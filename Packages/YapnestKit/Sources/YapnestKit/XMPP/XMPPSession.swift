@@ -482,9 +482,9 @@ public final class XMPPSession: @unchecked Sendable {
     /// handler would trust the forwarded `from`. A room's results must come from that room; our
     /// own archive's must involve us, when the stanza says who it's between.
     static func archivedMessage(_ message: Martin.Message, belongsTo source: JID, isAccount: Bool) -> Bool {
-        let from = message.from.flatMap { JID($0.bareJid.stringValue) }
+        let from = message.from.flatMap { JID($0) }
         if !isAccount { return from == source }
-        guard let from, let to = message.to.flatMap({ JID($0.bareJid.stringValue) }) else { return true }
+        guard let from, let to = message.to.flatMap({ JID($0) }) else { return true }
         return from == source || to == source
     }
 
@@ -771,9 +771,9 @@ public final class XMPPSession: @unchecked Sendable {
         guard policy.verifiesLiveness else { return }
         let monitor = NWPathMonitor()
         // The first update only reports the starting path.
-        let seenFirst = OSAllocatedUnfairLock(initialState: false)
+        let seenFirst = Once()
         monitor.pathUpdateHandler = { [weak self] path in
-            let isFirst = !seenFirst.withLock { seen in defer { seen = true }; return seen }
+            let isFirst = seenFirst.first()
             DiagLog.network(isFirst ? "Network path at start" : "Network path changed", path)
             guard !isFirst, path.status == .satisfied else { return }
             // A switch reports several updates in a row.
@@ -879,7 +879,7 @@ public final class XMPPSession: @unchecked Sendable {
         var fields: [DiagField] = [.value("reason", DisconnectKind(reason)), .value("outcome", failureClass)]
         switch reason {
         case .streamError(let element):
-            fields.append(.value("condition", StreamCondition(name: element.firstChild(xmlns: "urn:ietf:params:xml:ns:xmpp-streams")?.name)))
+            fields.append(.value("condition", StreamCondition(name: Self.streamCondition(of: element))))
         case .authenticationFailure(let error):
             fields.append(.value("auth", AuthFailure(error)))
         default:
@@ -1058,6 +1058,10 @@ public final class XMPPSession: @unchecked Sendable {
         }
     }
 
+    private static func streamCondition(of element: Element) -> String? {
+        element.firstChild(xmlns: "urn:ietf:params:xml:ns:xmpp-streams")?.name
+    }
+
     private static func failure(for reason: XMPPClient.State.DisconnectionReason) -> Failure? {
         switch reason {
         case .none: nil
@@ -1068,7 +1072,7 @@ public final class XMPPSession: @unchecked Sendable {
         case .xmlError(SocketConnectorNetwork.startTLSNotOffered): .fatal("The server doesn't support encryption.")
         case .xmlError: .transient("The server sent something unexpected.")
         case .streamError(let element):
-            switch element.firstChild(xmlns: "urn:ietf:params:xml:ns:xmpp-streams")?.name {
+            switch Self.streamCondition(of: element) {
             case "host-unknown": .fatal("This server doesn't host that address.")
             case "conflict": .transient("Signed in from somewhere else with the same name.")
             case "system-shutdown": .transient("The server is shutting down.")
@@ -1093,7 +1097,7 @@ public final class XMPPSession: @unchecked Sendable {
     func handleTopLevel(_ stanza: Martin.Message) {
         if let carbon = stanza.element.children.first(where: { $0.xmlns == MessageCarbonsModule.MC_XMLNS }) {
             // Only our own server may send carbons: from our bare JID, or no from.
-            if let from = stanza.from, from.resource != nil || JID(from.bareJid.stringValue) != account {
+            if let from = stanza.from, from.resource != nil || JID(from) != account {
                 logger.warning("Dropping forged carbon from \(from.stringValue, privacy: .private)")
                 return
             }
@@ -1115,8 +1119,8 @@ public final class XMPPSession: @unchecked Sendable {
             if source == .live { invitationReceived(stanza) }
             return
         }
-        let from = stanza.from.flatMap { JID($0.bareJid.stringValue) }
-        let to = stanza.to.flatMap { JID($0.bareJid.stringValue) }
+        let from = stanza.from.flatMap { JID($0) }
+        let to = stanza.to.flatMap { JID($0) }
         if let from, isGroup(from) {
             // Errors bounce our group messages; private messages through
             // the room aren't supported.
@@ -1272,7 +1276,7 @@ public final class XMPPSession: @unchecked Sendable {
         guard stanza.name == "message", let message = stanza as? Martin.Message, message.type == .chat || message.type == .groupchat,
               message.body != nil || message.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) != nil,
               message.firstChild(name: "replace", xmlns: NS.correction) == nil,
-              let id = message.id, let peer = message.to.flatMap({ JID($0.bareJid.stringValue) }) else { return }
+              let id = message.id, let peer = message.to.flatMap({ JID($0) }) else { return }
         DiagLog.info(.send, "Server acknowledged", .id("msg", Redacted.id(id)))
         do {
             try database.markSent(peer: peer, remoteId: id)
@@ -2076,7 +2080,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// Sends a failed message again.
     public func retry(_ message: Message) throws {
         guard message.direction == .outgoing, message.status == .failed, let id = message.remoteId,
-              let peer = try database.reader.read({ try Conversation.fetchOne($0, key: message.conversationId)?.peer }) else { return }
+              let peer = try database.conversation(id: message.conversationId)?.peer else { return }
         try database.markPending(conversationId: message.conversationId, remoteId: id)
         var pending = message
         pending.status = .pending

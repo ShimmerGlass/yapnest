@@ -72,7 +72,7 @@ extension XMPPSession {
     func blocklistChanged(_ jids: [Martin.JID]?) {
         guard let jids else { return }
         do {
-            try database.setBlocklist(Set(jids.compactMap { JID($0.bareJid.stringValue) }))
+            try database.setBlocklist(Set(jids.compactMap { JID($0) }))
         } catch {
             logger.error("Failed to store the blocklist: \(error)")
         }

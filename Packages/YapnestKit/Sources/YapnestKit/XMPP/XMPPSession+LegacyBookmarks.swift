@@ -44,8 +44,8 @@ final class LegacyBookmarksModule: AbstractPEPModule, XmppModule, @unchecked Sen
 extension Bookmark {
     init?(legacy conference: Element) {
         guard conference.name == "conference", let jid = conference.getAttribute("jid").flatMap(JID.init(_:)) else { return nil }
-        self.init(jid: jid, name: conference.getAttribute("name"), autojoin: ["true", "1"].contains(conference.getAttribute("autojoin")),
-                  nick: conference.firstChild(name: "nick")?.value)
+        let fields = Self.conferenceFields(conference)
+        self.init(jid: jid, name: fields.name, autojoin: fields.autojoin, nick: fields.nick)
     }
 
     static func legacyList(in storage: Element) -> [Bookmark] {
@@ -56,9 +56,7 @@ extension Bookmark {
     var legacyElement: Element {
         let conference = Element(name: "conference")
         conference.setAttribute("jid", value: jid.description)
-        if let name { conference.setAttribute("name", value: name) }
-        conference.setAttribute("autojoin", value: autojoin ? "true" : "false")
-        if let nick { conference.addChild(Element(name: "nick", cdata: nick)) }
+        addConferenceFields(to: conference)
         return conference
     }
 }

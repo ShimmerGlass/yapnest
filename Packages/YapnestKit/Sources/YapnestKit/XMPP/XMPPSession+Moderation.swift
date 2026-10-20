@@ -84,12 +84,14 @@ extension XMPPSession {
     /// someone, present or not, with their address if it shows those.
     func affiliationChanged(in room: JID, _ stanza: Martin.Message) {
         guard let x = stanza.firstChild(name: "x", xmlns: NS.mucUser) else { return }
-        for item in x.filterChildren(name: "item", xmlns: nil) {
+        let changes = x.filterChildren(name: "item", xmlns: nil).compactMap { item -> (JID, RoomAffiliation)? in
             guard let jid = item.getAttribute("jid").flatMap(JID.init(_:)),
-                  let affiliation = item.getAttribute("affiliation").flatMap(RoomAffiliation.init) else { continue }
-            updateRoom(room) { status in
-                status?.setAffiliation(affiliation, of: jid)
-            }
+                  let affiliation = item.getAttribute("affiliation").flatMap(RoomAffiliation.init) else { return nil }
+            return (jid, affiliation)
+        }
+        guard !changes.isEmpty else { return }
+        updateRoom(room) { status in
+            for (jid, affiliation) in changes { status?.setAffiliation(affiliation, of: jid) }
         }
     }
 

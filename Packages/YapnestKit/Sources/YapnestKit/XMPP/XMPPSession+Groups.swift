@@ -223,11 +223,20 @@ struct Bookmark: Sendable {
     init?(id: String, payload: Element?) {
         guard let jid = JID(id), let conference = payload, conference.name == "conference", conference.xmlns == NS.bookmarks else { return nil }
         self.jid = jid
-        self.name = conference.getAttribute("name")
-        self.autojoin = ["true", "1"].contains(conference.getAttribute("autojoin"))
-        self.nick = conference.firstChild(name: "nick")?.value
+        (self.name, self.autojoin, self.nick) = Self.conferenceFields(conference)
         self.notify = conference.firstChild(name: "extensions")?.firstChild(name: "notify", xmlns: NS.notificationSettings)
             .flatMap(Self.notify(in:)) ?? .always
+    }
+
+    /// The fields XEP-0048 and XEP-0402 write alike.
+    static func conferenceFields(_ conference: Element) -> (name: String?, autojoin: Bool, nick: String?) {
+        (conference.getAttribute("name"), ["true", "1"].contains(conference.getAttribute("autojoin")), conference.firstChild(name: "nick")?.value)
+    }
+
+    func addConferenceFields(to conference: Element) {
+        if let name { conference.setAttribute("name", value: name) }
+        conference.setAttribute("autojoin", value: autojoin ? "true" : "false")
+        if let nick { conference.addChild(Element(name: "nick", cdata: nick)) }
     }
 
     /// The setting that applies to us: one for phones, then for clients,
@@ -245,9 +254,7 @@ struct Bookmark: Sendable {
 
     var element: Element {
         let conference = Element(name: "conference", xmlns: NS.bookmarks)
-        if let name { conference.setAttribute("name", value: name) }
-        conference.setAttribute("autojoin", value: autojoin ? "true" : "false")
-        if let nick { conference.addChild(Element(name: "nick", cdata: nick)) }
+        addConferenceFields(to: conference)
         if notify != .always {
             let notify = Element(name: "notify", xmlns: NS.notificationSettings)
             notify.addChild(Element(name: self.notify.rawValue))
@@ -287,10 +294,11 @@ extension XMPPSession {
     @discardableResult
     func updateRoom(_ jid: JID, _ change: (inout RoomStatus?) -> Void) -> RoomStatus? {
         publish(rooms, under: roomsPublishLock) { state in
-            var room = state.rooms[jid]
+            let before = state.rooms[jid]
+            var room = before
             change(&room)
             state.rooms[jid] = room
-            return (room, state.rooms)
+            return (room, room == before ? nil : state.rooms)
         }
     }
 
@@ -306,8 +314,10 @@ extension XMPPSession {
 
     /// Rejoins every group we're in, after a new session's catch-up.
     func joinRooms() {
-        reloadKnownRooms()
-        for group in (try? database.groupChats()) ?? [] where !group.hasLeft {
+        let groups = (try? database.groupChats()) ?? []
+        let rooms = Set(groups.map(\.jid))
+        lock.withLock { $0.knownRooms = rooms }
+        for group in groups where !group.hasLeft {
             join(group.jid, nickname: group.nickname)
         }
     }
@@ -412,6 +422,13 @@ extension XMPPSession {
         })
     }
 
+    @discardableResult
+    func refreshedRoomInfo(_ room: JID) async -> Bool {
+        await withCheckedContinuation { continuation in
+            refreshRoomInfo(room, then: { continuation.resume(returning: $0) }, missing: { continuation.resume(returning: false) })
+        }
+    }
+
     /// What a change to the room, by us or by another owner, leaves for us to
     /// catch up on once its info is read again. Joining does its own, so only
     /// a room we are already in is looked at.
@@ -427,8 +444,7 @@ extension XMPPSession {
     /// XEP-0486: the room's info form carries the hash of its picture, which
     /// is kept like a contact's, under the room's address.
     private func roomAvatarAnnounced(_ room: JID, form: JabberDataElement?) {
-        let field = form?.element.filterChildren(name: "field", xmlns: nil).first { $0.getAttribute("var") == "muc#roominfo_avatarhash" }
-        guard let hash = field?.firstChild(name: "value")?.value?.lowercased(), !hash.isEmpty else {
+        guard let hash = Self.formValues("muc#roominfo_avatarhash", in: form?.element)?.first?.lowercased(), !hash.isEmpty else {
             if form != nil, (try? database.contact(room))??.avatarHash != nil { try? database.setAvatarHash(nil, for: room) }
             return
         }
@@ -479,13 +495,14 @@ extension XMPPSession {
             return
         }
 
-        let trustsOccupantIds = (try? database.groupChat(room))??.hasOccupantIds ?? false
+        let claimedId = InboundMessage.occupantId(in: presence.element)
+        let trustsOccupantIds = claimedId != nil && ((try? database.groupChat(room))??.hasOccupantIds ?? false)
         let occupant = RoomOccupant(
             nick: nick,
             jid: item?.getAttribute("jid").flatMap(JID.init(_:)),
             affiliation: item?.getAttribute("affiliation").flatMap(RoomAffiliation.init) ?? .none,
             role: item?.getAttribute("role") ?? "participant",
-            occupantId: trustsOccupantIds ? InboundMessage.occupantId(in: presence.element) : nil,
+            occupantId: trustsOccupantIds ? claimedId : nil,
         )
         let joinedNow = updateRoom(room) { status in
             status?.occupants[nick] = occupant
@@ -636,8 +653,12 @@ extension XMPPSession {
         join(room, nickname: group.nickname)
     }
 
+    private static func errorCondition(of stanza: Stanza) -> String? {
+        stanza.firstChild(name: "error")?.children.first { $0.xmlns == "urn:ietf:params:xml:ns:xmpp-stanzas" && $0.name != "text" }?.name
+    }
+
     private func joinFailed(_ room: JID, presence: Presence, status: RoomStatus) {
-        let condition = presence.firstChild(name: "error")?.children.first { $0.xmlns == "urn:ietf:params:xml:ns:xmpp-stanzas" && $0.name != "text" }?.name
+        let condition = Self.errorCondition(of: presence)
         if condition == "conflict", !status.triedOtherNickname {
             // Someone has our nickname; try once with a variant.
             let nickname = status.nickname + "_"
@@ -867,11 +888,14 @@ extension XMPPSession {
     /// private group may read its archive; a few pages are enough to notify.
     func catchUpRoomArchives(then done: @escaping @Sendable () -> Void) {
         let pending = DispatchGroup()
-        for group in (try? database.groupChats()) ?? [] where !group.hasLeft {
-            // A room with nothing archived yet: from when it last had news
-            // here, if ever. A new conversation's placeholder date isn't one,
-            // and ejabberd refuses it.
-            let lastActivity = group.lastArchiveId == nil ? (try? database.conversation(id: group.conversationId))?.lastActivityAt : nil
+        let groups = ((try? database.groupChats()) ?? []).filter { !$0.hasLeft }
+        // A room with nothing archived yet: from when it last had news
+        // here, if ever. A new conversation's placeholder date isn't one,
+        // and ejabberd refuses it.
+        let lastActivities = (try? database.reader.read { db in
+            groups.map { group in group.lastArchiveId == nil ? (try? Conversation.fetchOne(db, key: group.conversationId))?.lastActivityAt : nil }
+        }) ?? Array(repeating: nil, count: groups.count)
+        for (group, lastActivity) in zip(groups, lastActivities) {
             let since = lastActivity.flatMap { $0 > .distantPast ? $0 : nil }
             pending.enter()
             fetchRoomArchiveForNotifications(group.jid, after: group.lastArchiveId, since: since, pagesLeft: 3) { pending.leave() }
@@ -969,7 +993,7 @@ extension XMPPSession {
     // MARK: Messages
 
     func handleRoomStanza(_ stanza: Martin.Message, source: InboundMessage.Source, isHistory: Bool = false) {
-        guard let room = stanza.from.flatMap({ JID($0.bareJid.stringValue) }), let group = try? database.groupChat(room) else { return }
+        guard let room = stanza.from.flatMap({ JID($0) }), let group = try? database.groupChat(room) else { return }
         reportSubjectOutcome(of: stanza, in: room)
         if stanza.type == .groupchat, stanza.from?.resource == nil {
             // The room itself: status code 104 announces a configuration change.
@@ -1115,12 +1139,12 @@ extension XMPPSession {
     static func invitation(in stanza: Martin.Message) -> Invitation? {
         if let direct = stanza.firstChild(name: "x", xmlns: NS.conference) {
             guard let room = direct.getAttribute("jid").flatMap(JID.init(_:)), room.localPart != nil,
-                  let inviter = stanza.from.flatMap({ JID($0.bareJid.stringValue) }) else { return nil }
+                  let inviter = stanza.from.flatMap({ JID($0) }) else { return nil }
             return Invitation(room: room, inviter: inviter, isDirect: true)
         }
         guard let invite = stanza.firstChild(name: "x", xmlns: NS.mucUser)?.firstChild(name: "invite"),
               let from = stanza.from, from.resource == nil,
-              let room = JID(from.bareJid.stringValue), room.localPart != nil,
+              let room = JID(from), room.localPart != nil,
               let inviter = invite.getAttribute("from").flatMap(JID.init(_:)) else { return nil }
         let reason = invite.firstChild(name: "reason")?.value.flatMap { $0.isEmpty ? nil : $0 }
         return Invitation(room: room, inviter: inviter, isDirect: false, reason: reason)
@@ -1229,13 +1253,9 @@ extension XMPPSession {
             try? database.removeGroupInvitation(bookmark.jid)
             let group = groups[bookmark.jid]
             if group == nil || group?.hasLeft == true {
-                _ = try? database.joinGroupChat(bookmark.jid, nickname: bookmark.nick ?? group?.nickname ?? defaultNickname, name: bookmark.name, isBookmarked: true)
+                _ = try? joinBookmarked(bookmark, existing: group)
             }
-            try? database.updateGroupChat(bookmark.jid) { group in
-                group.isBookmarked = true
-                if let name = bookmark.name, !name.isEmpty { group.name = name }
-                group.notify = bookmark.notify
-            }
+            applyBookmarkFields(bookmark)
         }
         for group in groups.values where !group.hasLeft {
             let bookmark = byJID[group.jid]
@@ -1250,21 +1270,29 @@ extension XMPPSession {
         joinRooms()
     }
 
+    private func joinBookmarked(_ bookmark: Bookmark, existing group: GroupChat?) throws -> GroupChat {
+        try database.joinGroupChat(bookmark.jid, nickname: bookmark.nick ?? group?.nickname ?? defaultNickname, name: bookmark.name, isBookmarked: true)
+    }
+
+    private func applyBookmarkFields(_ bookmark: Bookmark) {
+        try? database.updateGroupChat(bookmark.jid) { group in
+            group.isBookmarked = true
+            if let name = bookmark.name, !name.isEmpty { group.name = name }
+            group.notify = bookmark.notify
+        }
+    }
+
     func bookmarkChanged(_ change: BookmarksModule.Change) {
         switch change {
         case .published(let bookmark) where bookmark.autojoin:
             try? database.removeGroupInvitation(bookmark.jid)
             let group = try? database.groupChat(bookmark.jid)
             if group == nil || group?.hasLeft == true {
-                guard let joined = try? database.joinGroupChat(bookmark.jid, nickname: bookmark.nick ?? group?.nickname ?? defaultNickname, name: bookmark.name, isBookmarked: true) else { return }
+                guard let joined = try? joinBookmarked(bookmark, existing: group) else { return }
                 reloadKnownRooms()
                 join(joined.jid, nickname: joined.nickname)
             }
-            try? database.updateGroupChat(bookmark.jid) { group in
-                group.isBookmarked = true
-                if let name = bookmark.name, !name.isEmpty { group.name = name }
-                group.notify = bookmark.notify
-            }
+            applyBookmarkFields(bookmark)
         case .published(let bookmark):
             leaveRoom(bookmark.jid)
         case .retracted(let jid):
@@ -1274,16 +1302,16 @@ extension XMPPSession {
 
     func publishBookmark(_ group: GroupChat) {
         let bookmark = Bookmark(jid: group.jid, name: group.name, autojoin: true, nick: group.nickname, notify: group.notify)
+        if usesLegacyBookmarks {
+            publishLegacyBookmark(bookmark, for: group)
+            return
+        }
         let options = Self.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options", fields: [
             "pubsub#persist_items": ["true"],
             "pubsub#max_items": ["max"],
             "pubsub#send_last_published_item": ["never"],
             "pubsub#access_model": ["whitelist"],
         ])
-        if usesLegacyBookmarks {
-            publishLegacyBookmark(bookmark, for: group)
-            return
-        }
         // Some servers never answer a publish with max_items=max (Openfire),
         // so the wait is bounded, and the old kind of bookmark takes over.
         let once = Once()
@@ -1326,7 +1354,7 @@ extension XMPPSession {
     }
 
     static func dataForm(type: String, formType: String, fields: [String: [String]]) -> Element {
-        let x = Element(name: "x", xmlns: "jabber:x:data")
+        let x = Element(name: "x", xmlns: NS.dataForms)
         x.setAttribute("type", value: type)
         var all = [("FORM_TYPE", [formType])]
         all += fields.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
@@ -1407,7 +1435,7 @@ extension XMPPSession {
     static func decline(in stanza: Martin.Message) -> (room: JID, from: JID)? {
         guard let decline = stanza.firstChild(name: "x", xmlns: NS.mucUser)?.firstChild(name: "decline"),
               let from = stanza.from, from.resource == nil,
-              let room = JID(from.bareJid.stringValue), room.localPart != nil,
+              let room = JID(from), room.localPart != nil,
               let sender = decline.getAttribute("from").flatMap(JID.init(_:)) else { return nil }
         return (room, sender)
     }
@@ -1426,12 +1454,8 @@ extension XMPPSession {
         join(room, nickname: defaultNickname, discover: false)
         let status = try await waitForRoom(room)
         if status.wasCreated { try await configurePrivateRoom(room, name: name) }
-        await withCheckedContinuation { continuation in
-            refreshRoomInfo(room) { hasArchive in
-                self.updateRoom(room) { $0?.hasArchive = hasArchive }
-                continuation.resume()
-            }
-        }
+        let hasArchive = await refreshedRoomInfo(room)
+        updateRoom(room) { $0?.hasArchive = hasArchive }
         if let group = try database.groupChat(room) { publishBookmark(group) }
         if !invitees.isEmpty { try await invite(invitees, to: room) }
         return room
@@ -1537,7 +1561,7 @@ extension XMPPSession {
     private func reportSubjectOutcome(of stanza: Martin.Message, in room: JID) {
         if stanza.type == .error {
             guard let id = stanza.id else { return }
-            let condition = stanza.firstChild(name: "error")?.children.first { $0.xmlns == "urn:ietf:params:xml:ns:xmpp-stanzas" && $0.name != "text" }?.name
+            let condition = Self.errorCondition(of: stanza)
             let error: GroupError = ["forbidden", "not-allowed"].contains(condition) ? .notAllowed : .refused(condition ?? "error")
             subjectOutcomes.send(.failed(room: room, id: id, error))
         } else if stanza.type == .groupchat, stanza.body == nil, let subject = stanza.firstChild(name: "subject"),
@@ -1606,7 +1630,7 @@ extension XMPPSession {
         let items = try await disco.items(for: Martin.JID(account.domain))
         for item in items.items {
             guard let info = try? await disco.info(for: item.jid, node: item.node) else { continue }
-            if info.identities.contains(where: { $0.category == "conference" && $0.type == "text" }) {
+            if Self.isGroupChat(identities: info.identities.map { ($0.category, $0.type) }) {
                 let service = item.jid.stringValue
                 lock.withLock { $0.mucService = service }
                 return service
@@ -1619,12 +1643,12 @@ extension XMPPSession {
         let form = try await ownerForm(of: room)
         let offered = Set(form?.filterChildren(name: "field", xmlns: nil).compactMap { $0.getAttribute("var") } ?? [])
         let wanted: [String: [String]] = [
-            "muc#roomconfig_roomname": [name],
+            RoomConfiguration.Field.name: [name],
             "muc#roomconfig_persistentroom": ["1"],
-            "muc#roomconfig_membersonly": ["1"],
-            "muc#roomconfig_whois": ["anyone"],
+            RoomConfiguration.Field.membersOnly: ["1"],
+            RoomConfiguration.Field.whois: ["anyone"],
             "muc#roomconfig_publicroom": ["0"],
-            "muc#roomconfig_allowinvites": ["1"],
+            RoomConfiguration.Field.allowInvites: ["1"],
             // Prosody: who may list members, which OMEMO needs.
             "muc#roomconfig_getmemberlist": ["moderator", "participant", "visitor"],
             // Prosody and ejabberd name archiving differently.

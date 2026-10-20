@@ -35,9 +35,7 @@ extension XMPPSession {
 
         // The room announces the change (status 104) and we'd read it then,
         // but the caller wants to see the result when this returns.
-        await withCheckedContinuation { continuation in
-            refreshRoomInfo(room, then: { _ in continuation.resume() }, missing: { continuation.resume() })
-        }
+        await refreshedRoomInfo(room)
     }
 
     private func requireOwner(of room: JID) throws {
@@ -64,13 +62,9 @@ extension XMPPSession {
         do {
             let current = try await client.context.writer.write(iq: OutboundStanza.vCardRequest(of: room))
             kept = current.firstChild(name: "vCard", xmlns: NS.vcardTemp)?.children ?? []
+        } catch let error as XMPPError where error.errorCondition == .item_not_found {
         } catch let error as XMPPError {
-            switch error.errorCondition {
-            case .item_not_found: break
-            case .service_unavailable, .feature_not_implemented: throw GroupError.unsupported
-            case .forbidden, .not_allowed: throw GroupError.notAllowed
-            default: throw error
-            }
+            throw Self.groupError(error)
         }
         let card = Element(name: "vCard", xmlns: NS.vcardTemp)
         for child in kept where child.name != "PHOTO" {
@@ -85,14 +79,18 @@ extension XMPPSession {
         do {
             _ = try await client.context.writer.write(iq: OutboundStanza.vCard(card, of: room))
         } catch let error as XMPPError {
-            switch error.errorCondition {
-            case .service_unavailable, .feature_not_implemented, .item_not_found: throw GroupError.unsupported
-            case .forbidden, .not_allowed: throw GroupError.notAllowed
-            default: throw error
-            }
+            throw Self.groupError(error)
         }
         // Shown at once, instead of when the room's notice of it arrives.
         try database.setAvatarHash(hash, for: room)
+    }
+
+    private static func groupError(_ error: XMPPError) -> Error {
+        switch error.errorCondition {
+        case .service_unavailable, .feature_not_implemented, .item_not_found: GroupError.unsupported
+        case .forbidden, .not_allowed: GroupError.notAllowed
+        default: error
+        }
     }
 
     // MARK: Destroying
