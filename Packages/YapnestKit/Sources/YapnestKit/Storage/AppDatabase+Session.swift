@@ -20,14 +20,21 @@ extension AppDatabase {
         }
     }
 
+    /// Applies `change` to the stored contact, or a new one, and saves only
+    /// if it changed anything. Whether it did.
+    @discardableResult
+    static func updateContact(_ db: Database, _ jid: JID, _ change: (inout Contact) -> Void) throws -> Bool {
+        var contact = try Contact.fetchOne(db, key: jid) ?? Contact(jid: jid)
+        let before = contact
+        change(&contact)
+        guard contact != before else { return false }
+        try contact.save(db)
+        return true
+    }
+
     /// Notes that the user chose to add `jid`, before the server can answer.
     func markAddedByUser(_ jid: JID) throws {
-        try writer.write { db in
-            var contact = try Contact.fetchOne(db, key: jid) ?? Contact(jid: jid)
-            guard !contact.isAddedByUser else { return }
-            contact.isAddedByUser = true
-            try contact.save(db)
-        }
+        try writer.write { db in try Self.updateContact(db, jid) { $0.isAddedByUser = true } }
     }
 
     public func updateRosterItem(jid: JID, name: String?, subscription: Contact.Subscription, isPending: Bool, groups: [String] = []) throws {
@@ -49,22 +56,12 @@ extension AppDatabase {
 
     /// Records `jid`'s current avatar; nil when they have none.
     public func setAvatarHash(_ hash: String?, for jid: JID) throws {
-        try writer.write { db in
-            var contact = try Contact.fetchOne(db, key: jid) ?? Contact(jid: jid)
-            guard contact.avatarHash != hash else { return }
-            contact.avatarHash = hash
-            try contact.save(db)
-        }
+        try writer.write { db in try Self.updateContact(db, jid) { $0.avatarHash = hash } }
     }
 
     /// Records the name `jid` publishes for themselves; nil when they have none.
     func setNickname(_ nickname: String?, for jid: JID) throws {
-        try writer.write { db in
-            var contact = try Contact.fetchOne(db, key: jid) ?? Contact(jid: jid)
-            guard contact.nickname != nickname else { return }
-            contact.nickname = nickname
-            try contact.save(db)
-        }
+        try writer.write { db in try Self.updateContact(db, jid) { $0.nickname = nickname } }
     }
 
     /// Records when `jid` was last seen, or forgets it when nil.
@@ -117,18 +114,17 @@ extension AppDatabase {
     /// each room's own catch-up.
     func unconfirmedOutgoing(before: Date, since: Date) throws -> [(Message, JID)] {
         try reader.read { db in
-            let chats = try Int64.fetchAll(db, sql: "SELECT id FROM conversation WHERE kind = 'chat'")
+            let chats = try Conversation.fetchAll(db, sql: "SELECT * FROM conversation WHERE kind = 'chat'")
+            let peers = Dictionary(uniqueKeysWithValues: chats.compactMap { chat in chat.id.map { ($0, chat.peer) } })
             let messages = try Message
-                .filter(chats.contains(Column("conversationId")))
+                .filter(peers.keys.contains(Column("conversationId")))
                 .filter(Column("direction") == Message.Direction.outgoing)
                 .filter(Column("timestamp") < before && Column("timestamp") >= since)
                 .filter(Column("isRetracted") == false)
                 .filter(Column("status") == Message.Status.pending)
                 .order(Column("timestamp"))
                 .fetchAll(db)
-            return try messages.compactMap { message in
-                try Conversation.fetchOne(db, key: message.conversationId).map { (message, $0.peer) }
-            }
+            return messages.compactMap { message in peers[message.conversationId].map { (message, $0) } }
         }
     }
 
@@ -153,10 +149,15 @@ extension AppDatabase {
         try reader.read { db in
             let rows = try Reaction.filter(Column("pendingId") != nil).fetchAll(db)
             var seen = Set<Int64>()
-            return try rows.compactMap { row in
+            let messages = Dictionary(uniqueKeysWithValues: try Message.fetchAll(db, keys: Set(rows.map(\.messageId))).compactMap { message in
+                message.id.map { ($0, message) }
+            })
+            let peers = Dictionary(uniqueKeysWithValues: try Conversation.fetchAll(db, keys: Set(messages.values.map(\.conversationId))).compactMap { chat in
+                chat.id.map { ($0, chat.peer) }
+            })
+            return rows.compactMap { row in
                 guard let id = row.pendingId, seen.insert(row.messageId).inserted,
-                      let message = try Message.fetchOne(db, key: row.messageId),
-                      let peer = try Conversation.fetchOne(db, key: message.conversationId)?.peer else { return nil }
+                      let message = messages[row.messageId], let peer = peers[message.conversationId] else { return nil }
                 return (message, peer, id)
             }
         }
@@ -246,22 +247,13 @@ extension AppDatabase {
                 try contact.update(db)
             }
             for jid in blocked {
-                var contact = try Contact.fetchOne(db, key: jid) ?? Contact(jid: jid)
-                guard !contact.isBlocked else { continue }
-                contact.isBlocked = true
-                newlyBlocked.append(jid)
-                try contact.save(db)
+                if try Self.updateContact(db, jid, { $0.isBlocked = true }) { newlyBlocked.append(jid) }
             }
         }
     }
 
     func setBlocked(_ blocked: Bool, _ jid: JID) throws {
-        try writer.write { db in
-            var contact = try Contact.fetchOne(db, key: jid) ?? Contact(jid: jid)
-            guard contact.isBlocked != blocked else { return }
-            contact.isBlocked = blocked
-            try contact.save(db)
-        }
+        try writer.write { db in try Self.updateContact(db, jid) { $0.isBlocked = blocked } }
         // Blocked people shouldn't come up as someone to share with.
         if blocked { ShareSuggestions.remove([jid]) }
     }

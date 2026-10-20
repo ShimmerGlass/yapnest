@@ -87,6 +87,6 @@ public final class AvatarStore: Sendable {
     }
 
     static func hash(of data: Data) -> String {
-        Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        Data(Insecure.SHA1.hash(data: data)).hex
     }
 }

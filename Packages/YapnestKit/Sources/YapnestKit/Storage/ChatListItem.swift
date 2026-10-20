@@ -55,10 +55,7 @@ public struct ChatListItem: Hashable, Sendable, Identifiable {
             WHERE conversation.isArchived = ?
             """, arguments: [archived])
         let latestByConversation = Dictionary(uniqueKeysWithValues: latest.map { ($0.conversationId, $0) })
-        let attachments = Dictionary(
-            try Attachment.filter(latest.compactMap(\.id).contains(Column("messageId"))).fetchAll(db).map { ($0.messageId, $0) },
-            uniquingKeysWith: { a, _ in a },
-        )
+        let attachments = try AppDatabase.attachments(db, messageIds: latest.compactMap(\.id))
 
         let notifying = Dictionary(
             try AppDatabase.notifyingCounts(db, archived: archived).map { ($0.id, $0.count) },

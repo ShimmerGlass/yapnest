@@ -148,7 +148,7 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
         self.error = error
         self.omemoDevice = omemoDevice
         self.omemoTrust = omemoTrust
-        self.link = encryption == .omemoUndecryptable ? nil : LinkDetector.previewLink(in: body)?.absoluteString
+        self.link = Self.previewLink(for: body, encryption: encryption)
     }
 
     /// Whether an outgoing message gets the trust our own words do (images
@@ -177,7 +177,11 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
     /// Replaces the text, keeping the preview link in step.
     mutating func setBody(_ body: String) {
         self.body = body
-        link = encryption == .omemoUndecryptable ? nil : LinkDetector.previewLink(in: body)?.absoluteString
+        link = Self.previewLink(for: body, encryption: encryption)
+    }
+
+    private static func previewLink(for body: String, encryption: Encryption) -> String? {
+        encryption == .omemoUndecryptable ? nil : LinkDetector.previewLink(in: body)?.absoluteString
     }
 
     public static let databaseTableName = "message"
@@ -208,5 +212,14 @@ extension Message {
     func referenceRank(for reference: String) -> ReferenceRank? {
         guard serverId == reference || remoteId == reference || originId == reference else { return nil }
         return ReferenceRank(isServerId: serverId == reference, timestamp: timestamp, id: id ?? 0)
+    }
+}
+
+extension QuickResponses {
+    /// Notes `actionId` as chosen. False if it isn't offered or was chosen already.
+    mutating func choose(_ actionId: String) -> Bool {
+        guard actions.contains(where: { $0.id == actionId }), !chosen.contains(actionId) else { return false }
+        chosen.append(actionId)
+        return true
     }
 }

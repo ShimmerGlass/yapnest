@@ -39,25 +39,18 @@ extension AppDatabase {
         try writer.write { db in try Self.insert(db, message).message }
     }
 
-    /// `movesChat` is off for older history, which says nothing about when
-    /// the chat last had news: it stays where it is in the list, unless
-    /// it has no place yet.
-    static func insert(_ db: Database, _ message: Message, movesChat: Bool = true) throws -> (message: Message, inserted: Bool) {
+    static func insert(_ db: Database, _ message: Message) throws -> (message: Message, inserted: Bool) {
         var message = message
         if let existing = try duplicate(of: message, db) {
             return (try confirm(existing, serverId: message.serverId, db), false)
         }
         try message.insert(db)
-        if movesChat, var conversation = try Conversation.fetchOne(db, key: message.conversationId),
+        // Older history leaves a chat where it is in the list, so it only
+        // moves one that has no place yet: one restored from the archive.
+        // Its newest message is when it last had news, and it mustn't sort
+        // below chats that were never used.
+        if var conversation = try Conversation.fetchOne(db, key: message.conversationId),
            message.timestamp > conversation.lastActivityAt {
-            conversation.lastActivityAt = message.timestamp
-            try conversation.update(db)
-        } else if !movesChat, var conversation = try Conversation.fetchOne(db, key: message.conversationId),
-                  message.timestamp > conversation.lastActivityAt {
-            // History is older than what the chat already holds, so it only
-            // gets here when the chat has no place yet: one restored from the
-            // archive. Its newest message is when it last had news, and it
-            // mustn't sort below chats that were never used.
             conversation.lastActivityAt = message.timestamp
             try conversation.update(db)
         }
@@ -140,11 +133,19 @@ extension AppDatabase {
 
     /// Every message the reference could mean, in no particular order.
     static func referencedMessages(_ db: Database, conversationId: Int64, id: String, direction: Message.Direction? = nil) throws -> [Message] {
+        try referenceRequest(conversationId: conversationId, id: id, direction: direction).fetchAll(db)
+    }
+
+    static func referenceRequest(conversationId: Int64, id: String, direction: Message.Direction? = nil) -> QueryInterfaceRequest<Message> {
         var request = Message
             .filter(Column("conversationId") == conversationId)
             .filter(Column("remoteId") == id || Column("originId") == id || Column("serverId") == id)
         if let direction { request = request.filter(Column("direction") == direction) }
-        return try request.fetchAll(db)
+        return request
+    }
+
+    static func outgoingMessage(_ db: Database, conversationId: Int64, remoteId: String) throws -> Message? {
+        try referencedMessage(db, conversationId: conversationId, id: remoteId, direction: .outgoing)
     }
 
     /// Replaces `author`'s reactions on the referenced message, as XEP-0444
@@ -200,8 +201,7 @@ extension AppDatabase {
     }
 
     static func updateStatus(_ db: Database, _ status: Message.Status, conversationId: Int64, remoteId: String, force: Bool = false) throws {
-        guard var message = try referencedMessage(db, conversationId: conversationId, id: remoteId, direction: .outgoing),
-              message.direction == .outgoing else { return }
+        guard var message = try outgoingMessage(db, conversationId: conversationId, remoteId: remoteId) else { return }
         let allowed = force || status > message.status || (status == .failed && message.status == .pending)
         guard allowed, status != message.status else { return }
         message.status = status
@@ -249,8 +249,7 @@ extension AppDatabase {
     /// Marks an outgoing message as failed for a reason worth showing.
     public func markFailed(conversationId: Int64, remoteId: String, error: String) throws {
         try writer.write { db in
-            guard var message = try Self.referencedMessage(db, conversationId: conversationId, id: remoteId, direction: .outgoing),
-                  message.direction == .outgoing else { return }
+            guard var message = try Self.outgoingMessage(db, conversationId: conversationId, remoteId: remoteId) else { return }
             message.status = .failed
             message.error = error
             try message.update(db)
@@ -260,8 +259,7 @@ extension AppDatabase {
     /// Records the trust of the devices an outgoing message was encrypted for.
     public func setTrust(_ trust: OMEMODevice.Trust, conversationId: Int64, remoteId: String) throws {
         try writer.write { db in
-            guard var message = try Self.referencedMessage(db, conversationId: conversationId, id: remoteId, direction: .outgoing),
-                  message.direction == .outgoing else { return }
+            guard var message = try Self.outgoingMessage(db, conversationId: conversationId, remoteId: remoteId) else { return }
             message.omemoTrust = trust
             try message.update(db)
         }
@@ -278,8 +276,7 @@ extension AppDatabase {
 
     public func markPending(conversationId: Int64, remoteId: String) throws {
         try writer.write { db in
-            guard var message = try Self.referencedMessage(db, conversationId: conversationId, id: remoteId, direction: .outgoing),
-                  message.direction == .outgoing else { return }
+            guard var message = try Self.outgoingMessage(db, conversationId: conversationId, remoteId: remoteId) else { return }
             message.status = .pending
             message.error = nil
             try message.update(db)
@@ -299,8 +296,7 @@ extension AppDatabase {
     public func recordChosenAction(_ actionId: String, on messageId: Int64) throws -> Bool {
         try writer.write { db in
             guard var message = try Message.fetchOne(db, key: messageId), var offer = message.quickResponses,
-                  offer.actions.contains(where: { $0.id == actionId }), !offer.chosen.contains(actionId) else { return false }
-            offer.chosen.append(actionId)
+                  offer.choose(actionId) else { return false }
             message.quickResponses = offer
             try message.update(db)
             return true

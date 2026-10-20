@@ -42,6 +42,16 @@ public struct MessageCursor: Hashable, Sendable {
     public init(_ message: Message) {
         self.init(timestamp: message.timestamp, id: message.id!)
     }
+
+    func sqlBefore(inclusive: Bool) -> SQLExpression {
+        let ties = inclusive ? Column("id") <= id : Column("id") < id
+        return Column("timestamp") < timestamp || (Column("timestamp") == timestamp && ties)
+    }
+
+    func sqlAfter(inclusive: Bool) -> SQLExpression {
+        let ties = inclusive ? Column("id") >= id : Column("id") > id
+        return Column("timestamp") > timestamp || (Column("timestamp") == timestamp && ties)
+    }
 }
 
 extension ConversationItem {
@@ -77,10 +87,10 @@ extension AppDatabase {
         }
         var request = Message.filter(Column("conversationId") == conversationId)
         if let until {
-            request = request.filter(Column("timestamp") < until.timestamp || (Column("timestamp") == until.timestamp && Column("id") <= until.id))
+            request = request.filter(until.sqlBefore(inclusive: true))
         }
         if let since {
-            request = request.filter(Column("timestamp") > since.timestamp || (Column("timestamp") == since.timestamp && Column("id") >= since.id))
+            request = request.filter(since.sqlAfter(inclusive: true))
         } else {
             request = request.limit(limit)
         }
@@ -93,10 +103,7 @@ extension AppDatabase {
         let ids = messages.compactMap(\.id)
         let reactions = try Reaction.filter(ids.contains(Column("messageId"))).fetchAll(db)
         let reactionsByMessage = Dictionary(grouping: reactions, by: \.messageId)
-        let attachments = Dictionary(
-            try Attachment.filter(ids.contains(Column("messageId"))).fetchAll(db).map { ($0.messageId, $0) },
-            uniquingKeysWith: { a, _ in a },
-        )
+        let attachments = try AppDatabase.attachments(db, messageIds: ids)
         let links = Set(messages.compactMap(\.link))
         let previews = links.isEmpty ? [:] : Dictionary(
             try LinkPreview.fetchAll(db, keys: links).map { ($0.url, $0) },
@@ -119,10 +126,7 @@ extension AppDatabase {
                     quoted[id] = candidate
                 }
             }
-            quotedAttachments = Dictionary(
-                try Attachment.filter(candidates.compactMap(\.id).contains(Column("messageId"))).fetchAll(db).map { ($0.messageId, $0) },
-                uniquingKeysWith: { a, _ in a },
-            )
+            quotedAttachments = try Self.attachments(db, messageIds: candidates.compactMap(\.id))
         }
 
         return messages.map { message in
@@ -190,13 +194,13 @@ extension AppDatabase {
     public func olderCursor(peer: JID, before cursor: MessageCursor, count: Int) throws -> (cursor: MessageCursor, found: Int)? {
         try reader.read { db in
             guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return nil }
-            let older = try Message
+            let older = try Row.fetchAll(db, Message
                 .filter(Column("conversationId") == conversationId)
-                .filter(Column("timestamp") < cursor.timestamp || (Column("timestamp") == cursor.timestamp && Column("id") < cursor.id))
+                .filter(cursor.sqlBefore(inclusive: false))
                 .order(Column("timestamp").desc, Column("id").desc)
                 .limit(count)
-                .fetchAll(db)
-            return older.last.map { (MessageCursor($0), older.count) }
+                .select(Column("id"), Column("timestamp")))
+            return older.last.map { (MessageCursor(timestamp: $0["timestamp"], id: $0["id"]), older.count) }
         }
     }
 
@@ -206,13 +210,13 @@ extension AppDatabase {
     public func newerCursor(peer: JID, after cursor: MessageCursor, count: Int) throws -> (cursor: MessageCursor, found: Int)? {
         try reader.read { db in
             guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return nil }
-            let newer = try Message
+            let newer = try Row.fetchAll(db, Message
                 .filter(Column("conversationId") == conversationId)
-                .filter(Column("timestamp") > cursor.timestamp || (Column("timestamp") == cursor.timestamp && Column("id") > cursor.id))
+                .filter(cursor.sqlAfter(inclusive: false))
                 .order(Column("timestamp"), Column("id"))
                 .limit(count)
-                .fetchAll(db)
-            return newer.last.map { (MessageCursor($0), newer.count) }
+                .select(Column("id"), Column("timestamp")))
+            return newer.last.map { (MessageCursor(timestamp: $0["timestamp"], id: $0["id"]), newer.count) }
         }
     }
 
@@ -229,7 +233,7 @@ extension AppDatabase {
             let cursor = MessageCursor(message)
             let newer = try Message
                 .filter(Column("conversationId") == conversationId)
-                .filter(Column("timestamp") > cursor.timestamp || (Column("timestamp") == cursor.timestamp && Column("id") > cursor.id))
+                .filter(cursor.sqlAfter(inclusive: false))
                 .fetchCount(db)
             return (cursor, newer)
         }
@@ -291,20 +295,19 @@ extension AppDatabase {
         let newer: Int = try reader.read { db in
             try Message
                 .filter(Column("conversationId") == unread.conversationId)
-                .filter(Column("timestamp") > unread.timestamp || (Column("timestamp") == unread.timestamp && Column("id") >= id))
+                .filter(MessageCursor(unread).sqlAfter(inclusive: true))
                 .fetchCount(db)
         }
         guard newer > Self.initialWindow else { return (id, nil) }
         guard newer <= limit else {
             // Too much unread to show: as far back as the limit goes.
             let start: MessageCursor? = try reader.read { db in
-                try Message
+                try Row.fetchOne(db, Message
                     .filter(Column("conversationId") == unread.conversationId)
                     .order(Column("timestamp").desc, Column("id").desc)
-                    .limit(limit)
-                    .fetchAll(db)
-                    .last
-                    .map(MessageCursor.init)
+                    .select(Column("id"), Column("timestamp"))
+                    .limit(1, offset: limit - 1))
+                    .map { MessageCursor(timestamp: $0["timestamp"], id: $0["id"]) }
             }
             return (id, start)
         }
@@ -430,10 +433,10 @@ final class ConversationItemCache: @unchecked Sendable {
         }
         var window = Message.filter(Column("conversationId") == conversationId)
         if let until {
-            window = window.filter(Column("timestamp") < until.timestamp || (Column("timestamp") == until.timestamp && Column("id") <= until.id))
+            window = window.filter(until.sqlBefore(inclusive: true))
         }
         if let since {
-            window = window.filter(Column("timestamp") > since.timestamp || (Column("timestamp") == since.timestamp && Column("id") >= since.id))
+            window = window.filter(since.sqlAfter(inclusive: true))
         } else {
             window = window.limit(limit)
         }
@@ -461,11 +464,8 @@ final class ConversationItemCache: @unchecked Sendable {
             }
         }
         let ids = Array(fresh.keys)
-        let reactions = Dictionary(grouping: try Reaction.filter(ids.contains(Column("messageId"))).fetchAll(db), by: \.messageId)
-        let attachments = Dictionary(
-            try Attachment.filter(ids.contains(Column("messageId"))).fetchAll(db).map { ($0.messageId, $0) },
-            uniquingKeysWith: { a, _ in a },
-        )
+        let reactions = ids.isEmpty ? [:] : Dictionary(grouping: try Reaction.filter(ids.contains(Column("messageId"))).fetchAll(db), by: \.messageId)
+        let attachments = try AppDatabase.attachments(db, messageIds: ids)
         let links = Set(fresh.values.compactMap(\.link))
         let previews = links.isEmpty ? [:] : Dictionary(
             try LinkPreview.fetchAll(db, keys: links).map { ($0.url, $0) },
@@ -504,14 +504,11 @@ final class ConversationItemCache: @unchecked Sendable {
                 if let quote { needed.insert(quote.id) }
             }
         }
-        let quotedMessages = Dictionary(
+        let quotedMessages = needed.isEmpty ? [:] : Dictionary(
             try Message.filter(needed.contains(Column("id"))).fetchAll(db).map { ($0.id!, $0) },
             uniquingKeysWith: { a, _ in a },
         )
-        let quotedAttachments = Dictionary(
-            try Attachment.filter(needed.contains(Column("messageId"))).fetchAll(db).map { ($0.messageId, $0) },
-            uniquingKeysWith: { a, _ in a },
-        )
+        let quotedAttachments = try AppDatabase.attachments(db, messageIds: needed)
 
         var next: [Int64: Entry] = [:]
         next.reserveCapacity(revisions.count)

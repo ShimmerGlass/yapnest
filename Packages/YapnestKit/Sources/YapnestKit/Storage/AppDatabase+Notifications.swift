@@ -60,7 +60,7 @@ extension AppDatabase {
             }
             let newest = try Int64.fetchOne(db, sql: "SELECT MAX(id) FROM message") ?? 0
             let markId = try setting(.lastNotifiedMessageId).flatMap { Int64($0) }
-            let markDate = try setting(.lastNotifiedAt).flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0) }
+            let markDate = try Self.lastNotifiedAt(db)
             try set(.lastNotifiedMessageId, String(max(newest, markId ?? 0)))
             try set(.lastNotifiedAt, String(max(now, markDate ?? now).timeIntervalSince1970))
             guard let markId, let markDate else { return ([], []) }
@@ -87,6 +87,10 @@ extension AppDatabase {
     }
 
     static let notificationClockSlack: TimeInterval = 5 * 60
+
+    static func lastNotifiedAt(_ db: Database) throws -> Date? {
+        try setting(db, .lastNotifiedAt).flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0) }
+    }
 
     static func notification(_ db: Database, for message: Message) throws -> MessageNotification? {
         guard let id = message.id, let conversation = try Conversation.fetchOne(db, key: message.conversationId) else { return nil }
@@ -140,22 +144,25 @@ extension AppDatabase {
 
     /// Whether a group message is for us: it mentions us (XEP-0372), says
     /// our nickname as a word of its own, or replies to one of ours.
-    static func isMention(_ db: Database, _ message: Message, nickname: String) throws -> Bool {
+    static func isMention(_ db: Database, _ message: Message, nickname: String, word: NSRegularExpression? = nil) throws -> Bool {
         if message.mentionsMe { return true }
         // Most group messages don't contain the nickname at all, so only
         // those that do pay for a regex.
         if nickname.isEmpty || message.body.range(of: nickname, options: .caseInsensitive) != nil {
-            let name = NSRegularExpression.escapedPattern(for: nickname)
-            if message.body.range(of: "(?<![\\p{L}\\p{N}_])\(name)(?![\\p{L}\\p{N}_])", options: [.regularExpression, .caseInsensitive]) != nil {
+            if let regex = word ?? nicknameRegex(nickname),
+               regex.firstMatch(in: message.body, range: NSRange(message.body.startIndex..., in: message.body)) != nil {
                 return true
             }
         }
         guard let replyId = message.replyToId else { return false }
         // Rooms reference messages by their stanza-id; some clients by ours.
-        return try Message
-            .filter(Column("conversationId") == message.conversationId && Column("direction") == Message.Direction.outgoing)
-            .filter(Column("serverId") == replyId || Column("originId") == replyId || Column("remoteId") == replyId)
+        return try referenceRequest(conversationId: message.conversationId, id: replyId, direction: .outgoing)
             .isEmpty(db) == false
+    }
+
+    private static func nicknameRegex(_ nickname: String) -> NSRegularExpression? {
+        let name = NSRegularExpression.escapedPattern(for: nickname)
+        return try? NSRegularExpression(pattern: "(?<![\\p{L}\\p{N}_])\(name)(?![\\p{L}\\p{N}_])", options: .caseInsensitive)
     }
 
     /// Unread messages for the app's badge: outside archived conversations,
@@ -231,7 +238,8 @@ extension AppDatabase {
             .filter(Column("conversationId") == conversationId && Column("isRead") == false)
             .filter(mightMention)
             .fetchAll(db)
-        return try candidates.count(where: { try isMention(db, $0, nickname: nickname) })
+        let word = nicknameRegex(nickname)
+        return try candidates.count(where: { try isMention(db, $0, nickname: nickname, word: word) })
     }
 
     /// The delivered notifications to take down, given each one's thread. A

@@ -6,6 +6,14 @@ extension AppDatabase {
         try reader.read { db in try Attachment.fetchOne(db, key: messageId) }
     }
 
+    static func attachments(_ db: Database, messageIds: some Collection<Int64>) throws -> [Int64: Attachment] {
+        guard !messageIds.isEmpty else { return [:] }
+        return Dictionary(
+            try Attachment.filter(messageIds.contains(Column("messageId"))).fetchAll(db).map { ($0.messageId, $0) },
+            uniquingKeysWith: { a, _ in a },
+        )
+    }
+
     /// Stores an outgoing message with its not-yet-uploaded file.
     func insert(_ message: Message, attachment: Attachment) throws -> (Message, Attachment) {
         try writer.write { db in

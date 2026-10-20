@@ -62,8 +62,8 @@ extension AppDatabase {
         }
 
         if inbound.isError {
-            if let id = inbound.id, var message = try Self.referencedMessage(db, conversationId: conversationId, id: id, direction: .outgoing),
-               message.direction == .outgoing, message.status == .pending || message.status == .sent {
+            if let id = inbound.id, var message = try Self.outgoingMessage(db, conversationId: conversationId, remoteId: id),
+               message.status == .pending || message.status == .sent {
                 // Once the recipient's side confirmed it, an error naming the
                 // message is not to be believed.
                 message.status = .failed
@@ -127,8 +127,7 @@ extension AppDatabase {
                 // what's stored and the last notification claim is a floor
                 // they never fall under.
                 let newest = try Date.fetchOne(db, Message.filter(Column("conversationId") == conversationId).select(max(Column("timestamp"))))
-                let claimed = try Self.setting(db, .lastNotifiedAt)
-                    .flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0) }
+                let claimed = try Self.lastNotifiedAt(db)
                 if let floor = [newest, claimed].compactMap({ $0 }).max() { timestamp = max(timestamp, floor) }
             }
             var message = Message(
@@ -170,7 +169,7 @@ extension AppDatabase {
             message.isMarkable = inbound.isMarkable && !inbound.isOutgoing && !inbound.isGroupChat
             let file = AttachmentLink.parse(body: body, oob: inbound.oobURL, allowsInsecure: allowsInsecureLinks)
             if file != nil { message.link = nil }
-            let (stored, inserted) = try Self.insert(db, message, movesChat: !inbound.isHistory)
+            let (stored, inserted) = try Self.insert(db, message)
             if inserted {
                 result.newMessage = stored
                 if let file {
@@ -236,8 +235,7 @@ extension AppDatabase {
             .limit(50)
             .fetchAll(db)
         guard var message = offers.first(where: { $0.quickResponses?.actions.contains { $0.id == actionId } == true }),
-              var offer = message.quickResponses, !offer.chosen.contains(actionId) else { return }
-        offer.chosen.append(actionId)
+              var offer = message.quickResponses, offer.choose(actionId) else { return }
         message.quickResponses = offer
         try message.update(db)
     }

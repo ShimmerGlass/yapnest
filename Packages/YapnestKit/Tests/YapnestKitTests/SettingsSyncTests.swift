@@ -431,7 +431,7 @@ struct SettingsSyncTests {
         let conversation = try db.conversation(with: alice)
         try db.setArchived(true, conversationId: conversation.id!)
         let later = message(conversation, at: Date().timeIntervalSince1970 + 100)
-        _ = try db.writer.write { try AppDatabase.insert($0, later, movesChat: false) }
+        _ = try db.writer.write { try AppDatabase.insert($0, later) }
         #expect(!(try #require(try db.reader.read { try Conversation.fetchOne($0, key: conversation.id!) }).isArchived))
     }
 

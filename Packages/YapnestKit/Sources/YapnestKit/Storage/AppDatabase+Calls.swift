@@ -73,8 +73,7 @@ extension AppDatabase {
         let known: KnownCall
         if let signalPeer = signal.peer {
             peer = signalPeer
-            let conversation = try Conversation.filter(Column("peer") == signalPeer).fetchOne(db)
-            known = KnownCall(conversation: conversation, row: try conversation?.id.flatMap { try callRow(db, conversationId: $0, sid: signal.sid) })
+            known = try knownCall(db, peer: signalPeer, sid: signal.sid)
         } else {
             // A message we addressed to ourselves names no peer, only the call.
             let row = try Message.filter(Column("remoteId") == signal.sid && Column("callOutcome") != nil && Column("direction") == Message.Direction.incoming).fetchOne(db)
@@ -124,6 +123,11 @@ extension AppDatabase {
         var row: Message?
     }
 
+    private static func knownCall(_ db: Database, peer: JID, sid: String) throws -> KnownCall {
+        let conversation = try Conversation.filter(Column("peer") == peer).fetchOne(db)
+        return KnownCall(conversation: conversation, row: try conversation?.id.flatMap { try callRow(db, conversationId: $0, sid: sid) })
+    }
+
     private static func callRow(_ db: Database, conversationId: Int64, sid: String) throws -> Message? {
         try Message
             .filter(Column("conversationId") == conversationId && Column("remoteId") == sid && Column("callOutcome") != nil)
@@ -138,10 +142,7 @@ extension AppDatabase {
     /// also what lets it open a conversation, so a stranger's replayed calls
     /// don't.
     private static func upsertCall(_ db: Database, _ record: CallRecord, isAuthoritative: Bool, isHistory: Bool, known: KnownCall? = nil) throws -> Message? {
-        var known = try known ?? {
-            let conversation = try Conversation.filter(Column("peer") == record.peer).fetchOne(db)
-            return KnownCall(conversation: conversation, row: try conversation?.id.flatMap { try callRow(db, conversationId: $0, sid: record.sid) })
-        }()
+        var known = try known ?? knownCall(db, peer: record.peer, sid: record.sid)
         if known.conversation == nil {
             let inRoster = try Contact.fetchOne(db, key: record.peer)?.isInRoster == true
             guard isAuthoritative || inRoster else { return nil }

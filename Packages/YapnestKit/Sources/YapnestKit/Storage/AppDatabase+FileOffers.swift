@@ -13,7 +13,6 @@ extension AppDatabase {
                 conversationId: conversation.id!, direction: .incoming, sender: peer, body: "",
                 timestamp: now, status: .received, remoteId: sid,
             )
-            message.link = nil
             let (stored, inserted) = try Self.insert(db, message)
             guard inserted, let id = stored.id else { return nil }
             try Attachment(
