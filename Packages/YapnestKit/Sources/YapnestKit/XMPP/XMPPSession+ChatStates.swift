@@ -83,10 +83,8 @@ extension XMPPSession {
     func includesActiveState(to peer: JID) -> Bool {
         guard sendsChatStates else { return false }
         return lock.withLock { state in
-            var tracker = state.chatStates[peer] ?? ChatStateTracker()
-            guard tracker.supported != false else { return false }
-            tracker.sent = .active
-            state.chatStates[peer] = tracker
+            guard state.chatStates[peer]?.supported != false else { return false }
+            state.chatStates[peer, default: ChatStateTracker()].sent = .active
             return true
         }
     }
@@ -110,11 +108,7 @@ extension XMPPSession {
             // A receipt, a marker or a reaction says nothing either way.
             return
         }
-        lock.withLock { state in
-            var tracker = state.chatStates[inbound.peer] ?? ChatStateTracker()
-            tracker.supported = supported
-            state.chatStates[inbound.peer] = tracker
-        }
+        lock.withLock { $0.chatStates[inbound.peer, default: ChatStateTracker()].supported = supported }
     }
 
     // MARK: Read markers

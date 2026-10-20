@@ -173,7 +173,7 @@ extension XMPPSession {
     public func adHocCommands(at jid: String) async throws -> [AdHocCommand] {
         guard isConnected else { throw AdHocError.offline }
         let entity = Martin.JID(jid)
-        let query = Element(name: "query", xmlns: "http://jabber.org/protocol/disco#items")
+        let query = Element(name: "query", xmlns: DiscoveryModule.ITEMS_XMLNS)
         query.setAttribute("node", value: NS.commands)
         let iq = Iq()
         iq.type = .get
@@ -192,7 +192,7 @@ extension XMPPSession {
         let iq = Iq()
         iq.type = .get
         iq.to = entity
-        iq.addChild(Element(name: "query", xmlns: "http://jabber.org/protocol/disco#info"))
+        iq.addChild(Element(name: "query", xmlns: DiscoveryModule.INFO_XMLNS))
         guard let reply = try? await send(iq, to: entity, timeout: Self.adHocProbeTimeout) else { return false }
         return AdHocStanza.offersCommands(in: reply)
     }
@@ -264,7 +264,7 @@ enum AdHocStanza {
     /// offers itself count, as a list naming another entity's commands would
     /// have the user run them under the wrong name.
     static func commands(in reply: Iq, offeredBy entity: Martin.JID) -> [AdHocCommand] {
-        guard let query = reply.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#items") else { return [] }
+        guard let query = reply.firstChild(name: "query", xmlns: DiscoveryModule.ITEMS_XMLNS) else { return [] }
         return query.filterChildren(name: "item", xmlns: nil).compactMap { item in
             guard let node = item.getAttribute("node"), !node.isEmpty, let jid = item.getAttribute("jid"), Martin.JID(jid) == entity else { return nil }
             let name = item.getAttribute("name")
@@ -274,7 +274,7 @@ enum AdHocStanza {
 
     /// Whether a disco#info answer lists the commands feature.
     static func offersCommands(in reply: Iq) -> Bool {
-        guard let query = reply.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#info") else { return false }
+        guard let query = reply.firstChild(name: "query", xmlns: DiscoveryModule.INFO_XMLNS) else { return false }
         return query.filterChildren(name: "feature", xmlns: nil).contains { $0.getAttribute("var") == NS.commands }
     }
 

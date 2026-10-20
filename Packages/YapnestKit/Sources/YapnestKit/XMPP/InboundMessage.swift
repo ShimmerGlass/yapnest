@@ -295,8 +295,9 @@ extension InboundMessage {
             self.timestamp = timestamp ?? Self.trustedDelay(in: stanza, stamper: stamper, account: account, now: now)
         case .live, .carbon:
             self.serverId = stanza.stanzaId?[stamper.martin]
-            self.timestamp = Self.trustedDelay(in: stanza, stamper: stamper, account: account, now: now)
-            self.isDelayed = Self.trustedStamp(in: stanza, stamper: stamper, account: account) != nil
+            let stamp = Self.trustedStamp(in: stanza, stamper: stamper, account: account)
+            self.timestamp = min(stamp ?? now, now)
+            self.isDelayed = stamp != nil
         }
 
         self.id = stanza.id
@@ -318,8 +319,12 @@ extension InboundMessage {
         // encrypted message they are ignored, as the send side never adds them.
         let plain = encryption == .none
         self.fileMetadata = plain ? FileMetadata(stanza) : nil
-        self.fileSharingId = plain ? stanza.firstChild(name: "file-sharing", xmlns: NS.sfs)?.getAttribute("id").flatMap { $0.isEmpty || $0.count > 256 ? nil : $0 } : nil
-        self.sourcesId = plain ? stanza.firstChild(name: "sources", xmlns: NS.sfs)?.getAttribute("id").flatMap { $0.isEmpty || $0.count > 256 ? nil : $0 } : nil
+        func announcementId(_ name: String) -> String? {
+            guard plain else { return nil }
+            return stanza.firstChild(name: name, xmlns: NS.sfs)?.getAttribute("id").flatMap { $0.isEmpty || $0.count > 256 ? nil : $0 }
+        }
+        self.fileSharingId = announcementId("file-sharing")
+        self.sourcesId = announcementId("sources")
 
         // Outside the OMEMO payload too, so ignored in an encrypted message for
         // the same reason. They are an offer to the reader, so one in our own

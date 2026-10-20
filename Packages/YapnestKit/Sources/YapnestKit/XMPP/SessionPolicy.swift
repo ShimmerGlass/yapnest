@@ -61,29 +61,6 @@ extension XMPPSession {
             registersPush: false, fetchesImages: false, donatesSuggestions: false,
             resendsPending: false, verifiesLiveness: false,
         )
-
-        init(
-            announcesPresence: Bool, enablesCarbons: Bool, reportsClientState: Bool,
-            catchesUpOnConnect: Bool, syncsAccountState: Bool, prunesContactRequests: Bool,
-            readsRoomHistory: Bool, checksRoomMembership: Bool, sendsChatStates: Bool,
-            registersPush: Bool, fetchesImages: Bool, donatesSuggestions: Bool,
-            resendsPending: Bool, verifiesLiveness: Bool,
-        ) {
-            self.announcesPresence = announcesPresence
-            self.enablesCarbons = enablesCarbons
-            self.reportsClientState = reportsClientState
-            self.catchesUpOnConnect = catchesUpOnConnect
-            self.syncsAccountState = syncsAccountState
-            self.prunesContactRequests = prunesContactRequests
-            self.readsRoomHistory = readsRoomHistory
-            self.checksRoomMembership = checksRoomMembership
-            self.sendsChatStates = sendsChatStates
-            self.registersPush = registersPush
-            self.fetchesImages = fetchesImages
-            self.donatesSuggestions = donatesSuggestions
-            self.resendsPending = resendsPending
-            self.verifiesLiveness = verifiesLiveness
-        }
     }
 }
 

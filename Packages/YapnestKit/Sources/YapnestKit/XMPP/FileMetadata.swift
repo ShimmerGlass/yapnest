@@ -138,8 +138,8 @@ public struct FileMetadata: Sendable, Equatable {
     /// it off the main thread.
     static func outgoing(for attachment: Attachment, in store: AttachmentStore) -> FileMetadata? {
         if attachment.isAudio {
-            guard let (data, hash) = contents(of: attachment, in: store) else { return nil }
-            return FileMetadata(mediaType: attachment.mimeType, size: Int64(data.count), length: attachment.duration, name: attachment.name, sha256: hash)
+            guard let file = store.url(for: attachment), let (size, hash) = try? XMPPSession.sizeAndHash(of: file) else { return nil }
+            return FileMetadata(mediaType: attachment.mimeType, size: size, length: attachment.duration, name: attachment.name, sha256: hash)
         }
         guard attachment.isImage, let width = attachment.imageSize.map({ Int($0.width) }), let height = attachment.imageSize.map({ Int($0.height) }),
               let (data, hash) = contents(of: attachment, in: store),
@@ -182,12 +182,5 @@ public struct FileMetadata: Sendable, Equatable {
             Element(name: "url-data", xmlns: NS.urlData).with(attribute: "target", url),
         ])
         return Element(name: "file-sharing", xmlns: NS.sfs, children: [file, sources]).with(attribute: "disposition", "inline")
-    }
-}
-
-private extension Element {
-    func with(attribute name: String, _ value: String) -> Element {
-        setAttribute(name, value: value)
-        return self
     }
 }

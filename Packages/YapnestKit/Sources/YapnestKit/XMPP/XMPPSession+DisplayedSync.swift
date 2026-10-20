@@ -62,12 +62,7 @@ extension XMPPSession {
         // Reading while messages arrive marks the same one again and again.
         let isNew = lock.withLock { $0.publishedDisplayed.updateValue(stanzaId, forKey: peer) != stanzaId }
         guard isNew else { return }
-        let options = Self.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options", fields: [
-            "pubsub#persist_items": ["true"],
-            "pubsub#max_items": ["max"],
-            "pubsub#send_last_published_item": ["never"],
-            "pubsub#access_model": ["whitelist"],
-        ])
+        let options = Self.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options", fields: Self.settingsNodeFields(maxItems: "max"))
         client.module(.pubsub).publishItem(
             at: nil, to: NS.mds, itemId: peer.description, payload: state.element,
             publishOptions: options, errorDecoder: PubSubError.from(stanza:),

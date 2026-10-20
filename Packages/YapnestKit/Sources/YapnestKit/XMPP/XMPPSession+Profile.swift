@@ -73,15 +73,6 @@ extension XMPPSession {
         node: String, itemId: String?, payload: Element, accessModel: String,
         config: [String: [String]]? = nil, timeout: TimeInterval? = nil,
     ) async throws {
-        try await publishPEPOrReconfigure(
-            node: node, itemId: itemId, payload: payload, accessModel: accessModel, config: config, timeout: timeout,
-        )
-    }
-
-    private func publishPEPOrReconfigure(
-        node: String, itemId: String?, payload: Element, accessModel: String,
-        config: [String: [String]]?, timeout: TimeInterval?,
-    ) async throws {
         let options = config.map { fields in
             XMPPSession.dataForm(
                 type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options",
@@ -179,11 +170,7 @@ extension XMPPSession {
     /// A name as it's published and shown: one line, without stray spaces or
     /// format characters; nil if nothing is left.
     public static func normalizedNickname(_ name: String?) -> String? {
-        guard let name else { return nil }
-        let line = removingFormatCharacters(name).split(whereSeparator: \.isNewline).joined(separator: " ")
-            .trimmingCharacters(in: .whitespaces)
-        guard !line.isEmpty else { return nil }
-        return String(line.prefix(maxNicknameLength))
+        normalizedStatus(name.map(removingFormatCharacters), limit: maxNicknameLength)
     }
 
     /// The name others see for us, if we've set one.

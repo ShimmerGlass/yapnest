@@ -62,7 +62,7 @@ enum OutboundStanza {
             message.body = quoted + text
             quoteLength = quoted.unicodeScalars.count
             message.addChild(Element(name: "reply", attributes: ["xmlns": NS.reply, "to": quote.author, "id": quote.id]))
-            let range = Element(name: "body", attributes: ["start": "0", "end": String(quoted.unicodeScalars.count)])
+            let range = Element(name: "body", attributes: ["start": "0", "end": String(quoteLength)])
             message.addChild(Element(name: "fallback", xmlns: NS.fallback, children: [range]).with(attribute: "for", NS.reply))
         } else {
             message.body = text
@@ -280,7 +280,7 @@ enum OutboundStanza {
     }
 }
 
-private extension Element {
+extension Element {
     func with(attribute name: String, _ value: String) -> Element {
         setAttribute(name, value: value)
         return self

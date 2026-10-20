@@ -14,7 +14,7 @@ extension XMPPSession {
     /// Remembers this device's APNs token and enables push with it, now if
     /// we're connected or else after the next catch-up.
     public func setPushToken(_ token: Data, sandbox: Bool) {
-        let hex = token.map { String(format: "%02x", $0) }.joined()
+        let hex = token.hex
         let environment = sandbox ? "sandbox" : "production"
         let changed = (try? database.setting(.pushToken)) != hex || (try? database.setting(.pushEnvironment)) != environment
         try? database.setSetting(.pushToken, hex)
@@ -102,23 +102,23 @@ extension XMPPSession {
     }
 
     private func stalePushNodes() -> [StalePushNode] {
-        (try? database.setting(.pushStaleNodes))
-            .flatMap { try? JSONDecoder().decode([StalePushNode].self, from: Data($0.utf8)) } ?? []
+        Self.decodeStale(try? database.setting(.pushStaleNodes))
+    }
+
+    private static func decodeStale(_ json: String?) -> [StalePushNode] {
+        json.flatMap { try? JSONDecoder().decode([StalePushNode].self, from: Data($0.utf8)) } ?? []
     }
 
     /// Changes the list in one transaction, as answers to several disables
     /// can arrive together.
     private func updateStalePushNodes(_ change: @escaping @Sendable (inout [StalePushNode]) -> Void) {
         try? database.writer.write { db in
-            let key = AppDatabase.SettingKey.pushStaleNodes.rawValue
-            let stored = try String.fetchOne(db, sql: "SELECT value FROM setting WHERE key = ?", arguments: [key])
-            var nodes = stored.flatMap { try? JSONDecoder().decode([StalePushNode].self, from: Data($0.utf8)) } ?? []
+            var nodes = Self.decodeStale(try AppDatabase.setting(db, .pushStaleNodes))
             change(&nodes)
             if nodes.isEmpty {
-                try db.execute(sql: "DELETE FROM setting WHERE key = ?", arguments: [key])
+                try AppDatabase.setSetting(db, .pushStaleNodes, nil)
             } else if let json = try? JSONEncoder().encode(nodes) {
-                try db.execute(sql: "INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                               arguments: [key, String(decoding: json, as: UTF8.self)])
+                try AppDatabase.setSetting(db, .pushStaleNodes, String(decoding: json, as: UTF8.self))
             }
         }
     }
@@ -134,11 +134,7 @@ extension XMPPSession {
         let current = StalePushNode(relay: (try? database.setting(.pushRelay)) ?? "", node: (try? database.setting(.pushNode)) ?? "")
         for stale in nodes ?? stalePushNodes() {
             // The node in use is never disabled, whatever the list says.
-            if stale == current {
-                updateStalePushNodes { $0.removeAll { $0 == stale } }
-                continue
-            }
-            guard let relay = JID(stale.relay) else {
+            guard stale != current, let relay = JID(stale.relay) else {
                 updateStalePushNodes { $0.removeAll { $0 == stale } }
                 continue
             }
