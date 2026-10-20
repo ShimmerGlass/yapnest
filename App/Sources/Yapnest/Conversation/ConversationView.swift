@@ -30,9 +30,8 @@ struct ConversationView: View {
     @State private var bottomBarHeight: CGFloat = 0
 
     @State private var confirmsBlock = false
-    @State private var requestError: String?
     /// A contact request is being answered.
-    @State private var isAnswering = false
+    @State private var answering = ServerAction()
 
     private var screen: ConversationScreen { holder.screen(session: session, peer: peer, openingAt: openingAt, initial: initial) }
     private var conversation: ConversationModel { screen.conversation }
@@ -132,7 +131,7 @@ struct ConversationView: View {
             }
             .onChange(of: model.chatSearchRequests) { search.open() }
             .blockConfirmation(isPresented: $confirmsBlock, session: session, peer: peer, name: title)
-            .errorAlert("Couldn't answer", $requestError)
+            .errorAlert("Couldn't answer", $answering.error)
             .sheet(isPresented: $showsSettings, onDismiss: {
                 // The search field takes focus as it appears, which a sheet
                 // that's still leaving would swallow.
@@ -165,6 +164,16 @@ struct ConversationView: View {
             }
     }
 
+    @ViewBuilder
+    private func busyCard(_ shows: Bool, label: LocalizedStringKey) -> some View {
+        if shows {
+            ProgressView()
+                .padding(16)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .accessibilityLabel(label)
+        }
+    }
+
     /// The messages run under the bars, which blur them, and the composer
     /// rides above the keyboard.
     private var messages: some View {
@@ -174,22 +183,8 @@ struct ConversationView: View {
         .overlay(alignment: .top) {
             if Platform.flipsMessageList, #available(iOS 26, *) { TopEdgeBlur() }
         }
-        .overlay {
-            if conversation.isSearching {
-                ProgressView()
-                    .padding(16)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
-                    .accessibilityLabel("Looking for the message")
-            }
-        }
-        .overlay {
-            if conversation.isRemovingForEveryone {
-                ProgressView()
-                    .padding(16)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
-                    .accessibilityLabel("Removing the message")
-            }
-        }
+        .overlay { busyCard(conversation.isSearching, label: "Looking for the message") }
+        .overlay { busyCard(conversation.isRemovingForEveryone, label: "Removing the message") }
         .overlay {
             // The composer is UIKit and tells the model; the list is SwiftUI.
             if listDropTargeted || conversation.composerDropTargeted {
@@ -211,12 +206,12 @@ struct ConversationView: View {
                     .countsAsConversationSheet()
             }
         }
-        .sheet(isPresented: Binding(get: { conversation.showsLocationPicker }, set: { conversation.showsLocationPicker = $0 })) {
+        .sheet(isPresented: Bindable(conversation).showsLocationPicker) {
             LocationPicker { conversation.stageLocation($0) }
                 .sheetSizedForMac(width: 520, height: 560)
                 .countsAsConversationSheet()
         }
-        .sheet(isPresented: Binding(get: { conversation.showsGifPicker }, set: { conversation.showsGifPicker = $0 })) {
+        .sheet(isPresented: Bindable(conversation).showsGifPicker) {
             GifPicker(database: session.database) { conversation.addGif($0) }
                 .sheetSizedForMac(width: 520, height: 640)
                 .countsAsConversationSheet()
@@ -375,10 +370,10 @@ struct ConversationView: View {
         banner(Text("\(contact.requestTitle) (\(peer.description)) wants to add you as a contact and see when you're online.")) {
             Button("Accept") { answer { try $0.acceptContactRequest(from: $1) } }
                 .buttonStyle(.borderedProminent)
-                .disabled(isAnswering)
+                .disabled(answering.isBusy)
             Button("Decline") { answer { try $0.declineContactRequest(from: $1) } }
                 .buttonStyle(.bordered)
-                .disabled(isAnswering)
+                .disabled(answering.isBusy)
             Button("Block", role: .destructive) { confirmsBlock = true }
                 .buttonStyle(.bordered)
         }
@@ -404,17 +399,8 @@ struct ConversationView: View {
     /// Answering writes to the database, so it runs off the main thread; the
     /// buttons are off until it's done.
     private func answer(_ action: @escaping @Sendable (XMPPSession, JID) throws -> Void) {
-        guard !isAnswering else { return }
-        isAnswering = true
         let session = session, peer = peer
-        Task {
-            do {
-                try await Task.detached(priority: .userInitiated) { try action(session, peer) }.value
-            } catch {
-                requestError = error.localizedDescription
-            }
-            isAnswering = false
-        }
+        answering.run { try await Task.detached(priority: .userInitiated) { try action(session, peer) }.value }
     }
 }
 

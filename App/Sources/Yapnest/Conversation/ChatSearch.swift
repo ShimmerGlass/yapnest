@@ -50,9 +50,7 @@ final class ChatSearch {
         task?.cancel()
         isActive = false
         query = ""
-        matches = []
-        current = 0
-        isSearching = false
+        noMatches()
     }
 
     func goOlder() { move(to: current + 1) }
@@ -68,9 +66,7 @@ final class ChatSearch {
         task?.cancel()
         let text = query.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else {
-            matches = []
-            current = 0
-            isSearching = false
+            noMatches()
             return
         }
         isSearching = true

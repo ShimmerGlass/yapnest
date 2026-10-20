@@ -85,13 +85,9 @@ struct MessageBubble: View {
                     .bubbleSpacingAfter(6)
             }
             if let text = content.text {
-                if hasActions {
-                    // The bold action reads as part of the text when it sits tight under it.
-                    MessageBody(text: text, isOutgoing: isOutgoing, isRetracted: message.isRetracted, openLink: { model.open(link: $0) })
-                        .bubbleSpacingAfter(10)
-                } else {
-                    MessageBody(text: text, isOutgoing: isOutgoing, isRetracted: message.isRetracted, openLink: { model.open(link: $0) })
-                }
+                // The bold action reads as part of the text when it sits tight under it.
+                MessageBody(text: text, isOutgoing: isOutgoing, isRetracted: message.isRetracted, openLink: { model.open(link: $0) })
+                    .bubbleSpacingAfter(hasActions ? 10 : BubbleSpacingKey.defaultValue)
             }
             footer(foreground: foreground)
                 .bubbleFooter()

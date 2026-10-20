@@ -29,14 +29,7 @@ struct LocationCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay {
                 if let shown = loaded.flatMap({ $0.key == key ? $0.image : nil }) ?? LocationSnapshotCache.cached(key) {
-                    // A fixed frame: a flexible one grows to the filled picture's size, so a clip on it crops nothing.
-                    GeometryReader { proxy in
-                        Image(uiImage: shown)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
+                    FilledImage(image: Image(uiImage: shown), shape: RoundedRectangle(cornerRadius: 10))
                 } else {
                     Image(systemName: "mappin.and.ellipse")
                         .font(.title)

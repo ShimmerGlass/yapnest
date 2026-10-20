@@ -89,20 +89,20 @@ struct MessageMenu: View {
     private var links: some View {
         let urls = item.attachment == nil && message.encryption != .omemoUndecryptable ? LinkDetector.links(in: message.body).map(\.url) : []
         if urls.count == 1, let url = urls.first {
-            Section {
-                Button("Open Link", systemImage: "safari") { model.open(link: url) }
-                Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
-            }
+            Section { linkButtons(url) }
         } else if urls.count > 1 {
             Menu("Links", systemImage: "link") {
                 ForEach(urls, id: \.self) { url in
-                    Menu(url.absoluteString) {
-                        Button("Open Link", systemImage: "safari") { model.open(link: url) }
-                        Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
-                    }
+                    Menu(url.absoluteString) { linkButtons(url) }
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func linkButtons(_ url: URL) -> some View {
+        Button("Open Link", systemImage: "safari") { model.open(link: url) }
+        Button("Copy Link", systemImage: "link") { UIPasteboard.general.url = url }
     }
 
     /// How it was protected. The menu is as wide as the system makes it, so

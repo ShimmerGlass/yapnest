@@ -57,12 +57,5 @@ extension Message {
 }
 
 extension UIFont {
-    var bold: UIFont { withTraits(.traitBold) }
-    var italic: UIFont { withTraits(.traitItalic) }
-
-    private func withTraits(_ traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
-        guard let descriptor = fontDescriptor.withSymbolicTraits(fontDescriptor.symbolicTraits.union(traits)) else { return self }
-        return UIFont(descriptor: descriptor, size: 0)
-    }
+    var bold: UIFont { with(traits: .traitBold) }
 }
-

@@ -107,7 +107,7 @@ struct MessageList: View {
         .onScrollGeometryChange(for: Bool.self) { ConversationModel.isNearTop($0, flipped: flipped) } action: { _, near in
             model.nearTopChanged(near)
         }
-        .onScrollGeometryChange(for: Bool.self) { ConversationModel.distanceFromBottom($0, flipped: flipped) < $0.containerSize.height * 1.5 } action: { _, near in
+        .onScrollGeometryChange(for: Bool.self) { ConversationModel.isNearEnd($0, flipped: flipped) } action: { _, near in
             model.nearEndChanged(near)
         }
         .onScrollTargetVisibilityChange(idType: Int64.self, threshold: 0.5) { ids in

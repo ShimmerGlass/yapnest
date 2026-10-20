@@ -147,7 +147,8 @@ final class TransferProgress {
         }
         let ended = items.keys.filter { progress[$0] == nil }
         for id in ended { items[id] = nil }
-        if Set(progress.keys) != active { active = Set(progress.keys) }
+        let keys = Set(progress.keys)
+        if keys != active { active = keys }
     }
 }
 

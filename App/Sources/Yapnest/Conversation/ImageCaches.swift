@@ -8,28 +8,25 @@ enum ImageDownsampler {
     /// Decoded here, on whatever thread asks, so the first draw on the main
     /// thread has nothing left to do. `maxPixels` is the longer side.
     nonisolated static func downsample(_ url: URL, maxPixels: Int) -> UIImage? {
+        downsample(url) { _ in maxPixels }
+    }
+
+    /// For a size that depends on the picture's own: `maxPixels` is given its
+    /// header, so the file is opened once for both.
+    nonisolated static func downsample(_ url: URL, maxPixels: (AnimatedImages.Header?) -> Int) -> UIImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        let header = AnimatedImages.header(of: source) ?? AnimatedImages.header(of: url)
         // A GIF's canvas is decoded whole for any frame, however small it's
         // shown, so a huge one isn't read at all.
-        if AnimatedImages.header(of: url)?.plan == .tooLarge { return nil }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+        if header?.plan == .tooLarge { return nil }
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                   kCGImageSourceCreateThumbnailFromImageAlways: true,
                   kCGImageSourceCreateThumbnailWithTransform: true,
                   kCGImageSourceShouldCacheImmediately: true,
-                  kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+                  kCGImageSourceThumbnailMaxPixelSize: maxPixels(header),
               ] as CFDictionary)
         else { return nil }
         return UIImage(cgImage: image)
-    }
-
-    /// The picture's size in pixels, from its header.
-    nonisolated static func pixelSize(of url: URL) -> CGSize? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int,
-              let height = properties[kCGImagePropertyPixelHeight] as? Int
-        else { return nil }
-        return CGSize(width: width, height: height)
     }
 }
 
@@ -107,13 +104,16 @@ enum PreviewImageCache {
     static func load(_ url: URL, scale: CGFloat) async -> UIImage? {
         let width = MediaLimits.maxBubbleWidth * scale
         let image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
-            // The picture fills its frame, so a tall one is cropped to the
-            // width and it's the longer side that has to be larger.
-            var side = width
-            if let size = ImageDownsampler.pixelSize(of: url), size.width > 0 {
-                side = min(width * max(1, size.height / size.width), max(size.width, size.height))
+            ImageDownsampler.downsample(url) { header in
+                // The picture fills its frame, so a tall one is cropped to the
+                // width and it's the longer side that has to be larger.
+                var side = width
+                if let header {
+                    let (w, h) = (CGFloat(header.width), CGFloat(header.height))
+                    side = min(width * max(1, h / w), max(w, h))
+                }
+                return Int(side.rounded(.up))
             }
-            return ImageDownsampler.downsample(url, maxPixels: Int(side.rounded(.up)))
         }.value
         if let image { cache.setImage(image, forKey: url) }
         return image

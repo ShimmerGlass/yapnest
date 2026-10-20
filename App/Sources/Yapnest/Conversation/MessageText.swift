@@ -127,7 +127,7 @@ enum MessageText {
             if collapsed, let start = collapse(body) {
                 with(render(start, font: .body)) { $0.isCollapsed = true }
             } else {
-                with(render(body, font: bodyFont(for: body))) { $0.isEmojiOnly = emojiOnlyCount(body) != nil }
+                renderWhole(body)
             }
         }
     }
@@ -138,8 +138,13 @@ enum MessageText {
         return text
     }
 
-    private static func bodyFont(for body: String) -> BodyFont {
-        switch emojiOnlyCount(body) {
+    private static func renderWhole(_ body: String) -> RenderedText {
+        let emoji = emojiOnlyCount(body)
+        return with(render(body, font: bodyFont(forEmojiCount: emoji))) { $0.isEmojiOnly = emoji != nil }
+    }
+
+    private static func bodyFont(forEmojiCount emoji: Int?) -> BodyFont {
+        switch emoji {
         case let count? where count <= 3: BodyFont(swiftUI: .largeTitle, style: .largeTitle)
         case _?: BodyFont(swiftUI: .title, style: .title1)
         case nil: .body
@@ -208,7 +213,7 @@ enum MessageText {
     /// those larger.
     static func emojiOnlyCount(_ text: String) -> Int? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count <= 6 else { return nil }
+        guard !trimmed.isEmpty, trimmed.dropFirst(6).isEmpty else { return nil }
         for character in trimmed {
             guard let first = character.unicodeScalars.first else { return nil }
             let isEmoji = first.properties.isEmojiPresentation

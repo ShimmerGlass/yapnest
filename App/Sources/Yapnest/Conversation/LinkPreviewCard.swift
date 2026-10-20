@@ -85,14 +85,7 @@ private struct PreviewImage: View {
             .clipShape(UnevenRoundedRectangle(cornerRadii: cornerRadii))
             .overlay {
                 if let shown = loaded.flatMap({ $0.url == url ? $0.image : nil }) ?? PreviewImageCache.cached(url) {
-                    // A fixed frame: a flexible one grows to the filled picture's size, so a clip on it crops nothing.
-                    GeometryReader { proxy in
-                        Image(uiImage: shown)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .clipShape(UnevenRoundedRectangle(cornerRadii: cornerRadii))
-                    }
+                    FilledImage(image: Image(uiImage: shown), shape: UnevenRoundedRectangle(cornerRadii: cornerRadii))
                 }
             }
             .task(id: url) {

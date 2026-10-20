@@ -175,26 +175,12 @@ private struct MediaThumbnail: View {
                 if display.fileURL == nil, let preview {
                     // Smoothed on the way up, which is the blur: drawing it
                     // through a blur filter would cost an offscreen pass per bubble.
-                    GeometryReader { proxy in
-                        Image(uiImage: preview)
-                            .resizable()
-                            .interpolation(.high)
-                            .scaledToFill()
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
+                    FilledImage(image: Image(uiImage: preview).interpolation(.high), shape: RoundedRectangle(cornerRadius: 12))
                 }
             }
             .overlay {
                 if let shown = display.fileURL.flatMap({ url in loaded.flatMap { $0.url == url ? $0.image : nil } ?? ThumbnailCache.cached(url) }) {
-                    // A fixed frame: a flexible one grows to the filled picture's size, so a clip on it crops nothing.
-                    GeometryReader { proxy in
-                        Image(uiImage: shown)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
+                    FilledImage(image: Image(uiImage: shown), shape: RoundedRectangle(cornerRadius: 12))
                 }
             }
             .overlay {
@@ -280,6 +266,24 @@ private struct MediaThumbnail: View {
 }
 
 /// The round glyph over media and beside files: download, progress, play, failure.
+/// A picture filling its frame, clipped on its own layer. The frame is fixed:
+/// a flexible one grows to the filled picture's size, so a clip on it crops
+/// nothing.
+struct FilledImage<S: Shape>: View {
+    let image: Image
+    let shape: S
+
+    var body: some View {
+        GeometryReader { proxy in
+            image
+                .resizable()
+                .scaledToFill()
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipShape(shape)
+        }
+    }
+}
+
 struct AttachmentBadge: View {
     enum State: Equatable {
         case hidden, download, failed, unavailable, play, pause, file, contact

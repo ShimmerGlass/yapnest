@@ -725,9 +725,7 @@ final class ConversationModel {
                 }
             }
         } else {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
+            withoutAnimation {
                 if !arrivingIDs.isEmpty { arrivingIDs = [] }
                 replaceRows(built)
             }
@@ -781,6 +779,10 @@ final class ConversationModel {
             if let geometry { isNearTop = Self.isNearTop(geometry, flipped: isFlipped) }
             loadOlderIfNeeded()
         }
+    }
+
+    static func isNearEnd(_ geometry: ScrollGeometry, flipped: Bool) -> Bool {
+        distanceFromBottom(geometry, flipped: flipped) < geometry.containerSize.height * 1.5
     }
 
     static func isNearTop(_ geometry: ScrollGeometry, flipped: Bool) -> Bool {
@@ -1018,7 +1020,7 @@ final class ConversationModel {
                 newTexts[id] = textCache[id]
                 continue
             }
-            let content = makeContent(at: index, isNewest: inputs.isNewest, texts: &newTexts)
+            let content = makeContent(inputs, texts: &newTexts)
             let row: MessageRow
             if let existing = rowsByID[id], existing.content == content {
                 row = existing
@@ -1034,27 +1036,28 @@ final class ConversationModel {
         return built
     }
 
-    private func makeContent(at index: Int, isNewest: Bool, texts: inout [Int64: CachedText]) -> MessageRow.Content {
-        let item = items[order[index]]!
+    private func makeContent(_ inputs: RowInputs, texts: inout [Int64: CachedText]) -> MessageRow.Content {
+        let item = inputs.item
+        let isNewest = inputs.isNewest
         let message = item.message
         let isOutgoing = message.direction == .outgoing
-        let previous = index > 0 ? items[order[index - 1]] : nil
-        let next = index + 1 < order.count ? items[order[index + 1]] : nil
+        let this = Neighbour(item)
         let calendar = Calendar.current
-        func grouped(_ a: ConversationItem?, _ b: ConversationItem?) -> Bool {
+        func grouped(_ a: Neighbour?, _ b: Neighbour?) -> Bool {
             guard let a, let b else { return false }
-            return a.message.direction == b.message.direction
-                && a.message.author == b.message.author
-                && abs(a.message.timestamp.timeIntervalSince(b.message.timestamp)) < 120
-                && calendar.isDate(a.message.timestamp, inSameDayAs: b.message.timestamp)
+            return a.direction == b.direction
+                && a.author == b.author
+                && abs(a.timestamp.timeIntervalSince(b.timestamp)) < 120
+                && calendar.isDate(a.timestamp, inSameDayAs: b.timestamp)
         }
-        let showsDay = previous.map { !calendar.isDate($0.message.timestamp, inSameDayAs: message.timestamp) } ?? true
-        let startsRun = !grouped(previous, item) || showsDay
+        let showsDay = inputs.previous.map { !calendar.isDate($0.timestamp, inSameDayAs: message.timestamp) } ?? true
+        let joinsPrevious = grouped(inputs.previous, this)
+        let startsRun = !joinsPrevious || showsDay
         let layout = MessageRow.Layout(
             dayHeader: showsDay ? message.timestamp.dayHeaderFormatted(now: now()) : nil,
             showsUnreadDivider: item.id == unreadDividerId,
-            joinsPrevious: grouped(previous, item),
-            joinsNext: grouped(item, next) && next?.reactions.isEmpty != false && item.reactions.isEmpty,
+            joinsPrevious: joinsPrevious,
+            joinsNext: grouped(this, inputs.next) && inputs.next?.hasReactions != true && item.reactions.isEmpty,
         )
 
         let time = message.timestamp.formatted(date: .omitted, time: .shortened)
@@ -1114,10 +1117,10 @@ final class ConversationModel {
         case .page(let preview, _), .image(let preview, _): preview.title
         case .none, .ask: nil
         }
-        let replying: String? = item.quote.map { quote in
-            let author = item.quote?.author.map(authorName(for:))
-            let summary = quote.text.trimmingBlankEdgeLines
-            return author.map { String(localized: "Replying to \($0): \(summary)") } ?? String(localized: "Replying to: \(summary)")
+        let quoteAuthor = item.quote?.author.map(authorName(for:))
+        let quoteText = item.quote?.text.trimmingBlankEdgeLines
+        let replying: String? = quoteText.map { summary in
+            quoteAuthor.map { String(localized: "Replying to \($0): \(summary)") } ?? String(localized: "Replying to: \(summary)")
         }
         let reactions: String? = item.reactions.isEmpty ? nil
             : String(localized: "Reactions: \(item.reactions.map { "\($0.emoji) \($0.senders.count)" }.joined(separator: ", "))")
@@ -1126,9 +1129,9 @@ final class ConversationModel {
         return MessageRow.Content(
             item: item,
             layout: layout,
-            senderName: showsName ? authorName(for: message.author) : nil,
-            quoteAuthor: item.quote?.author.map(authorName(for:)) ?? "",
-            quoteText: item.quote?.text.trimmingBlankEdgeLines ?? "",
+            senderName: showsName ? who : nil,
+            quoteAuthor: quoteAuthor ?? "",
+            quoteText: quoteText ?? "",
             senderColor: showsName ? SenderColor.color(for: message.author) : nil,
             time: time,
             security: message.security,
@@ -1343,9 +1346,7 @@ final class ConversationModel {
                     guard let lastReadID, items[lastReadID] != nil else { return }
                     nudges += 1
                     FrameLog.event("scroll.scrollTo blank-recovery id=\(lastReadID)")
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) { scroll.scrollTo(id: lastReadID, anchor: flipped(.top)) }
+                    withoutAnimation { scroll.scrollTo(id: lastReadID, anchor: flipped(.top)) }
                 case .nudge:
                     nudges += 1
                     layoutNudge = layoutNudge == 0 ? 1 : 0
@@ -1509,10 +1510,14 @@ final class ConversationModel {
         if animated {
             withAnimation { scrollToNewestRow(last, byID: byID) }
         } else {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { scrollToNewestRow(last, byID: byID) }
+            withoutAnimation { scrollToNewestRow(last, byID: byID) }
         }
+    }
+
+    private func withoutAnimation(_ body: () -> Void) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction, body)
     }
 
     /// The edge the newest message is at.
@@ -1555,10 +1560,8 @@ final class ConversationModel {
     /// bottom when they arrive.
     private func showNewest() {
         guard isBounded else { return }
-        tasks.cancel("reveal")
-        tasks.cancel("older")
-        tasks.cancel("newer")
-        if olderState == .loading || olderState == .complete { olderState = .idle }
+        cancelWindowSteps()
+        if olderState == .complete { olderState = .idle }
         windowStart = nil
         windowEnd = nil
         pendingJump = nil
@@ -1744,7 +1747,7 @@ final class ConversationModel {
     private func loadNewerIfNeeded() {
         // The list's own report of being near the end only says when it changed,
         // so this looks at where it is now.
-        guard hasLoaded, isPositioned, !jumpSettling, isBounded, let geometry, bottomDistance(geometry) < geometry.containerSize.height * 1.5, !pendingBottom, tasks["newer"] == nil, tasks["older"] == nil, tasks["reveal"] == nil,
+        guard hasLoaded, isPositioned, !jumpSettling, isBounded, let geometry, Self.isNearEnd(geometry, flipped: isFlipped), !pendingBottom, tasks["newer"] == nil, tasks["older"] == nil, tasks["reveal"] == nil,
               pendingJump == nil, !isWidening, let newest = order.last.flatMap({ items[$0] })?.cursor else { return }
         let session = session, peer = peer, growth = Self.windowGrowth, generation = generation
         tasks["newer"] = Task { [weak self] in
@@ -1801,27 +1804,29 @@ final class ConversationModel {
         }
     }
 
+    /// Stops every step that would change the window under a jump.
+    private func cancelWindowSteps() {
+        tasks.cancel("reveal")
+        tasks.cancel("older")
+        tasks.cancel("newer")
+        if olderState == .loading { olderState = .idle }
+    }
+
     /// Scrolls to `target` and highlights it, whether it is in the window or not.
     func reveal(_ target: Int64) {
         followsBottom = false
+        // The scroll may cross the near-top threshold and start loading older
+        // rows, which would pin whatever row is topmost mid-flight. Outside
+        // the window, a newer jump replaces an earlier one.
+        cancelWindowSteps()
         if items[target] != nil {
-            tasks.cancel("reveal")
-            // The scroll may cross the near-top threshold and start loading
-            // older rows, which would pin whatever row is topmost mid-flight.
-            tasks.cancel("older")
-            tasks.cancel("newer")
-            if olderState == .loading { olderState = .idle }
             beginJumpSettling()
             FrameLog.event("scroll.scrollTo reveal id=\(target) center")
             withAnimation { scroll.scrollTo(id: target, anchor: .center) }
             flash(target)
             return
         }
-        // Stored, but outside the window. A newer jump replaces an earlier
-        // one, and stops a step that would change the window under it.
-        tasks.cancel("older")
-        tasks.cancel("newer")
-        if olderState == .loading { olderState = .idle }
+        // Stored, but outside the window.
         let session = session, peer = peer, limit = Self.windowLimit
         tasks["reveal"] = Task { [weak self] in
             let window = await Task.detached(priority: .userInitiated) {
@@ -2517,7 +2522,7 @@ final class ConversationModel {
                 if let message = pendingRead {
                     pendingRead = nil
                     let succeeded = await Task.detached(priority: .utility) {
-                        guard let conversation = try? session.database.reader.read({ try Conversation.fetchOne($0, key: message.conversationId) }) else { return false }
+                        guard let conversation = try? session.database.conversation(id: message.conversationId) else { return false }
                         return (try? session.markRead(conversation, through: message)) != nil
                     }.value
                     // Asking again for the same message has to be possible.
