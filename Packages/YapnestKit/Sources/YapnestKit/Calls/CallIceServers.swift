@@ -79,11 +79,11 @@ final class IceServerCache: Sendable {
     /// The cached servers, or what `discover` finds. A nil from it, a failure,
     /// gives no servers and isn't kept.
     func servers(now: @escaping @Sendable () -> Date = { Date() }, discover: @escaping @Sendable () async -> Discovered?) async -> [CallIceServer] {
-        let task = guarded.withLockUnchecked { state -> Task<[CallIceServer], Never> in
+        let (cached, task) = guarded.withLockUnchecked { state -> ([CallIceServer]?, Task<[CallIceServer], Never>?) in
             if let servers = state.servers, now() < state.validUntil {
-                return Task { servers }
+                return (servers, nil)
             }
-            if let inFlight = state.inFlight { return inFlight }
+            if let inFlight = state.inFlight { return (nil, inFlight) }
             let generation = state.generation
             let task = Task { [self] in
                 let found = await discover()
@@ -98,9 +98,10 @@ final class IceServerCache: Sendable {
                 return found?.servers ?? []
             }
             state.inFlight = task
-            return task
+            return (nil, task)
         }
-        return await task.value
+        if let cached { return cached }
+        return await task!.value
     }
 
     /// Forgets everything, as a new connection has new credentials.

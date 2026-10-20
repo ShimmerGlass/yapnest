@@ -84,10 +84,11 @@ enum CallJingle {
         text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n")
     }
 
+    private static let lineBreaks = CharacterSet(charactersIn: "\r\n\0")
+
     private static func hasLineBreak(_ element: Element) -> Bool {
-        let unsafe = CharacterSet(charactersIn: "\r\n\0")
-        if let value = element.value, value.rangeOfCharacter(from: unsafe) != nil { return true }
-        for value in element.attributes.values where value.rangeOfCharacter(from: unsafe) != nil { return true }
+        if let value = element.value, value.rangeOfCharacter(from: lineBreaks) != nil { return true }
+        for value in element.attributes.values where value.rangeOfCharacter(from: lineBreaks) != nil { return true }
         return element.children.contains(where: hasLineBreak)
     }
 }

@@ -12,9 +12,9 @@ struct CallBar: View {
     let controller: CallController
     let state: CallState
 
-    @State private var contact: Contact?
+    @State private var loadedName: String?
 
-    private var name: String { contact?.displayName ?? state.peer.shortName }
+    private var name: String { loadedName ?? state.peer.shortName }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -26,10 +26,7 @@ struct CallBar: View {
         .modifier(CallBarBackground())
         .padding(.horizontal, 12)
         .padding(.bottom, 4)
-        .task(id: state.peer) {
-            let database = session.database, peer = state.peer
-            contact = await offMain { try? database.contact(peer) }
-        }
+        .task(id: state.peer) { loadedName = await CallController.displayName(of: state.peer, in: session) }
         .accessibilityElement(children: .contain)
     }
 
@@ -60,6 +57,13 @@ struct CallBar: View {
         .contentShape(Rectangle())
     }
 
+    private func disc(_ symbol: String, fill: Color, foreground: Color) -> some View {
+        Image(systemName: symbol)
+            .frame(width: 36, height: 36)
+            .background(fill, in: Circle())
+            .foregroundStyle(foreground)
+    }
+
     @ViewBuilder
     private var controls: some View {
         if state.phase == .incoming {
@@ -74,19 +78,13 @@ struct CallBar: View {
             Button {
                 controller.endCall()
             } label: {
-                Image(systemName: "phone.down.fill")
-                    .frame(width: 36, height: 36)
-                    .background(Color.red, in: Circle())
-                    .foregroundStyle(.white)
+                disc("phone.down.fill", fill: Color.red, foreground: .white)
             }
             .accessibilityLabel("Decline")
             Button {
                 controller.answer()
             } label: {
-                Image(systemName: state.isVideo ? "video.fill" : "phone.fill")
-                    .frame(width: 36, height: 36)
-                    .background(Color.green, in: Circle())
-                    .foregroundStyle(.white)
+                disc(state.isVideo ? "video.fill" : "phone.fill", fill: Color.green, foreground: .white)
             }
             .accessibilityLabel("Answer")
         }
@@ -99,10 +97,7 @@ struct CallBar: View {
             Button {
                 controller.setMuted(!state.isMuted)
             } label: {
-                Image(systemName: state.isMuted ? "mic.slash.fill" : "mic.fill")
-                    .frame(width: 36, height: 36)
-                    .background(state.isMuted ? Color.primary : Color(.secondarySystemFill), in: Circle())
-                    .foregroundStyle(state.isMuted ? Color(.systemBackground) : Color.primary)
+                disc(state.isMuted ? "mic.slash.fill" : "mic.fill", fill: state.isMuted ? Color.primary : Color(.secondarySystemFill), foreground: state.isMuted ? Color(.systemBackground) : Color.primary)
             }
             .accessibilityLabel("Mute")
             .accessibilityAddTraits(state.isMuted ? .isSelected : [])
@@ -110,10 +105,7 @@ struct CallBar: View {
                 Button {
                     controller.setCameraEnabled(!state.isCameraOn)
                 } label: {
-                    Image(systemName: state.isCameraOn ? "video.fill" : "video.slash.fill")
-                        .frame(width: 36, height: 36)
-                        .background(state.isCameraOn ? Color(.secondarySystemFill) : Color.primary, in: Circle())
-                        .foregroundStyle(state.isCameraOn ? Color.primary : Color(.systemBackground))
+                    disc(state.isCameraOn ? "video.fill" : "video.slash.fill", fill: state.isCameraOn ? Color(.secondarySystemFill) : Color.primary, foreground: state.isCameraOn ? Color.primary : Color(.systemBackground))
                 }
                 .accessibilityLabel("Camera")
                 .accessibilityAddTraits(state.isCameraOn ? [] : .isSelected)
@@ -122,10 +114,7 @@ struct CallBar: View {
             Menu {
                 CallDevicePickers(showsCamera: state.isVideo, inMenu: true)
             } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .frame(width: 36, height: 36)
-                    .background(Color(.secondarySystemFill), in: Circle())
-                    .foregroundStyle(Color.primary)
+                disc("slider.horizontal.3", fill: Color(.secondarySystemFill), foreground: Color.primary)
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
@@ -134,10 +123,7 @@ struct CallBar: View {
             Button {
                 controller.endCall()
             } label: {
-                Image(systemName: "phone.down.fill")
-                    .frame(width: 36, height: 36)
-                    .background(Color.red, in: Circle())
-                    .foregroundStyle(.white)
+                disc("phone.down.fill", fill: Color.red, foreground: .white)
             }
             .accessibilityLabel("End")
         }

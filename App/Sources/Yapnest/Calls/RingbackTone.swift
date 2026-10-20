@@ -9,6 +9,8 @@ import CoreAudio
 import YapnestCallMedia
 #endif
 
+private let ringbackLogger = Logger(subsystem: "Yapnest", category: "Calls")
+
 /// The tone an outgoing call plays while the other end rings. CallKit plays
 /// nothing for a call we place, so the app does, on every platform.
 ///
@@ -26,7 +28,7 @@ enum RingbackTone {
     /// is waiting for the peer, so it is gone the moment the call is answered.
     static func plays(for state: CallState?) -> Bool {
         guard let state, state.direction == .outgoing else { return false }
-        return state.phase == .proposing || state.phase == .ringing
+        return state.phase.isAwaitingAnswer
     }
 
     /// The tone's loudness, from 0 to 1, at a sample of the cadence.
@@ -55,11 +57,11 @@ final class RingbackRenderer: @unchecked Sendable {
     init(sampleRate: Double) { self.sampleRate = sampleRate }
 
     func render(_ buffers: UnsafeMutableAudioBufferListPointer, frames: Int) {
-        for buffer in buffers {
-            guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
-            let channels = max(1, Int(buffer.mNumberChannels))
-            for i in 0..<frames {
-                let value = RingbackTone.sample(frame: frame + i, sampleRate: sampleRate)
+        for i in 0..<frames {
+            let value = RingbackTone.sample(frame: frame + i, sampleRate: sampleRate)
+            for buffer in buffers {
+                guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
+                let channels = max(1, Int(buffer.mNumberChannels))
                 for channel in 0..<channels { data[i * channels + channel] = value }
             }
         }
@@ -95,15 +97,12 @@ final class RingbackRenderer: @unchecked Sendable {
 /// answered and the tone is stopped.
 @MainActor
 final class RingbackPlayer {
-    private static let logger = Logger(subsystem: "Yapnest", category: "Calls")
     private static let sampleRate = 48_000.0
     /// `kAudioUnitSubType_HALOutput`, which the Catalyst SDK declares no name for.
     private static let halOutput: OSType = 0x6168_616C
 
     private var unit: AudioUnit?
     private var renderer: RingbackRenderer?
-
-    var isPlaying: Bool { unit != nil }
 
     func start() {
         guard unit == nil else { return }
@@ -117,7 +116,7 @@ final class RingbackPlayer {
         self.renderer = renderer
         self.unit = unit
         guard configure(unit, renderer), AudioOutputUnitStart(unit) == noErr else {
-            Self.logger.error("Ringback tone could not start")
+            ringbackLogger.error("Ringback tone could not start")
             stop()
             return
         }
@@ -164,10 +163,7 @@ final class RingbackPlayer {
 /// that is CallKit's to do. It is stopped before the call's own audio starts.
 @MainActor
 final class RingbackPlayer {
-    private static let logger = Logger(subsystem: "Yapnest", category: "Calls")
     private var engine: AVAudioEngine?
-
-    var isPlaying: Bool { engine != nil }
 
     func start() {
         guard engine == nil else { return }
@@ -182,7 +178,7 @@ final class RingbackPlayer {
             try engine.start()
             self.engine = engine
         } catch {
-            Self.logger.error("Ringback tone could not start: \(error.localizedDescription)")
+            ringbackLogger.error("Ringback tone could not start: \(error.localizedDescription)")
         }
     }
 

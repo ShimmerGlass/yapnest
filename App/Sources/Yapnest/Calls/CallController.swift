@@ -324,7 +324,7 @@ final class CallController {
         }
     }
 
-    private static func displayName(of peer: JID, in session: XMPPSession) async -> String {
+    static func displayName(of peer: JID, in session: XMPPSession) async -> String {
         let database = session.database
         let contact = await offMain { try? database.contact(peer) }
         return contact?.displayName ?? peer.shortName
@@ -412,8 +412,7 @@ final class CallController {
     }
 
     func endCall() {
-        guard Self.usesCallKit else { return session?.hangUpCall() ?? () }
-        guard let uuid = currentUUID else {
+        guard Self.usesCallKit, let uuid = currentUUID else {
             session?.hangUpCall()
             return
         }

@@ -22,10 +22,16 @@ struct CallView: View {
     private var name: String { contact?.displayName ?? state.peer.shortName }
 
     var body: some View {
-        if state.isVideo {
-            videoBody
-        } else {
-            audioBody
+        Group {
+            if state.isVideo {
+                videoBody
+            } else {
+                audioBody
+            }
+        }
+        .task(id: state.peer) {
+            let database = session.database, peer = state.peer
+            contact = await offMain { try? database.contact(peer) }
         }
     }
 
@@ -53,18 +59,24 @@ struct CallView: View {
         .overlay(alignment: .topLeading) {
             MinimizeButton(controller: controller).padding(.leading, 16).padding(.top, 8)
         }
-        .task(id: state.peer) {
-            let database = session.database, peer = state.peer
-            contact = await offMain { try? database.contact(peer) }
-        }
         .accessibilityElement(children: .contain)
+    }
+
+    private var muteButton: some View {
+        CallButton(title: "Mute", symbol: state.isMuted ? "mic.slash.fill" : "mic.fill", isOn: state.isMuted) {
+            controller.setMuted(!state.isMuted)
+        }
+    }
+
+    private var endButton: some View {
+        CallButton(title: "End", symbol: "phone.down.fill", tint: .red, isProminent: true) {
+            controller.endCall()
+        }
     }
 
     private var activeControls: some View {
         HStack(spacing: 32) {
-            CallButton(title: "Mute", symbol: state.isMuted ? "mic.slash.fill" : "mic.fill", isOn: state.isMuted) {
-                controller.setMuted(!state.isMuted)
-            }
+            muteButton
             #if targetEnvironment(macCatalyst)
             // The Mac has no earpiece to choose against, but speakers to choose among.
             CallDevicesButton(showsCamera: false)
@@ -74,9 +86,7 @@ struct CallView: View {
                 controller.setSpeaker(speakerOn)
             }
             #endif
-            CallButton(title: "End", symbol: "phone.down.fill", tint: .red, isProminent: true) {
-                controller.endCall()
-            }
+            endButton
         }
         .disabled(state.isOver)
     }
@@ -120,10 +130,6 @@ extension CallView {
         .environment(\.colorScheme, .dark)
         .statusBarHidden()
         .task(id: state.sid) { media = await session.callMedia(sid: state.sid) }
-        .task(id: state.peer) {
-            let database = session.database, peer = state.peer
-            contact = await offMain { try? database.contact(peer) }
-        }
         .accessibilityElement(children: .contain)
     }
 
@@ -185,9 +191,7 @@ extension CallView {
 
     private var videoControls: some View {
         HStack(spacing: 20) {
-            CallButton(title: "Mute", symbol: state.isMuted ? "mic.slash.fill" : "mic.fill", isOn: state.isMuted) {
-                controller.setMuted(!state.isMuted)
-            }
+            muteButton
             CallButton(title: "Camera", symbol: state.isCameraOn ? "video.fill" : "video.slash.fill", isOn: !state.isCameraOn) {
                 controller.setCameraEnabled(!state.isCameraOn)
             }
@@ -204,9 +208,7 @@ extension CallView {
                 .disabled(!state.isCameraOn)
             }
             #endif
-            CallButton(title: "End", symbol: "phone.down.fill", tint: .red, isProminent: true) {
-                controller.endCall()
-            }
+            endButton
         }
         .disabled(state.isOver)
     }

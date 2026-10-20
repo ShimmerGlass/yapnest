@@ -24,12 +24,12 @@ final class CallJingleModule: JingleModule {
     override func process(message: Martin.Message) throws {}
 
     override func process(iq stanza: Iq) throws {
-        if stanza.type == .set, let jingle = stanza.firstChild(name: "jingle", xmlns: JingleModule.XMLNS),
-           try fileTransfer?(stanza, jingle) == true {
+        guard stanza.type == .set, let jingle = stanza.firstChild(name: "jingle", xmlns: JingleModule.XMLNS) else {
+            try super.process(iq: stanza)
             return
         }
-        guard stanza.type == .set, let jingle = stanza.firstChild(name: "jingle", xmlns: JingleModule.XMLNS),
-              jingle.getAttribute("action") == "session-terminate" else {
+        if try fileTransfer?(stanza, jingle) == true { return }
+        guard jingle.getAttribute("action") == "session-terminate" else {
             try super.process(iq: stanza)
             return
         }

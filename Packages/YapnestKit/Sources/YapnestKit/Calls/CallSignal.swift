@@ -118,12 +118,7 @@ struct CallSignal: Sendable, Equatable {
         self.from = from?.stringValue
         self.isFromAccount = isFromAccount
         isTieBreak = element.name != "propose" && element.firstChild(name: "tie-break") != nil
-        switch source {
-        case .archive(_, let timestamp):
-            self.timestamp = timestamp ?? InboundMessage.trustedDelay(in: stanza, stamper: account, account: account, now: now)
-        case .live, .carbon:
-            self.timestamp = InboundMessage.trustedDelay(in: stanza, stamper: account, account: account, now: now)
-        }
+        self.timestamp = source.archivedAt ?? InboundMessage.trustedDelay(in: stanza, stamper: account, account: account, now: now)
     }
 
     init(sid: String, action: Action, sender: JID, recipient: JID, from: String? = nil, isFromAccount: Bool = false, timestamp: Date = Date()) {

@@ -22,7 +22,8 @@ extension XMPPSession {
     static let callFeatures = [JingleModule.MESSAGE_INITIATION_XMLNS, "urn:xmpp:jingle:apps:rtp:audio"]
 
     /// What a device must advertise to take video as well.
-    static let videoCallFeatures = callFeatures + ["urn:xmpp:jingle:apps:rtp:video"]
+    static let videoFeature = "urn:xmpp:jingle:apps:rtp:video"
+    static let videoCallFeatures = callFeatures + [videoFeature]
 
     /// How long finding the server's relays may delay a call.
     static let relayDiscoveryTimeout: TimeInterval = 8
@@ -81,8 +82,15 @@ extension XMPPSession {
         guard callMedia != nil else { return }
         callablePublishLock.lock()
         defer { callablePublishLock.unlock() }
-        let callable = Set(presences.value.keys.filter { canCall($0) })
-        let videoCallable = Set(callable.filter { canCall($0, video: true) })
+        var callable: Set<JID> = [], videoCallable: Set<JID> = []
+        let caps = client.modulesManager.moduleOrNil(CapabilitiesModule.IDENTIFIER)
+        for peer in presences.value.keys {
+            guard let caps else { break }
+            let audio = Self.callFeatures.map { caps.isFeatureSupported($0, by: peer.martin) }
+            guard Self.supportsAll(audio) else { continue }
+            callable.insert(peer)
+            if Self.supportsAll(audio + [caps.isFeatureSupported(Self.videoFeature, by: peer.martin)]) { videoCallable.insert(peer) }
+        }
         if callablePeers.value != callable { callablePeers.send(callable) }
         if videoCallablePeers.value != videoCallable { videoCallablePeers.send(videoCallable) }
     }
@@ -151,18 +159,18 @@ extension XMPPSession {
     public func hangUpCall() { callStep(.hangUp) }
 
     public func setCallMuted(_ muted: Bool) {
-        publish(callState, under: callPublishLock) { state -> (result: Void, snapshot: CallState??) in
-            guard let call = state.call, !call.machine.phase.isEnded else { return ((), nil) }
-            call.run.setMuted(muted)
-            return ((), .some(CallState(call.machine, run: call.run)))
-        }
+        updateCallRun { $0.setMuted(muted) }
     }
 
     /// Turns our camera on or off in a video call.
     public func setCallCameraEnabled(_ on: Bool) {
+        updateCallRun(requiresVideo: true) { $0.setCameraEnabled(on) }
+    }
+
+    private func updateCallRun(requiresVideo: Bool = false, _ change: (CallRun) -> Void) {
         publish(callState, under: callPublishLock) { state -> (result: Void, snapshot: CallState??) in
-            guard let call = state.call, !call.machine.phase.isEnded, call.machine.wantsVideo else { return ((), nil) }
-            call.run.setCameraEnabled(on)
+            guard let call = state.call, !call.machine.phase.isEnded, !requiresVideo || call.machine.wantsVideo else { return ((), nil) }
+            change(call.run)
             return ((), .some(CallState(call.machine, run: call.run)))
         }
     }
@@ -282,9 +290,8 @@ extension XMPPSession {
     /// Whether the machine took the signal.
     private func routeToCall(_ signal: CallSignal, source: InboundMessage.Source, isHistory: Bool) -> Bool {
         let isArchive = if case .archive = source { true } else { false }
-        let isCarbon = if case .carbon = source { true } else { false }
-        if case .propose = signal.action, !isArchive, !isCarbon, !isHistory, !signal.isFromAccount,
-           settleTieBreak(against: signal) { return true }
+        let isLivePropose = if case .propose = signal.action, source == .live, !isHistory, !signal.isFromAccount { true } else { false }
+        if isLivePropose, settleTieBreak(against: signal) { return true }
         // A call dismissed here goes on elsewhere, and how it ends is what the
         // log needs to hear.
         let ours = call(sid: signal.sid).map { $0.machine.phase != .ended(.dismissed) } ?? false
@@ -294,7 +301,7 @@ extension XMPPSession {
             if !isArchive, !isHistory { callStep(.signal(signal), sid: signal.sid) }
             return true
         }
-        guard case .propose = signal.action, !isArchive, !isCarbon, !isHistory, !signal.isFromAccount,
+        guard isLivePropose,
               (try? database.isInRoster(signal.sender)) == true else { return false }
         ring(for: signal)
         return true
@@ -306,7 +313,7 @@ extension XMPPSession {
     /// already answered, isn't a tie.
     private func settleTieBreak(against signal: CallSignal) -> Bool {
         guard let current = lock.withLock({ $0.call?.machine }), current.direction == .outgoing,
-              current.peer == signal.sender, current.phase == .proposing || current.phase == .ringing else { return false }
+              current.peer == signal.sender, current.phase.isAwaitingAnswer else { return false }
         let wins = CallMachine.winsTieBreak(
             ourSid: current.sid, ourAddress: ownAddress, theirSid: signal.sid, theirAddress: signal.from ?? signal.sender.description,
         )
@@ -326,10 +333,7 @@ extension XMPPSession {
         guard media.contains(.audio) else {
             // Video alone isn't a call we can take. The caller hears why, and
             // the user sees that someone tried.
-            if let device = signal.from { write(OutboundStanza.call(.reject(to: device, reason: .unsupportedApplications), sid: signal.sid)) }
-            callQueue.async { [self] in
-                record(CallRecord(peer: signal.sender, account: account, sid: signal.sid, direction: .incoming, outcome: .missed, startedAt: signal.timestamp, isVideo: signal.action.asksForVideo))
-            }
+            rejectAsMissed(signal, reason: .unsupportedApplications)
             return
         }
         guard let (machine, effects) = CallMachine.incoming(signal, account: account, me: ownAddress, now: now) else { return }
@@ -349,7 +353,11 @@ extension XMPPSession {
         // So that answering finds the servers ready.
         if !isBusy, !machine.phase.isEnded { Task { [self] in _ = await discoverIceServers() } }
         guard isBusy else { return }
-        if let device = signal.from { write(OutboundStanza.call(.reject(to: device, reason: .busy), sid: signal.sid)) }
+        rejectAsMissed(signal, reason: .busy)
+    }
+
+    private func rejectAsMissed(_ signal: CallSignal, reason: CallReason) {
+        if let device = signal.from { write(OutboundStanza.call(.reject(to: device, reason: reason), sid: signal.sid)) }
         callQueue.async { [self] in
             record(CallRecord(peer: signal.sender, account: account, sid: signal.sid, direction: .incoming, outcome: .missed, startedAt: signal.timestamp, isVideo: signal.action.asksForVideo))
         }

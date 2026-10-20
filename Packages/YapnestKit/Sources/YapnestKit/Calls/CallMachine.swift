@@ -20,6 +20,9 @@ public enum CallPhase: Sendable, Equatable {
     var isEnded: Bool {
         if case .ended = self { true } else { false }
     }
+
+    /// Our call has gone out and nobody has answered yet.
+    public var isAwaitingAnswer: Bool { self == .proposing || self == .ringing }
 }
 
 public enum CallEndReason: Sendable, Equatable {
@@ -199,7 +202,7 @@ struct CallMachine: Sendable, Equatable {
         case .decline: return direction == .incoming && phase == .incoming ? decline() : []
         case .dismiss: return direction == .incoming && phase == .incoming ? end(.dismissed) : []
         case .yieldToTieBreak:
-            guard direction == .outgoing, phase == .proposing || phase == .ringing else { return [] }
+            guard direction == .outgoing, phase.isAwaitingAnswer else { return [] }
             return [.send(.retract(to: peer.description, reason: .expired, tieBreak: true))] + end(.tieBreak)
         case .hangUp: return hangUp()
         case .timer(let token): return token == timerToken ? timedOut() : []
@@ -238,13 +241,13 @@ struct CallMachine: Sendable, Equatable {
             // The first device to answer gets the call. Another that answers
             // at the same moment is left to find out from the first one's
             // `accept`, which reaches all the callee's devices.
-            guard phase == .proposing || phase == .ringing, let device = signal.from, device.contains("/") else { return [] }
+            guard phase.isAwaitingAnswer, let device = signal.from, device.contains("/") else { return [] }
             phase = .accepted
             peerDevice = device
             answeredAt = now
             return [arm(Self.setupWindow), .startSession(to: device)]
         case (.outgoing, .reject(let reason)) where fromPeer:
-            guard phase == .proposing || phase == .ringing else { return [] }
+            guard phase.isAwaitingAnswer else { return [] }
             if signal.isTieBreak { return end(.tieBreak) }
             return end(reason == .busy ? .busy : .declined)
         case (.incoming, .retract) where fromPeer:
