@@ -114,17 +114,18 @@ struct ChatSettingsView: View {
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
                     identity.subtitleLine(.subheadline)
-                    if let group {
+                    // The address, unless the title already is it.
+                    if identity.title != peer.description {
                         Text(peer.description)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                        if let subject = group.subject {
-                            Text(subject)
-                                .font(.subheadline)
-                                .multilineTextAlignment(.center)
-                                .padding(.top, 4)
-                        }
+                    }
+                    if let subject = group?.subject {
+                        Text(subject)
+                            .font(.subheadline)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, 4)
                     }
                 }
                 HStack(spacing: 10) {

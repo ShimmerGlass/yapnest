@@ -18,6 +18,11 @@ final class ChatSettingsUITests: InteractionsTestCase {
         XCTAssertEqual(header.frame.midX, window.midX, accuracy: 2, "the header is off centre: \(header.frame) in \(window)")
     }
 
+    func testTheSettingsShowTheContactsAddress() {
+        driver.openChatSettings()
+        XCTAssertTrue(app.staticTexts["nest@fixture.test"].waitForExistence(timeout: 10), "the contact's address isn't shown")
+    }
+
     func testSearchIsInTheSettingsAndOpensTheSearchField() {
         driver.openChatSettings()
         app.buttons["Search"].tap()
