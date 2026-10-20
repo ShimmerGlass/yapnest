@@ -7,7 +7,7 @@ import YapnestKit
 /// text and in-field camera button, and a send button that appears once
 /// there's something to send.
 /// Earlier iOS versions get a blurred bar with a filled capsule instead.
-final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionDelegate {
+final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionDelegate, UITextDropDelegate {
     enum AttachmentSource {
         case photoLibrary, camera, file, location, contact
     }
@@ -122,7 +122,9 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
             send()
         }
         textView.onPasteAttachments = { [weak self] providers in self?.onAttachments?(providers) }
-        // The text view takes text drops itself; these take what it can't.
+        // The text view takes text drops itself; these take what it can't,
+        // and the text view is told to leave text files to them.
+        textView.textDropDelegate = self
         textView.addInteraction(UIDropInteraction(delegate: self))
         addInteraction(UIDropInteraction(delegate: self))
         textView.capturesSuggestionKeys = { [weak self] in self?.emojiMatches.isEmpty == false }
@@ -745,13 +747,18 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     // MARK: Dropping
 
     private static func attachments(in session: any UIDropSession) -> [NSItemProvider] {
-        session.items.map(\.itemProvider).filter {
-            AttachmentIntake.kind(of: $0.registeredTypeIdentifiers).isAttachment
-        }
+        AttachmentIntake.attachments(in: session.items.map(\.itemProvider)).map(\.provider)
+    }
+
+    /// Left to itself the text view would type a text file's contents, and
+    /// the drop interaction would stage the file as well.
+    func textDroppableView(_ textDroppableView: any UITextDroppable, proposalForDrop drop: any UITextDropRequest) -> UITextDropProposal {
+        guard AttachmentIntake.containsAttachment(drop.dropSession.items.map(\.itemProvider)) else { return drop.suggestedProposal }
+        return UITextDropProposal(operation: .cancel)
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, canHandle session: any UIDropSession) -> Bool {
-        !Self.attachments(in: session).isEmpty
+        AttachmentIntake.containsAttachment(session.items.map(\.itemProvider))
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: any UIDropSession) -> UIDropProposal {
@@ -875,12 +882,13 @@ fileprivate final class ComposerTextView: UITextView {
     /// itself and never reaches it.
     override func paste(_ sender: Any?) {
         let providers = UIPasteboard.general.itemProviders
-        let attachments = providers.filter { AttachmentIntake.kind(of: $0.registeredTypeIdentifiers).isAttachment }
+        let classified = AttachmentIntake.attachments(in: providers)
+        let attachments = classified.map(\.provider)
         guard !attachments.isEmpty else { return super.paste(sender) }
         // Text next to a picture is usually its address or name, but a page
         // or note copied with both means the text. Files offer their name as
         // text, which says nothing.
-        let onlyImages = attachments.allSatisfy { AttachmentIntake.kind(of: $0.registeredTypeIdentifiers) == .image }
+        let onlyImages = classified.allSatisfy { $0.kind == .image }
         guard onlyImages, let source = providers.first(where: { AttachmentIntake.offersText($0.registeredTypeIdentifiers) }) else {
             return onPasteAttachments?(attachments) ?? ()
         }

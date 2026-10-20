@@ -30,6 +30,35 @@ public enum AttachmentIntake {
         return .other
     }
 
+    /// What one pasted or dropped item is. A text file dragged from the
+    /// Finder or the Files app may offer only its own type, `public.plain-text`,
+    /// and no file URL, so by type alone it looks like words to type; being
+    /// backed by a file is what tells it from those. Callers classify once and
+    /// keep the answer, as this asks the provider each time.
+    public static func kind(of provider: NSItemProvider) -> Kind {
+        let kind = kind(of: provider.registeredTypeIdentifiers)
+        return kind == .text && isFileBacked(provider) ? .file : kind
+    }
+
+    /// The items that are pictures or files, with what each is.
+    public static func attachments(in providers: [NSItemProvider]) -> [(provider: NSItemProvider, kind: Kind)] {
+        providers.map { ($0, kind(of: $0)) }.filter { $0.1.isAttachment }
+    }
+
+    /// Whether any item is a picture or a file, which the text field's own
+    /// drop must then stand aside for. Asked on every drag move.
+    public static func containsAttachment(_ providers: [NSItemProvider]) -> Bool {
+        providers.contains { kind(of: $0).isAttachment }
+    }
+
+    /// Whether the item is a file rather than content made for the drag. Text
+    /// selected in a browser or note is registered as data; a file is
+    /// registered to be opened in place. A name alone says nothing, as a link
+    /// dragged from a page has one too.
+    public static func isFileBacked(_ provider: NSItemProvider) -> Bool {
+        !provider.registeredTypeIdentifiers(fileOptions: [.openInPlace]).isEmpty
+    }
+
     /// Whether an item offers text as well as what it is (a picture copied
     /// from a web page also offers its markup and address).
     public static func offersText(_ typeIdentifiers: [String]) -> Bool {

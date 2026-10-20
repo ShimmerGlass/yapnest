@@ -71,7 +71,9 @@ struct SharedItemLoader: Sendable {
                 return .text(url.absoluteString, isLink: true)
             }
         }
-        if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
+        // A text file from the Files app may offer only its text type; it is a
+        // file to send, which the fallback below does.
+        if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier), !AttachmentIntake.isFileBacked(provider) {
             if let text = try? await provider.loadItem(forTypeIdentifier: UTType.plainText.identifier) as? String {
                 return .text(text, isLink: false)
             }

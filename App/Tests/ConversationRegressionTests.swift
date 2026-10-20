@@ -17,14 +17,6 @@ struct ConversationRegressionTests {
         return bar
     }
 
-    private func copy(_ name: String) throws -> URL {
-        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let file = folder.appending(path: name)
-        try Data("contents of \(name)".utf8).write(to: file)
-        return file
-    }
-
     private func messageCount(_ f: ConversationFixture) -> Int {
         (try? f.database.reader.read { try Message.filter(Column("conversationId") == f.conversation.id!).fetchCount($0) }) ?? 0
     }
@@ -33,7 +25,7 @@ struct ConversationRegressionTests {
 
     @Test func leavingTheChatMidSendStillSendsEveryStagedFileAndClearsTheCopies() async throws {
         let f = try ConversationFixture()
-        let files = try [copy("one.txt"), copy("two.txt"), copy("three.txt")]
+        let files = try [makeTemporaryFile("one.txt"), makeTemporaryFile("two.txt"), makeTemporaryFile("three.txt")]
         for file in files { f.model.stage(file, isPhoto: false) }
         f.model.send("")
         // The chat is left before the sends ran.
@@ -47,7 +39,7 @@ struct ConversationRegressionTests {
         let f = try ConversationFixture()
         let mine = try f.add("typo", .outgoing, remoteId: "r1")
         await f.start()
-        let file = try copy("keep.txt")
+        let file = try makeTemporaryFile("keep.txt")
         f.model.stage(file, isPhoto: false)
         f.model.startEditing(mine.id!)
         f.model.send("fixed")

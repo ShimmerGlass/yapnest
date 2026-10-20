@@ -64,9 +64,7 @@ extension ConversationModel {
         Task {
             defer { preparingAttachments -= 1 }
             // In order, so they are sent the way they were put there.
-            for provider in providers {
-                let kind = AttachmentIntake.kind(of: provider.registeredTypeIdentifiers)
-                guard kind.isAttachment else { continue }
+            for (provider, kind) in AttachmentIntake.attachments(in: providers) {
                 do {
                     stage(try await Self.copyOut(provider, kind: kind), isPhoto: kind == .image)
                 } catch {
@@ -114,7 +112,7 @@ struct AttachmentDropDelegate: DropDelegate {
     @Binding var isTargeted: Bool
 
     private func attachments(_ info: DropInfo) -> [NSItemProvider] {
-        info.itemProviders(for: [.item]).filter { AttachmentIntake.kind(of: $0.registeredTypeIdentifiers).isAttachment }
+        AttachmentIntake.attachments(in: info.itemProviders(for: [.item])).map(\.provider)
     }
 
     func validateDrop(info: DropInfo) -> Bool { !attachments(info).isEmpty }
