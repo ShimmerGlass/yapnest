@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="bg" cx="0.5" cy="0.38" r="0.8">
+      <stop offset="0" stop-color="#FFF8EC"/>
+      <stop offset="0.65" stop-color="#FCEBDD"/>
+      <stop offset="1" stop-color="#F6D9CF"/>
+    </radialGradient>
+    <filter id="wobble" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.018" numOctaves="2" seed="7"/>
+      <feDisplacementMap in="SourceGraphic" scale="9" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="3" result="n"/>
+      <feColorMatrix in="n" type="matrix" values="0 0 0 0 0.25  0 0 0 0 0.15  0 0 0 0 0.1  0 0 0 0.10 0"/>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <g transform="translate(512 560) scale(1.1) translate(-512 -560)">
+
+  <!-- NEST_BACK -->
+
+  <!-- the chirp -->
+  <g filter="url(#wobble)" fill="none" stroke="#3B2A20" stroke-linecap="round" stroke-width="13">
+    <path d="M640 330 C665 315 680 300 690 275"/>
+    <path d="M665 372 C700 365 725 352 745 330"/>
+  </g>
+  <g filter="url(#wobble)" stroke="#3B2A20" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M760 250 L760 172 C780 180 800 190 812 205" fill="none" stroke-width="11"/>
+    <ellipse cx="744" cy="252" rx="20" ry="15" fill="#3B2A20" stroke="none" transform="rotate(-20 744 252)"/>
+  </g>
+
+  <g filter="url(#wobble)" stroke="#3B2A20" stroke-linecap="round" stroke-linejoin="round">
+    <!-- tail -->
+    <path d="M690 560 C750 520 790 505 820 470 C828 535 790 590 720 615 Z" fill="#9468AE" stroke-width="14"/>
+    <!-- body, sunk into the nest -->
+    <path d="M305 640 C290 470 380 370 510 370 C645 370 735 470 720 640 Z" fill="#B88FD0" stroke-width="16"/>
+    <!-- belly -->
+    <path d="M400 640 C400 545 445 500 512 500 C582 500 626 548 626 640 Z" fill="#FFEBD6" stroke="none"/>
+    <!-- head feathers -->
+    <path d="M500 374 C470 340 465 310 480 290 C505 310 512 340 500 374 Z" fill="#B88FD0" stroke-width="11"/>
+    <path d="M515 373 C520 335 540 312 565 308 C562 338 545 360 515 373 Z" fill="#B88FD0" stroke-width="11"/>
+    <!-- wing -->
+    <path d="M655 535 C703 540 726 585 712 640 C672 640 648 598 655 535 Z" fill="#9468AE" stroke-width="12"/>
+    <!-- cheeks -->
+    <ellipse cx="408" cy="505" rx="34" ry="22" fill="#F49AB2" stroke="none" opacity="0.9"/>
+    <ellipse cx="616" cy="505" rx="34" ry="22" fill="#F49AB2" stroke="none" opacity="0.9"/>
+    <!-- happy closed eyes -->
+    <path d="M425 468 C435 448 458 448 468 468" fill="none" stroke-width="12"/>
+    <path d="M556 468 C566 448 589 448 599 468" fill="none" stroke-width="12"/>
+    <!-- beak, wide open in a chirp -->
+    <path d="M478 492 C492 470 532 470 546 492 C530 498 494 498 478 492 Z" fill="#FFA947" stroke-width="10"/>
+    <path d="M486 506 C496 500 528 500 538 506 C530 532 494 532 486 506 Z" fill="#E8604C" stroke-width="10"/>
+  </g>
+
+  <!-- NEST_FRONT -->
+  </g>
+  <rect width="1024" height="1024" fill="#000" filter="url(#grain)" opacity="0.6"/>
+</svg>

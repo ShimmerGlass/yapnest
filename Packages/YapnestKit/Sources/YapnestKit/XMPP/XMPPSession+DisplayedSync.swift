@@ -1,0 +1,108 @@
+import Combine
+import Foundation
+@preconcurrency import Martin
+
+/// XEP-0490 message displayed synchronization: how far we've read each
+/// chat, kept in our PEP so our other devices follow along.
+final class DisplayedSyncModule: AbstractPEPModule, XmppModule, @unchecked Sendable {
+    static let ID = NS.mds
+    static let IDENTIFIER = XmppModuleIdentifier<DisplayedSyncModule>()
+
+    let criteria = Criteria.empty()
+    let features = [NS.mds + "+notify"]
+    let changes = PassthroughSubject<DisplayedState, Never>()
+
+    func process(stanza: Stanza) throws {
+        throw XMPPError.feature_not_implemented
+    }
+
+    override func onItemNotification(notification: PubSubModule.ItemNotification) {
+        // Only our own server may tell us what we've read.
+        guard notification.node == NS.mds, let context,
+              notification.message.from == nil || notification.message.from?.bareJid == context.userBareJid,
+              case .published(let item) = notification.action,
+              let state = DisplayedState(id: item.id, payload: item.payload) else { return }
+        changes.send(state)
+    }
+}
+
+/// One chat's item: the last message read there, by the stanza-id our
+/// server gave it in 1:1 chats, or the room in groups.
+struct DisplayedState: Sendable, Equatable {
+    var peer: JID
+    var stanzaId: String
+    var by: JID
+
+    init(peer: JID, stanzaId: String, by: JID) {
+        self.peer = peer
+        self.stanzaId = stanzaId
+        self.by = by
+    }
+
+    init?(id: String, payload: Element?) {
+        guard let peer = JID(id), let displayed = payload, displayed.name == "displayed", displayed.xmlns == NS.mds,
+              let stanzaId = displayed.firstChild(name: "stanza-id", xmlns: NS.sid),
+              let id = stanzaId.getAttribute("id"), let by = stanzaId.getAttribute("by").flatMap(JID.init(_:)) else { return nil }
+        self.init(peer: peer, stanzaId: id, by: by)
+    }
+
+    var element: Element {
+        let displayed = Element(name: "displayed", xmlns: NS.mds)
+        displayed.addChild(Element(name: "stanza-id", attributes: ["xmlns": NS.sid, "id": stanzaId, "by": by.description]))
+        return displayed
+    }
+}
+
+extension XMPPSession {
+    /// Tells our other devices we've read the chat with `peer` up to `message`.
+    func publishDisplayed(_ message: Message, route: Route) {
+        let peer = route.peer
+        guard isConnected, let stanzaId = message.serverId else { return }
+        let state = DisplayedState(peer: peer, stanzaId: stanzaId, by: route.isGroup ? peer : account)
+        // Reading while messages arrive marks the same one again and again.
+        let isNew = lock.withLock { $0.publishedDisplayed.updateValue(stanzaId, forKey: peer) != stanzaId }
+        guard isNew else { return }
+        let options = Self.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options", fields: [
+            "pubsub#persist_items": ["true"],
+            "pubsub#max_items": ["max"],
+            "pubsub#send_last_published_item": ["never"],
+            "pubsub#access_model": ["whitelist"],
+        ])
+        client.module(.pubsub).publishItem(
+            at: nil, to: NS.mds, itemId: peer.description, payload: state.element,
+            publishOptions: options, errorDecoder: PubSubError.from(stanza:),
+        ) { [weak self] (result: Result<Iq, PubSubError>) in
+            guard case .failure(let error) = result, let self else { return }
+            self.lock.withLock { _ = $0.publishedDisplayed.removeValue(forKey: peer) }
+            self.logger.info("Couldn't publish read state for \(peer, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Another of our devices read a chat.
+    func displayedChanged(_ state: DisplayedState) {
+        lock.withLock { $0.publishedDisplayed[state.peer] = state.stanzaId }
+        do {
+            try database.applyDisplayed(peer: state.peer, stanzaId: state.stanzaId)
+        } catch {
+            logger.error("Failed to apply read state: \(error)")
+        }
+    }
+
+    /// Catches up on what our other devices read while we were away.
+    func fetchDisplayed(then done: (@Sendable () -> Void)? = nil) {
+        client.module(.pubsub).retrieveItems(from: account.martin, for: NS.mds) { [weak self] result in
+            defer { done?() }
+            guard let self else { return }
+            switch result {
+            case .success(let items):
+                for item in items.items {
+                    if let state = DisplayedState(id: item.id, payload: item.payload) { self.displayedChanged(state) }
+                }
+            case .failure(let error) where error.error == .item_not_found:
+                break
+            case .failure(let error):
+                self.logger.info("Read states unavailable: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+}

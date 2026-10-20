@@ -1,0 +1,206 @@
+import Foundation
+@preconcurrency import Martin
+
+/// Push notifications (XEP-0357) through Yapnest's relay: the relay hands out
+/// a node for this device's APNs token, and our server publishes to it when a
+/// message arrives while the app is away.
+extension XMPPSession {
+    /// The relay the App Store builds use.
+    public static let defaultPushRelay = JID("push.yapnest.fr")!
+
+    /// The relay's ad-hoc command that turns a device token into a node.
+    static let registerPushCommand = "register-push-apns"
+
+    /// Remembers this device's APNs token and enables push with it, now if
+    /// we're connected or else after the next catch-up.
+    public func setPushToken(_ token: Data, sandbox: Bool) {
+        let hex = token.map { String(format: "%02x", $0) }.joined()
+        let environment = sandbox ? "sandbox" : "production"
+        let changed = (try? database.setting(.pushToken)) != hex || (try? database.setting(.pushEnvironment)) != environment
+        try? database.setSetting(.pushToken, hex)
+        try? database.setSetting(.pushEnvironment, environment)
+        if changed, state.value == .connected(isSyncing: false) { enablePush() }
+    }
+
+    /// Asks the relay for a node and our server to publish to it. Servers tie
+    /// it to the session, so every new session enables it again.
+    func enablePush() {
+        guard policy.registersPush, isConnected,
+              let token = try? database.setting(.pushToken),
+              let environment = try? database.setting(.pushEnvironment) else { return }
+        guard client.module(.disco).accountDiscoResult.features.contains(NS.push) else {
+            logger.info("Server has no push notifications")
+            return
+        }
+        disableStalePushNodes()
+        let relay = pushRelay
+        let iq = Iq()
+        iq.type = .set
+        iq.to = Martin.JID(relay.martin)
+        let command = Element(name: "command", xmlns: NS.commands)
+        command.setAttribute("node", value: Self.registerPushCommand)
+        command.setAttribute("action", value: "execute")
+        let form = Element(name: "x", xmlns: NS.dataForms)
+        form.setAttribute("type", value: "submit")
+        for (name, value) in [("token", token), ("environment", environment)] {
+            let field = Element(name: "field", attributes: ["var": name])
+            field.addChild(Element(name: "value", cdata: value))
+            form.addChild(field)
+        }
+        command.addChild(form)
+        iq.addChild(command)
+        client.context.writer.write(iq) { [weak self] result in
+            guard let self else { return }
+            let node = (try? result.get())?.firstChild(name: "command", xmlns: NS.commands)?.firstChild(name: "x", xmlns: NS.dataForms)?
+                .filterChildren(name: "field", xmlns: nil).first { $0.getAttribute("var") == "node" }?.firstChild(name: "value")?.value
+            guard let node, !node.isEmpty else {
+                self.logger.error("The push relay \(relay, privacy: .public) didn't register us: \(String(describing: result), privacy: .public)")
+                return
+            }
+            self.enablePush(relay: relay, node: node)
+        }
+    }
+
+    private func enablePush(relay: JID, node: String) {
+        // Spelled out: a bare trailing closure picks the overload that reports
+        // only that the stanza was written, and not the server's answer.
+        client.context.writer.write(Self.pushIq("enable", relay: relay, node: node), completionHandler: { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                // Only now: disabling the old node first would leave the
+                // stored one dead if this enable failed. A node for an older
+                // token, or another relay, would keep notifying.
+                var staleNow: StalePushNode?
+                if let oldRelay = (try? self.database.setting(.pushRelay)).flatMap(JID.init(_:)), let oldNode = try? self.database.setting(.pushNode),
+                   oldRelay != relay || oldNode != node {
+                    let stale = StalePushNode(relay: oldRelay.description, node: oldNode)
+                    self.addStalePushNode(stale)
+                    staleNow = stale
+                }
+                try? self.database.setSetting(.pushRelay, relay.description)
+                try? self.database.setSetting(.pushNode, node)
+                // The older ones were asked for when this enable began.
+                if let staleNow { self.disableStalePushNodes([staleNow]) }
+                self.logger.info("Push enabled through \(relay, privacy: .public)")
+            case .failure(let error):
+                // An enable nobody answered may still have gone through, so
+                // the node is kept to be disabled later (never the one in use).
+                if case .remote_server_timeout = error {
+                    self.addStalePushNode(StalePushNode(relay: relay.description, node: node))
+                }
+                self.logger.error("Our server didn't enable push: \(error)")
+            }
+        })
+    }
+
+    /// A node that must be disabled, kept until the server says it's gone:
+    /// a lost request would otherwise leave it notifying this device.
+    struct StalePushNode: Codable, Equatable {
+        var relay: String
+        var node: String
+    }
+
+    private func stalePushNodes() -> [StalePushNode] {
+        (try? database.setting(.pushStaleNodes))
+            .flatMap { try? JSONDecoder().decode([StalePushNode].self, from: Data($0.utf8)) } ?? []
+    }
+
+    /// Changes the list in one transaction, as answers to several disables
+    /// can arrive together.
+    private func updateStalePushNodes(_ change: @escaping @Sendable (inout [StalePushNode]) -> Void) {
+        try? database.writer.write { db in
+            let key = AppDatabase.SettingKey.pushStaleNodes.rawValue
+            let stored = try String.fetchOne(db, sql: "SELECT value FROM setting WHERE key = ?", arguments: [key])
+            var nodes = stored.flatMap { try? JSONDecoder().decode([StalePushNode].self, from: Data($0.utf8)) } ?? []
+            change(&nodes)
+            if nodes.isEmpty {
+                try db.execute(sql: "DELETE FROM setting WHERE key = ?", arguments: [key])
+            } else if let json = try? JSONEncoder().encode(nodes) {
+                try db.execute(sql: "INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                               arguments: [key, String(decoding: json, as: UTF8.self)])
+            }
+        }
+    }
+
+    private func addStalePushNode(_ stale: StalePushNode) {
+        updateStalePushNodes { if !$0.contains(stale) { $0.append(stale) } }
+    }
+
+    /// Asks the server to disable each replaced node, and forgets it once the
+    /// server answers that it did or that the node is already gone. Runs on
+    /// every connect until then.
+    private func disableStalePushNodes(_ nodes: [StalePushNode]? = nil) {
+        let current = StalePushNode(relay: (try? database.setting(.pushRelay)) ?? "", node: (try? database.setting(.pushNode)) ?? "")
+        for stale in nodes ?? stalePushNodes() {
+            // The node in use is never disabled, whatever the list says.
+            if stale == current {
+                updateStalePushNodes { $0.removeAll { $0 == stale } }
+                continue
+            }
+            guard let relay = JID(stale.relay) else {
+                updateStalePushNodes { $0.removeAll { $0 == stale } }
+                continue
+            }
+            // Spelled out, as in `enablePush`: only this overload reports the answer.
+            client.context.writer.write(Self.pushIq("disable", relay: relay, node: stale.node), completionHandler: { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success, .failure(.item_not_found):
+                    self.updateStalePushNodes { $0.removeAll { $0 == stale } }
+                case .failure(let error):
+                    self.logger.error("Couldn't disable the old push node, will retry: \(error)")
+                }
+            })
+        }
+    }
+
+    /// Stops notifications to this device, before signing out: the current
+    /// node and every older one still waiting to be disabled. Not a disable
+    /// without a node, which would stop the account's other devices at the
+    /// same relay too. Best effort, and short: the sign-out waits for it, and
+    /// an unanswered request would otherwise hold it up for Martin's 30
+    /// seconds. A node is forgotten only once the server has answered; the
+    /// relay drops the token itself once pushes to it start failing.
+    public func disablePush() async {
+        guard isConnected else { return }
+        let current = (try? database.setting(.pushRelay)).flatMap { relay in
+            (try? database.setting(.pushNode)).map { StalePushNode(relay: relay, node: $0) }
+        }
+        var nodes = stalePushNodes()
+        if let current, !nodes.contains(current) { nodes.append(current) }
+        let answered = await withTaskGroup(of: StalePushNode?.self) { group in
+            for stale in nodes {
+                guard let relay = JID(stale.relay) else {
+                    group.addTask { stale }
+                    continue
+                }
+                group.addTask { [client] in
+                    await withCheckedContinuation { (done: CheckedContinuation<StalePushNode?, Never>) in
+                        client.context.writer.write(Self.pushIq("disable", relay: relay, node: stale.node), timeout: 5, completionHandler: { result in
+                            switch result {
+                            case .success, .failure(.item_not_found): done.resume(returning: stale)
+                            case .failure: done.resume(returning: nil)
+                            }
+                        })
+                    }
+                }
+            }
+            var answered: [StalePushNode] = []
+            for await stale in group { if let stale { answered.append(stale) } }
+            return answered
+        }
+        updateStalePushNodes { $0.removeAll { answered.contains($0) } }
+        if let current, answered.contains(current) {
+            try? database.setSetting(.pushRelay, nil)
+            try? database.setSetting(.pushNode, nil)
+        }
+    }
+
+    static func pushIq(_ action: String, relay: JID, node: String) -> Iq {
+        let iq = Iq()
+        iq.type = .set
+        iq.addChild(Element(name: action, attributes: ["xmlns": NS.push, "jid": relay.description, "node": node]))
+        return iq
+    }
+}

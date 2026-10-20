@@ -1,0 +1,27 @@
+services:
+  snikket:
+    image: snikket/snikket-server:stable
+    environment:
+      SNIKKET_DOMAIN: localhost
+      SNIKKET_ADMIN_EMAIL: admin@localhost
+      # Plain HTTP, reachable from the host, for XEP-0363 uploads.
+      SNIKKET_TWEAK_INTERNAL_HTTP_INTERFACE: "0.0.0.0"
+      # Only Prosody runs in the container; no TURN server, no update checks.
+      SNIKKET_TWEAK_TURNSERVER: "0"
+      SNIKKET_UPDATE_CHECK: "0"
+      # Uploads on the main domain rather than share.localhost, so one http_host and
+      # external URL (set in dev.cfg.lua) cover them.
+      SNIKKET_TWEAK_SHARE_DOMAIN: "1"
+      SNIKKET_TWEAK_EXTRA_CONFIG: /etc/snikket-dev/dev.cfg.lua
+    ports:
+      - "25222:5222"
+      - "25280:5280"
+    volumes:
+      - ./dev.cfg.lua:/etc/snikket-dev/dev.cfg.lua:ro
+      # Where the cert manager would put a Let's Encrypt certificate; Snikket imports it from here.
+      # It's the dev CA's, which dev/certs/make.sh makes.
+      - ../certs/fullchain.pem:/snikket/letsencrypt/live/localhost/fullchain.pem:ro
+      - ../certs/server.key:/snikket/letsencrypt/live/localhost/privkey.pem:ro
+      - data:/snikket
+volumes:
+  data:

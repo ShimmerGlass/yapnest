@@ -1,0 +1,262 @@
+name: Yapnest
+options:
+  bundleIdPrefix: fr.yapnest.app
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+packages:
+  YapnestKit:
+    path: Packages/YapnestKit
+targets:
+  Yapnest:
+    type: application
+    supportedDestinations: [iOS, macCatalyst]
+    sources:
+      - App/Sources
+      - App/Shared
+      - App/Resources
+      # Notification sounds have to be in the main bundle, and flat in it.
+      - path: App/Sounds
+        excludes: ["*.md", "*.txt"]
+      # The licence texts, kept as a folder (dev/licences.py writes it).
+      - path: App/Licences
+        type: folder
+    dependencies:
+      - package: YapnestKit
+      # WebRTC, kept out of the extensions.
+      - package: YapnestKit
+        product: YapnestCallMedia
+      - target: YapnestNotifications
+      - target: YapnestShare
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Yapnest
+        # From Config/Base.xcconfig, the same for the app and its extensions,
+        # which App Store Connect requires.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # The Mac App Store refuses a build without one.
+        LSApplicationCategoryType: public.app-category.social-networking
+        YapnestAppGroup: group.$(BUNDLE_ID_PREFIX)
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        # CallKit refuses every call request from an app without `voip`, even
+        # in the foreground. `audio` keeps a call's sound running when the app
+        # is left.
+        UIBackgroundModes: [remote-notification, voip, audio]
+        # xmpp: links (XEP-0147), such as the contact invitations servers hand out.
+        CFBundleURLTypes:
+          - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
+            CFBundleURLSchemes: [xmpp]
+        # Notifications with a sender's picture are built from these intents.
+        NSUserActivityTypes: [INSendMessageIntent]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSCameraUsageDescription: Take photos and videos to send in a conversation, and show yourself in video calls.
+        NSMicrophoneUsageDescription: Talk in calls, and record sound with the videos you send.
+        # For Save Image from the share sheet and the file preview.
+        NSPhotoLibraryAddUsageDescription: Save photos and videos from your conversations.
+        # The yapnest-website pages. Review opens the privacy policy and terms,
+        # and the terms are required for an app with user-generated content.
+        YapnestPrivacyPolicyURL: https://yapnest.fr/privacy
+        YapnestTermsURL: https://yapnest.fr/terms
+        YapnestSupportURL: mailto:support@yapnest.fr
+        # Also a placeholder: where the source will be published is not
+        # confirmed. The AGPL requires the app to point people to it.
+        YapnestSourceURL: https://github.com/ShimmerGlass/yapnest
+        KlipyAPIKey: $(KLIPY_API_KEY)
+        NSLocationWhenInUseUsageDescription: Yapnest uses your location only when you choose to share it in a chat.
+        # Answers App Store Connect's export question once rather than at each
+        # upload. OMEMO is encryption, but end-to-end messaging with standard
+        # algorithms falls under the mass-market exemption of Category 5,
+        # Part 2, which Apple counts as exempt. France still needs the ANSSI
+        # declaration.
+        ITSAppUsesNonExemptEncryption: false
+        # Plain HTTP only to local addresses, for the development server's uploads.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    entitlements:
+      path: App/Yapnest.entitlements
+      properties:
+        # Xcode switches it to production when distributing.
+        aps-environment: development
+        # Lets notifications show the sender's or group's picture.
+        com.apple.developer.usernotifications.communication: true
+        com.apple.security.application-groups: [group.$(BUNDLE_ID_PREFIX)]
+        # First, so it's where the keychain puts the account by default.
+        keychain-access-groups: [$(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).shared]
+        # The Mac's sandbox; iOS ignores these. Files to send come from the
+        # document picker, which grants access to what's picked.
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-only: true
+        # A call's UDP sockets take STUN and TURN answers and the peer's
+        # connectivity checks, which the sandbox counts as incoming: with only
+        # network.client, reading them fails with EPERM and a call never connects.
+        com.apple.security.network.server: true
+        # For video and audio calls on the Mac; asked for when a call needs them.
+        com.apple.security.device.camera: true
+        com.apple.security.device.audio-input: true
+        # For sharing a location; asked for only when the user does.
+        com.apple.security.personal-information.location: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX)
+        TARGETED_DEVICE_FAMILY: "1"
+        # Mac Catalyst, laid out for the Mac rather than as a scaled iPad.
+        TARGETED_DEVICE_FAMILY[sdk=macosx*]: "6"
+        # The same bundle id as on iOS, which the push relay's APNs topic is.
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        GENERATE_INFOPLIST_FILE: NO
+        # Drawn by design/app-icon/make_icon.py.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Mauve, dark enough for white text.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  # Fetches and decrypts what a push announces, and shows it.
+  YapnestNotifications:
+    type: app-extension
+    supportedDestinations: [iOS, macCatalyst]
+    sources:
+      - App/NotificationService
+    dependencies:
+      - package: YapnestKit
+    info:
+      path: App/NotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: Yapnest Notifications
+        # From Config/Base.xcconfig, the same for the app and its extensions,
+        # which App Store Connect requires.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        YapnestAppGroup: group.$(BUNDLE_ID_PREFIX)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    entitlements:
+      path: App/NotificationService/YapnestNotifications.entitlements
+      properties:
+        com.apple.security.application-groups: [group.$(BUNDLE_ID_PREFIX)]
+        keychain-access-groups: [$(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).shared]
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).notifications
+        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY[sdk=macosx*]: "6"
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        GENERATE_INFOPLIST_FILE: NO
+  # The share sheet: sends what other apps share to a chat, without opening
+  # the app.
+  YapnestShare:
+    type: app-extension
+    supportedDestinations: [iOS, macCatalyst]
+    sources:
+      - App/ShareExtension
+      - App/Shared
+      - App/Resources
+    dependencies:
+      - package: YapnestKit
+    info:
+      path: App/ShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Yapnest
+        # From Config/Base.xcconfig, the same for the app and its extensions,
+        # which App Store Connect requires.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        YapnestAppGroup: group.$(BUNDLE_ID_PREFIX)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsImageWithMaxCount: 10
+              NSExtensionActivationSupportsMovieWithMaxCount: 5
+              NSExtensionActivationSupportsFileWithMaxCount: 10
+              NSExtensionActivationSupportsWebURLWithMaxCount: 5
+              NSExtensionActivationSupportsText: true
+            # Chats the app donated show at the top of the share sheet.
+            IntentsSupported: [INSendMessageIntent]
+    entitlements:
+      path: App/ShareExtension/YapnestShare.entitlements
+      properties:
+        com.apple.security.application-groups: [group.$(BUNDLE_ID_PREFIX)]
+        keychain-access-groups: [$(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).shared]
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).share
+        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY[sdk=macosx*]: "6"
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  # Unit tests for the app's own logic, hosted in the app so they can reach
+  # its internals.
+  YapnestTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS]
+    sources:
+      - App/Tests
+    dependencies:
+      - target: Yapnest
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).tests
+  # Drives the app in the simulator on the dev fixtures (DevFixture.swift),
+  # which need no server. Slow, so it has its own scheme.
+  YapnestUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [iOS]
+    sources:
+      - App/UITests
+    dependencies:
+      - target: Yapnest
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).uitests
+        TEST_TARGET_NAME: Yapnest
+schemes:
+  Yapnest:
+    build:
+      targets:
+        Yapnest: all
+    # Kept here, as xcodegen rewrites the scheme. Release, without the
+    # debugger, which stalls launch on every library it loads.
+    run:
+      config: Release
+      debugEnabled: false
+    profile:
+      config: Release
+    test:
+      config: Debug
+      targets:
+        - YapnestTests
+        - package: YapnestKit/YapnestKitTests
+  # The fixtures and the frame recorder are debug-only, so this tests Debug.
+  YapnestUITests:
+    build:
+      targets:
+        Yapnest: all
+        YapnestUITests: [test]
+    test:
+      config: Debug
+      # Whole classes run side by side on clones of the simulator, which is
+      # why the long fuzz checks are split over several classes.
+      targets:
+        - name: YapnestUITests
+          parallelizable: true

@@ -1,0 +1,18 @@
+services:
+  ejabberd:
+    image: ghcr.io/processone/ejabberd:latest
+    ports:
+      - "5222:5222"
+      - "5280:5280"
+      # STUN and TURN, and the range TURN relays from (ejabberd.yml).
+      - "3478:3478/udp"
+      - "49152-49171:49152-49171/udp"
+    # setup.sh writes the Mac's address to .env.
+    environment:
+      EJABBERD_MACRO_TURN_HOST: ${TURN_HOST:-127.0.0.1}
+    volumes:
+      - ./ejabberd.yml:/opt/ejabberd/conf/ejabberd.yml:ro
+      - ../certs:/opt/ejabberd/certs:ro
+      - data:/opt/ejabberd/database
+volumes:
+  data:

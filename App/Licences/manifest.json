@@ -1,0 +1,82 @@
+{
+  "yapnest": {
+    "license": "AGPL-3.0",
+    "file": "yapnest.txt"
+  },
+  "libraries": [
+    {
+      "id": "gemoji",
+      "name": "gemoji",
+      "version": "",
+      "license": "MIT",
+      "url": "https://github.com/github/gemoji",
+      "file": "gemoji.txt",
+      "modified": false,
+      "note": "Emoji shortcode list"
+    },
+    {
+      "id": "grdb.swift",
+      "name": "GRDB",
+      "version": "7.11.1",
+      "license": "MIT",
+      "url": "https://github.com/groue/GRDB.swift",
+      "file": "grdb.swift.txt",
+      "modified": false
+    },
+    {
+      "id": "kenney-interface-sounds",
+      "name": "Interface Sounds",
+      "version": "",
+      "license": "CC0-1.0",
+      "url": "https://kenney.nl/assets/interface-sounds",
+      "file": "kenney-interface-sounds.txt",
+      "modified": false,
+      "note": "Notification sounds, by Kenney (kenney.nl), converted to CAF"
+    },
+    {
+      "id": "libsignal",
+      "name": "libsignal",
+      "version": "1.0.0",
+      "license": "GPL-3.0",
+      "url": "https://github.com/tigase/libsignal",
+      "file": "libsignal.txt",
+      "modified": false
+    },
+    {
+      "id": "martin",
+      "name": "Martin",
+      "version": "6daa5f8",
+      "license": "AGPL-3.0",
+      "url": "https://github.com/tigase/Martin",
+      "file": "martin.txt",
+      "modified": true
+    },
+    {
+      "id": "martinomemo",
+      "name": "MartinOMEMO",
+      "version": "2.2.3",
+      "license": "GPL-3.0",
+      "url": "https://github.com/tigase/MartinOMEMO",
+      "file": "martinomemo.txt",
+      "modified": true
+    },
+    {
+      "id": "tigase-logging.swift",
+      "name": "tigase-logging",
+      "version": "1.0.0",
+      "license": "AGPL-3.0",
+      "url": "https://github.com/tigase/tigase-logging.swift",
+      "file": "tigase-logging.swift.txt",
+      "modified": false
+    },
+    {
+      "id": "webrtc",
+      "name": "WebRTC",
+      "version": "154.0.0",
+      "license": "BSD-3-Clause",
+      "url": "https://github.com/stasel/WebRTC",
+      "file": "webrtc.txt",
+      "modified": false
+    }
+  ]
+}

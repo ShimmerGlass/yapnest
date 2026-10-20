@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Local development server. Not for production: a known admin password and
+     encryption key, and unencrypted connections allowed. -->
+<jive>
+    <adminConsole>
+        <port>9090</port>
+        <securePort>9091</securePort>
+    </adminConsole>
+    <locale>en</locale>
+
+    <!-- Autosetup leaves the database to the wizard; this is its embedded choice. -->
+    <connectionProvider>
+        <className>org.jivesoftware.database.EmbeddedConnectionProvider</className>
+    </connectionProvider>
+
+    <!-- Where HTTP File Upload tells clients to PUT and GET: Openfire's plain HTTP
+         port, as the compose file publishes it. -->
+    <plugin>
+        <httpfileupload>
+            <serverspecific>
+                <announcedWebProtocol>http</announcedWebProtocol>
+                <announcedWebHost>localhost</announcedWebHost>
+                <announcedWebPort>35280</announcedWebPort>
+            </serverspecific>
+        </httpfileupload>
+    </plugin>
+
+    <!-- Runs the setup on the first start, with an embedded database. -->
+    <autosetup>
+        <run>true</run>
+        <locale>en</locale>
+        <xmpp>
+            <domain>localhost</domain>
+            <fqdn>localhost</fqdn>
+            <auth>
+                <anonymous>false</anonymous>
+            </auth>
+        </xmpp>
+        <encryption>
+            <algorithm>AES</algorithm>
+            <key>yapnest-dev-only</key>
+        </encryption>
+        <database>
+            <mode>embedded</mode>
+        </database>
+        <admin>
+            <email>admin@localhost</email>
+            <password>admin</password>
+        </admin>
+        <authprovider>
+            <mode>default</mode>
+        </authprovider>
+        <users>
+            <user1>
+                <username>alice</username>
+                <password>password</password>
+                <name>alice</name>
+                <email>alice@localhost</email>
+            </user1>
+            <user2>
+                <username>bob</username>
+                <password>password</password>
+                <name>bob</name>
+                <email>bob@localhost</email>
+            </user2>
+            <user3>
+                <username>carol</username>
+                <password>password</password>
+                <name>carol</name>
+                <email>carol@localhost</email>
+            </user3>
+            <user4>
+                <username>pwchange</username>
+                <password>password</password>
+                <name>pwchange</name>
+                <email>pwchange@localhost</email>
+            </user4>
+        </users>
+    </autosetup>
+</jive>

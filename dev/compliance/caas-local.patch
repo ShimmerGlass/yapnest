@@ -1,0 +1,26 @@
+diff --git a/caas-app/src/main/java/im/conversations/compliance/xmpp/TestExecutor.java b/caas-app/src/main/java/im/conversations/compliance/xmpp/TestExecutor.java
+index 37896ac..d0c4a83 100644
+--- a/caas-app/src/main/java/im/conversations/compliance/xmpp/TestExecutor.java
++++ b/caas-app/src/main/java/im/conversations/compliance/xmpp/TestExecutor.java
+@@ -48,7 +48,20 @@ public class TestExecutor {
+             throws XmppException, TestFactory.TestCreationException {
+ 
+         final ArrayList<Result> results = new ArrayList<>();
+-        XmppClient client = XmppClient.create(credential.getDomain(), configuration);
++        // Local dev servers: CAAS_HOST and CAAS_PORT name where to connect, as the
++        // domain's SRV record would, and the connection goes without TLS.
++        final String host = System.getenv("CAAS_HOST");
++        final XmppClient client =
++                host == null
++                        ? XmppClient.create(credential.getDomain(), configuration)
++                        : XmppClient.create(
++                                credential.getDomain(),
++                                configuration,
++                                rocks.xmpp.core.session.TcpConnectionConfiguration.builder()
++                                        .hostname(host)
++                                        .port(Integer.parseInt(System.getenv("CAAS_PORT")))
++                                        .secure(false)
++                                        .build());
+         client.getManager(EntityCapabilitiesManager.class).setEnabled(false);
+         client.connect(credential.getJid());
+         client.login(credential.getJid().getLocal(), credential.getPassword(), "caas");

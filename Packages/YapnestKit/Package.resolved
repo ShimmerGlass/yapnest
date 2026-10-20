@@ -1,0 +1,42 @@
+{
+  "originHash" : "0dacd7dea5a40e79d8dc980dc679368a3bfeb8bb1c586bf6b92604270eb73a63",
+  "pins" : [
+    {
+      "identity" : "grdb.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/groue/GRDB.swift",
+      "state" : {
+        "revision" : "b83108d10f42680d78f23fe4d4d80fc88dab3212",
+        "version" : "7.11.1"
+      }
+    },
+    {
+      "identity" : "libsignal",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tigase/libsignal",
+      "state" : {
+        "revision" : "d23d5af0d729cf66b93cea607f3f84a34b9fddfd",
+        "version" : "1.0.0"
+      }
+    },
+    {
+      "identity" : "tigase-logging.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tigase/tigase-logging.swift",
+      "state" : {
+        "revision" : "382e2e85e64f8b1e3fcb71a996a030bf1b62ecb3",
+        "version" : "1.0.0"
+      }
+    },
+    {
+      "identity" : "webrtc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/stasel/WebRTC",
+      "state" : {
+        "revision" : "0c0ad84dac6c1941c16a414dfcfba94691866e4c",
+        "version" : "154.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}

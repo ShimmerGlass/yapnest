@@ -1,0 +1,158 @@
+# Local development server, for checking Yapnest against ejabberd as well as
+# Prosody. Not for production: no TLS requirement, plain sign-in allowed.
+# STARTTLS is offered all the same, with the dev CA's certificate
+# (dev/certs/make.sh), because ejabberd offers SASL2 only on an encrypted
+# stream, and the tests of SASL2, Bind 2 and FAST run over TLS. The plaintext
+# ones need TLS to stay optional.
+hosts:
+  - localhost
+
+loglevel: info
+
+certfiles:
+  - /opt/ejabberd/certs/server.pem
+  - /opt/ejabberd/certs/server.key
+
+define_macro:
+  TURN_HOST: "127.0.0.1"
+
+listen:
+  - port: 5222
+    ip: "::"
+    module: ejabberd_c2s
+    max_stanza_size: 262144
+    shaper: c2s_shaper
+    access: c2s
+    starttls: true
+    starttls_required: false
+  - port: 5280
+    ip: "::"
+    module: ejabberd_http
+    request_handlers:
+      /upload: mod_http_upload
+      /admin: ejabberd_web_admin
+  # STUN and TURN for calls, as the user's server offers them. Relays are
+  # advertised on TURN_HOST, the Mac's address (setup.sh).
+  - port: 3478
+    ip: "::"
+    transport: udp
+    module: ejabberd_stun
+    use_turn: true
+    turn_ipv4_address: TURN_HOST
+    turn_min_port: 49152
+    turn_max_port: 49171
+    auth_type: user
+    auth_realm: localhost
+
+auth_method: internal
+auth_password_format: scram
+
+acl:
+  local:
+    user_regexp: ""
+  # Runs the server's commands (XEP-0050) in the ad-hoc commands live test.
+  # Nothing else signs in as it.
+  admin:
+    user: admin@localhost
+  loopback:
+    ip:
+      - 127.0.0.0/8
+      - ::1/128
+
+access_rules:
+  local:
+    allow: local
+  c2s:
+    deny: blocked
+    allow: all
+  announce:
+    allow: admin
+  configure:
+    allow: admin
+  muc_create:
+    allow: local
+  pubsub_createnode:
+    allow: local
+  trusted_network:
+    allow: loopback
+
+shaper:
+  normal:
+    rate: 3000
+    burst_size: 20000
+  fast: 100000
+
+shaper_rules:
+  c2s_shaper:
+    none: admin
+    fast: all
+
+modules:
+  mod_adhoc: {}
+  # Gives the admin account forms to run (user statistics, add user, ...).
+  mod_configure: {}
+  # Roster and account commands for ejabberdctl, to pair test accounts from scripts.
+  mod_admin_extra: {}
+  # Password changes (XEP-0077), for the password change tests.
+  mod_register: {}
+  # FAST tokens (XEP-0484) for SASL2.
+  mod_auth_fast: {}
+  mod_blocking: {}
+  mod_caps: {}
+  mod_carboncopy: {}
+  mod_client_state: {}
+  mod_disco: {}
+  mod_http_upload:
+    put_url: "http://localhost:5280/upload"
+    docroot: /opt/ejabberd/upload
+    max_size: 52428800
+    custom_headers:
+      "Access-Control-Allow-Origin": "*"
+  mod_last: {}
+  mod_mam:
+    assume_mam_usage: true
+    default: always
+  mod_muc:
+    host: conference.localhost
+    access_create: muc_create
+    access_persistent: muc_create
+    default_room_options:
+      mam: true
+      persistent: true
+  mod_offline: {}
+  mod_ping: {}
+  mod_privacy: {}
+  mod_private: {}
+  mod_pubsub:
+    access_createnode: pubsub_createnode
+    plugins:
+      - flat
+      - pep
+    force_node_config:
+      "eu.siacs.conversations.axolotl.*":
+        access_model: open
+      "storage:bookmarks":
+        access_model: whitelist
+  mod_push: {}
+  mod_roster:
+    versioning: true
+  # Hands out the STUN and TURN services above, with short-lived TURN
+  # credentials (XEP-0215).
+  mod_stun_disco:
+    services:
+      - host: TURN_HOST
+        port: 3478
+        type: stun
+        transport: udp
+        restricted: false
+      - host: TURN_HOST
+        port: 3478
+        type: turn
+        transport: udp
+        restricted: true
+  mod_stream_mgmt:
+    resend_on_timeout: if_offline
+  mod_vcard: {}
+  mod_vcard_xupdate: {}
+  mod_avatar: {}
+  mod_version: {}

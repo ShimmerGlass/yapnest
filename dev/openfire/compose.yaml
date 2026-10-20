@@ -1,0 +1,18 @@
+services:
+  openfire:
+    build: .
+    # The image is amd64 only; Docker emulates it on Apple silicon.
+    platform: linux/amd64
+    ports:
+      - "35222:5222"
+      # HTTP file upload (XEP-0363), on the plugin's own web server.
+      - "35280:7070"
+      # The admin console.
+      - "35090:9090"
+    volumes:
+      # Plugins the image installs on start. setup.sh fills this folder;
+      # the bare variant leaves out the push and upload ones.
+      - ${OPENFIRE_PLUGINS:-./plugins}:/opt/plugins:ro
+      - data:/var/lib/openfire
+volumes:
+  data:

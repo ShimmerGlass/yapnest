@@ -1,0 +1,335 @@
+import AVFoundation
+import Foundation
+import ImageIO
+import Testing
+import UniformTypeIdentifiers
+@testable import YapnestKit
+
+struct AttachmentTests {
+    @Test func fileCryptoRoundTrip() throws {
+        let plain = Data((0..<5000).map { UInt8($0 % 251) })
+        let encrypted = try FileCrypto.encrypt(plain)
+        #expect(encrypted.data.count == plain.count + 16)
+        #expect(encrypted.fragment.count == 88)
+        #expect(try FileCrypto.decrypt(encrypted.data, fragment: encrypted.fragment) == plain)
+
+        var tampered = encrypted.data
+        tampered[0] ^= 1
+        #expect(throws: FileCrypto.Failure.self) { try FileCrypto.decrypt(tampered, fragment: encrypted.fragment) }
+    }
+
+    @Test func aesgcmURLs() throws {
+        let url = try #require(FileCrypto.aesgcmURL(for: URL(string: "https://up.example/abc/photo.jpg")!, fragment: "00ff"))
+        #expect(url.absoluteString == "aesgcm://up.example/abc/photo.jpg#00ff")
+        let split = try #require(FileCrypto.split(url))
+        #expect(split.download.absoluteString == "https://up.example/abc/photo.jpg")
+        #expect(split.fragment == "00ff")
+    }
+
+    @Test func recognizesFileMessages() {
+        #expect(AttachmentLink.parse(body: "aesgcm://up.example/a/My%20Photo.jpg#abcd", oob: nil)?.name == "My Photo.jpg")
+        #expect(AttachmentLink.parse(body: "https://up.example/a/doc.pdf", oob: "https://up.example/a/doc.pdf")?.name == "doc.pdf")
+        // A link someone typed is just a link.
+        #expect(AttachmentLink.parse(body: "https://up.example/a/doc.pdf", oob: nil) == nil)
+        // Plain http only for development servers, which send no certificate.
+        let plain = "http://up.example/a/doc.pdf"
+        #expect(AttachmentLink.parse(body: plain, oob: plain) == nil)
+        #expect(AttachmentLink.parse(body: plain, oob: plain, allowsInsecure: true)?.name == "doc.pdf")
+        #expect(AttachmentLink.parse(body: plain, oob: nil, allowsInsecure: true) == nil)
+        #expect(AttachmentLink.parse(body: "look aesgcm://up.example/a#ab", oob: nil) == nil)
+    }
+
+    @Test func ingestStoresAttachment() throws {
+        let db = try AppDatabase.inMemory()
+        let me = JID("me@example.org")!, alice = JID("alice@example.org")!
+        let url = "https://up.example/x/cat.png"
+        let inbound = InboundMessage(
+            peer: alice, isOutgoing: false, sender: alice, type: "chat", timestamp: Date(), id: "f1",
+            body: url, encryption: .none, oobURL: url,
+            requestsReceipt: false, isMarkable: false, isError: false,
+        )
+        let result = try db.ingest(inbound)
+        #expect(result.newAttachment?.name == "cat.png")
+        #expect(result.newAttachment?.mimeType == "image/png")
+        #expect(result.newMessage?.link == nil)
+        let item = try db.reader.read { db in try AppDatabase.conversationItems(db, peer: alice, me: me) }.first
+        #expect(item?.attachment?.state == .remote)
+        #expect(try db.chatList().first?.lastAttachment?.summary == "📷 Photo")
+    }
+
+    @Test func plainHttpUploadsAreFilesOnlyOnDevelopmentServers() throws {
+        let alice = JID("alice@example.org")!
+        let url = "http://localhost:5280/upload/cat.png"
+        func inbound(_ id: String) -> InboundMessage {
+            InboundMessage(
+                peer: alice, isOutgoing: false, sender: alice, type: "chat", timestamp: Date(), id: id,
+                body: url, encryption: .none, oobURL: url,
+                requestsReceipt: false, isMarkable: false, isError: false,
+            )
+        }
+        let strict = try AppDatabase.inMemory()
+        #expect(try strict.ingest(inbound("h1")).newAttachment == nil)
+
+        let development = try AppDatabase.inMemory()
+        development.allowsInsecureLinks = true
+        #expect(try development.ingest(inbound("h1")).newAttachment?.name == "cat.png")
+        #expect(try development.ingest([inbound("h2")]).first?.newAttachment?.name == "cat.png")
+    }
+
+    @Test func roomNicksAreCleanedWhenStored() throws {
+        let db = try AppDatabase.inMemory()
+        let room = JID("room@conference.example.org")!
+        _ = try db.writer.write { db in try AppDatabase.conversation(db, with: room) }
+        let inbound = InboundMessage(
+            peer: room, isOutgoing: false, sender: JID("room@conference.example.org")!, nick: "\u{202E}Mom\u{200B}", type: "groupchat", timestamp: Date(), id: "g1",
+            body: "send me the code", encryption: .none,
+            requestsReceipt: false, isMarkable: false, isError: false,
+        )
+        let result = try db.ingest(inbound)
+        #expect(result.newMessage?.nick == "Mom")
+    }
+
+    @Test func quotesDescribeFilesNotTheirLinks() throws {
+        let key = "aesgcm://up.example/x/cat.png#0123456789abcdef"
+        #expect(Attachment.quoteSummary(text: key, attachment: nil) == "📷 Photo")
+        #expect(Attachment.quoteSummary(text: "https://up.example/x/clip.mp4", attachment: nil) == "🎬 Video")
+        #expect(Attachment.quoteSummary(text: "https://up.example/x/notes.pdf", attachment: nil) == "📎 notes.pdf")
+        #expect(Attachment.quoteSummary(text: "https://example.org/about", attachment: nil) == nil)
+        #expect(Attachment.quoteSummary(text: "see aesgcm://x/y.png#k", attachment: nil) == nil)
+        let stored = Attachment(messageId: 1, url: nil, name: "a.pdf", state: .pendingUpload)
+        #expect(Attachment.quoteSummary(text: "", attachment: stored) == "📎 a.pdf")
+    }
+
+    @Test func recognizesContacts() {
+        func card(mime: String?, name: String = "Jane Appleseed.vcf") -> YapnestKit.Attachment {
+            Attachment(messageId: 1, url: nil, name: name, mimeType: mime, state: .ready)
+        }
+        #expect(card(mime: "text/vcard").isContact)
+        #expect(card(mime: "text/x-vcard").isContact)
+        #expect(card(mime: nil).isContact)
+        #expect(!Attachment(messageId: 1, url: nil, name: "a.pdf", state: .ready).isContact)
+        #expect(card(mime: "text/vcard").summary == "👤 Jane Appleseed")
+        #expect(card(mime: nil, name: "Dr. Who.vcf").summary == "👤 Dr. Who")
+        #expect(Attachment.quoteSummary(text: "https://up.example/x/Jane%20Appleseed.vcf", attachment: nil) == "👤 Jane Appleseed")
+    }
+
+    @Test func replyToAFileQuotesItsSummary() throws {
+        let db = try AppDatabase.inMemory()
+        let me = JID("me@example.org")!, alice = JID("alice@example.org")!
+        let id = try db.conversation(with: alice).id!
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        let url = "aesgcm://up.example/x/cat.png#0123456789abcdef"
+        let file = try db.insert(Message(conversationId: id, direction: .incoming, sender: alice, body: url, timestamp: t0, remoteId: "f1"))
+        try db.writer.write { try Attachment(messageId: file.id!, url: url, name: "cat.png", state: .remote).insert($0) }
+        try db.insert(Message(conversationId: id, direction: .outgoing, sender: me, body: "cute", timestamp: t0 + 1, remoteId: "r1", replyToId: "f1", replyToSender: alice))
+        try db.insert(Message(conversationId: id, direction: .incoming, sender: alice, body: "and", timestamp: t0 + 2, remoteId: "r2", replyToId: "gone", replyToSender: alice, replyFallback: url))
+        let items = try db.reader.read { try AppDatabase.conversationItems($0, peer: alice, me: me) }
+        #expect(items[1].quote?.text == "📷 Photo")
+        #expect(items[2].quote?.text == "📷 Photo")
+    }
+
+    @Test func photosLoseMetadataAndShrink() async throws {
+        let context = CGContext(data: nil, width: 4000, height: 3000, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.fill(CGRect(x: 0, y: 0, width: 4000, height: 3000))
+        let original = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(original, UTType.jpeg.identifier as CFString, 1, nil)!
+        let gps: [CFString: Any] = [kCGImagePropertyGPSLatitude: 48.85, kCGImagePropertyGPSLongitude: 2.35]
+        CGImageDestinationAddImage(destination, context.makeImage()!, [kCGImagePropertyGPSDictionary: gps] as CFDictionary)
+        CGImageDestinationFinalize(destination)
+
+        func hasGPS(_ data: Data) -> Bool {
+            let source = CGImageSourceCreateWithData(data as CFData, nil)!
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            return properties?[kCGImagePropertyGPSDictionary] != nil
+        }
+        #expect(hasGPS(original as Data))
+        let directory = FileManager.default.temporaryDirectory.appending(path: "photo-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appending(path: "IMG_1.heic")
+        try (original as Data).write(to: source)
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        let photo = try await store.importFile(at: source, name: "IMG_1.heic", asPhoto: true)
+        #expect((photo.width, photo.height) == (2048, 1536))
+        #expect(photo.name == "IMG_1.jpg")
+        #expect(!hasGPS(try Data(contentsOf: store.directory.appending(path: photo.file))))
+    }
+
+    @Test func importedPortraitVideoIsMeasuredAfterItsRotation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "video-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appending(path: "clip.mov")
+        // Recorded 64x32 and turned a quarter, which is how phones store portrait.
+        try await writeVideo(to: source, width: 64, height: 32, transform: CGAffineTransform(rotationAngle: .pi / 2))
+
+        let size = try #require(await AttachmentStore.videoSize(of: source))
+        #expect((size.width, size.height) == (32, 64))
+
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        let video = try await store.importFile(at: source, name: "clip.mov", asPhoto: false)
+        #expect((video.width, video.height) == (32, 64))
+    }
+
+    private func hasLocation(_ url: URL) async throws -> Bool {
+        let items = try await AVURLAsset(url: url).load(.metadata)
+        return items.contains { $0.identifier == .quickTimeMetadataLocationISO6709 }
+    }
+
+    @Test func importedVideoLosesItsLocation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "video-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appending(path: "clip.mov")
+        try await writeVideo(to: source, width: 64, height: 32, transform: .identity, location: "+48.8584+002.2945/")
+        #expect(try await hasLocation(source))
+
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        let video = try await store.importFile(at: source, name: "clip.mov", asPhoto: false)
+        let stored = store.directory.appending(path: video.file)
+        #expect(try !(await hasLocation(stored)))
+        #expect((video.width, video.height) == (64, 32))
+        // The user's own file is left as it was.
+        #expect(try await hasLocation(source))
+    }
+
+    @Test func imageSequenceLosesItsLocationButKeepsItsFrames() async throws {
+        let gps: [CFString: Any] = [kCGImagePropertyGPSLatitude: 48.85, kCGImagePropertyGPSLatitudeRef: "N",
+                                    kCGImagePropertyGPSLongitude: 2.29, kCGImagePropertyGPSLongitudeRef: "E"]
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, UTType.tiff.identifier as CFString, 2, nil)!
+        for _ in 0..<2 {
+            CGImageDestinationAddImage(destination, makeImage(width: 40, height: 30), [kCGImagePropertyGPSDictionary: gps] as CFDictionary)
+        }
+        #expect(CGImageDestinationFinalize(destination))
+        func locations(_ url: URL) -> [Bool] {
+            let source = CGImageSourceCreateWithURL(url as CFURL, nil)!
+            return (0..<CGImageSourceGetCount(source)).map {
+                (CGImageSourceCopyPropertiesAtIndex(source, $0, nil) as? [CFString: Any])?[kCGImagePropertyGPSDictionary] != nil
+            }
+        }
+
+        let directory = FileManager.default.temporaryDirectory.appending(path: "tiff-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appending(path: "scan.tiff")
+        try (data as Data).write(to: source)
+        #expect(locations(source) == [true, true])
+
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        let imported = try await store.importFile(at: source, name: "scan.tiff", asPhoto: true)
+        #expect(locations(store.directory.appending(path: imported.file)) == [false, false])
+        #expect((imported.width, imported.height) == (40, 30))
+    }
+
+    @Test func setDownloadedKeepsTheKnownSizeWhenNothingWasMeasured() throws {
+        let db = try AppDatabase.inMemory()
+        let peer = JID("alice@example.org")!
+        let message = try db.writer.write { db in
+            let conversation = try AppDatabase.conversation(db, with: peer)
+            let (stored, _) = try AppDatabase.insert(db, Message(
+                conversationId: conversation.id!, direction: .incoming, sender: peer, body: "x", timestamp: Date(),
+            ))
+            try Attachment(messageId: stored.id!, url: "https://up.example/a.mov", name: "a.mov", width: 32, height: 64, state: .remote).insert(db)
+            return stored
+        }
+        try db.setDownloaded(messageId: message.id!, localFile: "f.mov", size: 10, mimeType: nil, width: nil, height: nil)
+        let kept = try #require(try db.attachment(messageId: message.id!))
+        #expect((kept.width, kept.height) == (32, 64))
+        try db.setDownloaded(messageId: message.id!, localFile: "f.mov", size: 10, mimeType: nil, width: 100, height: 50)
+        let replaced = try #require(try db.attachment(messageId: message.id!))
+        #expect((replaced.width, replaced.height) == (100, 50))
+    }
+
+    private func writeVideo(to url: URL, width: Int, height: Int, transform: CGAffineTransform, location: String? = nil) async throws {
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        if let location {
+            let item = AVMutableMetadataItem()
+            item.identifier = .quickTimeMetadataLocationISO6709
+            item.dataType = kCMMetadataBaseDataType_UTF8 as String
+            item.value = location as NSString
+            writer.metadata = [item]
+        }
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
+        ])
+        input.transform = transform
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height,
+        ])
+        writer.add(input)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+        for frame in 0..<3 {
+            var buffer: CVPixelBuffer?
+            CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, nil, &buffer)
+            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(5)) }
+            adaptor.append(try #require(buffer), withPresentationTime: CMTime(value: Int64(frame), timescale: 10))
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        try #require(writer.status == .completed)
+    }
+
+    private func makeImage(width: Int, height: Int) -> CGImage {
+        let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()!
+    }
+
+    @Test func animatedGifSentAsPhotoStaysAnimated() async throws {
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, UTType.gif.identifier as CFString, 2, nil)!
+        for _ in 0..<2 { CGImageDestinationAddImage(destination, makeImage(width: 40, height: 30), nil) }
+        #expect(CGImageDestinationFinalize(destination))
+
+        let directory = FileManager.default.temporaryDirectory.appending(path: "gif-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appending(path: "funny.gif")
+        try (data as Data).write(to: source)
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        let gif = try await store.importFile(at: source, name: "funny.gif", asPhoto: true)
+        #expect(gif.name == "funny.gif")
+        #expect(gif.file.hasSuffix(".gif"))
+        #expect((gif.width, gif.height) == (40, 30))
+        let stored = try #require(CGImageSourceCreateWithURL(store.directory.appending(path: gif.file) as CFURL, nil))
+        #expect(CGImageSourceGetCount(stored) == 2)
+    }
+
+    @Test func stillPNGSentAsPhotoBecomesJPEG() async throws {
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, makeImage(width: 40, height: 30), nil)
+        #expect(CGImageDestinationFinalize(destination))
+
+        let directory = FileManager.default.temporaryDirectory.appending(path: "png-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appending(path: "shot.png")
+        try (data as Data).write(to: source)
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        let photo = try await store.importFile(at: source, name: "shot.png", asPhoto: true)
+        #expect(photo.name == "shot.jpg")
+        #expect(photo.file.hasSuffix(".jpg"))
+    }
+
+    @Test func typeIsResolvedFromMimeTypeThenExtensionAndRepeatsAgree() {
+        let png = Attachment(messageId: 1, url: nil, name: "x.bin", mimeType: "image/png", state: .ready)
+        #expect(png.type == .png)
+        #expect(png.type == png.type)
+        #expect(png.isImage)
+
+        let byExtension = Attachment(messageId: 2, url: nil, name: "clip.mp4", state: .ready)
+        #expect(byExtension.type == byExtension.type)
+        #expect(byExtension.isVideo)
+
+        let unknown = Attachment(messageId: 3, url: nil, name: "file", state: .ready)
+        #expect(unknown.type == nil)
+        #expect(unknown.type == nil)
+    }
+}
