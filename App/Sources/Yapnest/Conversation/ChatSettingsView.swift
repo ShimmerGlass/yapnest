@@ -1,3 +1,4 @@
+import GRDB
 import SwiftUI
 import YapnestKit
 
@@ -53,15 +54,6 @@ struct ChatSettingsView: View {
     @State private var saveError: String?
     @State private var saves = SettingsWrites()
 
-    init(session: XMPPSession, peer: JID, identity: ChatIdentity, canCall: Bool, canVideoCall: Bool, onSearch: @escaping () -> Void) {
-        self.session = session
-        self.peer = peer
-        self.identity = identity
-        self.canCall = canCall
-        self.canVideoCall = canVideoCall
-        self.onSearch = onSearch
-    }
-
     /// What the form starts from, read off the main thread.
     private struct Initial: Sendable {
         var isEncrypted: Bool
@@ -74,7 +66,7 @@ struct ChatSettingsView: View {
 
     private func loadInitial() async {
         let session = session, peer = peer
-        let initial = await Task.detached(priority: .userInitiated) {
+        let initial = await offMain {
             let database = session.database
             return Initial(
                 isEncrypted: (try? database.isEncrypted(with: peer)) ?? true,
@@ -84,7 +76,7 @@ struct ChatSettingsView: View {
                 group: try? database.groupChat(peer),
                 contact: try? database.contact(peer),
             )
-        }.value
+        }
         isEncrypted = initial.isEncrypted
         linkPreviews = initial.linkPreviews
         notificationSound = initial.notificationSound
@@ -156,11 +148,12 @@ struct ChatSettingsView: View {
     }
 
     var body: some View {
+        let nicks = probeNicks
         NavigationStack {
             Form {
                 header
 
-                if let group { groupSections(group) }
+                if let group { groupSections(group, probeNicks: nicks) }
 
                 if group == nil, contact?.seesPresence == true, let status = model.statuses[peer] {
                     Section("Status") {
@@ -178,11 +171,7 @@ struct ChatSettingsView: View {
                             LabeledContent {
                                 Text(contact?.name ?? "None")
                             } label: {
-                                Label {
-                                    Text("Nickname")
-                                } icon: {
-                                    if rename.isBusy { ProgressView() } else { Image(systemName: "pencil") }
-                                }
+                                BusyLabel(title: "Nickname", systemImage: "pencil", isBusy: rename.isBusy)
                             }
                         }
                         .tint(.primary)
@@ -268,11 +257,7 @@ struct ChatSettingsView: View {
                 if let group, !group.hasLeft {
                     Section {
                         Button(role: .destructive) { confirmsLeave = true } label: {
-                            Label {
-                                Text("Leave Group")
-                            } icon: {
-                                if leave.isBusy { ProgressView() } else { Image(systemName: "rectangle.portrait.and.arrow.right") }
-                            }
+                            BusyLabel(title: "Leave Group", systemImage: "rectangle.portrait.and.arrow.right", isBusy: leave.isBusy)
                         }
                         .disabled(leave.isBusy)
                     }
@@ -281,11 +266,7 @@ struct ChatSettingsView: View {
                 if group != nil, room?.canDestroy == true {
                     Section {
                         Button(role: .destructive) { confirmsDestroy = true } label: {
-                            Label {
-                                Text("Delete Group")
-                            } icon: {
-                                if destroy.isBusy { ProgressView() } else { Image(systemName: "trash") }
-                            }
+                            BusyLabel(title: "Delete Group", systemImage: "trash", isBusy: destroy.isBusy)
                         }
                         .disabled(destroy.isBusy)
                     }
@@ -295,11 +276,7 @@ struct ChatSettingsView: View {
                     Section {
                         if contact?.isInRoster == true {
                             Button(role: .destructive) { confirmsRemove = true } label: {
-                                Label {
-                                    Text("Remove from Contacts")
-                                } icon: {
-                                    if remove.isBusy { ProgressView() } else { Image(systemName: "person.badge.minus") }
-                                }
+                                BusyLabel(title: "Remove from Contacts", systemImage: "person.badge.minus", isBusy: remove.isBusy)
                             }
                             .disabled(remove.isBusy)
                         } else if contact?.hasContactRequest != true {
@@ -314,11 +291,7 @@ struct ChatSettingsView: View {
                             Button {
                                 unblock.run { try await session.unblock(peer) }
                             } label: {
-                                Label {
-                                    Text("Unblock")
-                                } icon: {
-                                    if unblock.isBusy { ProgressView() } else { Image(systemName: "hand.raised.slash") }
-                                }
+                                BusyLabel(title: "Unblock", systemImage: "hand.raised.slash", isBusy: unblock.isBusy)
                             }
                             .disabled(unblock.isBusy)
                         } else {
@@ -389,7 +362,7 @@ struct ChatSettingsView: View {
             .task(id: MembersKey(room: room, nickname: group?.nickname)) {
                 await loadMembers()
             }
-            .task(id: CommandProbeKey(nicks: probeNicks)) {
+            .task(id: CommandProbeKey(nicks: nicks)) {
                 await probeCommands()
             }
             .sheet(item: $commandsTarget) { target in
@@ -437,7 +410,7 @@ struct ChatSettingsView: View {
                 await session.database.forEachValue(of: session.database.observeGroupChat(peer), "Group") { group in
                     self.group = group
                     let session = session, peer = peer
-                    let encrypted = await Task.detached(priority: .userInitiated) { try? session.database.isEncrypted(with: peer) }.value
+                    let encrypted = await offMain { try? session.database.isEncrypted(with: peer) }
                     if let encrypted { isEncrypted = encrypted }
                 }
             }
@@ -463,42 +436,35 @@ struct ChatSettingsView: View {
         try await session.setContactName(peer, name: name)
     }
 
-    /// A member who answered once may have left since.
-    private var presentCommandNicks: [String] {
-        probeNicks.filter(commandNicks.contains)
-    }
-
-    private var groupCommandEntities: [(label: String?, jid: String)] {
+    private func groupCommandEntities(presentNicks: [String]) -> [(label: String?, jid: String)] {
         var entities: [(label: String?, jid: String)] = []
         if room?.offersCommands == true {
             entities.append((label: String(localized: "Group"), jid: peer.description))
         }
-        for nick in presentCommandNicks {
+        for nick in presentNicks {
             entities.append((label: nick, jid: "\(peer)/\(nick)"))
         }
         return entities
     }
 
     @ViewBuilder
-    private func groupSections(_ group: GroupChat) -> some View {
+    private func groupSections(_ group: GroupChat, probeNicks: [String]) -> some View {
+        // A member who answered once may have left since.
+        let presentNicks = probeNicks.filter(commandNicks.contains)
         Section {
             Picker(selection: Binding(get: { group.notify }, set: setNotify)) {
                 Text("All Messages").tag(GroupChat.Notify.always)
                 Text("Mentions").tag(GroupChat.Notify.onMention)
                 Text("None").tag(GroupChat.Notify.never)
             } label: {
-                Label {
-                    Text("Notifications")
-                } icon: {
-                    if changeNotify.isBusy { ProgressView() } else { Image(systemName: "bell") }
-                }
+                BusyLabel(title: "Notifications", systemImage: "bell", isBusy: changeNotify.isBusy)
             }
             .disabled(changeNotify.isBusy)
-            if room?.offersCommands == true || !presentCommandNicks.isEmpty {
+            if room?.offersCommands == true || !presentNicks.isEmpty {
                 NavigationLink {
                     // A bot can't offer commands at the room's own address, so
                     // the members' are gathered here beside the room's.
-                    CommandsListView(title: "Commands", session: session, entities: groupCommandEntities)
+                    CommandsListView(title: "Commands", session: session, entities: groupCommandEntities(presentNicks: presentNicks))
                 } label: {
                     Label("Commands", systemImage: "terminal")
                 }
@@ -529,8 +495,9 @@ struct ChatSettingsView: View {
             let isLastOwner = room?.isLastOwner(session.account) ?? false
             ForEach(memberRows, id: \.id) { row in
                 let opensCommands = commandsAction(for: row)
+                let linksDevices = row.jid != nil && group.isPrivate && !row.isMe
                 Group {
-                    if let jid = row.jid, group.isPrivate, !row.isMe {
+                    if linksDevices, let jid = row.jid {
                         NavigationLink {
                             DevicesList(session: session, peer: jid)
                         } label: {
@@ -548,7 +515,7 @@ struct ChatSettingsView: View {
                         .buttonStyle(.borderless)
                         .accessibilityLabel("Commands")
                         // Clear of the chevron a private group's row has.
-                        .padding(.trailing, row.jid != nil && group.isPrivate && !row.isMe ? 28 : 0)
+                        .padding(.trailing, linksDevices ? 28 : 0)
                     }
                 }
                 .memberModeration(of: row, in: room, isLastOwner: isLastOwner, group: peer, session: session, onCommands: opensCommands)
@@ -624,9 +591,9 @@ struct ChatSettingsView: View {
             return
         }
         let session = session, nickname = group?.nickname
-        memberRows = await Task.detached(priority: .userInitiated) {
+        memberRows = await offMain {
             Self.members(of: room, nickname: nickname, session: session)
-        }.value
+        }
     }
 
     /// Present occupants first, then members who aren't here right now.
@@ -639,9 +606,12 @@ struct ChatSettingsView: View {
         let absent = room.members.subtracting(here).map { jid in
             MemberRow.Model(jid: jid, nick: nil, affiliation: room.affiliation(of: jid), isPresent: false, isMe: jid == session.account)
         }
+        let jids = (present + absent).compactMap(\.jid)
+        let contacts = (try? session.database.reader.read { db in try Contact.fetchAll(db, keys: jids) })
+            .map { Dictionary($0.map { ($0.jid, $0) }, uniquingKeysWith: { first, _ in first }) } ?? [:]
         return (present + absent).map { member in
             var member = member
-            member.contact = member.jid.flatMap { try? session.database.contact($0) }
+            member.contact = member.jid.flatMap { contacts[$0] }
             return member
         }.sorted { a, b in
             if a.isMe != b.isMe { return a.isMe }
@@ -668,7 +638,7 @@ struct ChatSettingsView: View {
         group?.notify = notify
         changeNotify.run { [session, peer] in
             do {
-                try await Task.detached(priority: .userInitiated) { try session.setNotify(notify, in: peer) }.value
+                try await offMain { try session.setNotify(notify, in: peer) }
             } catch {
                 group?.notify = previous
                 throw error
@@ -706,7 +676,7 @@ private final class SettingsWrites {
         tail = Task {
             await previous?.value
             do {
-                try await Task.detached(priority: .userInitiated, operation: work).value
+                try await offMain(work)
             } catch {
                 onFailure(error)
             }

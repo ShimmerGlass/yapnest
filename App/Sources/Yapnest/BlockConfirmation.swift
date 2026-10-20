@@ -9,14 +9,13 @@ struct BlockConfirmation: ViewModifier {
     let peer: JID
     let name: String
 
-    @State private var isBlocking = false
-    @State private var error: String?
+    @State private var blocking = ServerAction()
 
     func body(content: Content) -> some View {
         content
-            .disabled(isBlocking)
+            .disabled(blocking.isBusy)
             .overlay {
-                if isBlocking {
+                if blocking.isBusy {
                     ProgressView("Blocking…")
                         .padding()
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -35,19 +34,12 @@ struct BlockConfirmation: ViewModifier {
                     Text("They won't be able to message you or see when you're online, on any of your devices.")
                 }
             }
-            .errorAlert("Couldn't block", $error)
+            .errorAlert("Couldn't block", $blocking.error)
     }
 
     private func block(reporting reason: XMPPSession.ReportReason?) {
-        isBlocking = true
-        Task {
-            do {
-                try await session.block(peer, reporting: reason)
-            } catch {
-                self.error = error.localizedDescription
-            }
-            isBlocking = false
-        }
+        let (session, peer) = (session, peer)
+        blocking.run { try await session.block(peer, reporting: reason) }
     }
 }
 

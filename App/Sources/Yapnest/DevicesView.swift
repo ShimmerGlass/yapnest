@@ -7,8 +7,6 @@ struct DevicesView: View {
     /// The contact whose devices to show; nil for our own account.
     let peer: JID?
 
-    @Environment(\.dismiss) private var dismiss
-
     var body: some View {
         NavigationStack {
             DevicesList(session: session, peer: peer)
@@ -110,7 +108,7 @@ struct DevicesList: View {
         }
         .confirmationDialog(
             "Verify this device?",
-            isPresented: Binding(get: { pendingVerification != nil }, set: { if !$0 { pendingVerification = nil } }),
+            isPresented: Binding(isPresent: $pendingVerification),
             titleVisibility: .visible,
             presenting: pendingVerification,
         ) { pending in
@@ -127,7 +125,7 @@ struct DevicesList: View {
         }
         .alert(
             pendingRemoval?.count == 1 ? "Remove this device?" : "Remove \(pendingRemoval?.count ?? 0) devices?",
-            isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
+            isPresented: Binding(isPresent: $pendingRemoval),
             presenting: pendingRemoval,
         ) { devices in
             Button("Remove", role: .destructive) { remove(devices) }
@@ -137,7 +135,7 @@ struct DevicesList: View {
                 ? "It will stop receiving your encrypted messages. If you still use it, it adds itself back the next time it connects."
                 : "They will stop receiving your encrypted messages. Any you still use add themselves back the next time they connect.")
         }
-        .alert("Couldn't remove", isPresented: Binding(get: { removalError != nil }, set: { if !$0 { removalError = nil } })) {
+        .alert("Couldn't remove", isPresented: Binding(isPresent: $removalError)) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(removalError ?? "")

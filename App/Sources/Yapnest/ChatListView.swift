@@ -376,6 +376,7 @@ private struct ChatListContent: View {
 
     /// Messages of the chats listed here; the other list has the rest.
     private var shownMessageResults: [(result: MessageSearchResult, item: ChatListItem)] {
+        guard !messageResults.isEmpty else { return [] }
         let byId = Dictionary((items ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return messageResults.compactMap { result in byId[result.conversationId].map { (result, $0) } }
     }
@@ -390,6 +391,8 @@ private struct ChatListContent: View {
     }
 
     var body: some View {
+        let visible = visibleItems
+        let shown = shownMessageResults
         List {
             if !archived, search.isEmpty, let requests, !requests.isEmpty {
                 Section {
@@ -417,7 +420,7 @@ private struct ChatListContent: View {
                 }
             }
 
-            ForEach(visibleItems) { item in
+            ForEach(visible) { item in
                 Button {
                     open(.conversation(item.conversation.peer), item)
                 } label: {
@@ -450,9 +453,9 @@ private struct ChatListContent: View {
                 }
             }
 
-            if !query.isEmpty, isSearchingMessages || !shownMessageResults.isEmpty {
+            if !query.isEmpty, isSearchingMessages || !shown.isEmpty {
                 Section {
-                    ForEach(shownMessageResults, id: \.result.id) { found in
+                    ForEach(shown, id: \.result.id) { found in
                         Button {
                             open(.conversation(found.item.conversation.peer, at: found.result.messageId), found.item)
                         } label: {
@@ -497,8 +500,8 @@ private struct ChatListContent: View {
         .overlay {
             switch ChatListEmptyState.choose(
                 itemCount: items?.count,
-                visibleItemCount: visibleItems.count,
-                hasMessageResults: !shownMessageResults.isEmpty,
+                visibleItemCount: visible.count,
+                hasMessageResults: !shown.isEmpty,
                 isSearchingMessages: isSearchingMessages,
                 requestCount: requests?.count,
                 invitationCount: invitations?.count,
@@ -517,7 +520,7 @@ private struct ChatListContent: View {
         }
         .confirmationDialog(
             "Delete this chat?",
-            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+            isPresented: Binding(isPresent: $pendingDelete),
             titleVisibility: .visible,
             presenting: pendingDelete,
         ) { item in
@@ -632,9 +635,9 @@ private struct ChatListContent: View {
         try? await Task.sleep(for: .milliseconds(250))
         guard !Task.isCancelled else { return }
         let database = session.database
-        let found = await Task.detached(priority: .userInitiated) {
+        let found = await offMain {
             (try? database.searchMessages(query, limit: 50)) ?? []
-        }.value
+        }
         guard !Task.isCancelled else { return }
         messageResults = found
         isSearchingMessages = false
@@ -642,10 +645,7 @@ private struct ChatListContent: View {
 
     private func delete(_ item: ChatListItem) {
         // Removing the attachment files is disk work.
-        let session = session
-        Task.detached(priority: .userInitiated) {
-            do { try session.deleteConversation(id: item.id) } catch { DiagLog.error(.app, "Chat action failed", .error(error)) }
-        }
+        perform { [session] in try session.deleteConversation(id: item.id) }
         onDelete(item.conversation.peer)
     }
 

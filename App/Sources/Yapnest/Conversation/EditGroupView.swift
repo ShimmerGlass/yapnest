@@ -32,8 +32,7 @@ struct EditGroupView: View {
     @State private var description = ""
     @State private var picture = Picture.unchanged
     @State private var photo: PhotosPickerItem?
-    @State private var isPreparingPicture = false
-    @State private var pictureError: String?
+    @State private var preparingPicture = ServerAction()
     @State private var loading = Loading.loading
     @State private var options = RoomConfiguration()
     @State private var isSaving = false
@@ -95,7 +94,7 @@ struct EditGroupView: View {
     private var hasChanges: Bool { changesPicture || configurationChange != nil || changesSubject }
 
     private var canSave: Bool {
-        hasChanges && !isSaving && !isPreparingPicture
+        hasChanges && !isSaving && !preparingPicture.isBusy
     }
 
     var body: some View {
@@ -139,7 +138,7 @@ struct EditGroupView: View {
                 }
             }
             .errorAlert("Couldn't save everything", $failures)
-            .errorAlert("Couldn't use that picture", $pictureError)
+            .errorAlert("Couldn't use that picture", $preparingPicture.error)
             .confirmationDialog("Turn off encryption?", isPresented: $confirmsEncryptionOff, titleVisibility: .visible) {
                 Button("Turn Off Encryption", role: .destructive, action: perform)
             } message: {
@@ -165,7 +164,7 @@ struct EditGroupView: View {
                 pictureView
                     .frame(width: 80, height: 80)
                     .overlay {
-                        if isPreparingPicture { ProgressView() }
+                        if preparingPicture.isBusy { ProgressView() }
                     }
                 HStack(spacing: 24) {
                     PhotosPicker(selection: $photo, matching: .images) {
@@ -176,7 +175,7 @@ struct EditGroupView: View {
                     }
                 }
                 .buttonStyle(.borderless)
-                .disabled(isPreparingPicture)
+                .disabled(preparingPicture.isBusy)
             }
             .frame(maxWidth: .infinity)
             .avatarHeaderRow()
@@ -286,16 +285,10 @@ struct EditGroupView: View {
     }
 
     private func choosePicture(_ item: PhotosPickerItem) {
-        isPreparingPicture = true
-        Task {
-            defer { isPreparingPicture = false }
-            do {
-                let prepared = try await AvatarImagePreparation.prepare(item)
-                guard let image = UIImage(data: prepared.data) else { throw AvatarImagePreparation.UnreadableError() }
-                picture = .replaced(prepared, image)
-            } catch {
-                pictureError = error.localizedDescription
-            }
+        preparingPicture.run {
+            let prepared = try await AvatarImagePreparation.prepare(item)
+            guard let image = UIImage(data: prepared.data) else { throw AvatarImagePreparation.UnreadableError() }
+            picture = .replaced(prepared, image)
         }
     }
 

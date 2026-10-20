@@ -150,14 +150,9 @@ private enum AppKit {
 
     /// Calls a selector that returns void. `perform` would hand back whatever
     /// was left in the return register, so the result is never read.
-    static func send(_ selector: String, to target: AnyObject?, with argument: Any? = nil) {
+    static func send(_ selector: String, to target: AnyObject?) {
         guard let target else { return }
-        let sel = NSSelectorFromString(selector)
-        if let argument {
-            _ = target.perform(sel, with: argument)
-        } else {
-            _ = target.perform(sel)
-        }
+        _ = target.perform(NSSelectorFromString(selector))
     }
 }
 

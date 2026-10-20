@@ -81,7 +81,7 @@ private struct MemberModeration: ViewModifier {
             }
             .alert(
                 confirming.map(title(of:)) ?? "",
-                isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+                isPresented: Binding(isPresent: $confirming),
                 presenting: confirming,
             ) { confirmation in
                 switch confirmation {

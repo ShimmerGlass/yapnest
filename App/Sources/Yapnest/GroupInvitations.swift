@@ -9,8 +9,7 @@ struct GroupInvitationRow: View {
     let invitation: GroupInvitation
 
     @State private var confirmsJoin = false
-    @State private var isJoining = false
-    @State private var error: String?
+    @State private var joining = ServerAction()
 
     /// Their name from the contacts, read once off the main thread.
     @State private var knownName: String?
@@ -38,11 +37,11 @@ struct GroupInvitationRow: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.circle)
-                .disabled(isJoining)
+                .disabled(joining.isBusy)
             Button {
                 confirmsJoin = true
             } label: {
-                if isJoining {
+                if joining.isBusy {
                     ProgressView()
                 } else {
                     Label("Join", systemImage: "checkmark")
@@ -51,14 +50,14 @@ struct GroupInvitationRow: View {
             }
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.circle)
-            .disabled(isJoining)
+            .disabled(joining.isBusy)
         }
         .padding(.vertical, 8)
         .contextMenu {
             Button("Join", systemImage: "checkmark") { confirmsJoin = true }
-                .disabled(isJoining)
+                .disabled(joining.isBusy)
             Button("Decline", systemImage: "xmark", action: decline)
-                .disabled(isJoining)
+                .disabled(joining.isBusy)
         }
         .confirmationDialog("Join this group?", isPresented: $confirmsJoin, titleVisibility: .visible) {
             Button("Join", action: join)
@@ -66,7 +65,7 @@ struct GroupInvitationRow: View {
         } message: {
             Text("\(invitation.room.description) says \(inviterName) invited you. This can't be confirmed: the group is on a different server than \(inviterName)'s, and that server could name anyone as the inviter.\n\nJoining shows the group your nickname and that you're online, and adds the group to all your devices. If you're unsure, ask \(inviterName) first.")
         }
-        .errorAlert("Couldn't join", $error)
+        .errorAlert("Couldn't join", $joining.error)
         .task(id: invitation.inviter) {
             let inviter = invitation.inviter
             knownName = await offMain { [session] in (try? session.database.contact(inviter))?.displayName }
@@ -74,17 +73,14 @@ struct GroupInvitationRow: View {
     }
 
     private func join() {
-        isJoining = true
-        Task {
-            defer { isJoining = false }
-            do { try await session.acceptGroupInvitation(invitation.room) } catch { self.error = error.localizedDescription }
-        }
+        let (session, room) = (session, invitation.room)
+        joining.run { try await session.acceptGroupInvitation(room) }
     }
 
     private func decline() {
         let room = invitation.room
         Task {
-            do { try await offMain { [session] in try session.declineGroupInvitation(room) } } catch { self.error = error.localizedDescription }
+            do { try await offMain { [session] in try session.declineGroupInvitation(room) } } catch { self.joining.error = error.localizedDescription }
         }
     }
 }

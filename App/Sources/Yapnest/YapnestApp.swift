@@ -42,8 +42,8 @@ struct YapnestApp: App {
             })
             .onOpenURL { delegate.model.open(link: $0) }
             .diagnosticsErrorAlert(delegate.diagnostics)
-            .errorAlert("Couldn't open the link", Binding(get: { delegate.model.linkProblem }, set: { delegate.model.linkProblem = $0 }))
-            .errorAlert("Couldn't place the call", Binding(get: { delegate.model.calls.error }, set: { delegate.model.calls.error = $0 }))
+            .errorAlert("Couldn't open the link", Bindable(delegate.model).linkProblem)
+            .errorAlert("Couldn't place the call", Bindable(delegate.model.calls).error)
             .fullScreenCover(isPresented: Binding(get: { delegate.model.calls.showsCallView }, set: { _ in })) {
                 if let session = delegate.model.session, let state = delegate.model.calls.screen {
                     CallView(session: session, controller: delegate.model.calls, state: state)

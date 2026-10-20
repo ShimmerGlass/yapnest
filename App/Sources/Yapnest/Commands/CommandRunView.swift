@@ -83,7 +83,7 @@ struct CommandRunView: View {
             if canceled { dismiss() }
         }
         .onDisappear { run.abandon() }
-        .alert("Couldn't run the command", isPresented: Binding(get: { run.error != nil }, set: { if !$0 { run.error = nil } })) {
+        .alert("Couldn't run the command", isPresented: Binding(isPresent: $run.error)) {
             if run.needsRestart {
                 Button("Start again") { Task { await run.start() } }
                 Button("Close", role: .cancel) { dismiss() }

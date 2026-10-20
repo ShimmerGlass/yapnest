@@ -26,12 +26,13 @@ struct NewChatView: View {
 
     /// Who Return starts a chat with: the typed address, or the one contact
     /// the text narrows the list to.
-    private var target: JID? {
+    private func target(in matches: [Contact]) -> JID? {
         if let typedAddress { return typedAddress }
         return matches.count == 1 ? matches[0].jid : nil
     }
 
     var body: some View {
+        let matches = matches
         NavigationStack {
             Form {
                 TextField("Name or address", text: $query)
@@ -66,7 +67,7 @@ struct NewChatView: View {
                     SheetCancelButton { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    SheetConfirmButton("Chat", action: start).disabled(target == nil)
+                    SheetConfirmButton("Chat", action: start).disabled(target(in: matches) == nil)
                 }
             }
             .task {
@@ -80,6 +81,6 @@ struct NewChatView: View {
     }
 
     private func start() {
-        if let target { onStart(target) }
+        if let target = target(in: matches) { onStart(target) }
     }
 }

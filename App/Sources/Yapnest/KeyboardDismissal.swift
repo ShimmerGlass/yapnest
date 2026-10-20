@@ -7,16 +7,12 @@ extension View {
     /// Mac, which has no on-screen keyboard.
     @ViewBuilder
     func dismissesKeyboardOnTap() -> some View {
-        if Platform.isMac {
-            self
-        } else {
-            #if !targetEnvironment(macCatalyst)
-            scrollDismissesKeyboard(.interactively)
-                .background(KeyboardDismissalInstaller())
-            #else
-            self
-            #endif
-        }
+        #if targetEnvironment(macCatalyst)
+        self
+        #else
+        scrollDismissesKeyboard(.interactively)
+            .background(KeyboardDismissalInstaller())
+        #endif
     }
 }
 

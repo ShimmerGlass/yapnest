@@ -9,8 +9,7 @@ struct ContactRequestRow: View {
     let onOpen: () -> Void
 
     @State private var confirmsBlock = false
-    @State private var error: String?
-    @State private var isAnswering = false
+    @State private var answer = ServerAction()
 
     var body: some View {
         HStack(spacing: 12) {
@@ -40,12 +39,12 @@ struct ContactRequestRow: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.circle)
-                .disabled(isAnswering)
+                .disabled(answer.isBusy)
             Button("Accept", systemImage: "checkmark") { perform(session.acceptContactRequest) }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.circle)
-                .disabled(isAnswering)
+                .disabled(answer.isBusy)
         }
         .padding(.vertical, 8)
         .contextMenu {
@@ -54,17 +53,12 @@ struct ContactRequestRow: View {
             Button("Block", systemImage: "hand.raised", role: .destructive) { confirmsBlock = true }
         }
         .blockConfirmation(isPresented: $confirmsBlock, session: session, peer: contact.jid, name: contact.requestTitle)
-        .errorAlert("Couldn't answer", $error)
+        .errorAlert("Couldn't answer", $answer.error)
     }
 
     private func perform(_ action: @escaping @Sendable (JID) throws -> Void) {
-        guard !isAnswering else { return }
-        isAnswering = true
         let jid = contact.jid
-        Task {
-            defer { isAnswering = false }
-            do { try await offMain { try action(jid) } } catch { self.error = error.localizedDescription }
-        }
+        answer.run { try await offMain { try action(jid) } }
     }
 }
 
@@ -79,11 +73,7 @@ struct AddContactButton: View {
 
     var body: some View {
         Button(action: addContact) {
-            Label {
-                Text("Add to Contacts")
-            } icon: {
-                if add.isBusy { ProgressView() } else { Image(systemName: "person.badge.plus") }
-            }
+            BusyLabel(title: "Add to Contacts", systemImage: "person.badge.plus", isBusy: add.isBusy)
         }
         .disabled(add.isBusy)
         .errorAlert("Couldn't add contact", $add.error)

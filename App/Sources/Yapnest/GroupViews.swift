@@ -9,8 +9,7 @@ struct NewGroupView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var selected: Set<JID> = []
-    @State private var isCreating = false
-    @State private var error: String?
+    @State private var creation = ServerAction()
 
     var body: some View {
         NavigationStack {
@@ -25,13 +24,13 @@ struct NewGroupView: View {
             .dismissesKeyboardOnTap()
             .navigationTitle("New Group")
             .navigationBarTitleDisplayMode(.inline)
-            .disabled(isCreating)
+            .disabled(creation.isBusy)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     SheetCancelButton { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if isCreating {
+                    if creation.isBusy {
                         ProgressView()
                     } else {
                         SheetConfirmButton("Create", action: create)
@@ -39,20 +38,16 @@ struct NewGroupView: View {
                     }
                 }
             }
-            .errorAlert("Couldn't create the group", $error)
+            .errorAlert("Couldn't create the group", $creation.error)
         }
     }
 
     private func create() {
-        isCreating = true
-        Task {
-            do {
-                let room = try await session.createGroup(name: name.trimmingCharacters(in: .whitespaces), inviting: Array(selected))
-                onCreated(room)
-            } catch {
-                self.error = error.localizedDescription
-            }
-            isCreating = false
+        let name = name.trimmingCharacters(in: .whitespaces)
+        let invitees = Array(selected)
+        creation.run {
+            let room = try await session.createGroup(name: name, inviting: invitees)
+            onCreated(room)
         }
     }
 }
@@ -67,8 +62,7 @@ struct JoinGroupView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var address: String
     @State private var nickname = ""
-    @State private var isJoining = false
-    @State private var error: String?
+    @State private var joining = ServerAction()
 
     /// `room` is from a link, which the user still confirms with the whole
     /// address in front of them.
@@ -107,39 +101,33 @@ struct JoinGroupView: View {
             .dismissesKeyboardOnTap()
             .navigationTitle("Join Group")
             .navigationBarTitleDisplayMode(.inline)
-            .disabled(isJoining)
+            .disabled(joining.isBusy)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     SheetCancelButton { dismiss() }
-                        .disabled(isJoining)
+                        .disabled(joining.isBusy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if isJoining {
+                    if joining.isBusy {
                         ProgressView()
                     } else {
                         SheetConfirmButton("Join", action: join).disabled(room == nil)
                     }
                 }
             }
-            .errorAlert("Couldn't join", $error)
+            .errorAlert("Couldn't join", $joining.error)
         }
         .presentationDetents([.medium])
         // The answer opens the chat, which a user who left no longer wants.
-        .interactiveDismissDisabled(isJoining)
+        .interactiveDismissDisabled(joining.isBusy)
     }
 
     private func join() {
         guard let room else { return }
-        isJoining = true
         let nickname = nickname.trimmingCharacters(in: .whitespaces)
-        Task {
-            do {
-                try await session.joinGroup(room, nickname: nickname.isEmpty ? nil : nickname, mayCreate: Self.mayCreate(room, linkRoom: linkRoom))
-                onJoined(room)
-            } catch {
-                self.error = error.localizedDescription
-            }
-            isJoining = false
+        joining.run {
+            try await session.joinGroup(room, nickname: nickname.isEmpty ? nil : nickname, mayCreate: Self.mayCreate(room, linkRoom: linkRoom))
+            onJoined(room)
         }
     }
 }
@@ -276,8 +264,7 @@ struct InviteView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<JID> = []
-    @State private var isInviting = false
-    @State private var error: String?
+    @State private var invitation = ServerAction()
 
     var body: some View {
         NavigationStack {
@@ -287,33 +274,28 @@ struct InviteView: View {
             .dismissesKeyboardOnTap()
             .navigationTitle("Add Members")
             .navigationBarTitleDisplayMode(.inline)
-            .disabled(isInviting)
+            .disabled(invitation.isBusy)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     SheetCancelButton { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if isInviting {
+                    if invitation.isBusy {
                         ProgressView()
                     } else {
                         SheetConfirmButton("Add", action: invite).disabled(selected.isEmpty)
                     }
                 }
             }
-            .errorAlert("Couldn't add them", $error)
+            .errorAlert("Couldn't add them", $invitation.error)
         }
     }
 
     private func invite() {
-        isInviting = true
-        Task {
-            do {
-                try await session.invite(Array(selected), to: room)
-                dismiss()
-            } catch {
-                self.error = error.localizedDescription
-            }
-            isInviting = false
+        let invitees = Array(selected)
+        invitation.run {
+            try await session.invite(invitees, to: room)
+            dismiss()
         }
     }
 }

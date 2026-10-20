@@ -41,7 +41,7 @@ struct OpenSourceLicences: Decodable, Sendable {
 /// Under Settings: says Yapnest is free software, then lists the libraries
 /// it is built on.
 struct LicencesView: View {
-    private let licences = OpenSourceLicences.load()
+    private static let licences = OpenSourceLicences.load()
     #if DEBUG
     /// From `YAPNEST_DEV_SETTINGS=licences:<library id>`, for screenshots.
     @State private var devLibrary = ProcessInfo.processInfo.environment["YAPNEST_DEV_SETTINGS"]
@@ -55,14 +55,14 @@ struct LicencesView: View {
                 if let url = AppLinks.sourceCode {
                     Link(destination: url) { Label("Source Code", systemImage: "chevron.left.forwardslash.chevron.right") }
                 }
-                if let own = licences?.yapnest {
+                if let own = Self.licences?.yapnest {
                     NavigationLink("Yapnest") {
                         LicenceTextView(title: "Yapnest", file: own.file)
                     }
                 }
             }
 
-            if let libraries = licences?.libraries {
+            if let libraries = Self.licences?.libraries {
                 Section {
                     ForEach(libraries) { library in
                         NavigationLink {
@@ -92,7 +92,7 @@ struct LicencesView: View {
         .navigationBarTitleDisplayMode(.inline)
         #if DEBUG
         .navigationDestination(item: $devLibrary) { id in
-            if let library = licences?.libraries.first(where: { $0.id == id }) {
+            if let library = Self.licences?.libraries.first(where: { $0.id == id }) {
                 LicenceTextView(title: library.name, file: library.file, library: library)
             }
         }
@@ -126,7 +126,7 @@ struct LicenceTextView: View {
                     Link(library.url.absoluteString, destination: library.url)
                         .font(.footnote)
                 }
-                Text(text.map(Self.reflowed) ?? String(localized: "The licence text couldn't be loaded."))
+                Text(text ?? String(localized: "The licence text couldn't be loaded."))
                     .font(.footnote)
                     .textSelection(.enabled)
             }
@@ -135,13 +135,13 @@ struct LicenceTextView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .task { text = OpenSourceLicences.text(of: file) }
+        .task { text = await offMain { [file] in OpenSourceLicences.text(of: file).map(Self.reflowed) } }
     }
 
     /// Licence files are hard-wrapped at about 80 columns, which wraps again
     /// on a phone. Paragraphs of plain lines are joined; indented ones (titles,
     /// lists) keep their breaks.
-    private static func reflowed(_ text: String) -> String {
+    private nonisolated static func reflowed(_ text: String) -> String {
         text.components(separatedBy: "\n\n").map { paragraph in
             let lines = paragraph.components(separatedBy: "\n")
             let isPlain = lines.dropFirst().allSatisfy { !$0.hasPrefix("  ") && !$0.hasPrefix("\t") }

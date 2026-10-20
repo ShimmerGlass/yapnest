@@ -22,10 +22,11 @@ struct XDataFormView: View {
             }
         }
         if let reported = form.reported {
+            let titles = Dictionary(reported.map { ($0.name, $0.title) }, uniquingKeysWith: { first, _ in first })
             ForEach(Array(form.items.enumerated()), id: \.offset) { _, item in
                 Section {
                     ForEach(Array(item.enumerated()), id: \.offset) { _, field in
-                        ReadOnlyField(field: field, title: reported.first { $0.name == field.name }?.title, showsEmpty: true)
+                        ReadOnlyField(field: field, title: titles[field.name], showsEmpty: true)
                     }
                 }
             }

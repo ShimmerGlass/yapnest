@@ -9,7 +9,7 @@ struct BannedMembersView: View {
     let room: JID
 
     @Environment(AppModel.self) private var model
-    @State private var load = ServerAction()
+    @State private var loadError: String?
     @State private var lifting = ServerAction()
     @State private var isLoading = true
     /// Who is being let back in, for the spinner on their row.
@@ -21,6 +21,7 @@ struct BannedMembersView: View {
     }
 
     var body: some View {
+        let banned = banned
         List {
             ForEach(banned, id: \.self) { jid in
                 row(jid)
@@ -37,19 +38,19 @@ struct BannedMembersView: View {
         }
         .navigationTitle("Banned")
         .navigationBarTitleDisplayMode(.inline)
-        .errorAlert("Couldn't load the banned list", $load.error)
+        .errorAlert("Couldn't load the banned list", $loadError)
         .errorAlert("Couldn't unban", $lifting.error)
         .task {
             // The room's list replaces what we have, so it is read before the
             // spinner goes.
-            do { try await session.refreshBanList(of: room) } catch { load.error = error.localizedDescription }
+            do { try await session.refreshBanList(of: room) } catch { loadError = error.localizedDescription }
             isLoading = false
         }
         .task(id: banned) {
             let session = session, jids = banned
-            names = await Task.detached(priority: .userInitiated) {
+            names = await offMain {
                 (try? session.database.contactNames(of: jids)) ?? [:]
-            }.value
+            }
         }
     }
 
