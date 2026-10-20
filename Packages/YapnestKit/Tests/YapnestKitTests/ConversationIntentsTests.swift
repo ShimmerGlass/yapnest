@@ -189,3 +189,44 @@ struct ConversationIntentsTests {
         return output as Data
     }
 }
+
+struct DeliveredNotificationMatchTests {
+    private func notification(_ id: Int64) -> MessageNotification {
+        MessageNotification(messageId: id, peer: JID("alice@example.org")!, title: "Alice", body: "hi", timestamp: Date())
+    }
+
+    @Test func aNotificationUnderThePushIdentifierIsFoundByItsMessageId() {
+        let delivered: [(identifier: String, userInfo: [AnyHashable: Any])] = [
+            (identifier: "apns-1", userInfo: [MessageNotification.messageIdKey: Int64(7)]),
+            (identifier: "apns-2", userInfo: [MessageNotification.messageIdKey: Int64(8)]),
+        ]
+        let found = MessageNotification.deliveredIdentifiers(replacing: [notification(7)], among: delivered)
+        #expect(found.map(\.1) == ["apns-1"])
+    }
+
+    @Test func aNotificationUnderTheMessageIdentifierIsFound() {
+        let delivered: [(identifier: String, userInfo: [AnyHashable: Any])] = [(identifier: "message-7", userInfo: [:])]
+        #expect(MessageNotification.deliveredIdentifiers(replacing: [notification(7)], among: delivered).map(\.1) == ["message-7"])
+    }
+
+    @Test func aMessageWithNoDeliveredNotificationIsLeftOut() {
+        let delivered: [(identifier: String, userInfo: [AnyHashable: Any])] = [
+            (identifier: "message-8", userInfo: [MessageNotification.messageIdKey: Int64(8)]),
+        ]
+        #expect(MessageNotification.deliveredIdentifiers(replacing: [notification(7)], among: delivered).isEmpty)
+    }
+
+    @Test func theContentCarriesTheMessageId() {
+        let content = notification(7).content(badge: nil)
+        #expect(content.userInfo[MessageNotification.messageIdKey] as? Int64 == 7)
+    }
+}
+
+struct SessionStateLogNameTests {
+    @Test func aFailedStateNamesItsCaseWithoutItsText() {
+        let name = XMPPSession.State.failed("secret text").caseName
+        #expect(name == "failed")
+        #expect(!name.contains("secret"))
+        #expect(XMPPSession.State.disconnected(error: "secret text").caseName == "disconnected")
+    }
+}

@@ -135,13 +135,28 @@ extension MessageNotification {
     public static func replaceDelivered(_ edited: [MessageNotification], badge: Int?, avatars: AvatarStore) async {
         guard !edited.isEmpty else { return }
         let center = UNUserNotificationCenter.current()
-        let delivered = Set(await center.deliveredNotifications().map(\.request.identifier))
-        for notification in edited where delivered.contains(notification.requestIdentifier) {
+        let delivered = await center.deliveredNotifications().map { (identifier: $0.request.identifier, userInfo: $0.request.content.userInfo) }
+        for (notification, identifier) in deliveredIdentifiers(replacing: edited, among: delivered) {
             let content = await notification.content(badge: badge, avatars: avatars)
             let silent = (content.mutableCopy() as? UNMutableNotificationContent) ?? notification.content(badge: badge)
             silent.sound = nil
             silent.interruptionLevel = .passive
-            try? await center.add(UNNotificationRequest(identifier: notification.requestIdentifier, content: silent, trigger: nil))
+            try? await center.add(UNNotificationRequest(identifier: identifier, content: silent, trigger: nil))
+        }
+    }
+
+    /// For each corrected message that has a delivered notification, the
+    /// identifier that notification has. The first one of a push is delivered
+    /// under the push's identifier and found by the message id in its
+    /// `userInfo`; ones from before that was recorded, and the ones this app
+    /// posts, are under `requestIdentifier`.
+    static func deliveredIdentifiers(
+        replacing edited: [MessageNotification], among delivered: [(identifier: String, userInfo: [AnyHashable: Any])],
+    ) -> [(MessageNotification, String)] {
+        edited.compactMap { notification in
+            let match = delivered.first { ($0.userInfo[messageIdKey] as? Int64) == notification.messageId }
+                ?? delivered.first { $0.identifier == notification.requestIdentifier }
+            return match.map { (notification, $0.identifier) }
         }
     }
 

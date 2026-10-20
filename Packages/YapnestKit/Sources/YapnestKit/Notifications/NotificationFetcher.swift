@@ -102,7 +102,7 @@ public struct NotificationFetcher: Sendable {
             let caughtUp = await session.catchUpOnce(timeout: timeout)
             DiagLog.info(.notificationExtension, "Catch-up finished", .bool("completed", caughtUp), .duration("budget", timeout))
             if !caughtUp {
-                Self.logger.warning("Catch-up didn't finish: \(String(describing: session.state.value), privacy: .public)")
+                Self.logger.warning("Catch-up didn't finish: \(session.state.value.caseName, privacy: .public)")
             }
             // What did arrive is worth showing even if the rest didn't.
             return try claimed(from: database)
@@ -157,6 +157,10 @@ extension MessageNotification {
     /// Marks a delivered notification that was only shown silently, so that it
     /// can be found and taken down again.
     public static let quietKey = "quiet"
+    /// The message a notification shows. The first notification of a push is
+    /// delivered under the push's own identifier, so a correction can't find
+    /// it by `requestIdentifier`.
+    public static let messageIdKey = "messageId"
 
     public func content(badge: Int?) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
@@ -165,7 +169,7 @@ extension MessageNotification {
         content.body = body
         content.sound = NotificationSound.choice(kind: isGroup ? .groupchat : .chat, stored: sound, isQuiet: isQuiet).unSound
         content.threadIdentifier = peer.description
-        content.userInfo = [Self.peerKey: peer.description]
+        content.userInfo = [Self.peerKey: peer.description, Self.messageIdKey: messageId]
         if isQuiet {
             content.interruptionLevel = .passive
             content.userInfo[Self.quietKey] = true

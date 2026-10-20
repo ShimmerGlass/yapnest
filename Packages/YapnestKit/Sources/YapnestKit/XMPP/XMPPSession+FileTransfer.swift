@@ -331,7 +331,7 @@ extension XMPPSession {
     /// message's transfer (`beginTransfer`).
     func sendOverJingle(_ message: Message, _ attachment: Attachment, to device: Martin.JID) async throws {
         guard let messageId = message.id, let file = attachments.url(for: attachment) else { throw AttachmentError.unreadable }
-        let (size, hash) = try Self.sizeAndHash(of: file)
+        let (size, hash) = try FileCrypto.sizeAndHash(of: file)
         let offer = JingleFileOffer(
             name: attachment.name, mediaType: attachment.mimeType, size: size, date: nil, sha256: hash,
             ibbSid: UUID().uuidString.lowercased(), blockSize: JingleFile.blockSize,
@@ -433,18 +433,5 @@ extension XMPPSession {
                 return
             }
         }
-    }
-
-    /// The size and SHA-256 of a file, read in pieces so a large one isn't loaded.
-    static func sizeAndHash(of file: URL) throws -> (size: Int64, sha256: Data) {
-        let handle = try FileHandle(forReadingFrom: file)
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        var size: Int64 = 0
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            hasher.update(data: chunk)
-            size += Int64(chunk.count)
-        }
-        return (size, Data(hasher.finalize()))
     }
 }

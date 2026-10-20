@@ -10,6 +10,7 @@ struct GroupInvitationRow: View {
 
     @State private var confirmsJoin = false
     @State private var joining = ServerAction()
+    @State private var declineError: String?
 
     /// Their name from the contacts, read once off the main thread.
     @State private var knownName: String?
@@ -66,6 +67,7 @@ struct GroupInvitationRow: View {
             Text("\(invitation.room.description) says \(inviterName) invited you. This can't be confirmed: the group is on a different server than \(inviterName)'s, and that server could name anyone as the inviter.\n\nJoining shows the group your nickname and that you're online, and adds the group to all your devices. If you're unsure, ask \(inviterName) first.")
         }
         .errorAlert("Couldn't join", $joining.error)
+        .errorAlert("Couldn't decline", $declineError)
         .task(id: invitation.inviter) {
             let inviter = invitation.inviter
             knownName = await offMain { [session] in (try? session.database.contact(inviter))?.displayName }
@@ -80,7 +82,7 @@ struct GroupInvitationRow: View {
     private func decline() {
         let room = invitation.room
         Task {
-            do { try await offMain { [session] in try session.declineGroupInvitation(room) } } catch { self.joining.error = error.localizedDescription }
+            do { try await offMain { [session] in try session.declineGroupInvitation(room) } } catch { self.declineError = error.localizedDescription }
         }
     }
 }

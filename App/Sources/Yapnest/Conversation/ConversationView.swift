@@ -400,7 +400,7 @@ struct ConversationView: View {
     /// buttons are off until it's done.
     private func answer(_ action: @escaping @Sendable (XMPPSession, JID) throws -> Void) {
         let session = session, peer = peer
-        answering.run { try await Task.detached(priority: .userInitiated) { try action(session, peer) }.value }
+        answering.run { try await offMain { try action(session, peer) } }
     }
 }
 

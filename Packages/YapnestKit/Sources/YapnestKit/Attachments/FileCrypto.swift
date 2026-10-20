@@ -15,6 +15,19 @@ enum FileCrypto {
         case decryptionFailed
     }
 
+    /// The size and SHA-256 of a file, read in pieces so a large one isn't loaded.
+    static func sizeAndHash(of file: URL) throws -> (size: Int64, sha256: Data) {
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        var size: Int64 = 0
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+            hasher.update(data: chunk)
+            size += Int64(chunk.count)
+        }
+        return (size, Data(hasher.finalize()))
+    }
+
     static func encrypt(_ data: Data) throws -> Encrypted {
         let key = SymmetricKey(size: .bits256)
         let iv = AES.GCM.Nonce()

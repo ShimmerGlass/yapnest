@@ -138,7 +138,7 @@ public struct FileMetadata: Sendable, Equatable {
     /// it off the main thread.
     static func outgoing(for attachment: Attachment, in store: AttachmentStore) -> FileMetadata? {
         if attachment.isAudio {
-            guard let file = store.url(for: attachment), let (size, hash) = try? XMPPSession.sizeAndHash(of: file) else { return nil }
+            guard let file = store.url(for: attachment), let (size, hash) = try? FileCrypto.sizeAndHash(of: file) else { return nil }
             return FileMetadata(mediaType: attachment.mimeType, size: size, length: attachment.duration, name: attachment.name, sha256: hash)
         }
         guard attachment.isImage, let width = attachment.imageSize.map({ Int($0.width) }), let height = attachment.imageSize.map({ Int($0.height) }),

@@ -37,6 +37,16 @@ public final class XMPPSession: @unchecked Sendable {
         /// Connected; `isSyncing` while catching up on the archive.
         case connected(isSyncing: Bool)
         case failed(String)
+
+        /// Which case it is, without the error text, so it's safe to log.
+        public var caseName: String {
+            switch self {
+            case .disconnected: "disconnected"
+            case .connecting: "connecting"
+            case .connected: "connected"
+            case .failed: "failed"
+            }
+        }
     }
 
     /// What the session is for.
