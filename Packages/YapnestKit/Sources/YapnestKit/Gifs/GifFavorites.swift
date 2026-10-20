@@ -51,7 +51,8 @@ extension AppDatabase {
 
     /// Starred GIFs, newest star first.
     private static func starredGifs(_ db: Database) throws -> [(gif: Gif, version: SettingsVersion)] {
-        try starredGifRows(db).compactMap { row in decodeGif(row.value).map { ($0, row.version) } }
+        let decoder = JSONDecoder()
+        return try starredGifRows(db).compactMap { row in decodeGif(row.value, using: decoder).map { ($0, row.version) } }
     }
 
     /// The starred GIFs past the capacity, oldest star last. Their values
@@ -89,8 +90,8 @@ extension AppDatabase {
         return (try? encoder.encode(gif)).map { String(decoding: $0, as: UTF8.self) }
     }
 
-    private static func decodeGif(_ json: String) -> Gif? {
-        json.data(using: .utf8).flatMap { try? JSONDecoder().decode(Gif.self, from: $0) }
+    private static func decodeGif(_ json: String, using decoder: JSONDecoder) -> Gif? {
+        json.data(using: .utf8).flatMap { try? decoder.decode(Gif.self, from: $0) }
     }
 
     /// An unreadable value reads as no favorites rather than failing the picker.

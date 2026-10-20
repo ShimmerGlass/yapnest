@@ -33,12 +33,16 @@ public final class AttachmentStore: Sendable {
         try? FileManager.default.removeItem(at: AudioWaveform.cacheURL(for: url))
     }
 
+    private static func freshName(keeping name: String) -> String {
+        let ext = (name as NSString).pathExtension
+        return UUID().uuidString.lowercased() + (ext.isEmpty ? "" : ".\(ext)")
+    }
+
     /// Stores `data` under a fresh name that keeps `name`'s extension, so
     /// viewers can tell the type.
     func save(_ data: Data, name: String) throws -> String {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let ext = (name as NSString).pathExtension
-        let file = UUID().uuidString.lowercased() + (ext.isEmpty ? "" : ".\(ext)")
+        let file = Self.freshName(keeping: name)
         try data.write(to: directory.appending(path: file), options: .atomic)
         return file
     }
@@ -46,8 +50,7 @@ public final class AttachmentStore: Sendable {
     /// Takes over a finished download that was written inside the store (see
     /// `temporaryFile()`) under a fresh name that keeps `name`'s extension.
     func adopt(_ file: URL, name: String) throws -> String {
-        let ext = (name as NSString).pathExtension
-        let stored = UUID().uuidString.lowercased() + (ext.isEmpty ? "" : ".\(ext)")
+        let stored = Self.freshName(keeping: name)
         try FileManager.default.moveItem(at: file, to: directory.appending(path: stored))
         return stored
     }
@@ -108,8 +111,8 @@ public final class AttachmentStore: Sendable {
             }
             try? FileManager.default.removeItem(at: destination)
         }
-        let ext = (name as NSString).pathExtension
-        let file = UUID().uuidString.lowercased() + (ext.isEmpty ? "" : ".\(ext)")
+        let file = Self.freshName(keeping: name)
+        let isVideo = Self.isVideo(name: name)
         let destination = directory.appending(path: file)
         do {
             try FileManager.default.copyItem(at: url, to: destination)
@@ -119,7 +122,7 @@ public final class AttachmentStore: Sendable {
         // Better to refuse a file than to send one that still says where it
         // was made.
         do {
-            if Self.isVideo(name: name) {
+            if isVideo {
                 try await Self.stripVideoMetadata(at: destination)
             } else if asPhoto {
                 try Self.stripLocation(fromImageAt: destination)
@@ -130,12 +133,10 @@ public final class AttachmentStore: Sendable {
         }
         var dimensions: (width: Int, height: Int)?
         let duration = AudioFormat.isAudio(mimeType: nil, name: name) ? AudioWaveform.duration(of: destination) : nil
-        if Self.isVideo(name: name) {
+        if isVideo {
             dimensions = await Self.videoSize(of: destination)
-        } else if let source = CGImageSourceCreateWithURL(destination as CFURL, nil), let (width, height) = Self.pixelSize(of: source) {
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-            let orientation = properties?[kCGImagePropertyOrientation] as? Int ?? 1
-            dimensions = orientation >= 5 ? (height, width) : (width, height)
+        } else {
+            dimensions = Self.imageSize(ofFileAt: destination)
         }
         return Imported(file: file, name: name, size: destination.fileSize, width: dimensions?.width, height: dimensions?.height, duration: duration)
     }
@@ -231,7 +232,7 @@ public final class AttachmentStore: Sendable {
         return width > 0 && height > 0 ? (width, height) : nil
     }
 
-    private static func pixelSize(of source: CGImageSource) -> (Int, Int)? {
+    static func pixelSize(of source: CGImageSource) -> (Int, Int)? {
         guard CGImageSourceGetCount(source) > 0,
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,

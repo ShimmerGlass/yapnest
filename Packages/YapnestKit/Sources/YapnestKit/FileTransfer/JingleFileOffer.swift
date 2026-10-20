@@ -86,9 +86,7 @@ struct JingleFileOffer: Equatable, Sendable {
         let name = SafeFileName.make(file.firstChild(name: "name")?.value ?? "")
         let mediaType = file.firstChild(name: "media-type")?.value.flatMap { $0.isEmpty ? nil : $0 }
         let date = file.firstChild(name: "date")?.value.flatMap { try? Date($0, strategy: .iso8601) }
-        let sha256 = file.filterChildren(name: "hash", xmlns: JingleFile.hashes)
-            .first { $0.getAttribute("algo") == "sha-256" }
-            .flatMap { hash($0) }
+        let sha256 = sha256(in: file)
         return .success(JingleFileOffer(
             name: name, mediaType: mediaType, size: size, date: date, sha256: sha256,
             ibbSid: sid, blockSize: min(blockSize, JingleFile.blockSize),
@@ -97,16 +95,16 @@ struct JingleFileOffer: Equatable, Sendable {
 
     /// The hash a session-info `<checksum>` gives later (XEP-0234).
     static func checksum(in jingle: Element) -> Data? {
-        jingle.firstChild(name: "checksum", xmlns: JingleFile.application)?
-            .firstChild(name: "file")?
-            .filterChildren(name: "hash", xmlns: JingleFile.hashes)
-            .first { $0.getAttribute("algo") == "sha-256" }
-            .flatMap { hash($0) }
+        sha256(in: jingle.firstChild(name: "checksum", xmlns: JingleFile.application)?.firstChild(name: "file"))
     }
 
     /// A SHA-256 is 32 bytes; anything else is not one.
-    private static func hash(_ element: Element) -> Data? {
-        element.value.flatMap { Data(base64Encoded: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }.flatMap { $0.count == 32 ? $0 : nil }
+    private static func sha256(in file: Element?) -> Data? {
+        file?.filterChildren(name: "hash", xmlns: JingleFile.hashes)
+            .first { $0.getAttribute("algo") == "sha-256" }
+            .flatMap { $0.value }
+            .flatMap { Data(base64Encoded: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .flatMap { $0.count == 32 ? $0 : nil }
     }
 
     /// The `<content>` of the session-initiate, or, with `blockSize` negotiated,
@@ -132,28 +130,25 @@ struct JingleFileOffer: Equatable, Sendable {
 
     // MARK: Stanzas
 
-    static func jingleIq(to jid: Martin.JID, action: String, sid: String, children: [Element] = []) -> Iq {
+    static func jingleIq(to jid: Martin.JID, action: String, sid: String, attributes: [String: String] = [:], children: [Element] = []) -> Iq {
         let iq = Iq()
         iq.to = jid
         iq.type = .set
         let jingle = Element(name: "jingle", xmlns: JingleFile.jingle)
         jingle.setAttribute("action", value: action)
         jingle.setAttribute("sid", value: sid)
+        for (name, value) in attributes { jingle.setAttribute(name, value: value) }
         for child in children { jingle.addChild(child) }
         iq.addChild(jingle)
         return iq
     }
 
     func sessionInitiate(to jid: Martin.JID, sid: String, initiator: Martin.JID) -> Iq {
-        let iq = Self.jingleIq(to: jid, action: "session-initiate", sid: sid, children: [content()])
-        iq.firstChild(name: "jingle")?.setAttribute("initiator", value: initiator.stringValue)
-        return iq
+        Self.jingleIq(to: jid, action: "session-initiate", sid: sid, attributes: ["initiator": initiator.stringValue], children: [content()])
     }
 
     func sessionAccept(to jid: Martin.JID, sid: String, responder: Martin.JID) -> Iq {
-        let iq = Self.jingleIq(to: jid, action: "session-accept", sid: sid, children: [content()])
-        iq.firstChild(name: "jingle")?.setAttribute("responder", value: responder.stringValue)
-        return iq
+        Self.jingleIq(to: jid, action: "session-accept", sid: sid, attributes: ["responder": responder.stringValue], children: [content()])
     }
 
     static func sessionTerminate(to jid: Martin.JID, sid: String, reason: JingleSessionTerminateReason) -> Iq {

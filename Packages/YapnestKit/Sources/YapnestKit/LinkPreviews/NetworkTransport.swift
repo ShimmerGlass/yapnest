@@ -51,16 +51,7 @@ struct SystemTransport: FetchTransport {
         var cursor = list
         while let entry = cursor {
             defer { cursor = entry.pointee.ai_next }
-            guard let sa = entry.pointee.ai_addr else { continue }
-            let bytes: [UInt8]
-            switch entry.pointee.ai_family {
-            case AF_INET:
-                bytes = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { withUnsafeBytes(of: $0.pointee.sin_addr) { Array($0) } }
-            case AF_INET6:
-                bytes = sa.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { withUnsafeBytes(of: $0.pointee.sin6_addr) { Array($0) } }
-            default:
-                continue
-            }
+            guard let sa = entry.pointee.ai_addr, let bytes = LocalInterfaces.bytes(of: UnsafePointer(sa)) else { continue }
             if let address = IPAddress(bytes: bytes), !result.contains(address) { result.append(address) }
         }
         return result

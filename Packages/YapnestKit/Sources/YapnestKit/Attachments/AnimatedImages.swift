@@ -53,17 +53,17 @@ public enum AnimatedImages {
         public var canDownsample: Bool { AnimatedImages.canDownsample(width: width, height: height, frames: frames) }
     }
 
+    // Not caching keeps decoded frames from piling up inside the source.
+    private static var noCache: CFDictionary { [kCGImageSourceShouldCache: false] as CFDictionary }
+
     /// The canvas size and frame count, from the header alone.
     public static func header(of source: CGImageSource) -> Header? {
-        guard let type = CGImageSourceGetType(source), CGImageSourceGetCount(source) > 0,
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
-              width > 0, height > 0 else { return nil }
+        guard let type = CGImageSourceGetType(source), let (width, height) = AttachmentStore.pixelSize(of: source) else { return nil }
         return Header(width: width, height: height, frames: CGImageSourceGetCount(source), isGIF: type as String == UTType.gif.identifier)
     }
 
     public static func header(of url: URL) -> Header? {
-        if let header = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary).flatMap(header(of:)) {
+        if let header = CGImageSourceCreateWithURL(url as CFURL, noCache).flatMap(header(of:)) {
             return header
         }
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
@@ -72,7 +72,7 @@ public enum AnimatedImages {
     }
 
     public static func header(of data: Data) -> Header? {
-        CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary).flatMap(header(of:))
+        CGImageSourceCreateWithData(data as CFData, noCache).flatMap(header(of:))
             ?? oversizeHeader(fromScreenDescriptor: data.prefix(10))
     }
 
@@ -116,15 +116,12 @@ public enum AnimatedImages {
             count = CGImageSourceGetCount(source)
         }
 
-        // Not caching keeps decoded frames from piling up inside the source.
-        private static var options: CFDictionary { [kCGImageSourceShouldCache: false] as CFDictionary }
-
         public convenience init?(url: URL) {
-            self.init(source: CGImageSourceCreateWithURL(url as CFURL, Self.options))
+            self.init(source: CGImageSourceCreateWithURL(url as CFURL, AnimatedImages.noCache))
         }
 
         public convenience init?(data: Data) {
-            self.init(source: CGImageSourceCreateWithData(data as CFData, Self.options))
+            self.init(source: CGImageSourceCreateWithData(data as CFData, AnimatedImages.noCache))
         }
 
         public func delay(at index: Int) -> Duration {
@@ -181,7 +178,7 @@ public enum AnimatedImages {
     /// `side` pixels, with the same frames, delays and loop count. One frame
     /// is decoded at a time, and the destination is only replaced once whole.
     public static func downsample(_ source: URL, to destination: URL, side: Int = downsampledSide) throws {
-        guard let input = CGImageSourceCreateWithURL(source as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+        guard let input = CGImageSourceCreateWithURL(source as CFURL, noCache),
               CGImageSourceGetCount(input) > 0 else { throw TranscodeError.unreadable }
         let count = CGImageSourceGetCount(input)
         let fileProperties = CGImageSourceCopyProperties(input, nil) as? [CFString: Any]

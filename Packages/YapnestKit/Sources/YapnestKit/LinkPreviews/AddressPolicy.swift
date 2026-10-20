@@ -48,7 +48,7 @@ struct AddressPrefix: Hashable, Sendable {
     func contains(_ other: IPAddress) -> Bool {
         guard other.bytes.count == address.bytes.count else { return false }
         let whole = length / 8
-        if whole > 0, Array(other.bytes[..<whole]) != Array(address.bytes[..<whole]) { return false }
+        if whole > 0, !other.bytes[..<whole].elementsEqual(address.bytes[..<whole]) { return false }
         let rest = length % 8
         guard rest > 0 else { return true }
         let mask = UInt8(truncatingIfNeeded: 0xFF << (8 - rest))
@@ -196,7 +196,7 @@ enum LocalInterfaces {
         return result
     }
 
-    private static func bytes(of sa: UnsafePointer<sockaddr>) -> [UInt8]? {
+    static func bytes(of sa: UnsafePointer<sockaddr>) -> [UInt8]? {
         switch Int32(sa.pointee.sa_family) {
         case AF_INET:
             return sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { p in withUnsafeBytes(of: p.pointee.sin_addr) { Array($0) } }

@@ -4,6 +4,10 @@ import GRDB
 public enum LinkPreviewSetting: String, Sendable, CaseIterable {
     case askPerConversation
     case never
+
+    init(stored raw: String?) {
+        self = raw.flatMap(Self.init(rawValue:)) ?? .askPerConversation
+    }
 }
 
 /// What to do about a message's link preview.
@@ -27,7 +31,7 @@ public enum LinkPreviewPolicy {
 
 extension AppDatabase {
     public var linkPreviewSetting: LinkPreviewSetting {
-        ((try? setting(.linkPreviews)) ?? nil).flatMap(LinkPreviewSetting.init(rawValue:)) ?? .askPerConversation
+        LinkPreviewSetting(stored: (try? setting(.linkPreviews)) ?? nil)
     }
 
     public func setLinkPreviewSetting(_ value: LinkPreviewSetting) throws {
@@ -36,8 +40,7 @@ extension AppDatabase {
 
     public func observeLinkPreviewSetting() -> ValueObservation<ValueReducers.Fetch<LinkPreviewSetting>> {
         ValueObservation.tracking { db in
-            let raw = try Self.setting(db, .linkPreviews)
-            return raw.flatMap(LinkPreviewSetting.init(rawValue:)) ?? .askPerConversation
+            LinkPreviewSetting(stored: try Self.setting(db, .linkPreviews))
         }
     }
 }

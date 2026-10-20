@@ -22,10 +22,6 @@ public struct DiagField: Sendable {
         DiagField(key, String(value))
     }
 
-    public static func double(_ key: StaticString, _ value: Double) -> DiagField {
-        DiagField(key, String(format: "%.3f", value))
-    }
-
     public static func duration(_ key: StaticString, _ seconds: TimeInterval) -> DiagField {
         DiagField(key, String(format: "%.3fs", seconds))
     }

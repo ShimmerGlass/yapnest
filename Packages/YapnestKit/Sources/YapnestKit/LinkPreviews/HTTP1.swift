@@ -119,10 +119,7 @@ struct HTTP1ResponseParser {
 
         case .fixed(let remaining):
             guard !buffer.isEmpty else { return false }
-            let count = min(remaining, buffer.count)
-            let taken = buffer.prefix(count)
-            buffer.removeFirst(count)
-            append(taken)
+            let count = takeBody(remaining)
             if !isComplete { state = remaining == count ? .done : .fixed(remaining - count) }
             return true
 
@@ -151,10 +148,7 @@ struct HTTP1ResponseParser {
 
         case .chunk(let remaining):
             guard !buffer.isEmpty else { return false }
-            let count = min(remaining, buffer.count)
-            let taken = buffer.prefix(count)
-            buffer.removeFirst(count)
-            append(taken)
+            let count = takeBody(remaining)
             if !isComplete { state = remaining == count ? .chunkEnd : .chunk(remaining - count) }
             return true
 
@@ -179,6 +173,16 @@ struct HTTP1ResponseParser {
         case .done:
             return false
         }
+    }
+
+    /// Moves up to `remaining` buffered bytes into the body, and returns how
+    /// many.
+    private mutating func takeBody(_ remaining: Int) -> Int {
+        let count = min(remaining, buffer.count)
+        let taken = buffer.prefix(count)
+        buffer.removeFirst(count)
+        append(taken)
+        return count
     }
 
     private mutating func parseHead(_ block: [UInt8]) throws {
@@ -244,17 +248,17 @@ struct HTTP1ResponseParser {
         guard limits.stopAtEndOfHead, isHTML else { return }
         let marker = Array("</head>".utf8)
         let start = max(0, searched - marker.count + 1)
-        let array = [UInt8](body)
-        var i = start
-        while i + marker.count <= array.count {
-            if (0..<marker.count).allSatisfy({ Self.lower(array[i + $0]) == marker[$0] }) {
-                body = body.prefix(i + marker.count)
+        let unsearched = [UInt8](body.suffix(from: body.startIndex + start))
+        var i = 0
+        while i + marker.count <= unsearched.count {
+            if (0..<marker.count).allSatisfy({ Self.lower(unsearched[i + $0]) == marker[$0] }) {
+                body = body.prefix(start + i + marker.count)
                 state = .done
                 return
             }
             i += 1
         }
-        searched = array.count
+        searched = body.count
     }
 
     private static func lower(_ byte: UInt8) -> UInt8 {
@@ -263,7 +267,7 @@ struct HTTP1ResponseParser {
 
     private static func find(_ needle: [UInt8], in haystack: [UInt8]) -> Int? {
         guard haystack.count >= needle.count else { return nil }
-        for i in 0...(haystack.count - needle.count) where haystack[i] == needle[0] && Array(haystack[i..<(i + needle.count)]) == needle {
+        for i in 0...(haystack.count - needle.count) where haystack[i] == needle[0] && haystack[i..<(i + needle.count)].elementsEqual(needle) {
             return i
         }
         return nil

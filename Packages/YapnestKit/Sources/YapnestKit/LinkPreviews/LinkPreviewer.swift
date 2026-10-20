@@ -133,10 +133,8 @@ public final class LinkPreviewer: Sendable {
     /// Scales the image down, re-encodes it and stores it under a name
     /// derived from the link. Nil if it isn't a usable image.
     private func saveImage(_ data: Data, for key: String) -> (file: String, width: Double, height: Double)? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0,
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
-              width > 0, height > 0, width * height <= Self.maxImagePixels else { return nil }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let (width, height) = AttachmentStore.pixelSize(of: source), width * height <= Self.maxImagePixels else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -161,7 +159,7 @@ public final class LinkPreviewer: Sendable {
     }
 
     static func fileName(for key: String) -> String {
-        SHA256.hash(data: Data(key.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+        Data(SHA256.hash(data: Data(key.utf8)).prefix(16)).hex
     }
 
     static func decode(_ data: Data, encodingName: String?) -> String {

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // Link previews fetch addresses that strangers put in messages, so they must
 // never reach the local network: not a router's admin page, not a printer,
@@ -152,10 +153,10 @@ final class SafeFetcher: LinkFetching {
         }
 
         let connection = transport.makeConnection(to: address, serverName: target.hostName)
-        let timedOut = Flag()
+        let timedOut = OSAllocatedUnfairLock(initialState: false)
         let timer = Task {
             try await Task.sleep(for: .seconds(timeout))
-            timedOut.set()
+            timedOut.withLock { $0 = true }
             connection.close()
         }
         defer {
@@ -193,18 +194,11 @@ final class SafeFetcher: LinkFetching {
         } catch let error as HTTP1ResponseParser.Failure {
             throw error == .tooLarge ? FetchError.tooLarge : FetchError.badResponse
         } catch let error as FetchError {
-            throw timedOut.isSet ? FetchError.timedOut : error
+            throw timedOut.withLock { $0 } ? FetchError.timedOut : error
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            throw timedOut.isSet ? FetchError.timedOut : FetchError.unreachable("\(error)")
+            throw timedOut.withLock { $0 } ? FetchError.timedOut : FetchError.unreachable("\(error)")
         }
     }
-}
-
-final class Flag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = false
-    func set() { lock.withLock { value = true } }
-    var isSet: Bool { lock.withLock { value } }
 }

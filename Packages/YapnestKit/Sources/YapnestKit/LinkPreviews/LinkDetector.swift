@@ -17,8 +17,13 @@ public enum LinkDetector {
     /// The link a message's preview is for: its first web link. Only HTTPS
     /// links get previews, so fetching one never goes out in the clear.
     public static func previewLink(in text: String) -> URL? {
-        guard let url = links(in: text).first(where: { $0.url.scheme?.lowercased().hasPrefix("http") == true })?.url,
-              url.scheme?.lowercased() == "https" else { return nil }
-        return url
+        var first: URL?
+        detector.enumerateMatches(in: text, range: NSRange(text.startIndex..., in: text)) { match, _, stop in
+            guard let url = match?.url, let scheme = url.scheme?.lowercased(), openableSchemes.contains(scheme), scheme.hasPrefix("http") else { return }
+            first = url
+            stop.pointee = true
+        }
+        guard let first, first.scheme?.lowercased() == "https" else { return nil }
+        return first
     }
 }

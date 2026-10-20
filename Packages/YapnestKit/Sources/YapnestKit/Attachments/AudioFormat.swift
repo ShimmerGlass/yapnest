@@ -35,13 +35,13 @@ public enum AudioFormat {
         "^voice[ _-]message.*",
         "^RECORDING_[0-9]{8}_[0-9]{6,9}\\.(m4a|mp4|oga|ogg|opus)$",
         "^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\.m4a$",
-    ]
+    ].map { try! NSRegularExpression(pattern: $0, options: .caseInsensitive) }
 
     /// Whether a sound is someone's voice message rather than a song or a
     /// recording that was picked: by its name alone, as above.
     public static func isVoiceClip(mimeType: String?, name: String) -> Bool {
         guard isAudio(mimeType: mimeType, name: name) else { return false }
-        return voiceNamePatterns.contains { name.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil }
+        return voiceNamePatterns.contains { $0.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil }
     }
 
     /// A length as a clock reads it: "0:07", "12:30", "1:02:03".
