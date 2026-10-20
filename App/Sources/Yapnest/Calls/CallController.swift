@@ -110,7 +110,12 @@ final class CallController {
         if let state, state.sid != screen?.sid { isExpanded = Self.startsExpanded(state) }
         screen = state
         // Writing the same value would still notify the views that read it.
-        if (state != nil) != isInCall { isInCall = state != nil }
+        if (state != nil) != isInCall {
+            isInCall = state != nil
+            // A clip playing or a voice message being recorded lets go of the
+            // audio session, which is the call's now.
+            VoicePlayback.shared.isInCall = isInCall
+        }
         // A video call is watched, not touched, so the screen would dim.
         let keepAwake = Self.keepsScreenAwake(for: state)
         if UIApplication.shared.isIdleTimerDisabled != keepAwake { UIApplication.shared.isIdleTimerDisabled = keepAwake }

@@ -62,7 +62,7 @@ targets:
         NSUserActivityTypes: [INSendMessageIntent]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSCameraUsageDescription: Take photos and videos to send in a conversation, and show yourself in video calls.
-        NSMicrophoneUsageDescription: Talk in calls, and record sound with the videos you send.
+        NSMicrophoneUsageDescription: Talk in calls, record voice messages, and record sound with the videos you send.
         # For Save Image from the share sheet and the file preview.
         NSPhotoLibraryAddUsageDescription: Save photos and videos from your conversations.
         # The yapnest-website pages. Review opens the privacy policy and terms,

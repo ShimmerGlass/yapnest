@@ -10,8 +10,9 @@ company or a phone number.
   encrypted with OMEMO, and you decide which of your contacts' devices to
   trust.
 - **Everything you'd expect from a chat app.** Reactions, replies, edits and
-  deleting messages, mentions, photos, videos, files and GIFs, link previews,
-  locations, and read state that follows you across your devices.
+  deleting messages, mentions, photos, videos, files, GIFs, voice messages,
+  link previews, locations, and read state that follows you across your
+  devices.
 - **Groups.** Create private groups, invite people, and manage members,
   admins and the group's settings.
 - **Contact requests you control.** Accept or decline requests, block
@@ -148,8 +149,8 @@ What Yapnest implements, and where it stops short.
 | XEP-0428 | Fallback Indication | Full. |
 | XEP-0444 | Message Reactions | Full. |
 | XEP-0439 | Quick Response | Receive: a message's suggested replies, shown as buttons under the newest message of a chat and sent as ordinary text, and its actions, shown as buttons under the bubble, each chosen once, and sent as an `<action-selected>`, which the account's other devices read from the carbon or the archive to stop offering the action too. Both are ignored in encrypted messages, as they are not covered by OMEMO, and in groups and their private messages, where an action would reach the whole room. |
-| XEP-0446 | File Metadata Element | Receive: size and, for pictures and videos, width and height, so a bubble has its final shape before the download, and a thumbnail. Sent for photos only in unencrypted chats; the metadata is not covered by OMEMO, so an encrypted chat sends none. |
-| XEP-0447 | Stateless File Sharing | Partial. Receive: the metadata of a `<file-sharing>`, in the message with the link or in an earlier message without a body (as Dino sends it). Sent in one message with the link and the XEP-0066 element, for photos in unencrypted chats only. Sources other than the message's own link are ignored. |
+| XEP-0446 | File Metadata Element | Receive: size and, for pictures and videos, width and height, so a bubble has its final shape before the download, and a thumbnail; for sound, its length, shown on a voice message before it is downloaded. Sent for photos and voice messages (with their length) only in unencrypted chats; the metadata is not covered by OMEMO, so an encrypted chat sends none. |
+| XEP-0447 | Stateless File Sharing | Partial. Receive: the metadata of a `<file-sharing>`, in the message with the link or in an earlier message without a body (as Dino sends it). Sent in one message with the link and the XEP-0066 element, for photos and voice messages in unencrypted chats only. Sources other than the message's own link are ignored. |
 | XEP-0454 | OMEMO Media Sharing | Full. |
 | XEP-0461 | Message Replies | Full. |
 | XEP-0484 | Fast Authentication Streamlining Tokens | Full, where the server offers it. |

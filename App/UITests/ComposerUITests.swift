@@ -26,6 +26,17 @@ final class ComposerUITests: InteractionsTestCase {
         waitUntilHidden(send, "the send button after the text was deleted")
     }
 
+    func testTheMicrophoneIsThereOnlyWithoutText() {
+        let microphone = app.buttons["Record voice message"]
+        waitUntilHittable(microphone, "the microphone button")
+        driver.composer.tap()
+        driver.composer.typeText("Hello")
+        waitUntilHidden(microphone, "the microphone button while there is text")
+        waitUntilHittable(send, "the send button")
+        driver.composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5))
+        waitUntilHittable(microphone, "the microphone button after the text was deleted")
+    }
+
     func testSendingPutsANewBubbleAtTheNewestEnd() {
         driver.composer.tap()
         driver.composer.typeText("A brand new message")

@@ -24,6 +24,7 @@ struct ComposerBar: UIViewRepresentable {
         bar.onAttachments = { [weak model] providers in model?.offerAttachments(providers) }
         bar.onRemovePending = { [weak model] id in model?.removePendingAttachment(id) }
         bar.onDropTargeted = { [weak model] targeted in model?.composerDropTargeted = targeted }
+        bar.onVoicePress = { [weak model] locked in model?.voicePress(locked: locked) }
         model.composer.bar = bar
         model.composerAttached()
         return host

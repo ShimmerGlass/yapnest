@@ -30,6 +30,7 @@ public final class AttachmentStore: Sendable {
         guard let url = url(for: attachment) else { return }
         try? FileManager.default.removeItem(at: url)
         try? FileManager.default.removeItem(at: AnimatedImages.copyURL(for: url))
+        try? FileManager.default.removeItem(at: AudioWaveform.cacheURL(for: url))
     }
 
     /// Stores `data` under a fresh name that keeps `name`'s extension, so
@@ -76,6 +77,7 @@ public final class AttachmentStore: Sendable {
         var size: Int64
         var width: Int?
         var height: Int?
+        var duration: TimeInterval?
     }
 
     /// Stores the file at `url` for sending without reading it into memory,
@@ -127,6 +129,7 @@ public final class AttachmentStore: Sendable {
             throw XMPPSession.AttachmentError.unreadable
         }
         var dimensions: (width: Int, height: Int)?
+        let duration = AudioFormat.isAudio(mimeType: nil, name: name) ? AudioWaveform.duration(of: destination) : nil
         if Self.isVideo(name: name) {
             dimensions = await Self.videoSize(of: destination)
         } else if let source = CGImageSourceCreateWithURL(destination as CFURL, nil), let (width, height) = Self.pixelSize(of: source) {
@@ -134,7 +137,7 @@ public final class AttachmentStore: Sendable {
             let orientation = properties?[kCGImagePropertyOrientation] as? Int ?? 1
             dimensions = orientation >= 5 ? (height, width) : (width, height)
         }
-        return Imported(file: file, name: name, size: destination.fileSize, width: dimensions?.width, height: dimensions?.height)
+        return Imported(file: file, name: name, size: destination.fileSize, width: dimensions?.width, height: dimensions?.height, duration: duration)
     }
 
     struct MetadataError: Error {}
@@ -237,6 +240,9 @@ public final class AttachmentStore: Sendable {
     }
 
     static func mimeType(for name: String) -> String? {
-        UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType
+        // The system calls an .m4a "audio/x-m4a", which other clients don't
+        // know as a voice message; it is MPEG-4 audio.
+        if (name as NSString).pathExtension.lowercased() == "m4a" { return "audio/mp4" }
+        return UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType
     }
 }

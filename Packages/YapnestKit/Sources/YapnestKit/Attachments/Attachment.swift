@@ -32,6 +32,9 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
     public var size: Int64?
     public var width: Double?
     public var height: Double?
+    /// How long a sound plays, in seconds: what the sender announced, or
+    /// what we measured of our own recording.
+    public var duration: TimeInterval?
     /// A tiny PNG the sender announced (see `FileMetadata`), drawn blurred until
     /// the file is downloaded. Dropped once it is.
     public var thumbnail: Data?
@@ -47,6 +50,7 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
         size: Int64? = nil,
         width: Double? = nil,
         height: Double? = nil,
+        duration: TimeInterval? = nil,
         thumbnail: Data? = nil,
         localFile: String? = nil,
         state: State,
@@ -58,6 +62,7 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
         self.size = size
         self.width = width
         self.height = height
+        self.duration = duration
         self.thumbnail = thumbnail
         self.localFile = localFile
         self.state = state
@@ -71,6 +76,16 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
 
     public var isImage: Bool { type?.conforms(to: .image) ?? false }
     public var isVideo: Bool { type?.conforms(to: .movie) ?? false }
+    public var isAudio: Bool { AudioFormat.isAudio(mimeType: mimeType, name: name) }
+
+    /// Whether the bubble plays it itself. AVAudioPlayer has no Ogg or Opus
+    /// decoder, and shipping one for those senders isn't worth it: they are
+    /// shown as any other file.
+    public var playsInline: Bool { isAudio && AudioFormat.isPlayable(mimeType: mimeType, name: name) }
+
+    /// A voice message, as opposed to music or some other sound; see `AudioFormat.isVoiceClip`.
+    public var isVoiceClip: Bool { AudioFormat.isVoiceClip(mimeType: mimeType, name: name) }
+
     public var isContact: Bool { type?.conforms(to: .vCard) ?? false }
 
     /// A contact's name, which is its file name without the extension.
@@ -88,6 +103,7 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
     /// it is an image changes neither the bubble nor whether it downloads itself.
     mutating func apply(_ metadata: FileMetadata) {
         size = metadata.size ?? size
+        if isAudio, let length = metadata.length { duration = length }
         guard metadata.describesMedia, isImage || isVideo else { return }
         if let width = metadata.width, let height = metadata.height {
             self.width = Double(width)
@@ -100,6 +116,7 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
     public var summary: String {
         if isImage { return String(localized: "📷 Photo") }
         if isVideo { return String(localized: "🎬 Video") }
+        if isAudio { return isVoiceClip ? String(localized: "🎤 Voice message") : "🎵 " + name }
         if isContact { return "👤 " + contactName }
         return "📎 " + name
     }

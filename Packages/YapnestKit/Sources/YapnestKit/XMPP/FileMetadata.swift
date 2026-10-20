@@ -18,6 +18,8 @@ public struct FileMetadata: Sendable, Equatable {
     public var size: Int64?
     public var width: Int?
     public var height: Int?
+    /// How long a sound plays, in seconds (XEP-0446 sends milliseconds).
+    public var length: TimeInterval?
     /// A small PNG to draw, blurred, until the file is downloaded. Already
     /// checked and re-encoded: see `normalizedThumbnail`.
     public var thumbnail: Data?
@@ -26,11 +28,12 @@ public struct FileMetadata: Sendable, Equatable {
     /// SHA-256 of the file, only for sending.
     public var sha256: Data?
 
-    public init(mediaType: String? = nil, size: Int64? = nil, width: Int? = nil, height: Int? = nil, thumbnail: Data? = nil, name: String? = nil, sha256: Data? = nil) {
+    public init(mediaType: String? = nil, size: Int64? = nil, width: Int? = nil, height: Int? = nil, length: TimeInterval? = nil, thumbnail: Data? = nil, name: String? = nil, sha256: Data? = nil) {
         self.mediaType = mediaType
         self.size = size
         self.width = width
         self.height = height
+        self.length = length
         self.thumbnail = thumbnail
         self.name = name
         self.sha256 = sha256
@@ -38,6 +41,8 @@ public struct FileMetadata: Sendable, Equatable {
 
     /// A side of a claimed picture is believed up to this long.
     static let maxDimension = 16384
+    /// A claimed length is believed up to a day.
+    static let maxLengthMilliseconds: Int64 = 24 * 60 * 60 * 1000
     /// Thumbnails larger than this, as sent, are ignored.
     static let maxThumbnailBytes = 32 * 1024
     /// A thumbnail claiming more pixels than this on a side is ignored without
@@ -66,6 +71,9 @@ public struct FileMetadata: Sendable, Equatable {
         let dimensions = Self.dimensions(width: file.firstChild(name: "width")?.value, height: file.firstChild(name: "height")?.value)
         width = dimensions?.width
         height = dimensions?.height
+        length = file.firstChild(name: "length")?.value
+            .flatMap { Int64($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .flatMap { (1...Self.maxLengthMilliseconds).contains($0) ? TimeInterval($0) / 1000 : nil }
         thumbnail = file.filterChildren(name: "thumbnail", xmlns: NS.thumbnails).lazy
             .compactMap { $0.getAttribute("uri") }
             .compactMap(Self.thumbnail(fromDataURI:))
@@ -126,18 +134,26 @@ public struct FileMetadata: Sendable, Equatable {
     // MARK: Sending
 
     /// What to tell the recipient of `attachment`'s file, which is a picture
-    /// in the store. Nil for anything else. Reads the file, so call it off
-    /// the main thread.
+    /// or a sound in the store. Nil for anything else. Reads the file, so call
+    /// it off the main thread.
     static func outgoing(for attachment: Attachment, in store: AttachmentStore) -> FileMetadata? {
-        guard attachment.isImage, let file = store.url(for: attachment), let width = attachment.imageSize.map({ Int($0.width) }),
-              let height = attachment.imageSize.map({ Int($0.height) }),
-              let data = try? Data(contentsOf: file, options: .mappedIfSafe),
+        if attachment.isAudio {
+            guard let (data, hash) = contents(of: attachment, in: store) else { return nil }
+            return FileMetadata(mediaType: attachment.mimeType, size: Int64(data.count), length: attachment.duration, name: attachment.name, sha256: hash)
+        }
+        guard attachment.isImage, let width = attachment.imageSize.map({ Int($0.width) }), let height = attachment.imageSize.map({ Int($0.height) }),
+              let (data, hash) = contents(of: attachment, in: store),
               let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         return FileMetadata(
             mediaType: attachment.mimeType, size: Int64(data.count), width: width, height: height,
-            thumbnail: pngThumbnail(of: source, maxSide: sentThumbnailSide), name: attachment.name,
-            sha256: Data(SHA256.hash(data: data)),
+            thumbnail: pngThumbnail(of: source, maxSide: sentThumbnailSide), name: attachment.name, sha256: hash,
         )
+    }
+
+    /// The stored file and its SHA-256.
+    private static func contents(of attachment: Attachment, in store: AttachmentStore) -> (Data, Data)? {
+        guard let file = store.url(for: attachment), let data = try? Data(contentsOf: file, options: .mappedIfSafe) else { return nil }
+        return (data, Data(SHA256.hash(data: data)))
     }
 
     /// The `<file-sharing>` element for a file at `url`.
@@ -150,6 +166,7 @@ public struct FileMetadata: Sendable, Equatable {
             file.addChild(Element(name: "width", cdata: String(width)))
             file.addChild(Element(name: "height", cdata: String(height)))
         }
+        if let length, length > 0 { file.addChild(Element(name: "length", cdata: String(Int((length * 1000).rounded())))) }
         if let sha256 {
             let hash = Element(name: "hash", cdata: sha256.base64EncodedString(), xmlns: NS.hashes)
             hash.setAttribute("algo", value: "sha-256")

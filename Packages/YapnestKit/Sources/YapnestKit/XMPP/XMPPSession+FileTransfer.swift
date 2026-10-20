@@ -235,11 +235,13 @@ extension XMPPSession {
         scheduleRemoval(ft)
         let messageId = ft.messageId, name = ft.offer.name, mimeType = ft.offer.mediaType
         Task.detached { [self] in
-            let dimensions = await AttachmentStore.displaySize(ofFileAt: attachments.directory.appending(path: localFile), name: name)
+            let stored = attachments.directory.appending(path: localFile)
+            let dimensions = await AttachmentStore.displaySize(ofFileAt: stored, name: name)
+            let duration = AudioFormat.isAudio(mimeType: mimeType, name: name) ? AudioWaveform.duration(of: stored) : nil
             do {
                 try database.setDownloaded(
                     messageId: messageId, localFile: localFile, size: size, mimeType: mimeType,
-                    width: dimensions?.width, height: dimensions?.height,
+                    width: dimensions?.width, height: dimensions?.height, duration: duration,
                 )
             } catch {
                 transferLogger.error("Couldn't record received file for message \(messageId): \(error, privacy: .public)")

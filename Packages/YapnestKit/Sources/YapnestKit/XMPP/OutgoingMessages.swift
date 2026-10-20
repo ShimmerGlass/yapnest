@@ -75,6 +75,7 @@ struct OutgoingMessages: Sendable {
                         size: imported.size,
                         width: imported.width.map(Double.init),
                         height: imported.height.map(Double.init),
+                        duration: imported.duration,
                         localFile: imported.file,
                         state: .pendingUpload,
                     )

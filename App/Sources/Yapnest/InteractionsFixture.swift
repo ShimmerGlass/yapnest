@@ -1,4 +1,5 @@
 #if DEBUG
+import AVFoundation
 import Foundation
 import GRDB
 import UIKit
@@ -17,6 +18,7 @@ enum InteractionsFixture {
     static let wordy = JID("wordy@fixture.test")!
     static let emoji = JID("emoji@fixture.test")!
     static let calls = JID("calls@fixture.test")!
+    static let voice = JID("voice@fixture.test")!
 
     /// A message long enough to be cut short behind "Show more": 30 lines,
     /// the first "Line 01 of a message that runs on." and the last "Line 30
@@ -45,6 +47,7 @@ enum InteractionsFixture {
         try fillWordy(database)
         try fillEmoji(database)
         try fillCalls(database)
+        try fillVoice(database, files: files)
         try fillStyling(database)
     }
 
@@ -208,6 +211,49 @@ enum InteractionsFixture {
         for (index, (outcome, direction, duration)) in kinds.enumerated() {
             try DevFixture.addCall(database, conversation, peer: calls, outcome: outcome, direction: direction, duration: duration, at: next(), sid: "calls-\(index)")
         }
+    }
+
+    /// Voice messages in each state a bubble can be in: not downloaded (with
+    /// the length the sender announced, and without), downloaded and playable,
+    /// failed, and Opus, which is shown as a file. All of them must be the
+    /// same height, so the list doesn't move when one downloads.
+    private static func fillVoice(_ database: AppDatabase, files: URL) throws {
+        let conversation = try chat(database, voice, "Voice")
+        try writeSound(to: files.appending(path: "fixture-voice.caf"), seconds: 30)
+        // Days old, so the chat sorts below the others and doesn't push one of
+        // them out of the chat list's first screen.
+        var time = Date().addingTimeInterval(-3 * 24 * 3600)
+        func next() -> Date { time.addTimeInterval(60); return time }
+        try add(database, conversation, from: voice, "Words before the voice messages.", at: next())
+        func clip(_ id: String, _ name: String, _ mimeType: String, outgoing: Bool = false, duration: TimeInterval? = nil, state: Attachment.State, local: Bool = false) throws {
+            let url = "https://files.fixture.test/\(id)/\(name)"
+            let message = try add(database, conversation, from: voice, url, outgoing: outgoing, at: next(), remoteId: id)
+            try database.writer.write { db in
+                try Attachment(
+                    messageId: message.id!, url: url, name: name, mimeType: mimeType, size: 48_000, duration: duration,
+                    localFile: local ? "fixture-voice.caf" : nil, state: state,
+                ).insert(db)
+            }
+        }
+        try clip("v-remote", "Voice message.m4a", "audio/mp4", duration: 12, state: .remote)
+        try clip("v-unknown", "RECORDING_20260101_101010123.m4a", "audio/mp4", state: .remote)
+        try clip("v-ready", "Voice message.caf", "audio/x-caf", outgoing: true, duration: 30, state: .ready, local: true)
+        try clip("v-failed", "voice-message-20260101-101010.m4a", "audio/mp4", duration: 5, state: .downloadFailed)
+        try clip("v-song", "Song.mp3", "audio/mpeg", duration: 200, state: .remote)
+        try clip("v-opus", "RECORDING_20260101_101011123.oga", "audio/ogg", state: .remote)
+        try add(database, conversation, from: voice, "Voice chat newest.", at: next())
+    }
+
+    /// A file the player can open: a tone, quiet enough to leave running in a
+    /// test, or silence (`amplitude` 0) for tests that only need the player to load it.
+    static func writeSound(to url: URL, seconds: Int, amplitude: Float = 0.05) throws {
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 8000, channels: 1, interleaved: false)!
+        let frames = AVAudioFrameCount(8000 * seconds)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+        buffer.frameLength = frames
+        for index in 0..<Int(frames) { buffer.floatChannelData![0][index] = Float(sin(Double(index) * 0.2)) * amplitude }
+        try? FileManager.default.removeItem(at: url)
+        try AVAudioFile(forWriting: url, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false).write(from: buffer)
     }
 
     private static func fillWordy(_ database: AppDatabase) throws {

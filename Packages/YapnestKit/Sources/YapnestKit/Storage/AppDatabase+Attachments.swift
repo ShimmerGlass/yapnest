@@ -32,7 +32,9 @@ extension AppDatabase {
         }
     }
 
-    func setDownloaded(messageId: Int64, localFile: String, size: Int64, mimeType: String?, width: Int?, height: Int?) throws {
+    /// `duration` is what measuring a sound gave; a file that can't be
+    /// measured keeps the length its sender announced.
+    func setDownloaded(messageId: Int64, localFile: String, size: Int64, mimeType: String?, width: Int?, height: Int?, duration: TimeInterval? = nil) throws {
         try writer.write { db in
             guard var attachment = try Attachment.fetchOne(db, key: messageId) else { return }
             attachment.localFile = localFile
@@ -44,6 +46,7 @@ extension AppDatabase {
                 attachment.width = Double(width)
                 attachment.height = Double(height)
             }
+            if let duration { attachment.duration = duration }
             attachment.thumbnail = nil
             attachment.state = .ready
             try attachment.update(db)
@@ -117,6 +120,7 @@ private struct FileAnnouncement: Codable, FetchableRecord, PersistableRecord {
     var size: Int64?
     var width: Int?
     var height: Int?
+    var length: Double?
     var thumbnail: Data?
 
     static let databaseTableName = "fileAnnouncement"
@@ -130,7 +134,7 @@ extension AppDatabase {
     static func keepAnnouncement(_ db: Database, key: String, _ metadata: FileMetadata, now: Date = Date()) throws {
         try FileAnnouncement(
             key: key, receivedAt: now, mediaType: metadata.mediaType, size: metadata.size,
-            width: metadata.width, height: metadata.height, thumbnail: metadata.thumbnail,
+            width: metadata.width, height: metadata.height, length: metadata.length, thumbnail: metadata.thumbnail,
         ).save(db)
         try FileAnnouncement.filter(Column("receivedAt") < now.addingTimeInterval(-FileAnnouncement.lifetime)).deleteAll(db)
         try db.execute(sql: """
@@ -142,6 +146,6 @@ extension AppDatabase {
     static func takeAnnouncement(_ db: Database, key: String) throws -> FileMetadata? {
         guard let found = try FileAnnouncement.fetchOne(db, key: key) else { return nil }
         try found.delete(db)
-        return FileMetadata(mediaType: found.mediaType, size: found.size, width: found.width, height: found.height, thumbnail: found.thumbnail)
+        return FileMetadata(mediaType: found.mediaType, size: found.size, width: found.width, height: found.height, length: found.length, thumbnail: found.thumbnail)
     }
 }

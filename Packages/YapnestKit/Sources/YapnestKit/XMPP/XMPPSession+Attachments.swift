@@ -187,10 +187,12 @@ extension XMPPSession {
 
                 let localFile = try attachments.save(data, name: attachment.name)
                 let mimeType = fragment == nil ? http.mimeType : nil
-                let size = await AttachmentStore.displaySize(of: data, savedAs: attachments.directory.appending(path: localFile), name: attachment.name)
+                let stored = attachments.directory.appending(path: localFile)
+                let size = await AttachmentStore.displaySize(of: data, savedAs: stored, name: attachment.name)
+                let duration = attachment.isAudio ? AudioWaveform.duration(of: stored) : nil
                 try database.setDownloaded(
                     messageId: messageId, localFile: localFile, size: Int64(data.count),
-                    mimeType: mimeType, width: size?.width, height: size?.height,
+                    mimeType: mimeType, width: size?.width, height: size?.height, duration: duration,
                 )
             } catch {
                 // Over the limit isn't a failure; a tap can still fetch it.

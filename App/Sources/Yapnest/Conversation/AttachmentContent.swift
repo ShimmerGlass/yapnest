@@ -9,6 +9,13 @@ struct AttachmentContent: View {
     let id: Int64
     let isOutgoing: Bool
     let transfers: TransferProgress
+    /// What a tap on the file does: opens it, downloads it, retries, or
+    /// explains a failure.
+    let onTap: () -> Void
+    /// Our message that didn't go out, whose clip explains that instead of playing.
+    let isFailed: Bool
+    /// Plays a sound's file from a fraction of its length, or from the start if nil.
+    let play: (URL, Double?) -> Void
 
     private var attachment: Attachment { display.attachment }
     private var isMedia: Bool { attachment.isImage || attachment.isVideo }
@@ -19,7 +26,19 @@ struct AttachmentContent: View {
         }
     }
 
+    @ViewBuilder
     private func content(progress: Double?) -> some View {
+        if attachment.playsInline {
+            // The player has controls of its own, so a tap on the bubble around them does nothing.
+            VoiceMessageView(display: display, id: id, isOutgoing: isOutgoing, progress: progress, onTap: onTap, isFailed: isFailed, play: play)
+        } else {
+            filePresentation(progress: progress)
+                .onTapGesture(perform: onTap)
+                .linkPointer()
+        }
+    }
+
+    private func filePresentation(progress: Double?) -> some View {
         Group {
             if isMedia {
                 MediaThumbnail(display: display, badge: badge(progress: progress, media: true))
@@ -55,28 +74,55 @@ struct AttachmentContent: View {
     }
 
     private func badge(progress: Double?, media: Bool) -> AttachmentBadge.State {
+        let ready: AttachmentBadge.State = if media {
+            attachment.isVideo ? .play : .hidden
+        } else {
+            attachment.isContact ? .contact : .file
+        }
+        return AttachmentStatus.badge(attachment, progress: progress, ready: ready)
+    }
+
+    private func detail(progress: Double?) -> String {
+        let size = display.sizeText
+        return AttachmentStatus.detail(
+            display, progress: progress,
+            remote: [size, String(localized: "Tap to download")].compactMap { $0 }.joined(separator: " · "),
+            ready: [size, attachment.isContact ? String(localized: "Contact") : attachment.type?.localizedDescription].compactMap { $0 }.joined(separator: " · "),
+        )
+    }
+}
+
+/// What a file's state and transfer say, the same for every way it is drawn.
+enum AttachmentStatus {
+    /// How VoiceOver names a sound: a voice message by what it is, any other
+    /// by its file name, since the emoji in a summary reads as noise.
+    static func spokenSound(_ attachment: Attachment) -> String {
+        attachment.isVoiceClip ? String(localized: "Voice message") : String(localized: "Audio file: \(attachment.name)")
+    }
+
+    /// The badge for a file that is arriving, missing or failed; `ready` is
+    /// the one for a file that is on this device (or on its way out).
+    static func badge(_ attachment: Attachment, progress: Double?, ready: AttachmentBadge.State) -> AttachmentBadge.State {
         if let progress { return .progress(progress) }
         switch attachment.state {
         case .remote, .offered: return .download
         case .downloadFailed: return .failed
         case .unavailable: return .unavailable
-        case .pendingUpload, .ready:
-            if media { return attachment.isVideo ? .play : .hidden }
-            return attachment.isContact ? .contact : .file
+        case .pendingUpload, .ready: return ready
         }
     }
 
-    private func detail(progress: Double?) -> String {
-        let size = display.sizeText
+    /// The line under a file: its progress or failure, or `remote` for one not
+    /// downloaded yet and `ready` for one that is here.
+    static func detail(_ display: AttachmentDisplay, progress: Double?, remote: String, ready: String) -> String {
         if let progress {
-            return [size, String(localized: "\(Int(progress * 100))%")].compactMap { $0 }.joined(separator: " · ")
+            return [display.sizeText, String(localized: "\(Int(progress * 100))%")].compactMap { $0 }.joined(separator: " · ")
         }
-        switch attachment.state {
-        case .remote, .offered: return [size, String(localized: "Tap to download")].compactMap { $0 }.joined(separator: " · ")
+        switch display.attachment.state {
+        case .remote, .offered: return remote
         case .downloadFailed: return String(localized: "Couldn't download · Tap to retry")
         case .unavailable: return String(localized: "No longer available")
-        case .pendingUpload, .ready:
-            return [size, attachment.isContact ? String(localized: "Contact") : attachment.type?.localizedDescription].compactMap { $0 }.joined(separator: " · ")
+        case .pendingUpload, .ready: return ready
         }
     }
 }
@@ -236,7 +282,7 @@ private struct MediaThumbnail: View {
 /// The round glyph over media and beside files: download, progress, play, failure.
 struct AttachmentBadge: View {
     enum State: Equatable {
-        case hidden, download, failed, unavailable, play, file, contact
+        case hidden, download, failed, unavailable, play, pause, file, contact
         case progress(Double)
     }
 
@@ -272,6 +318,7 @@ struct AttachmentBadge: View {
         // Nothing to retry: the offer it came from is over.
         case .unavailable: "xmark"
         case .play: "play.fill"
+        case .pause: "pause.fill"
         case .file: "doc.fill"
         case .contact: "person.fill"
         }

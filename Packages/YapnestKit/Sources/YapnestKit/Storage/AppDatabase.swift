@@ -595,6 +595,16 @@ public final class AppDatabase: Sendable {
             try db.execute(sql: "UPDATE conversation SET archivedAt = lastActivityAt WHERE isArchived")
         }
 
+        migrator.registerMigration("v35-attachment-duration") { db in
+            // How long a sound plays, announced by the sender or measured by us.
+            try db.alter(table: "attachment") { t in
+                t.add(column: "duration", .double)
+            }
+            try db.alter(table: "fileAnnouncement") { t in
+                t.add(column: "length", .double)
+            }
+        }
+
         return migrator
     }
 

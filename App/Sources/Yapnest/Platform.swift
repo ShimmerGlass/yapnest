@@ -24,4 +24,11 @@ enum Platform {
     /// The title bar can't hold a picture, so the Mac has none, and a chat's
     /// own header takes the top of the window, as in Messages.
     static let usesChatHeader = isMac
+
+    /// The page of the system's settings where `pane` ("Privacy_Microphone")
+    /// is switched on or off. The Mac has panes of its own; elsewhere it is
+    /// the app's page.
+    static func privacySettingsURL(_ pane: String) -> URL? {
+        URL(string: isMac ? "x-apple.systempreferences:com.apple.preference.security?\(pane)" : UIApplication.openSettingsURLString)
+    }
 }

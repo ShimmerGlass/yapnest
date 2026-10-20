@@ -48,6 +48,8 @@ final class ConversationModel {
         case confirmModeration(Int64)
         case reactions(Int64)
         case quoteNotFound
+        /// The microphone is off for the app, so a voice message can't be recorded.
+        case microphoneDenied
     }
 
     let session: XMPPSession
@@ -1094,9 +1096,11 @@ final class ConversationModel {
             let file = display.attachment
             let kind = file.isImage ? String(localized: "Photo")
                 : file.isVideo ? String(localized: "Video")
+                : file.isAudio ? AttachmentStatus.spokenSound(file)
                 : file.isContact ? String(localized: "Contact: \(file.contactName)")
                 : String(localized: "File: \(file.name)")
-            return [kind, display.sizeText].compactMap { $0 }.joined(separator: ", ")
+            let length = file.isAudio ? file.duration.map(AudioFormat.clock) : nil
+            return [kind, length, display.sizeText].compactMap { $0 }.joined(separator: ", ")
         }
         let state: String? = if isOutgoing && message.status == .failed {
             String(localized: "Not sent")
@@ -1985,6 +1989,61 @@ final class ConversationModel {
         }
     }
 
+    // MARK: Voice messages
+
+    /// Records and sends voice messages; the composer's microphone button
+    /// drives it. Made on the first press, which is why cancelling goes
+    /// through the optional.
+    @ObservationIgnored private var voiceRecorder: VoiceRecorder?
+
+    private func makeVoiceRecorder() -> VoiceRecorder {
+        let engine = SystemVoiceRecordingEngine()
+        let recorder = VoiceRecorder(engine: engine)
+        engine.onInterrupted = { [weak recorder] in recorder?.cancel() }
+        recorder.onChange = { [weak self] in self?.composer.bar?.voiceChanged() }
+        recorder.onFinished = { [weak self] file in self?.sendVoice(file) }
+        recorder.onTooShort = { [weak self] in self?.composer.bar?.showHint(String(localized: "Voice message too short")) }
+        recorder.onRefused = { [weak self] in self?.voiceRefused($0) }
+        voiceRecorder = recorder
+        composer.bar?.voice = recorder
+        return recorder
+    }
+
+    func voicePress(locked: Bool = false) {
+        guard refuseUnlessCanSend() else { return }
+        // One audio session: it is a recording or a playback, not both.
+        VoicePlayback.shared.stop()
+        (voiceRecorder ?? makeVoiceRecorder()).press(locked: locked)
+    }
+
+    private func voiceRefused(_ refusal: VoiceRecorder.Refusal) {
+        switch refusal {
+        case .inCall:
+            prompt = .notice(title: String(localized: "Can't record during a call"), message: String(localized: "Hang up first, then record your voice message."))
+        case .microphoneDenied: prompt = .microphoneDenied
+        case .failed(let reason): prompt = .error(reason)
+        }
+    }
+
+    /// Sent at once, in its place among what is being sent, rather than staged.
+    private func sendVoice(_ file: URL) {
+        let previous = sendTail
+        sendTail = Task { [self] in
+            await previous?.value
+            await sendFile(file, asPhoto: false, isTemporaryCopy: true)
+        }
+    }
+
+    /// Plays a received or sent sound, or pauses it. Not during a call, which
+    /// has the audio session.
+    func playVoice(id: Int64, file: URL, from fraction: Double?) {
+        let playback = VoicePlayback.shared
+        let result = fraction.map { playback.seek(id: id, file: file, to: $0) } ?? playback.toggle(id: id, file: file)
+        if result == .refusedInCall {
+            prompt = .notice(title: String(localized: "Can't play during a call"), message: String(localized: "Hang up first, then play the voice message."))
+        }
+    }
+
     /// Reading and re-encoding a big photo takes a moment; keep it off the
     /// main thread.
     ///
@@ -2242,6 +2301,7 @@ final class ConversationModel {
             let order = await Task.detached { database.emojiRanking().byScore(at: Date()) }.value
             bar?.setEmojiOrder(order)
         }
+        bar.voice = voiceRecorder
         updateComposerBanner()
         // Whether this is a group isn't known until `finishStart` has read it,
         // which can be after the composer appears; `suggestMentions` checks.
@@ -2402,6 +2462,8 @@ final class ConversationModel {
         } else {
             becomeInactive()
             flushDraft()
+            voiceRecorder?.cancel()
+            VoicePlayback.shared.stop()
         }
     }
 
@@ -2482,6 +2544,8 @@ final class ConversationModel {
 
     func appWillResignActive() {
         if isOnScreen { becomeInactive() }
+        // The microphone isn't ours once the app is covered.
+        voiceRecorder?.appWillResignActive()
     }
 
     // MARK: Chat states

@@ -62,10 +62,13 @@ struct MessageBubble: View {
                 }
             }
             if let attachment = content.attachment {
-                AttachmentContent(display: attachment, id: row.id, isOutgoing: isOutgoing, transfers: model.transfers)
+                AttachmentContent(
+                    display: attachment, id: row.id, isOutgoing: isOutgoing, transfers: model.transfers,
                     // A failed photo has nothing to open, so a tap on it explains the failure like the footer does.
-                    .onTapGesture { if isFailed { model.explainFailure(of: row.id) } else { model.attachmentTapped(row.id) } }
-                    .linkPointer()
+                    onTap: { if isFailed { model.explainFailure(of: row.id) } else { model.attachmentTapped(row.id) } },
+                    isFailed: isFailed,
+                    play: { url, fraction in model.playVoice(id: row.id, file: url, from: fraction) },
+                )
             }
             if let location = content.location {
                 LocationCard(location: location)

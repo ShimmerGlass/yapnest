@@ -11,6 +11,7 @@ extension View {
 
 private struct ConversationPrompts: ViewModifier {
     let model: ConversationModel
+    @Environment(\.openURL) private var openURL
 
     private var alert: (title: String, message: String)? {
         switch model.prompt {
@@ -22,6 +23,8 @@ private struct ConversationPrompts: ViewModifier {
         case .failure(let id): (String(localized: "Message not sent"), model.failureText(of: id))
         case .quoteNotFound:
             (String(localized: "Message not found"), String(localized: "The message that was quoted may be too old, or have been deleted."))
+        case .microphoneDenied:
+            (String(localized: "Microphone access is off"), String(localized: "Allow Yapnest to use the microphone in Settings to record voice messages."))
         case .confirmRetraction, .confirmModeration, .reactions, nil: nil
         }
     }
@@ -66,6 +69,11 @@ private struct ConversationPrompts: ViewModifier {
             Button("Not Now", role: .cancel) {}
         case .failure(let id):
             Button("Try Again") { model.retry(id) }
+            Button("Cancel", role: .cancel) {}
+        case .microphoneDenied:
+            Button("Open Settings") {
+                if let url = Platform.privacySettingsURL("Privacy_Microphone") { openURL(url) }
+            }
             Button("Cancel", role: .cancel) {}
         default:
             Button("OK", role: .cancel) {}

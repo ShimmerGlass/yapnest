@@ -186,9 +186,6 @@ struct LocationPicker: View {
     }
 
     private func openSettings() {
-        let urlString = Platform.isMac
-            ? "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices"
-            : UIApplication.openSettingsURLString
-        if let url = URL(string: urlString) { openURL(url) }
+        if let url = Platform.privacySettingsURL("Privacy_LocationServices") { openURL(url) }
     }
 }

@@ -27,6 +27,13 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     var onDropTargeted: ((Bool) -> Void)?
     /// The nickname being typed after an "@", or nil when there's none.
     var onMentionQuery: ((String?) -> Void)?
+    /// The microphone button went down (`locked` when it was activated rather
+    /// than held). What follows goes to `voice` directly.
+    var onVoicePress: ((_ locked: Bool) -> Void)?
+    /// The recorder behind the microphone button, which the bar only draws.
+    var voice: VoiceRecorder? {
+        didSet { voiceChanged() }
+    }
 
     private enum Metrics {
         static let controlSize: CGFloat = 40
@@ -56,6 +63,14 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         self?.onAttach?(.camera)
     }
     private lazy var sendButton = makeSendButton()
+    private lazy var micButton = makeMicButton()
+    private let recordingRow = VoiceRecordingRow()
+    /// The column of the field that holds the text, hidden while recording.
+    private var fieldColumn: UIView?
+    private var recordingClock: Timer?
+    private var hintTimer: Timer?
+    /// Where the finger went down on the microphone button.
+    private var micStartX: CGFloat = 0
     private let suggestions = UIStackView()
     private let suggestionsRow = UIScrollView()
     private let replyPreview = UIView()
@@ -87,9 +102,6 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     /// Escape hides the suggestions until the word being typed changes.
     private var dismissedEmoji: EmojiShortcodes.Trigger?
     private var lastTextLength = 0
-    /// The field ends at the send button while it's shown, at the edge otherwise.
-    private var fieldToSend: NSLayoutConstraint!
-    private var fieldToEdge: NSLayoutConstraint!
 
     var text: String { textView.text }
 
@@ -121,7 +133,10 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
             guard let self, !acceptSelectedEmoji() else { return }
             send()
         }
-        textView.onPasteAttachments = { [weak self] providers in self?.onAttachments?(providers) }
+        textView.onPasteAttachments = { [weak self] providers in
+            guard self?.voice?.isRecording != true else { return }
+            self?.onAttachments?(providers)
+        }
         // The text view takes text drops itself; these take what it can't,
         // and the text view is told to leave text files to them.
         textView.textDropDelegate = self
@@ -158,14 +173,12 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         }
 
         let field = makeField()
-        for view in [leadingControls, field, sendButton] {
+        for view in [leadingControls, field, sendButton, micButton] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
 
         let guide = safeAreaLayoutGuide
-        fieldToSend = field.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -Metrics.spacing)
-        fieldToEdge = field.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -Metrics.outerMargin)
         gifButton.isHidden = true
         emojiButton.isHidden = !Platform.isMac
         NSLayoutConstraint.activate([
@@ -175,10 +188,13 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
             field.leadingAnchor.constraint(equalTo: leadingControls.trailingAnchor, constant: Metrics.spacing),
             field.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.verticalMargin),
             field.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -Metrics.verticalMargin),
-            fieldToEdge,
+            // The microphone and the send button share a place at the end of the row.
+            field.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -Metrics.spacing),
 
             sendButton.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -Metrics.outerMargin),
             sendButton.bottomAnchor.constraint(equalTo: field.bottomAnchor),
+            micButton.centerXAnchor.constraint(equalTo: sendButton.centerXAnchor),
+            micButton.centerYAnchor.constraint(equalTo: sendButton.centerYAnchor),
         ])
         updateControls(animated: false)
     }
@@ -229,6 +245,14 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         column.axis = .vertical
         column.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(column)
+        fieldColumn = column
+
+        recordingRow.translatesAutoresizingMaskIntoConstraints = false
+        recordingRow.alpha = 0
+        recordingRow.isHidden = true
+        recordingRow.isUserInteractionEnabled = false
+        recordingRow.onCancel = { [weak self] in self?.voice?.cancel() }
+        contentView.addSubview(recordingRow)
 
         textHeight = textView.heightAnchor.constraint(equalToConstant: Metrics.controlSize)
         NSLayoutConstraint.activate([
@@ -237,6 +261,10 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
             column.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -2),
             column.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             textHeight,
+            recordingRow.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            recordingRow.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            recordingRow.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            recordingRow.heightAnchor.constraint(equalToConstant: Metrics.controlSize),
             placeholder.topAnchor.constraint(equalTo: textView.topAnchor, constant: 10),
         ])
         applyTextInsets()
@@ -558,12 +586,14 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     /// A glass capsule the size of the other controls, for the GIF and emoji
     /// buttons; the caller gives it a title or an image.
     private func makeCapsuleButton(accessibilityLabel: String, action: @escaping () -> Void) -> UIButton {
-        let button: UIButton
-        if #available(iOS 26, *) {
-            button = UIButton(configuration: .glass())
-        } else {
-            button = UIButton(configuration: .plain())
-        }
+        configureCapsule(UIButton(configuration: Self.capsuleConfiguration()), accessibilityLabel: accessibilityLabel, action: action)
+    }
+
+    private static func capsuleConfiguration() -> UIButton.Configuration {
+        if #available(iOS 26, *) { .glass() } else { .plain() }
+    }
+
+    private func configureCapsule<Button: UIButton>(_ button: Button, accessibilityLabel: String, action: @escaping () -> Void) -> Button {
         button.configuration?.contentInsets = .zero
         button.configuration?.baseForegroundColor = .label
         button.configuration?.cornerStyle = .capsule
@@ -623,7 +653,90 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         return button
     }
 
+    private func makeMicButton() -> MicButton {
+        // A touch is read by the gesture below, so the button's own action does nothing.
+        let button = configureCapsule(MicButton(configuration: Self.capsuleConfiguration()), accessibilityLabel: String(localized: "Record voice message")) {}
+        button.configuration?.image = UIImage(systemName: "mic.fill")
+        button.accessibilityHint = String(localized: "Hold to record, release to send. Double tap to start recording.")
+        button.onAccessibilityActivate = { [weak self] in self?.onVoicePress?(true) }
+        let touch = UILongPressGestureRecognizer(target: self, action: #selector(micTouched(_:)))
+        touch.minimumPressDuration = 0
+        touch.allowableMovement = .greatestFiniteMagnitude
+        button.addGestureRecognizer(touch)
+        return button
+    }
+
+    @objc private func micTouched(_ touch: UILongPressGestureRecognizer) {
+        switch touch.state {
+        case .began:
+            micStartX = touch.location(in: self).x
+            onVoicePress?(false)
+        case .changed:
+            let moved = touch.location(in: self).x - micStartX
+            // Toward where the text starts is toward cancelling.
+            voice?.slide(Double(effectiveUserInterfaceLayoutDirection == .rightToLeft ? moved : -moved))
+        case .ended:
+            voice?.release()
+        case .cancelled, .failed:
+            voice?.cancel()
+        default:
+            break
+        }
+    }
+
+    /// The recorder's phase changed: shows or hides the recording, and ticks
+    /// while it runs.
+    func voiceChanged() {
+        guard let voice else { return }
+        let recording = voice.isRecording
+        recordingRow.show(phase: voice.phase, willCancel: voice.willCancel)
+        recordingRow.isUserInteractionEnabled = voice.phase == .locked
+        textView.isUserInteractionEnabled = !recording
+        // Hidden when idle, so its Cancel isn't among the buttons VoiceOver finds.
+        if recording { recordingRow.isHidden = false }
+        UIView.animate(withDuration: 0.2, animations: {
+            self.recordingRow.alpha = recording ? 1 : 0
+            self.fieldColumn?.alpha = recording ? 0 : 1
+            // Held, the button swells under the finger.
+            self.micButton.transform = voice.phase == .holding ? CGAffineTransform(scaleX: 1.4, y: 1.4) : .identity
+        }, completion: { _ in
+            if self.voice?.isRecording != true { self.recordingRow.isHidden = true }
+        })
+        updateControls(animated: true)
+        if recording, recordingClock == nil {
+            let clock = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.tickRecording() }
+            }
+            RunLoop.main.add(clock, forMode: .common)
+            recordingClock = clock
+            UIAccessibility.post(notification: .announcement, argument: String(localized: "Recording"))
+        } else if !recording {
+            recordingClock?.invalidate()
+            recordingClock = nil
+        }
+    }
+
+    private func tickRecording() {
+        guard let voice else { return }
+        recordingRow.update(elapsed: voice.elapsed, level: voice.level)
+        voice.tick()
+    }
+
+    /// Says something in place of the field's placeholder for a moment.
+    func showHint(_ text: String) {
+        placeholder.text = text
+        hintTimer?.invalidate()
+        hintTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.placeholder.text = String(localized: "Message") }
+        }
+    }
+
     private func send() {
+        if let voice, voice.isRecording {
+            // A held recording is sent by letting go of the button.
+            if voice.phase == .locked { voice.finish() }
+            return
+        }
         // Commits any IME composition (pinyin, kana) first, as Messages does,
         // so the send doesn't carry the uncommitted marked text.
         textView.unmarkText()
@@ -644,18 +757,19 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
 
     // MARK: State
 
-    /// Something to send replaces the camera button in the field with the send button beside it.
+    /// Something to send replaces the microphone and the camera button in the
+    /// field with the send button. A recording that stays on is sent by it too.
     private func updateControls(animated: Bool) {
-        let showSend = hasContent
+        let showSend = hasContent || voice?.phase == .locked
         let changed = sendButton.isHidden == showSend
         guard changed || !animated else { return }
         let apply = {
             self.sendButton.isHidden = !showSend
             self.sendButton.alpha = showSend ? 1 : 0
+            self.micButton.isHidden = showSend
+            self.micButton.alpha = showSend ? 0 : 1
             self.cameraButton.isHidden = showSend
             self.cameraButton.alpha = showSend ? 0 : 1
-            self.fieldToEdge.isActive = !showSend
-            self.fieldToSend.isActive = showSend
             self.layoutIfNeeded()
         }
         if animated {
@@ -758,7 +872,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, canHandle session: any UIDropSession) -> Bool {
-        AttachmentIntake.containsAttachment(session.items.map(\.itemProvider))
+        voice?.isRecording != true && AttachmentIntake.containsAttachment(session.items.map(\.itemProvider))
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: any UIDropSession) -> UIDropProposal {
@@ -780,6 +894,13 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         // Whatever could be undone refers to the text that was just replaced.
         textView.undoManager?.removeAllActions()
         didChange(notify: notify)
+    }
+
+    /// Nothing is typed while a voice message is recorded: the field keeps
+    /// the keyboard's focus (the Mac's Return still finishes the recording),
+    /// but what is typed or pasted into it is turned away.
+    func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+        voice?.isRecording != true
     }
 
     func textViewDidChange(_ textView: UITextView) {

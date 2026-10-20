@@ -50,6 +50,7 @@ An XMPP client for iOS 18+ and the Mac (Mac Catalyst, Mac idiom). `README.md` co
   - `OMEMODevice`: a device and how far it's trusted.
 - `Model/`: the GRDB records: `Message`, `Conversation`, `Contact`, `GroupChat`, `Reaction`, and `JID`, which is always bare and normalized.
 - `Attachments/`, `LinkPreviews/`: file encryption and storage; link detection and OpenGraph previews.
+- `Attachments/AudioFormat.swift` says which files are sound and which the player can play (not Ogg or Opus, which show as files); `AudioWaveform.swift` works out the bars drawn in a voice message's bubble and keeps them beside the file. `Rules/VoiceRecordingRules.swift` holds what decides how a recording ends.
 - `Gifs/`: `GifService`, the KLIPY client behind the GIF picker, and the setting that turns it off.
 - Tests are in `Tests/YapnestKitTests`. The `LiveServer` tests need `YAPNEST_INTEGRATION=1` and the dev server running; `YAPNEST_SERVER` (`prosody`, `ejabberd`, `snikket`, `openfire`, `openfire-bare`) picks which, and `LiveServer.target` in `SessionFixtures.swift` holds its ports.
 
@@ -73,6 +74,7 @@ An XMPP client for iOS 18+ and the Mac (Mac Catalyst, Mac idiom). `README.md` co
   - `MessageRowView.swift`: a row, with the day header, unread divider and swipe to reply. `MessageBubble.swift` lays out the bubble, quote and reactions chip; `AttachmentContent.swift` and `LinkPreviewCard.swift` fill it. `MessageMenu.swift` is the context menu.
   - `GifPicker.swift`: the KLIPY sheet behind the composer's GIF button. A chosen GIF is downloaded and staged like any attachment. `AnimatedImageView.swift` plays GIFs, in the picker and in bubbles, only while on screen.
   - `ComposerBar.swift` hosts `ConversationInputBar.swift` (the composer, glass on iOS 26, with the Mac's key handling) under the list, which is stretched down behind it by the composer's measured height so messages scroll under its glass, and keeps that much room past its newest message (flipped, a safe area padding; unflipped, padding on the last row). Not a `safeAreaInset` or a `ZStack`: the list then reaches into the keyboard's safe area and its layout never settles. SwiftUI's own keyboard avoidance lifts both together; there is no custom keyboard layout. `AttachmentPicker.swift` has the pickers and QuickLook; `ConversationPrompts.swift` the alerts. What's picked, pasted or dropped waits in the composer's field until the user sends it: `PendingAttachments.swift` holds it and `AttachmentTray.swift` draws it.
+  - `VoiceRecorder.swift`: recording a voice message (hold, tap to lock, slide to cancel) over AVAudioRecorder; `ConversationInputBar` draws it through `VoiceRecordingRow.swift` and sends the result at once as an `.m4a` attachment, with its length in the XEP-0446 metadata in unencrypted chats. `VoiceMessageView.swift` is the player in a bubble, a fixed size in every state, and `VoicePlayback.swift` plays one clip at a time.
   - `ChatSettingsView.swift`: settings for one chat.
 
 ## Conventions
