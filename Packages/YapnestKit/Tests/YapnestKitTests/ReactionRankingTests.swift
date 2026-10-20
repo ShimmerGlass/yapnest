@@ -128,11 +128,61 @@ struct ReactionRankingTests {
         do {
             let database = try AppDatabase(DatabaseQueue(path: url.path))
             #expect(database.reactionRanking().row(at: start) == ReactionRanking.defaults)
-            try database.recordReactionPick("🔥", at: start)
-            try database.recordReactionPick("🔥", at: later(1))
+            try database.recordEmojiPick("🔥", at: start)
+            try database.recordEmojiPick("🔥", at: later(1))
         }
         let reopened = try AppDatabase(DatabaseQueue(path: url.path))
         #expect(reopened.reactionRanking().row(at: later(1)).first == "🔥")
         #expect(reopened.reactionRanking().score(of: "🔥", at: later(1)) > 1.9)
+    }
+
+    @Test func byScoreOrdersByDecayedScoreThenRecency() {
+        var ranking = ReactionRanking()
+        ranking.record("a", at: start)
+        ranking.record("b", at: later(1))
+        ranking.record("c", at: later(2))
+        ranking.record("c", at: later(2))
+        // Equal scores: the newer pick first.
+        var tied = ReactionRanking()
+        tied.record("old", at: start)
+        tied.record("new", at: start.addingTimeInterval(1))
+        #expect(tied.byScore(at: start.addingTimeInterval(1)) == ["new", "old"])
+        #expect(ranking.byScore(at: later(2)) == ["c", "b", "a"])
+        #expect(ranking.byScore(at: later(2000)).isEmpty)
+    }
+
+    private func memoryDatabase() throws -> AppDatabase {
+        try AppDatabase(DatabaseQueue())
+    }
+
+    private func ownUsageIsDirty(_ database: AppDatabase) throws -> Bool {
+        try database.writer.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM syncedItemDirty WHERE item = 'usage:dev1'") } == 1
+    }
+
+    @Test func importedRecentsKeepTheirOrderAndStayBelowOnePick() throws {
+        let database = try memoryDatabase()
+        try database.seedSyncedSettingsIfNeeded(deviceId: "dev1")
+        #expect(try database.importEmojiRecents(["🔥", "🪺", "🌿"], at: start))
+        let ranking = database.reactionRanking()
+        #expect(ranking.byScore(at: start) == ["🔥", "🪺", "🌿"])
+        for emoji in ["🔥", "🪺", "🌿"] { #expect(ranking.score(of: emoji, at: start) < 1) }
+        #expect(ranking.row(at: start) == ReactionRanking.defaults)
+        try database.recordEmojiPick("🌿", at: start)
+        #expect(database.reactionRanking().byScore(at: start).first == "🌿")
+        #expect(try ownUsageIsDirty(database))
+    }
+
+    @Test func recentsAreImportedOnlyOnce() throws {
+        let database = try memoryDatabase()
+        #expect(try database.importEmojiRecents(["🔥"], at: start))
+        #expect(try !database.importEmojiRecents(["🪺"], at: start))
+        #expect(database.reactionRanking().byScore(at: start) == ["🔥"])
+    }
+
+    @Test func importDoesNotLowerAHigherScore() throws {
+        let database = try memoryDatabase()
+        try database.recordEmojiPick("🔥", at: start)
+        try database.importEmojiRecents(["🔥"], at: start)
+        #expect(abs(database.reactionRanking().score(of: "🔥", at: start) - 1) < 1e-9)
     }
 }

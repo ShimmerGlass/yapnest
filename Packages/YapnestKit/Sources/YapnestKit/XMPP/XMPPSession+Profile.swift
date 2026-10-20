@@ -48,48 +48,85 @@ extension XMPPSession {
     /// Publishes one item to our own PEP node, with `accessModel` set on the
     /// node. A node that already exists with another access model refuses
     /// the options, so then it's reconfigured and the item published again.
-    func publishPEP(node: String, itemId: String?, payload: Element, accessModel: String) async throws {
+    /// `config`, when given, replaces the default (persisting, with
+    /// `accessModel`) as the node's fields, both asked for in the publish
+    /// options and set on a refusing node. A limit of its own isn't asked
+    /// for, as the node already has it. With a `timeout`, a server that never
+    /// answers throws `TimeoutError`.
+    func publishPEP(
+        node: String, itemId: String?, payload: Element, accessModel: String,
+        config: [String: [String]]? = nil, timeout: TimeInterval? = nil,
+    ) async throws {
         do {
-            try await publishPEPOrReconfigure(node: node, itemId: itemId, payload: payload, accessModel: accessModel)
+            try await publishPEPKeepingErrors(
+                node: node, itemId: itemId, payload: payload, accessModel: accessModel, config: config, timeout: timeout,
+            )
         } catch let error as PubSubError {
             logger.error("Publishing to \(node, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             throw ProfileError.refused(reason: error.localizedDescription)
         }
     }
 
-    private func publishPEPOrReconfigure(node: String, itemId: String?, payload: Element, accessModel: String) async throws {
+    /// The same, throwing the server's own `PubSubError`, for a caller that
+    /// tells its conditions apart.
+    func publishPEPKeepingErrors(
+        node: String, itemId: String?, payload: Element, accessModel: String,
+        config: [String: [String]]? = nil, timeout: TimeInterval? = nil,
+    ) async throws {
+        try await publishPEPOrReconfigure(
+            node: node, itemId: itemId, payload: payload, accessModel: accessModel, config: config, timeout: timeout,
+        )
+    }
+
+    private func publishPEPOrReconfigure(
+        node: String, itemId: String?, payload: Element, accessModel: String,
+        config: [String: [String]]?, timeout: TimeInterval?,
+    ) async throws {
+        let options = config.map { fields in
+            XMPPSession.dataForm(
+                type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options",
+                fields: fields.filter { $0.key != "pubsub#max_items" || $0.value == ["max"] },
+            )
+        }
         do {
-            try await publishPEPItem(node: node, itemId: itemId, payload: payload, options: ProfileStanza.publishOptions(accessModel: accessModel))
+            try await publishPEPItem(
+                node: node, itemId: itemId, payload: payload,
+                options: options ?? ProfileStanza.publishOptions(accessModel: accessModel), timeout: timeout,
+            )
         } catch let error as PubSubError where error.error.errorCondition == .conflict {
             logger.info("Reconfiguring \(node, privacy: .public) to be \(accessModel, privacy: .public)")
-            try await configurePEPNode(node, accessModel: accessModel)
-            try await publishPEPItem(node: node, itemId: itemId, payload: payload, options: nil)
+            try await configurePEPNode(node, fields: config ?? ["pubsub#access_model": [accessModel]])
+            try await publishPEPItem(node: node, itemId: itemId, payload: payload, options: nil, timeout: timeout)
         }
     }
 
-    private func publishPEPItem(node: String, itemId: String?, payload: Element, options: Element?) async throws {
+    private func publishPEPItem(node: String, itemId: String?, payload: Element, options: Element?, timeout: TimeInterval?) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let once = Once()
             client.module(.pubsub).publishItem(
                 at: nil, to: node, itemId: itemId, payload: payload,
                 publishOptions: options, errorDecoder: PubSubError.from(stanza:),
             ) { (result: Result<Iq, PubSubError>) in
-                continuation.resume(with: result.map { _ in () })
+                if once.first() { continuation.resume(with: result.map { _ in () }) }
+            }
+            if let timeout {
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    if once.first() { continuation.resume(throwing: TimeoutError()) }
+                }
             }
         }
     }
 
-    /// Submits only the access model, with its form type, rather than the
+    /// Submits only the given fields, with the form type, rather than the
     /// form the node handed out: that carries read-only and fixed fields,
     /// which servers like ejabberd refuse in a submission.
-    private func configurePEPNode(_ node: String, accessModel: String) async throws {
+    func configurePEPNode(_ node: String, fields: [String: [String]]) async throws {
         let set = Iq()
         set.type = .set
         let pubsub = Element(name: "pubsub", xmlns: "http://jabber.org/protocol/pubsub#owner")
         let configure = Element(name: "configure")
         configure.setAttribute("node", value: node)
-        configure.addChild(XMPPSession.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#node_config", fields: [
-            "pubsub#access_model": [accessModel],
-        ]))
+        configure.addChild(XMPPSession.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#node_config", fields: fields))
         pubsub.addChild(configure)
         set.addChild(pubsub)
         _ = try await client.context.writer.write(iq: set, errorDecoder: PubSubError.from(stanza:))
@@ -175,7 +212,7 @@ extension XMPPSession {
 
     static let nicknameItemId = "current"
 
-    private func retractPEPItem(node: String, itemId: String) async throws {
+    func retractPEPItem(node: String, itemId: String) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             client.module(.pubsub).retractItem(at: nil, from: node, itemId: itemId, notify: true) { result in
                 continuation.resume(with: result.map { _ in () })
@@ -284,9 +321,30 @@ extension XMPPSession {
     /// Saves what we show contacts and sends it, to be sent on every connection
     /// from now on. Offline, it goes out when we connect.
     public func setStatus(availability: Availability, message: String) throws {
-        try database.setSetting(.availability, availability == .available ? nil : availability.rawValue)
-        try database.setSetting(.statusMessage, Self.normalizedStatus(message))
+        try storeAvailability(availability)
+        try storeStatusMessage(message)
         sendPresence()
+    }
+
+    /// The same for the availability alone, for a caller whose copy of the
+    /// message may be older than ours: only what changed is recorded as a
+    /// change to publish.
+    public func setAvailability(_ availability: Availability) throws {
+        try storeAvailability(availability)
+        sendPresence()
+    }
+
+    public func setStatusMessage(_ message: String) throws {
+        try storeStatusMessage(message)
+        sendPresence()
+    }
+
+    private func storeAvailability(_ availability: Availability) throws {
+        try database.setSetting(.availability, availability == .available ? nil : availability.rawValue)
+    }
+
+    private func storeStatusMessage(_ message: String) throws {
+        try database.setSetting(.statusMessage, Self.normalizedStatus(message))
     }
 
     /// Our presence, through `setPresence` so Martin adds the entity

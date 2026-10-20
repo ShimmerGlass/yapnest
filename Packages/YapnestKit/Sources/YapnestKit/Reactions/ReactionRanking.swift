@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 
 /// Which reactions the user reaches for, so the long-press menu's quick row
 /// can offer them. Each pick adds one point that halves every two weeks: a
@@ -62,6 +63,28 @@ public struct ReactionRanking: Codable, Equatable, Sendable {
             .map(\.emoji)
     }
 
+    /// Every emoji still remembered, the highest score first and, on equal
+    /// scores, the more recent pick. Unlike `row`, defaults get no prior: this
+    /// is for ordering a longer list by how much each has actually been used.
+    public func byScore(at now: Date) -> [String] {
+        entries
+            .filter { Self.decayed($0.value, at: now) >= Self.forgetBelow }
+            .map { (emoji: $0.key, score: Self.decayed($0.value, at: now), updated: $0.value.updated) }
+            .sorted { a, b in
+                if a.score != b.score { return a.score > b.score }
+                if a.updated != b.updated { return a.updated > b.updated }
+                return a.emoji < b.emoji
+            }
+            .map(\.emoji)
+    }
+
+    /// Lifts an emoji's score to `score` if it holds less, without counting a pick.
+    mutating func raise(_ emoji: String, to score: Double, at now: Date) {
+        guard !emoji.isEmpty, self.score(of: emoji, at: now) < score else { return }
+        entries[emoji] = Entry(score: score, updated: now)
+        prune(at: now)
+    }
+
     /// What a default is worth before anything is picked: a constant that
     /// doesn't decay, a little less for each place down the defaults so
     /// their order holds. Between one pick (1) and two (about 2).
@@ -72,6 +95,49 @@ public struct ReactionRanking: Codable, Equatable, Sendable {
 
     public static let defaultPrior = 1.5
     public static let priorStep = 0.01
+
+    /// Every ranking's scores added at one time, which is what one device
+    /// would hold had it seen all the picks. Each emoji is added up as of its
+    /// newest pick, so the sum keeps when that was, which breaks ties in `row`.
+    public static func summed(_ rankings: [ReactionRanking], at now: Date) -> ReactionRanking {
+        var total: [String: Entry] = [:]
+        let emoji = Set(rankings.flatMap { $0.entries.keys })
+        for e in emoji {
+            let entries = rankings.compactMap { $0.entries[e] }
+            guard let newest = entries.map(\.updated).max() else { continue }
+            let entry = Entry(score: entries.reduce(0) { $0 + decayed($1, at: newest) }, updated: newest)
+            if decayed(entry, at: now) >= forgetBelow { total[e] = entry }
+        }
+        return ReactionRanking(entries: total)
+    }
+
+    /// Whether every emoji has faded out, so the device that held it has
+    /// been silent long enough for its item to go.
+    public func isForgotten(at now: Date) -> Bool {
+        entries.values.allSatisfy { Self.decayed($0, at: now) < Self.forgetBelow }
+    }
+
+    /// Keeps, for each emoji, the larger of the two scores as of `now`. An
+    /// emptied ranking therefore can't wipe what the server holds. Scores
+    /// decay by the same factor, so the larger now stays the larger.
+    mutating func merge(_ other: ReactionRanking, at now: Date) {
+        var merged: [String: Entry] = [:]
+        for e in Set(entries.keys).union(other.entries.keys) {
+            let mine = entries[e], theirs = other.entries[e]
+            let winner = (mine.map { Self.decayed($0, at: now) } ?? 0) >= (theirs.map { Self.decayed($0, at: now) } ?? 0) ? mine : theirs
+            if let winner, Self.decayed(winner, at: now) >= Self.forgetBelow { merged[e] = winner }
+        }
+        entries = merged
+        prune(at: now)
+    }
+
+    /// Whether this holds something `other` lacks or has less of at `now`.
+    func exceeds(_ other: ReactionRanking, at now: Date) -> Bool {
+        entries.contains { e, entry in
+            let mine = Self.decayed(entry, at: now)
+            return mine >= Self.forgetBelow && mine > other.score(of: e, at: now) * (1 + 1e-9)
+        }
+    }
 
     private mutating func prune(at now: Date) {
         entries = entries.filter { Self.decayed($0.value, at: now) >= Self.forgetBelow }
@@ -86,24 +152,87 @@ public struct ReactionRanking: Codable, Equatable, Sendable {
 }
 
 extension AppDatabase {
+    /// This device's own ranking. Other devices' rankings are in
+    /// `remoteUsage`; `emojiRanking` adds them all.
     public func reactionRanking() -> ReactionRanking {
-        guard let json = try? setting(.reactionRanking), let data = json.data(using: .utf8),
-              let ranking = try? JSONDecoder.reactionRanking.decode(ReactionRanking.self, from: data)
-        else { return ReactionRanking() }
-        return ranking
+        (try? reader.read { try Self.ownRanking($0) }) ?? ReactionRanking()
+    }
+
+    /// What readers rank by: every device's picks added up.
+    public func emojiRanking(at now: Date = Date()) -> ReactionRanking {
+        let rankings = (try? reader.read { db in
+            [try Self.ownRanking(db)] + (try Self.remoteRankings(db))
+        }) ?? []
+        return ReactionRanking.summed(rankings, at: now)
     }
 
     /// Counts a pick, in one transaction so two writers can't lose each other's.
     @discardableResult
-    public func recordReactionPick(_ emoji: String, at now: Date = Date()) throws -> ReactionRanking {
-        try updateJSONSetting(.reactionRanking, default: ReactionRanking(), decoder: .reactionRanking, encoder: .reactionRanking) { ranking in
+    public func recordEmojiPick(_ emoji: String, at now: Date = Date()) throws -> ReactionRanking {
+        try writer.write { db in
+            var ranking = try Self.ownRanking(db)
             ranking.record(emoji, at: now)
+            try Self.storeOwnRanking(db, ranking)
+            try Self.markOwnUsageDirty(db)
             return ranking
         }
     }
+
+    /// Takes in the shortcode recents kept before emoji usage was synced, once
+    /// per account. Each counts as a fraction of a pick, the first (most recent)
+    /// the most, so one real pick outranks them and none can displace a default.
+    /// Scores already held stay when they are higher.
+    @discardableResult
+    public func importEmojiRecents(_ recents: [String], at now: Date = Date()) throws -> Bool {
+        try writer.write { db in
+            guard try Self.setting(db, .emojiRecentsImported) == nil else { return false }
+            var ranking = try Self.ownRanking(db)
+            let before = ranking
+            for (index, emoji) in recents.enumerated() {
+                ranking.raise(emoji, to: max(0.5 - Double(index) * 0.01, 0.01), at: now)
+            }
+            if ranking != before {
+                try Self.storeOwnRanking(db, ranking)
+                try Self.markOwnUsageDirty(db)
+            }
+            try Self.setSetting(db, .emojiRecentsImported, "1")
+            return true
+        }
+    }
+
+    /// Other devices whose every emoji has faded out: any device retracts
+    /// their items.
+    func forgottenUsageDevices(at now: Date = Date()) throws -> [String] {
+        try reader.read { db in
+            try Row.fetchAll(db, sql: "SELECT deviceId, json FROM remoteUsage").compactMap { row in
+                let ranking = Self.decodeRanking(row["json"]) ?? ReactionRanking()
+                return ranking.isForgotten(at: now) ? row["deviceId"] as String : nil
+            }
+        }
+    }
+
+    static func ownRanking(_ db: Database) throws -> ReactionRanking {
+        decodeRanking(try setting(db, .reactionRanking)) ?? ReactionRanking()
+    }
+
+    private static func remoteRankings(_ db: Database) throws -> [ReactionRanking] {
+        try String.fetchAll(db, sql: "SELECT json FROM remoteUsage").compactMap(decodeRanking)
+    }
+
+    static func decodeRanking(_ json: String?) -> ReactionRanking? {
+        json.flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder.reactionRanking.decode(ReactionRanking.self, from: $0) }
+    }
+
+    static func encodeRanking(_ ranking: ReactionRanking) throws -> String {
+        String(decoding: try JSONEncoder.reactionRanking.encode(ranking), as: UTF8.self)
+    }
+
+    static func storeOwnRanking(_ db: Database, _ ranking: ReactionRanking) throws {
+        try setSetting(db, .reactionRanking, try encodeRanking(ranking))
+    }
 }
 
-private extension JSONEncoder {
+extension JSONEncoder {
     static var reactionRanking: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
@@ -112,7 +241,7 @@ private extension JSONEncoder {
     }
 }
 
-private extension JSONDecoder {
+extension JSONDecoder {
     static var reactionRanking: JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .secondsSince1970

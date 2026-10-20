@@ -8,7 +8,13 @@ extension XMPPSession {
 
     public func setSharesLastSeen(_ on: Bool) throws {
         try database.setFlag(.sharesLastSeen, on)
-        if !on {
+        try sharingLastSeenChanged()
+    }
+
+    /// What follows from the setting changing, whether the user changed it
+    /// here or another of their devices did.
+    func sharingLastSeenChanged() throws {
+        if !sharesLastSeen {
             try database.clearLastSeen()
             lock.withLock { $0.lastSeenSchedule.reset() }
         }

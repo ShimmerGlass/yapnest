@@ -345,9 +345,8 @@ extension AppDatabase {
 
     public func setLinkPreviews(_ allowed: Bool?, peer: JID) throws {
         try writer.write { db in
-            var conversation = try Self.conversation(db, with: peer)
-            conversation.linkPreviews = allowed
-            try conversation.update(db)
+            _ = try Self.conversation(db, with: peer)
+            try Self.setChatSetting(db, peer, "linkPreviews", allowed.map { $0 ? "1" : "0" })
         }
     }
 
@@ -358,9 +357,8 @@ extension AppDatabase {
 
     public func setNotificationSound(_ sound: String?, peer: JID) throws {
         try writer.write { db in
-            var conversation = try Self.conversation(db, with: peer)
-            conversation.notificationSound = sound
-            try conversation.update(db)
+            _ = try Self.conversation(db, with: peer)
+            try Self.setChatSetting(db, peer, "notificationSound", sound)
         }
     }
 

@@ -209,6 +209,8 @@ public final class XMPPSession: @unchecked Sendable {
         var archiveVersion: MessageArchiveManagementModule.Version?
         /// The last read message we know our devices agree on, by chat (XEP-0490).
         var publishedDisplayed: [JID: String] = [:]
+        /// Where our settings node stands this session: see `SettingsSyncState`.
+        var settingsSync = SettingsSyncState()
         /// Contact requests the server sent on this session.
         var repeatedContactRequests: Set<JID> = []
         /// Whether those are all the server has: a new session's initial
@@ -445,6 +447,7 @@ public final class XMPPSession: @unchecked Sendable {
         // Contacts' published names (XEP-0172).
         modules.register(NickModule())
         modules.register(DisplayedSyncModule())
+        modules.register(SettingsSyncModule())
         modules.register(BlockingCommandModule())
 
         // Martin sends the stored presence on connect, but only runs the hook
@@ -537,6 +540,10 @@ public final class XMPPSession: @unchecked Sendable {
 
         client.modulesManager.module(DisplayedSyncModule.IDENTIFIER).changes
             .sink { [weak self] state in self?.displayedChanged(state) }
+            .store(in: &cancellables)
+
+        client.modulesManager.module(SettingsSyncModule.IDENTIFIER).changes
+            .sink { [weak self] change in self?.settingsChanged(change) }
             .store(in: &cancellables)
 
         client.module(.disco).$accountDiscoResult
@@ -879,6 +886,7 @@ public final class XMPPSession: @unchecked Sendable {
                     $0.uploadService = nil
                     $0.mucService = nil
                     $0.publishedDisplayed = [:]
+                    $0.settingsSync.startSession()
                     $0.repeatedContactRequests = []
                     $0.prunesContactRequests = policy.prunesContactRequests
                     // What we last told each contact went with the old session.
@@ -948,6 +956,9 @@ public final class XMPPSession: @unchecked Sendable {
         // An extension sends nothing it didn't write itself.
         if policy.resendsPending { sendUnclaimedPending() }
         resumeInterruptedCatchUps()
+        // A settings sync the drop cut off never reconciled or started
+        // watching for changes; one that finished only has changes to send.
+        if lock.withLock({ $0.settingsSync.syncStarted && !$0.settingsSync.syncCompleted }) { syncSettings() } else { requestSettingsPublish() }
     }
 
     /// Martin resets the result at the start of each session, so any
@@ -1503,6 +1514,7 @@ public final class XMPPSession: @unchecked Sendable {
         fetchDisplayed()
         syncBookmarks()
         fetchNickname()
+        syncSettings()
         enablePush()
         // However long ago: a message still pending was never sent, and the
         // share extension leaves its messages so, possibly for days when the

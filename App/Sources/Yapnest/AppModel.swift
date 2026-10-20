@@ -615,15 +615,27 @@ final class AppModel {
         pendingLink = link
     }
 
+    /// The shortcode recents the composer kept per device before emoji usage
+    /// was synced become picks on the account that is signed in. Only one
+    /// account is ever signed in, so the first one to open takes them.
+    private nonisolated static func importEmojiRecents(into database: AppDatabase) {
+        let key = "recentEmojiShortcodes"
+        guard let recents = UserDefaults.standard.stringArray(forKey: key) else { return }
+        guard (try? database.importEmojiRecents(recents)) != nil else { return }
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
     /// Opening the database and making the session read and migrate it, so
     /// that happens off the main thread.
     private func makeSession(_ credentials: XMPPSession.Credentials) async throws -> XMPPSession {
         let directory = environment.accountDirectory(credentials.jid)
         let relay = Self.pushRelay(for: credentials.jid)
         let session = try await offMain {
-            try XMPPSession(
+            let database = try directory.openDatabase()
+            Self.importEmojiRecents(into: database)
+            return try XMPPSession(
                 credentials: credentials, resource: "yapnest-\(SharedContainer.deviceId)", directory: directory,
-                database: try directory.openDatabase(), pushRelay: relay, callMedia: WebRTCCallMediaFactory(),
+                database: database, pushRelay: relay, callMedia: WebRTCCallMediaFactory(),
             )
         }
         calls.attach(session)

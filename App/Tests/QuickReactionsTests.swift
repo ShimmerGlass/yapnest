@@ -33,7 +33,7 @@ struct QuickReactionsTests {
     @Test func aPickFromTheFullPickerEntersTheNextMenu() async throws {
         let (f, id) = try await opened()
         // One pick alone doesn't displace a default; the second does.
-        try f.database.recordReactionPick("🪺")
+        try f.database.recordEmojiPick("🪺")
         f.model.react("🪺", to: id)
         await eventually("the pick never showed in the row") { f.model.quickReactions.first == "🪺" }
         #expect(f.model.quickReactions == ["🪺", "👍", "❤️", "😂", "😮"])
@@ -54,14 +54,14 @@ struct QuickReactionsTests {
         let before = f.model.quickReactions
         // Something else counts picks, as another open chat would: the row
         // shown by this chat's menu stays until a pick made here.
-        try f.database.recordReactionPick("🔥")
-        try f.database.recordReactionPick("🔥")
+        try f.database.recordEmojiPick("🔥")
+        try f.database.recordEmojiPick("🔥")
         #expect(await stays { f.model.quickReactions == before })
     }
 
     @Test func theRankingIsLoadedWhenTheChatIsOpenedAgain() async throws {
         let (f, id) = try await opened()
-        try f.database.recordReactionPick("🪺")
+        try f.database.recordEmojiPick("🪺")
         f.model.react("🪺", to: id)
         await eventually("the pick was never counted") { picks(f, "🪺") > 1.9 }
         f.reopen()

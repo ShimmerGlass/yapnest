@@ -300,10 +300,9 @@ struct SettingsView: View {
 
     // Saved here and sent in the same call, so nothing waits on the server.
     private func setAvailability(_ new: XMPPSession.Availability) {
-        let message = savedStatus
         Task {
             do {
-                try await offMain { [session] in try session.setStatus(availability: new, message: message) }
+                try await offMain { [session] in try session.setAvailability(new) }
                 availability = new
             } catch {
                 profileError = error.localizedDescription
@@ -312,11 +311,11 @@ struct SettingsView: View {
     }
 
     private func saveStatus() {
-        let (availability, message) = (availability, status)
+        let message = status
         Task {
             do {
                 savedStatus = try await offMain { [session] in
-                    try session.setStatus(availability: availability, message: message)
+                    try session.setStatusMessage(message)
                     return session.statusMessage
                 }
                 status = savedStatus

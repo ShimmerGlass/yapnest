@@ -2074,7 +2074,7 @@ final class ConversationModel {
         let isPick = !item.reactions.contains { $0.emoji == emoji && $0.includesMe }
         write({ [session, peer] in
             try session.toggleReaction(emoji, on: message, peer: peer)
-            if isPick { try session.database.recordReactionPick(emoji) }
+            if isPick { try session.database.recordEmojiPick(emoji) }
         }, then: { [weak self] in
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             if isPick { self?.loadQuickReactions() }
@@ -2084,7 +2084,7 @@ final class ConversationModel {
     /// Reads the ranking off the main thread and shows its row in the next menu.
     func loadQuickReactions() {
         Task { [weak self, database = session.database] in
-            let row = await Task.detached { database.reactionRanking().row(at: Date()) }.value
+            let row = await Task.detached { database.emojiRanking().row(at: Date()) }.value
             self?.quickReactions = row
         }
     }
@@ -2235,6 +2235,13 @@ final class ConversationModel {
         bar.setPreparingAttachment(preparingAttachments > 0)
         bar.setPendingAttachments(pendingAttachments)
         bar.setGifsAvailable(gifsAvailable)
+        bar.onEmojiPicked = { [database = session.database] emoji in
+            Task.detached(priority: .utility) { try? database.recordEmojiPick(emoji) }
+        }
+        Task { [weak bar, database = session.database] in
+            let order = await Task.detached { database.emojiRanking().byScore(at: Date()) }.value
+            bar?.setEmojiOrder(order)
+        }
         updateComposerBanner()
         // Whether this is a group isn't known until `finishStart` has read it,
         // which can be after the composer appears; `suggestMentions` checks.

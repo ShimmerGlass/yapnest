@@ -245,3 +245,16 @@ struct JoinGroupLinkTests {
         #expect(JoinGroupView.mayCreate(room, linkRoom: nil))
     }
 }
+
+/// The composer's emoji order loads after it appears.
+@MainActor
+struct ComposerEmojiOrderTests {
+    @Test func aPickMadeBeforeTheOrderLoadedStaysAtTheFront() {
+        let bar = ConversationInputBar(frame: CGRect(x: 0, y: 0, width: 400, height: 100))
+        bar.recordRecent("🪺")
+        bar.setEmojiOrder(["😀", "🪺", "👍"])
+        #expect(bar.emojiOrder == ["🪺", "😀", "👍"])
+        bar.recordRecent("👍")
+        #expect(bar.emojiOrder == ["👍", "🪺", "😀"])
+    }
+}

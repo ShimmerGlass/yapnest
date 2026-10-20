@@ -67,11 +67,14 @@ failing: its option is simply hidden.
 | ejabberd | Works. Password change needs `mod_register`. Call signalling (ringing, answering across devices, TURN credentials from `mod_stun_disco`) is tested on it, and so is managing a group (configuration, subject, bans, owners, kick, picture, destroy). Jingle file transfers between two accounts are tested on it and on Prosody. | Moderation, spam reports and invitation links aren't tested on it. |
 | Openfire | Partial. Chats, groups and file upload work, but see the gaps below. | The Monitoring (archive), Push Notification and HTTP File Upload plugins. |
 
+Yapnest's settings name your contacts, so before publishing them it reads the node's configuration back and only syncs if the server keeps it readable by nobody else (`whitelist`); it sets it right once, and otherwise syncs nothing that session. It never deletes the node.
+
 Openfire's gaps:
 - It adds no stanza-id to messages, so read state syncing, spam reports and matching messages against the archive work less well or not at all.
 - Its rooms don't advertise message moderation (XEP-0425), so moderators can't remove others' messages there, and spam reports, which need the stanza-id above, don't work either.
 - The first block an account ever makes doesn't take effect for its sessions that were already online; it does for any that start later.
 - It never answers a XEP-0402 bookmark publish with `max_items=max`, so Yapnest keeps its groups in the older PEP bookmarks (XEP-0048) there instead.
+- It never answers, or fails, a publish or node creation that asks for `max_items=max`. Yapnest's settings node is then given a limit of 1000 items and published to without asking for `max`.
 
 ## Supported XEPs
 
@@ -88,8 +91,8 @@ What Yapnest implements, and where it stops short.
 | XEP-0047 | In-Band Bytestreams | The transport of Jingle file transfers (XEP-0261), in `iq` stanzas only: `message` stanzas are refused. |
 | XEP-0048 | Bookmarks | Only the PEP form (`storage:bookmarks`), read and written on servers that don't mirror XEP-0402 bookmarks to it (no `#compat`), and when a XEP-0402 publish fails or goes unanswered. |
 | XEP-0050 | Ad-Hoc Commands | Client side: lists and runs the commands of the server, of a contact's devices that advertise them, of a group, and of a group's members that offer them (bots), including ones with several stages (next, previous, complete, cancel), forms, result tables and notes. Also used to register with the push relay. |
-| XEP-0059 | Result Set Management | Used by MAM. |
-| XEP-0060 | Publish-Subscribe | Full for what Yapnest uses: publish with an access model, reconfigure a node that refuses it. |
+| XEP-0059 | Result Set Management | Used by MAM, and to read the settings node a page at a time. |
+| XEP-0060 | Publish-Subscribe | Full for what Yapnest uses: publish with an access model, reconfigure a node that refuses it, create a node with its configuration, read all items a page at a time (RSM). |
 | XEP-0066 | Out of Band Data | Full, for uploaded files. |
 | XEP-0077 | In-Band Registration | Password change only; no account registration. |
 | XEP-0084 | User Avatar | Full: publish, remove, receive. |
@@ -108,7 +111,7 @@ What Yapnest implements, and where it stops short.
 | XEP-0199 | XMPP Ping | Full. Also confirms a sent message on a server without stream management. |
 | XEP-0203 | Delayed Delivery | Read. |
 | XEP-0215 | External Service Discovery | STUN and TURN servers are asked for from the account's server for each call. Without any the call still tries a direct path. |
-| XEP-0223 | Persistent Storage of Private Data via PubSub | Used for bookmarks and read state. |
+| XEP-0223 | Persistent Storage of Private Data via PubSub | Used for bookmarks and read state, and for Yapnest's own settings (pins, archived chats, link preview and sound choices, GIF favorites, emoji usage and the like), in a node only the account can read, so they follow the user to their other devices. |
 | XEP-0234 | Jingle File Transfer | Receive and send file offers over in-band bytestreams, in 1:1 chats with contacts, unencrypted only. A file is sent this way only when the server's upload can't take it (no upload service, or the file is over its limit) and a device of the contact advertises it; encrypted chats and requests for a file aren't supported. A received offer is accepted at once up to 15 MB, and waits to be accepted above that. The file's SHA-256 is checked when given, and files over 1 GiB are declined. Offers end when the connection does. |
 | XEP-0245 | The /me Command | Display. |
 | XEP-0249 | Direct MUC Invitations | Full; received only from contacts. |

@@ -43,4 +43,7 @@ enum NS {
     static let hashes = "urn:xmpp:hashes:2"
     static let attaching = "urn:xmpp:message-attaching:1"
     static let quickResponse = "urn:xmpp:tmp:quick-response"
+    /// Yapnest's own settings, kept in our PEP: see `SettingsItem`. The `:0` is
+    /// bumped only for a change older builds can't read.
+    static let settings = "https://yapnest.fr/protocol/settings:0"
 }

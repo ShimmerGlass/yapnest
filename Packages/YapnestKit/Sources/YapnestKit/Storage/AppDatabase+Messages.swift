@@ -15,7 +15,8 @@ extension AppDatabase {
         // Sorts last until its first message sets the real time.
         var conversation = Conversation(peer: peer, kind: kind, lastActivityAt: .distantPast, isEncrypted: try encryptsByDefault(db, with: peer))
         try conversation.insert(db)
-        return conversation
+        guard try applyStoredChatEntries(db, peer: peer) else { return conversation }
+        return try Conversation.fetchOne(db, key: conversation.id) ?? conversation
     }
 
     /// A bare domain is a component, such as a gateway to another network,
@@ -50,7 +51,6 @@ extension AppDatabase {
         if movesChat, var conversation = try Conversation.fetchOne(db, key: message.conversationId),
            message.timestamp > conversation.lastActivityAt {
             conversation.lastActivityAt = message.timestamp
-            conversation.isArchived = false
             try conversation.update(db)
         } else if !movesChat, var conversation = try Conversation.fetchOne(db, key: message.conversationId),
                   message.timestamp > conversation.lastActivityAt {
@@ -61,7 +61,18 @@ extension AppDatabase {
             conversation.lastActivityAt = message.timestamp
             try conversation.update(db)
         }
+        try unarchive(db, conversationId: message.conversationId, ifNewerThan: message.timestamp)
         return (message, true)
+    }
+
+    /// A message newer than the time a chat was archived brings it back,
+    /// whatever else it does to the chat: that is the rule the other devices
+    /// judge by, so all of them reach the same answer. The archiving time and
+    /// its version stay as they were.
+    static func unarchive(_ db: Database, conversationId: Int64, ifNewerThan timestamp: Date) throws {
+        _ = try Conversation.filter(key: conversationId)
+            .filter(Column("isArchived") == true && (Column("archivedAt") == nil || Column("archivedAt") < timestamp))
+            .updateAll(db, Column("isArchived").set(to: false))
     }
 
     /// Records the server's id for a message we already have.

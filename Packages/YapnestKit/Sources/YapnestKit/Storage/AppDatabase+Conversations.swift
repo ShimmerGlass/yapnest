@@ -5,14 +5,22 @@ import GRDB
 extension AppDatabase {
     public func setPinned(_ pinned: Bool, conversationId: Int64) throws {
         try writer.write { db in
-            _ = try Conversation.filter(key: conversationId).updateAll(db, Column("isPinned").set(to: pinned))
+            guard let conversation = try Conversation.fetchOne(db, key: conversationId) else { return }
+            try Self.setChatSetting(db, conversation.peer, "pinned", pinned ? "1" : nil)
         }
     }
 
     /// Archived conversations leave the main list until a new message arrives.
+    /// The time is what other devices are told. A new message unarchives the
+    /// chat without touching it: every device sees that message, so they all
+    /// reach the same answer.
     public func setArchived(_ archived: Bool, conversationId: Int64) throws {
         try writer.write { db in
-            _ = try Conversation.filter(key: conversationId).updateAll(db, Column("isArchived").set(to: archived))
+            guard let conversation = try Conversation.fetchOne(db, key: conversationId), conversation.isArchived != archived else { return }
+            _ = try Conversation.filter(key: conversationId).updateAll(
+                db, Column("isArchived").set(to: archived), Column("archivedAt").set(to: archived ? Date() : nil),
+            )
+            try Self.touch(db, item: Self.chatItem(conversation.peer), key: "archivedAt")
         }
     }
 
@@ -53,6 +61,7 @@ extension AppDatabase {
     public func deleteConversation(id: Int64) throws -> [Attachment] {
         let (peer, attachments) = try writer.write { db in
             let peer = try Conversation.fetchOne(db, key: id)?.peer
+            if let peer { try Self.resetChatSettings(db, peer: peer) }
             let attachments = try Attachment.fetchAll(db, sql: """
                 SELECT attachment.* FROM attachment
                 JOIN message ON message.id = attachment.messageId

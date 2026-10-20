@@ -28,6 +28,10 @@ public struct Conversation: Codable, Hashable, Sendable, Identifiable, Fetchable
     /// The sound of this chat's notifications: nil for the system's, else
     /// what `NotificationSound` stores.
     public var notificationSound: String?
+    /// When the chat was archived. The chat is archived while this is set and
+    /// nothing newer than it has arrived, which is what the other devices
+    /// are told; `isArchived` is that answer.
+    public var archivedAt: Date?
 
     public init(
         id: Int64? = nil,
@@ -42,6 +46,7 @@ public struct Conversation: Codable, Hashable, Sendable, Identifiable, Fetchable
         historyComplete: Bool = false,
         historyCursor: String? = nil,
         notificationSound: String? = nil,
+        archivedAt: Date? = nil,
     ) {
         self.id = id
         self.peer = peer
@@ -55,6 +60,7 @@ public struct Conversation: Codable, Hashable, Sendable, Identifiable, Fetchable
         self.historyComplete = historyComplete
         self.historyCursor = historyCursor
         self.notificationSound = notificationSound
+        self.archivedAt = archivedAt
     }
 
     public static let databaseTableName = "conversation"

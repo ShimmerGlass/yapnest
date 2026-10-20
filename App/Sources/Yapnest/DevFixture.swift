@@ -203,7 +203,7 @@ enum DevFixture: String, CaseIterable {
         }
         let now = Date()
         for (emoji, picks) in [("🔥", 4), ("🎉", 3), ("🙏", 2), ("😢", 1)] {
-            for _ in 0..<picks { try database.recordReactionPick(emoji, at: now) }
+            for _ in 0..<picks { try database.recordEmojiPick(emoji, at: now) }
         }
     }
 

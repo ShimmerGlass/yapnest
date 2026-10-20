@@ -192,9 +192,9 @@ extension AppDatabase {
         if !isHistory, record.startedAt > conversation.lastActivityAt {
             var moved = conversation
             moved.lastActivityAt = record.startedAt
-            moved.isArchived = false
             try moved.update(db)
         }
+        try unarchive(db, conversationId: conversationId, ifNewerThan: record.startedAt)
         return row
     }
 }

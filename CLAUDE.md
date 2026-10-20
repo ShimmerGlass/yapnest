@@ -28,6 +28,7 @@ An XMPP client for iOS 18+ and the Mac (Mac Catalyst, Mac idiom). `README.md` co
   - `+Blocking`: blocking and spam reports.
   - `+Attachments`: file uploads.
   - `+DisplayedSync`: read state synced across devices.
+  - `+Settings`: Yapnest's own settings synced through a private PEP node (`SettingsSyncModule`). Before anything is published the node is checked to be whitelist, and syncing stops for the session if the server keeps it open; it is never deleted. A fetch that isn't complete never deletes local items.
   - `+Push`: push notifications through the relay.
   - `+History`: older messages from the archive when scrolling back. `+Restore` uses it after a sync that began without a cursor (a reinstall) to bring back the chats older than the sync window.
   - `+AdHoc`: ad-hoc commands (XEP-0050): finding and running a server's, a contact's device's or a group's, a stage at a time. What they ask is an `XDataForm` (`XDataForm.swift`, XEP-0004).
@@ -39,6 +40,7 @@ An XMPP client for iOS 18+ and the Mac (Mac Catalyst, Mac idiom). `README.md` co
 - `Storage/AppDatabase*.swift`: the GRDB database, one per account, with its schema and migrations in `AppDatabase.swift`. It's split by area:
   - `+Ingest`: applying inbound stanzas.
   - `+Messages`, `+Conversations`, `+Groups`, `+Notifications`, `+Session`, `+Settings`.
+  - `+SyncedSettings`: the synced settings' entries, versions (a hybrid logical clock) and merging; `touch` records a local change in the setter's transaction.
   - `+GroupInvitations`: invitations through a room that can't vouch for the inviter, held until the user answers.
 
   `ChatListItem` and `ConversationItem` are the read models the UI observes.

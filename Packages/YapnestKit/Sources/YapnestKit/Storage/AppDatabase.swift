@@ -570,6 +570,31 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v34-synced-settings") { db in
+            // The state of every synced setting: see `AppDatabase+SyncedSettings`.
+            try db.create(table: "syncedEntry") { t in
+                t.column("item", .text).notNull()
+                t.column("key", .text).notNull()
+                t.column("value", .text)
+                t.column("version", .text).notNull()
+                t.column("by", .text).notNull()
+                t.primaryKey(["item", "key"])
+            }
+            try db.create(table: "syncedItemDirty") { t in
+                t.primaryKey("item", .text)
+            }
+            try db.create(table: "remoteUsage") { t in
+                t.primaryKey("deviceId", .text)
+                t.column("json", .text).notNull()
+            }
+            try db.alter(table: "conversation") { t in
+                t.add(column: "archivedAt", .datetime)
+            }
+            // A chat archived before the time was kept counts as archived
+            // as of its last activity, so a newer message still brings it back.
+            try db.execute(sql: "UPDATE conversation SET archivedAt = lastActivityAt WHERE isArchived")
+        }
+
         return migrator
     }
 

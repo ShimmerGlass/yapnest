@@ -399,16 +399,25 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
 
     // MARK: Emoji
 
-    private static let recentsKey = "recentEmojiShortcodes"
-    private static let recentsLimit = 24
+    /// Emoji by how much they're used, across devices, most used first. Kept
+    /// in memory so typing doesn't read the database on every change; the
+    /// model loads it when the composer appears.
+    private(set) var emojiOrder: [String] = []
+    /// Emoji picked before the order arrived, most recent first, which the
+    /// loaded order would otherwise replace. Nil once it has.
+    private var picksBeforeOrder: [String]? = []
+    var onEmojiPicked: ((String) -> Void)?
 
-    /// Per device, as a convenience for ranking only. Kept in memory so
-    /// typing doesn't read UserDefaults on every change.
-    private lazy var recentEmoji: [String] = UserDefaults.standard.stringArray(forKey: Self.recentsKey) ?? []
+    func setEmojiOrder(_ order: [String]) {
+        let picked = picksBeforeOrder ?? []
+        picksBeforeOrder = nil
+        emojiOrder = picked + order.filter { !picked.contains($0) }
+    }
 
-    private func recordRecent(_ emoji: String) {
-        recentEmoji = Array(([emoji] + recentEmoji.filter { $0 != emoji }).prefix(Self.recentsLimit))
-        UserDefaults.standard.set(recentEmoji, forKey: Self.recentsKey)
+    func recordRecent(_ emoji: String) {
+        emojiOrder = [emoji] + emojiOrder.filter { $0 != emoji }
+        picksBeforeOrder = picksBeforeOrder.map { [emoji] + $0.filter { $0 != emoji } }
+        onEmojiPicked?(emoji)
     }
 
     private var cursor: Int? {
@@ -421,7 +430,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         if trigger != nil, trigger == dismissedEmoji { trigger = nil }
         // Whichever word is nearest the cursor wins.
         if let found = trigger, let mention = mentionRange, mention.range.location > found.range.location { trigger = nil }
-        let matches = trigger.map { EmojiShortcodes.shared.matches(for: $0.query, recents: recentEmoji) } ?? []
+        let matches = trigger.map { EmojiShortcodes.shared.matches(for: $0.query, recents: emojiOrder) } ?? []
         // Not a new query while the same one is still being typed.
         if matches != emojiMatches { selectedEmoji = 0 }
         emojiTrigger = matches.isEmpty ? nil : trigger

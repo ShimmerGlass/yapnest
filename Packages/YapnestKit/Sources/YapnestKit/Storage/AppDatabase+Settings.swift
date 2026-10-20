@@ -41,8 +41,8 @@ extension AppDatabase {
         /// Whether the GIF picker is offered. On unless turned off, because
         /// its searches go to KLIPY.
         case gifs
-        /// The GIFs the user starred in the picker, newest first, as JSON:
-        /// see `addGifFavorite`. Per device, never synced.
+        /// The GIFs starred before they were synced, as JSON. Taken into
+        /// `syncedEntry` and removed by the first write: see `addGifFavorite`.
         case gifFavorites
         /// The name we publish for ourselves (XEP-0172).
         case nickname
@@ -51,19 +51,35 @@ extension AppDatabase {
         case availability
         case statusMessage
         /// How much each emoji has been picked as a reaction, decayed: see
-        /// `ReactionRanking`. Per device, never synced.
+        /// `ReactionRanking`. This device's own picks; the other devices' are
+        /// in `remoteUsage`, and published as our `usage:` item.
         case reactionRanking
         /// Whether we tell contacts when we were last active (XEP-0012) and
         /// show them theirs. Off unless turned on.
         case sharesLastSeen
+        /// The highest settings version issued or seen, so the clock never
+        /// goes back, even after a relaunch: see `SettingsVersion`.
+        case settingsClock
+        /// This device's id in synced entries and in its `usage:` item.
+        case syncDeviceId
+        /// Set once the values from before settings were synced are recorded.
+        case settingsSeeded
+        /// Set once the composer's old per-device shortcode recents are taken
+        /// into `reactionRanking`: see `importEmojiRecents`.
+        case emojiRecentsImported
     }
 
     public func setting(_ key: SettingKey) throws -> String? {
         try reader.read { try Self.setting($0, key) }
     }
 
+    /// A key that is synced between devices also records the change, in the
+    /// same transaction, to be published.
     public func setSetting(_ key: SettingKey, _ value: String?) throws {
-        try writer.write { try Self.setSetting($0, key, value) }
+        try writer.write { db in
+            try Self.setSetting(db, key, value)
+            if Self.syncedGlobalKeys[key] != nil { try Self.touch(db, item: Self.globalItem, key: key.rawValue) }
+        }
     }
 
     /// For use inside a transaction or an observation.
@@ -77,32 +93,6 @@ extension AppDatabase {
             try db.execute(sql: "INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", arguments: [key.rawValue, value])
         } else {
             try db.execute(sql: "DELETE FROM setting WHERE key = ?", arguments: [key.rawValue])
-        }
-    }
-
-    /// Changes a JSON setting in one transaction so two writers can't lose
-    /// each other's changes. An unreadable or missing value starts from
-    /// `defaultValue`.
-    ///
-    /// An unreadable value is replaced by the default on the next change, so
-    /// what was stored is lost. A type kept this way (`Gif`, `Rendition`,
-    /// `ReactionRanking`) must therefore keep decoding the JSON it wrote
-    /// before it changed, with any new field optional.
-    @discardableResult
-    func updateJSONSetting<T: Codable, R>(
-        _ key: SettingKey,
-        default defaultValue: T,
-        decoder: JSONDecoder = JSONDecoder(),
-        encoder: JSONEncoder = JSONEncoder(),
-        _ change: (inout T) -> R,
-    ) throws -> R {
-        try writer.write { db in
-            var value = try Self.setting(db, key)
-                .flatMap { $0.data(using: .utf8) }
-                .flatMap { try? decoder.decode(T.self, from: $0) } ?? defaultValue
-            let result = change(&value)
-            try Self.setSetting(db, key, String(decoding: try encoder.encode(value), as: UTF8.self))
-            return result
         }
     }
 
