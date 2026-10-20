@@ -86,7 +86,7 @@ extension XMPPSession {
             case .failure(let error) where error.error == .item_not_found:
                 done([])
             case .failure(let error):
-                self?.logger.info("Bookmarks unavailable: \(error.localizedDescription, privacy: .public)")
+                self?.logger.info("Bookmarks unavailable: \(error.localizedDescription, privacy: .private)")
                 done(nil)
             }
         }
@@ -151,7 +151,7 @@ extension XMPPSession {
             if case .success? = result {
                 done(true)
             } else {
-                logger.warning("Couldn't publish the old bookmarks: \(String(describing: result), privacy: .public)")
+                logger.warning("Couldn't publish the old bookmarks: \(String(describing: result), privacy: .private)")
                 done(false)
             }
         }

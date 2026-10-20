@@ -57,12 +57,16 @@ extension XMPPSession {
     /// Uploads the file, then sends the message with its URL.
     func upload(_ message: Message, _ attachment: Attachment, to peer: JID) {
         guard let messageId = message.id, let id = message.remoteId, beginTransfer(messageId) else { return }
+        let transferId = Redacted.id(id)
         Task.detached { [self] in
             defer { endTransfer(messageId) }
+            var phase = UploadPhase.prepare
+            var started = Date()
             do {
                 guard let file = attachments.url(for: attachment), (try? file.checkResourceIsReachable()) == true else {
                     throw AttachmentError.unreadable
                 }
+                phase = .service
                 let service = try await uploadService()
                 // Refused before it is read: a file the server can't take
                 // may be too big to hold in memory.
@@ -79,8 +83,13 @@ extension XMPPSession {
                 if let max = service.maxSize, data.count > max { throw AttachmentError.tooLarge(max: max) }
                 // Encrypted files are opaque bytes; don't reveal their type.
                 let contentType = fragment == nil ? attachment.mimeType ?? "application/octet-stream" : "application/octet-stream"
+                phase = .slot
+                started = Date()
                 let slot = try await client.module(.httpFileUpload)
                     .requestUploadSlot(componentJid: service.jid, filename: attachment.name, size: data.count, contentType: contentType)
+                DiagLog.info(.upload, "Upload slot granted", .id("msg", transferId), .int("bytes", data.count), .duration("took", since: started))
+                phase = .put
+                started = Date()
 
                 var request = URLRequest(url: slot.putUri)
                 request.httpMethod = "PUT"
@@ -88,19 +97,28 @@ extension XMPPSession {
                 for (header, value) in slot.putHeaders { request.setValue(value, forHTTPHeaderField: header) }
                 let delegate = ProgressDelegate { [weak self] progress in self?.setProgress(progress, for: messageId) }
                 let (_, response) = try await URLSession.shared.upload(for: request, from: data, delegate: delegate)
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                    throw AttachmentError.uploadFailed(HTTPURLResponse.localizedString(forStatusCode: (response as? HTTPURLResponse)?.statusCode ?? 0))
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                DiagLog.info(.upload, "Upload finished", .id("msg", transferId), .int("status", status), .int("bytes", data.count), .duration("took", since: started))
+                guard (200..<300).contains(status) else {
+                    throw AttachmentError.uploadFailed(HTTPURLResponse.localizedString(forStatusCode: status))
                 }
 
                 let url = fragment.flatMap { FileCrypto.aesgcmURL(for: slot.getUri, fragment: $0) } ?? slot.getUri
+                phase = .store
                 guard let uploaded = try database.setUploaded(messageId: messageId, url: url.absoluteString) else { return }
                 transmit(uploaded, to: peer)
             } catch {
                 // A server that can't take the file may not be the only way to get it there.
-                if await sendOverJingleInstead(after: error, message, attachment, to: peer) { return }
+                if await sendOverJingleInstead(after: error, message, attachment, to: peer) {
+                    DiagLog.notice(.upload, "Upload handed to Jingle", .id("msg", transferId), .value("phase", phase), .error(error), .duration("took", since: started))
+                    return
+                }
                 // Offline: the upload is retried when the connection is back, by the resend after a resume or a catch-up.
-                guard isConnected else { return }
-                logger.error("Upload of \(id, privacy: .public) failed: \(error, privacy: .public)")
+                guard isConnected else {
+                    DiagLog.notice(.upload, "Upload deferred, offline", .id("msg", transferId), .value("phase", phase), .error(error), .duration("took", since: started))
+                    return
+                }
+                DiagLog.error(.upload, "Upload failed", .id("msg", transferId), .value("phase", phase), .error(error), .duration("took", since: started), .bool("connected", true))
                 let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 try? database.markFailed(conversationId: message.conversationId, remoteId: id, error: reason)
             }
@@ -162,8 +180,10 @@ extension XMPPSession {
     private func download(_ attachment: Attachment, limit: Int64) {
         let messageId = attachment.messageId
         guard let string = attachment.url, let url = URL(string: string), beginTransfer(messageId) else { return }
+        let transferId = Redacted.id(string)
         Task.detached { [self] in
             defer { endTransfer(messageId) }
+            let started = Date()
             var delegate: ProgressDelegate?
             do {
                 var source = url
@@ -194,13 +214,14 @@ extension XMPPSession {
                     messageId: messageId, localFile: localFile, size: Int64(data.count),
                     mimeType: mimeType, width: size?.width, height: size?.height, duration: duration,
                 )
+                DiagLog.info(.receive, "Download finished", .id("file", transferId), .int("status", http.statusCode), .int("bytes", data.count), .duration("took", since: started))
             } catch {
                 // Over the limit isn't a failure; a tap can still fetch it.
                 if let size = (error as? TooLarge)?.size ?? delegate?.exceededSize {
                     try? database.setTooLarge(messageId: messageId, size: size > 0 ? size : nil)
                     return
                 }
-                logger.warning("Download for message \(messageId) failed: \(error, privacy: .public)")
+                DiagLog.error(.receive, "Download failed", .id("file", transferId), .error(error), .duration("took", since: started))
                 try? database.setAttachmentState(.downloadFailed, messageId: messageId)
             }
         }

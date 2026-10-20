@@ -172,6 +172,8 @@ public final class XMPPSession: @unchecked Sendable {
         var retryNow = false
         /// Counts connection attempts, so a stale watchdog can tell it's stale.
         var attempt = 0
+        /// When the login in flight began, for the durations in the diagnostics log.
+        var connectStartedAt: Date?
         /// Waits for the connector to come up, to start the watchdog.
         var watchdogSubscription: SubscriptionBox?
         /// Set when the connection dropped under the account's catch-up, which
@@ -315,6 +317,7 @@ public final class XMPPSession: @unchecked Sendable {
         let domain = credentials.jid.domain
         client.connectionConfiguration.modifyConnectorOptions(type: SocketConnectorNetwork.Options.self) { options in
             options.connectionTimeout = 15
+            options.diagnostics = { Self.logConnect($0) }
             options.sslCertificateValidation = .customValidator { trust in Self.validate(trust, domain: domain) }
         }
         if let host = credentials.host {
@@ -382,7 +385,7 @@ public final class XMPPSession: @unchecked Sendable {
         if requireTLS {
             modules.register(RequireTLSStreamFeaturesModule(
                 isTLSActive: { [weak self] in self?.client.connector?.activeFeatures.contains(.TLS) ?? false },
-                onInsecure: { [weak self] in self?.abort(.fatal("The server doesn't support encryption.")) },
+                onInsecure: { [weak self] in self?.abort(.fatal("The server doesn't support encryption."), because: .insecure) },
             ))
         } else {
             modules.register(StreamFeaturesModule())
@@ -507,7 +510,7 @@ public final class XMPPSession: @unchecked Sendable {
                 let isAccount = source == self.account
                 guard isAccount || self.isGroup(source) else { return }
                 guard Self.archivedMessage(archived.message, belongsTo: source, isAccount: isAccount) else {
-                    self.logger.warning("Dropped an archive result from \(source.description, privacy: .public) about someone else's conversation")
+                    self.logger.warning("Dropped an archive result from \(source.description, privacy: .private) about someone else's conversation")
                     return
                 }
                 if isAccount {
@@ -532,6 +535,10 @@ public final class XMPPSession: @unchecked Sendable {
 
         client.modulesManager.module(NickModule.IDENTIFIER).changes
             .sink { [weak self] change in self?.nicknameChanged(change.jid, to: change.nickname) }
+            .store(in: &cancellables)
+
+        client.module(.auth).$state
+            .sink { [weak self] state in self?.logAuthorization(state) }
             .store(in: &cancellables)
 
         client.module(.blockingCommand).$blockedJids
@@ -584,7 +591,13 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// With the latest FAST token: another session may have replaced it.
     private func login() {
-        client.module(.sasl2).fastToken = fastTokens.load()
+        let token = fastTokens.load()
+        client.module(.sasl2).fastToken = token
+        let attempts = lock.withLock {
+            $0.connectStartedAt = Date()
+            return $0.reconnectAttempt
+        }
+        DiagLog.info(.connection, "Connecting", .int("reconnects", attempts), .bool("fastToken", token != nil))
         client.login()
     }
 
@@ -625,7 +638,8 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     /// Drops the current attempt, reporting `failure` instead of Martin's reason.
-    private func abort(_ failure: Failure) {
+    private func abort(_ failure: Failure, because cause: AbortCause) {
+        DiagLog.notice(.connection, "Dropping the connection", .value("cause", cause))
         lock.withLock { $0.pendingFailure = failure }
         _ = client.disconnect(true)
     }
@@ -645,7 +659,7 @@ public final class XMPPSession: @unchecked Sendable {
         let arm = { [weak self] in
             DispatchQueue.global().asyncAfter(deadline: .now() + Self.connectTimeout) {
                 guard let self, self.lock.withLock({ $0.attempt == attempt }), case .connecting = self.client.state else { return }
-                self.abort(.transient("The server didn't respond."))
+                self.abort(.transient("The server didn't respond."), because: .watchdog)
             }
         }
         guard let connector = client.connector else { return arm() }
@@ -691,14 +705,15 @@ public final class XMPPSession: @unchecked Sendable {
                 return $0.attempt == attempt
             }
             let heard = answered.withLock { $0 }
-            guard current, !heard, isConnected else { return }
-            logger.info("No answer from the server; reconnecting")
-            abort(.transient("The connection was lost."))
+            guard current, isConnected else { return }
+            DiagLog.notice(.connection, "Liveness check finished", .value("outcome", heard ? LivenessOutcome.answered : .silent), .duration("timeout", timeout))
+            guard !heard else { return }
+            abort(.transient("The connection was lost."), because: .noAnswer)
         }
     }
 
     /// What to do about a network path that has become usable.
-    enum PathAction: Equatable {
+    enum PathAction: String, DiagEnum {
         case nothing
         /// Ping the server: the old connection may be dead.
         case verify
@@ -723,17 +738,17 @@ public final class XMPPSession: @unchecked Sendable {
     /// up to a minute; none of them is worth waiting for once a network is back.
     func pathBecameSatisfied() {
         let wants = lock.withLock { $0.wantsConnection }
-        switch Self.pathAction(for: client.state, wantsConnection: wants) {
+        let action = Self.pathAction(for: client.state, wantsConnection: wants)
+        DiagLog.info(.network, "Network path usable", .value("action", action), .bool("wantsConnection", wants))
+        switch action {
         case .nothing:
             break
         case .verify:
             verifyConnection()
         case .restartAttempt:
-            logger.info("Network changed during a connection attempt; retrying")
             lock.withLock { $0.retryNow = true }
-            abort(.transient("The network changed."))
+            abort(.transient("The network changed."), because: .networkChanged)
         case .loginNow:
-            logger.info("Network changed while waiting to reconnect; retrying")
             reconnectNow()
         }
     }
@@ -758,7 +773,9 @@ public final class XMPPSession: @unchecked Sendable {
         // The first update only reports the starting path.
         let seenFirst = OSAllocatedUnfairLock(initialState: false)
         monitor.pathUpdateHandler = { [weak self] path in
-            guard seenFirst.withLock({ seen in defer { seen = true }; return seen }), path.status == .satisfied else { return }
+            let isFirst = !seenFirst.withLock { seen in defer { seen = true }; return seen }
+            DiagLog.network(isFirst ? "Network path at start" : "Network path changed", path)
+            guard !isFirst, path.status == .satisfied else { return }
             // A switch reports several updates in a row.
             guard let self else { return }
             pathDebouncer.schedule(after: Self.pathDebounce) { [weak self] in self?.pathBecameSatisfied() }
@@ -772,14 +789,14 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     private func scheduleReconnect() {
-        let pending: (delay: TimeInterval, token: Int)? = lock.withLock {
+        let pending: (delay: TimeInterval, token: Int, attempt: Int)? = lock.withLock {
             guard $0.wantsConnection else { return nil }
             $0.reconnectAttempt += 1
             $0.reconnectToken += 1
-            return (min(pow(2, Double($0.reconnectAttempt - 1)), 60), $0.reconnectToken)
+            return (min(pow(2, Double($0.reconnectAttempt - 1)), 60), $0.reconnectToken, $0.reconnectAttempt)
         }
-        guard let (delay, token) = pending else { return }
-        logger.info("Reconnecting in \(delay)s")
+        guard let (delay, token, attempt) = pending else { return }
+        DiagLog.info(.connection, "Reconnect scheduled", .duration("delay", delay), .int("attempt", attempt))
         DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.lock.withLock({ $0.wantsConnection && $0.reconnectToken == token }), case .disconnected = self.client.state else { return }
             self.login()
@@ -818,6 +835,59 @@ public final class XMPPSession: @unchecked Sendable {
         return false
     }
 
+    /// What Martin's connector reports about each endpoint, as the diagnostics log has it.
+    static func logConnect(_ event: SocketConnectorNetwork.ConnectEvent) {
+        switch event {
+        case .resolved(let candidates, let fallback, let duration):
+            DiagLog.info(.connection, "SRV lookup finished", .int("records", candidates), .bool("fallbackHost", fallback), .duration("took", duration))
+        case .resolveTimedOut(let duration):
+            DiagLog.notice(.connection, "SRV lookup timed out", .duration("took", duration))
+        case .attempting(let kind, let port):
+            DiagLog.info(.connection, "Trying an endpoint", .value("kind", kind), .int("port", port))
+        case .ready(let kind, let port, let family, let duration):
+            DiagLog.info(.connection, "Endpoint connected", .value("kind", kind), .int("port", port), .value("family", family), .duration("took", duration))
+        case .failed(let kind, let port, let reason, let error, let code, let duration, let triesNext):
+            var fields: [DiagField] = [.value("kind", kind), .int("port", port), .value("reason", reason), .duration("took", duration), .bool("triesNext", triesNext)]
+            if let error { fields += [.value("errorKind", error), .int("errorCode", code)] }
+            DiagLog.log(.error, .connection, "Endpoint failed", fields)
+        }
+    }
+
+    private func logAuthorization(_ state: AuthModule.AuthorizationStatus) {
+        // The module `AuthModule.login()` chose for this stream; each clears its mechanism when it starts.
+        let sasl2 = client.module(.sasl2)
+        let usesSasl2 = sasl2.isAvailable
+        let kind = SaslKind(mechanism: usesSasl2 ? sasl2.lastMechanism : client.modulesManager.moduleOrNil(.sasl)?.lastMechanism)
+        switch state {
+        case .inProgress:
+            DiagLog.info(.connection, "Signing in", .value("mechanism", kind))
+        case .authorized:
+            DiagLog.info(.connection, "Signed in", .value("mechanism", kind), .bool("withToken", usesSasl2 && sasl2.signedInWithToken))
+        case .error(let error):
+            DiagLog.error(.connection, "Sign-in failed", .value("mechanism", kind), .value("reason", AuthFailure(error)))
+        case .notAuthorized, .expectedAuthorization:
+            break
+        }
+    }
+
+    func logDisconnection(_ reason: XMPPClient.State.DisconnectionReason, failure: Failure?) {
+        let failureClass: FailureClass = switch failure {
+        case .fatal: .fatal
+        case .transient: .transient
+        case nil: .none
+        }
+        var fields: [DiagField] = [.value("reason", DisconnectKind(reason)), .value("outcome", failureClass)]
+        switch reason {
+        case .streamError(let element):
+            fields.append(.value("condition", StreamCondition(name: element.firstChild(xmlns: "urn:ietf:params:xml:ns:xmpp-streams")?.name)))
+        case .authenticationFailure(let error):
+            fields.append(.value("auth", AuthFailure(error)))
+        default:
+            break
+        }
+        DiagLog.log(failureClass == .none ? .info : .notice, .connection, "Disconnected", fields)
+    }
+
     private func clientStateChanged(_ state: XMPPClient.State) {
         switch state {
         case .connecting:
@@ -837,6 +907,8 @@ public final class XMPPSession: @unchecked Sendable {
                 defer { $0.pendingFailure = nil }
                 return $0.pendingFailure
             } ?? Self.failure(for: reason)
+            // Not the state a session starts in, before any login.
+            if lock.withLock({ $0.connectStartedAt }) != nil { logDisconnection(reason, failure: failure) }
             let retryNow = lock.withLock {
                 defer { $0.retryNow = false }
                 return $0.retryNow
@@ -859,6 +931,8 @@ public final class XMPPSession: @unchecked Sendable {
                 scheduleReconnect()
             }
         case .connected(let resumed):
+            let took = lock.withLock { $0.connectStartedAt.map { Date().timeIntervalSince($0) } }
+            DiagLog.info(.connection, "Connected", .bool("resumed", resumed), .duration("took", took ?? 0))
             let attempt = lock.withLock {
                 $0.watchdogSubscription = nil
                 $0.reconnectAttempt = 0
@@ -1020,7 +1094,7 @@ public final class XMPPSession: @unchecked Sendable {
         if let carbon = stanza.element.children.first(where: { $0.xmlns == MessageCarbonsModule.MC_XMLNS }) {
             // Only our own server may send carbons: from our bare JID, or no from.
             if let from = stanza.from, from.resource != nil || JID(from.bareJid.stringValue) != account {
-                logger.warning("Dropping forged carbon from \(from.stringValue, privacy: .public)")
+                logger.warning("Dropping forged carbon from \(from.stringValue, privacy: .private)")
                 return
             }
             guard carbon.name == "sent" || carbon.name == "received",
@@ -1090,7 +1164,7 @@ public final class XMPPSession: @unchecked Sendable {
                 }
                 return
             case .failed(let reason):
-                logger.warning("Couldn't decrypt message \(stanza.id ?? "?", privacy: .public): \(reason, privacy: .public)")
+                logger.warning("Couldn't decrypt message \(stanza.id ?? "?", privacy: .private): \(reason, privacy: .private)")
                 encryption = .omemoUndecryptable
                 // Keep a placeholder even if the sender sent no fallback body.
                 if stanza.body?.isEmpty ?? true { stanza.body = "🔒" }
@@ -1191,7 +1265,7 @@ public final class XMPPSession: @unchecked Sendable {
             do {
                 try database.clearPendingReactions(id: id)
             } catch {
-                logger.error("Failed to mark reactions \(id, privacy: .public) sent: \(error)")
+                logger.error("Failed to mark reactions \(id, privacy: .private) sent: \(error)")
             }
             return
         }
@@ -1199,10 +1273,11 @@ public final class XMPPSession: @unchecked Sendable {
               message.body != nil || message.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) != nil,
               message.firstChild(name: "replace", xmlns: NS.correction) == nil,
               let id = message.id, let peer = message.to.flatMap({ JID($0.bareJid.stringValue) }) else { return }
+        DiagLog.info(.send, "Server acknowledged", .id("msg", Redacted.id(id)))
         do {
             try database.markSent(peer: peer, remoteId: id)
         } catch {
-            logger.error("Failed to mark \(id, privacy: .public) sent: \(error)")
+            logger.error("Failed to mark \(id, privacy: .private) sent: \(error)")
         }
     }
 
@@ -1212,8 +1287,13 @@ public final class XMPPSession: @unchecked Sendable {
     /// has read `stanza`. With no reply the stanza stays unacknowledged, as
     /// on a stream with management: a new session sends it again.
     private func confirmByPing(_ stanza: Stanza) {
+        let started = Date()
         client.module(.ping).ping(Martin.JID(account.martin), timeout: Self.confirmationTimeout) { [weak self] result in
-            if case .failure(.remote_server_timeout) = result { return }
+            if case .failure(.remote_server_timeout) = result {
+                DiagLog.notice(.send, "Ping for confirmation timed out", .duration("waited", since: started))
+                return
+            }
+            DiagLog.info(.send, "Ping confirmed", .duration("took", since: started))
             self?.acknowledged(stanza)
         }
     }
@@ -1533,15 +1613,19 @@ public final class XMPPSession: @unchecked Sendable {
             return lock.withLock { $0.sends.isClaimed(id) }
         }
         do {
+            var resent = 0
             for (message, peer) in try database.unconfirmedOutgoing(before: .distantFuture, since: .distantPast) where !isClaimed(message) {
+                resent += 1
                 transmit(message, to: peer)
             }
             for (room, status) in lock.withLock({ $0.rooms }) where status.isJoined && !status.isSyncing {
                 guard let group = try database.groupChat(room) else { continue }
                 for message in try database.pendingOutgoing(conversationId: group.conversationId) where !isClaimed(message) {
+                    resent += 1
                     transmit(message, to: room)
                 }
             }
+            DiagLog.info(.send, "Sending unclaimed pending messages", .int("count", resent))
             resendPendingReactions()
         } catch {
             logger.error("Failed to load unsent messages: \(error)")
@@ -1628,26 +1712,41 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// `resend` sends a message again that was claimed but never came back.
     func transmit(_ message: Message, to peer: JID, resend: Bool = false) {
-        guard isConnected, let id = message.remoteId else { return }
+        guard let id = message.remoteId else { return }
+        let sendId = Redacted.id(id)
+        guard isConnected else {
+            DiagLog.info(.send, "Send waits", .id("msg", sendId), .value("reason", SendSkip.offline))
+            return
+        }
         let route = route(to: peer)
         // Until the room has us, and we've caught up on what it has, the
         // message waits; the end of the catch-up sends it.
-        guard route.isReady else { return }
+        guard route.isReady else {
+            DiagLog.info(.send, "Send waits", .id("msg", sendId), .value("reason", SendSkip.routeNotReady))
+            return
+        }
         let attachment = message.id.flatMap { try? database.attachment(messageId: $0) }
         if let attachment, attachment.url == nil {
+            DiagLog.info(.send, "Send needs an upload first", .id("msg", sendId))
             upload(message, attachment, to: peer)
             return
         }
         // Marked before the queue has it, as the claim comes only when the
         // block runs, which a slow encryption ahead of it can delay.
-        guard lock.withLock({ $0.sends.enqueue(id, resend: resend) }) else { return }
+        guard lock.withLock({ $0.sends.enqueue(id, resend: resend) }) else {
+            DiagLog.debug(.send, "Send already queued", .id("msg", sendId))
+            return
+        }
+        DiagLog.info(.send, "Send queued", .id("msg", sendId), .bool("resend", resend), .bool("attachment", attachment != nil), .bool("encrypted", message.encryption == .omemo))
         sendQueue(for: peer).async { [self] in
             // Claimed and checked for edits in one step: from here on, a
             // change has to follow the message as a correction.
             let text: String
             let (claim, token) = lock.withLock { ($0.sends.claim(id), $0.sends.token(of: id)) }
             switch claim {
-            case .skip: return
+            case .skip:
+                DiagLog.debug(.send, "Send skipped, not ours to claim", .id("msg", sendId))
+                return
             case .send(let edited): text = edited ?? message.body
             }
             let stanza = OutboundStanza.text(text, to: route, id: id, replyingTo: quote(of: message, in: route),
@@ -1663,10 +1762,12 @@ public final class XMPPSession: @unchecked Sendable {
             // A write the session drops comes back after deliver has returned.
             let dropped: @Sendable () -> Void = { [weak self] in
                 guard let self, let token else { return }
+                DiagLog.notice(.send, "Write dropped by the session", .id("msg", sendId))
                 lock.withLock { $0.sends.releaseDropped(id, token: token) }
             }
             switch deliver(stanza, to: peer, encrypted: message.encryption == .omemo, onDropped: dropped) {
             case .success(let (trust, acknowledged)):
+                DiagLog.info(.send, "Written to the stream", .id("msg", sendId), .bool("streamAcknowledges", acknowledged))
                 if let trust { try? database.setTrust(trust, conversationId: message.conversationId, remoteId: id) }
                 // The server's acknowledgement marks it sent, or the reply to
                 // a ping where it gives none. If that never comes it stays
@@ -1676,9 +1777,10 @@ public final class XMPPSession: @unchecked Sendable {
             case .failure(.offline):
                 // Nothing was written, so it stays pending and gives up its
                 // claim to be sent again once we're back.
+                DiagLog.notice(.send, "Send gave up, offline", .id("msg", sendId))
                 lock.withLock { $0.sends.release(id) }
-            case .failure(.failed(let reason)):
-                logger.error("Couldn't send message \(id, privacy: .public): \(reason, privacy: .public)")
+            case .failure(.failed(let reason, let kind)):
+                DiagLog.error(.send, "Marked failed", .id("msg", sendId), .value("reason", kind))
                 try? database.markFailed(conversationId: message.conversationId, remoteId: id, error: reason)
                 lock.withLock { $0.sends.release(id) }
             }
@@ -1715,7 +1817,7 @@ public final class XMPPSession: @unchecked Sendable {
     enum DeliveryError: Error {
         /// Lost the connection on the way: worth trying again later.
         case offline
-        case failed(String)
+        case failed(String, SendFailure)
     }
 
     /// The queue `peer`'s messages go out on, one after another.
@@ -1738,15 +1840,16 @@ public final class XMPPSession: @unchecked Sendable {
         if encrypted {
             let route = route(to: peer)
             if route.isGroup, (try? database.groupChat(peer))?.isPrivate != true {
-                return .failure(.failed(GroupError.notPrivate.localizedDescription))
+                return .failure(.failed(GroupError.notPrivate.localizedDescription, .groupNotPrivate))
             }
             switch omemo.encrypt(stanza, for: route.recipients(excluding: account)) {
             case .success(let (encrypted, devices)):
                 outgoing = encrypted
                 trust = devices
             case .failure(let error):
+                DiagLog.error(.omemo, "Encryption failed", .value("reason", EncryptFailure(error)))
                 guard isConnected else { return .failure(.offline) }
-                return .failure(.failed(error.localizedDescription))
+                return .failure(.failed(error.localizedDescription, .encryption))
             }
         }
         guard isConnected else { return .failure(.offline) }
@@ -1815,7 +1918,7 @@ public final class XMPPSession: @unchecked Sendable {
             stanza.addChild(Element(name: "replace", attributes: ["xmlns": NS.correction, "id": original]))
             sendQueue(for: peer).async { [self] in
                 if case .failure(let error) = deliver(stanza, to: peer, encrypted: message.encryption == .omemo) {
-                    logger.error("Couldn't send correction of \(original, privacy: .public): \(String(describing: error), privacy: .public)")
+                    logger.error("Couldn't send correction of \(original, privacy: .private): \(String(describing: error), privacy: .private)")
                 }
             }
         }

@@ -212,7 +212,7 @@ extension XMPPSession {
             } catch let error as PubSubError where error.error == .item_not_found {
                 return .complete(items)
             } catch {
-                logger.info("Settings unavailable: \(error.localizedDescription, privacy: .public)")
+                logger.info("Settings unavailable: \(error.localizedDescription, privacy: .private)")
                 return .incomplete(items)
             }
             let fresh = page.items.filter { seen.insert($0.id).inserted }
@@ -268,12 +268,12 @@ extension XMPPSession {
             do {
                 try await createSettingsNode()
             } catch {
-                logger.error("Couldn't create the settings node, so settings aren't synced: \(error.localizedDescription, privacy: .public)")
+                logger.error("Couldn't create the settings node, so settings aren't synced: \(error.localizedDescription, privacy: .private)")
                 return false
             }
         } catch {
             // The configuration says whether it can be read at all.
-            logger.info("Couldn't look at the settings node: \(error.localizedDescription, privacy: .public)")
+            logger.info("Couldn't look at the settings node: \(error.localizedDescription, privacy: .private)")
         }
         do {
             if try await settingsAccessModel() == "whitelist" { return true }
@@ -282,7 +282,7 @@ extension XMPPSession {
             if try await settingsAccessModel() == "whitelist" { return true }
             logger.error("The server keeps the settings node readable by others, so settings aren't synced")
         } catch {
-            logger.error("Couldn't check the settings node, so settings aren't synced: \(error.localizedDescription, privacy: .public)")
+            logger.error("Couldn't check the settings node, so settings aren't synced: \(error.localizedDescription, privacy: .private)")
         }
         return false
     }
@@ -359,7 +359,7 @@ extension XMPPSession {
             try await retractPEPItem(node: NS.settings, itemId: id)
             return true
         } catch {
-            logger.info("Couldn't retract \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.info("Couldn't retract \(id, privacy: .private): \(error.localizedDescription, privacy: .private)")
             return false
         }
     }
@@ -443,7 +443,7 @@ extension XMPPSession {
         do {
             items = try database.pendingSyncItems()
         } catch {
-            logger.info("Couldn't read the settings to publish: \(error.localizedDescription, privacy: .public)")
+            logger.info("Couldn't read the settings to publish: \(error.localizedDescription, privacy: .private)")
             return
         }
         for item in items {
@@ -454,7 +454,7 @@ extension XMPPSession {
             } catch {
                 // Still dirty, so the next change or connection tries again;
                 // one item the server refuses mustn't hold back the rest.
-                logger.info("Couldn't publish \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                logger.info("Couldn't publish \(item.id, privacy: .private): \(error.localizedDescription, privacy: .private)")
             }
         }
     }

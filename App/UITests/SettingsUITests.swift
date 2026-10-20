@@ -72,3 +72,25 @@ final class SettingsUITests: InteractionsTestCase {
         XCTAssertTrue(save.isEnabled, "Save is off though the passwords match")
     }
 }
+
+/// Exporting logs builds a file from the app's own log, which needs no
+/// connection, so it works on the fixture.
+final class ExportLogsUITests: InteractionsTestCase {
+    override var chat: String? { nil }
+
+    func testExportLogsOpensTheShareSheetWithoutAnError() {
+        driver.openSettings()
+        let row = app.buttons["exportLogs"].firstMatch
+        for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp() }
+        XCTAssertTrue(row.exists, "no Export Logs row in Settings")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "holds no messages, contacts or addresses")).firstMatch.exists,
+            "the footer doesn't say what the logs hold")
+        row.tap()
+        XCTAssertFalse(app.alerts["Couldn't export the logs"].waitForExistence(timeout: 3), "the export failed")
+        let shown = app.otherElements["diagnosticsShareSheet"].firstMatch.waitForExistence(timeout: 10)
+            || app.otherElements["ActivityListView"].waitForExistence(timeout: 5)
+            || app.buttons["Copy"].waitForExistence(timeout: 5)
+            || app.navigationBars["ActivityListView"].exists
+        XCTAssertTrue(shown, "the share sheet didn't open: \(app.debugDescription.prefix(2000))")
+    }
+}

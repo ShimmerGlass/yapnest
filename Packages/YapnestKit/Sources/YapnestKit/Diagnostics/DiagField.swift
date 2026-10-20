@@ -1,8 +1,9 @@
 import Foundation
 import Martin
 
-/// A small enum a log line may carry. Only types defined in YapnestKit
-/// should adopt it: a `String` can't, as it isn't `CaseIterable`.
+/// A small enum a log line may carry. An adopting type's `description` must
+/// come from a fixed set of values, never from data that was received or
+/// typed. A `String` can't adopt it, as it isn't `CaseIterable`.
 public protocol DiagEnum: CustomStringConvertible, CaseIterable, Sendable {}
 
 /// One `key=value` of a log line. The only ways to make one are below, and
@@ -29,6 +30,10 @@ public struct DiagField: Sendable {
         DiagField(key, String(format: "%.3fs", seconds))
     }
 
+    public static func duration(_ key: StaticString, since start: Date) -> DiagField {
+        duration(key, Date().timeIntervalSince(start))
+    }
+
     public static func bool(_ key: StaticString, _ value: Bool) -> DiagField {
         DiagField(key, value ? "true" : "false")
     }
@@ -52,10 +57,11 @@ public struct DiagField: Sendable {
         return DiagField("error", text)
     }
 
+    private static let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-/")
+
     /// Keeps a value to one token of plain characters, so it can't break the
     /// line or pass for another field.
     static func sanitized(_ text: String) -> String {
-        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-/")
         let cleaned = String(text.prefix(64).map { allowed.contains($0) ? $0 : "_" })
         return cleaned.isEmpty ? "_" : cleaned
     }

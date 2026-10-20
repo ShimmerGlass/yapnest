@@ -473,7 +473,34 @@ Each entry gives what went wrong for users, why, and what changed.
   `LoginDuringDisconnectTests`, and by `twentyResumesInARow`, which logs in
   with no delay on every other round.
 
+**Nothing to tell why a connection attempt failed**
+(`SocketConnectorNetwork.Options.diagnostics`)
+- *Symptom:* "can't connect on 4G" reports came with no way to see which
+  step failed: the SRV lookup, a refused port, a stalled TLS handshake.
+- *Cause:* the connector only wrote that to the system log, which the app
+  can't read back to put in an exported log.
+- *Change:* the options take a `diagnostics` callback, called with
+  `ConnectEvent`s: the SRV result (record count, whether the domain itself
+  was used), each endpoint tried (kind, port), when one came up (address
+  family, duration) and why one didn't (reason, the `NWError` kind and code).
+  The events hold enums and numbers only, never a host or an address, so the
+  app can log them as they are. If the SRV lookup never answers before the
+  connection timeout, a `resolveTimedOut` event says so and the attempt ends.
+  `SaslModule` and `Sasl2Module` clear `lastMechanism` (and `Sasl2Module`
+  `signedInWithToken`) when a sign-in starts, so the app doesn't report an
+  earlier stream's mechanism.
+- *Privacy:* Martin's own logging is otherwise unchanged, except that the
+  `<feature-not-implemented>` stanza dump is private now, and so are the
+  domain and results in `XMPPDNSSrvResolver` and the JID and disco result in
+  `CapabilitiesModule`, which logged them as public.
+
 ### MartinOMEMO
+
+**Logs named people publicly** (`OMEMOModule`)
+- *Symptom:* the system log held the addresses whose device lists or bundles
+  failed, readable by anyone who collects a sysdiagnose.
+- *Change:* the JID and the address name in those lines are private (hashed),
+  as everything that names a person or a server should be.
 
 **Our keys were published twice at once on a new device**
 (`isPepAvailable`, `publishDeviceBundleIfNeeded`)

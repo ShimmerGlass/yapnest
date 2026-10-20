@@ -54,7 +54,7 @@ extension XMPPSession {
             let node = (try? result.get())?.firstChild(name: "command", xmlns: NS.commands)?.firstChild(name: "x", xmlns: NS.dataForms)?
                 .filterChildren(name: "field", xmlns: nil).first { $0.getAttribute("var") == "node" }?.firstChild(name: "value")?.value
             guard let node, !node.isEmpty else {
-                self.logger.error("The push relay \(relay, privacy: .public) didn't register us: \(String(describing: result), privacy: .public)")
+                self.logger.error("The push relay \(relay, privacy: .private) didn't register us: \(String(describing: result), privacy: .private)")
                 return
             }
             self.enablePush(relay: relay, node: node)
@@ -82,7 +82,7 @@ extension XMPPSession {
                 try? self.database.setSetting(.pushNode, node)
                 // The older ones were asked for when this enable began.
                 if let staleNow { self.disableStalePushNodes([staleNow]) }
-                self.logger.info("Push enabled through \(relay, privacy: .public)")
+                self.logger.info("Push enabled through \(relay, privacy: .private)")
             case .failure(let error):
                 // An enable nobody answered may still have gone through, so
                 // the node is kept to be disabled later (never the one in use).

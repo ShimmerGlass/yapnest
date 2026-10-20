@@ -230,7 +230,7 @@ extension XMPPSession {
             reply = try await client.context.writer.write(iq: iq, timeout: timeout) { [logger] stanza in
                 // Who refused, and how, is what tells an entity's refusal from
                 // a server's that couldn't reach it.
-                if let stanza { logger.notice("Ad-hoc error: \(stanza.element.stringValue, privacy: .public)") }
+                if let stanza { logger.notice("Ad-hoc error: \(stanza.element.stringValue, privacy: .private)") }
                 return AdHocStanza.error(from: stanza)
             }
         } catch let error as AdHocError {

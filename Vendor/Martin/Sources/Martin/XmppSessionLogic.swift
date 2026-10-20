@@ -318,7 +318,7 @@ open class SocketSessionLogic: XmppSessionLogic {
                         try module.process(stanza: stanza);
                     }
                 } else {
-                    self.logger.debug("\(self.userJid) - feature-not-implemented \(stanza, privacy: .public)");
+                    self.logger.debug("\(self.userJid) - feature-not-implemented \(stanza, privacy: .private(mask: .hash))");
                     throw ErrorCondition.feature_not_implemented;
                 }
             } catch let error as XMPPError {

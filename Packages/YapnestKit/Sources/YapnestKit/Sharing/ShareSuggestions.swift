@@ -30,7 +30,7 @@ public enum ShareSuggestions {
         do {
             try await interaction.donate()
         } catch {
-            logger.info("Couldn't donate \(peer, privacy: .public): \(error)")
+            logger.info("Couldn't donate \(peer, privacy: .private): \(error)")
         }
     }
 

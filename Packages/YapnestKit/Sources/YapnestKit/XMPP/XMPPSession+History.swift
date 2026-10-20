@@ -75,7 +75,7 @@ extension XMPPSession {
                 // Moving the cursor past a page that didn't make it into the
                 // database would leave a gap that is never fetched.
                 guard page.isStored else {
-                    logger.error("Older history of \(peer, privacy: .public) couldn't be stored")
+                    logger.error("Older history of \(peer, privacy: .private) couldn't be stored")
                     throw HistoryError.notStored
                 }
                 let isComplete = page.isComplete
@@ -87,7 +87,7 @@ extension XMPPSession {
                 cursor = nil
                 try database.setHistoryState(peer: peer, isComplete: false, cursor: nil)
             case .failure(let error):
-                logger.error("Older history of \(peer, privacy: .public) failed: \(error)")
+                logger.error("Older history of \(peer, privacy: .private) failed: \(error)")
                 throw error
             }
         }

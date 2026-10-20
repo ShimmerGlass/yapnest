@@ -62,7 +62,7 @@ extension XMPPSession {
                 node: node, itemId: itemId, payload: payload, accessModel: accessModel, config: config, timeout: timeout,
             )
         } catch let error as PubSubError {
-            logger.error("Publishing to \(node, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("Publishing to \(node, privacy: .private) failed: \(error.localizedDescription, privacy: .private)")
             throw ProfileError.refused(reason: error.localizedDescription)
         }
     }
@@ -231,7 +231,7 @@ extension XMPPSession {
             case .failure(let error) where error.error == .item_not_found:
                 nicknameChanged(account, to: nil)
             case .failure(let error):
-                logger.info("Nickname unavailable: \(error.localizedDescription, privacy: .public)")
+                logger.info("Nickname unavailable: \(error.localizedDescription, privacy: .private)")
             }
         }
     }

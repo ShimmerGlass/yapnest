@@ -91,6 +91,18 @@ public struct ShareSender: Sendable {
         _ content: ShareContent, to peer: JID, timeout: TimeInterval = 60,
         progress: (@Sendable (_ sent: Int, _ total: Int) -> Void)? = nil,
     ) async -> Outcome {
+        let started = Date()
+        let outcome = await perform(content, to: peer, timeout: timeout, progress: progress)
+        DiagLog.info(.shareExtension, "Share finished", .value("outcome", ShareResult(outcome)), .duration("took", since: started))
+        // The extension is ended as soon as the sheet closes.
+        DiagLog.flush()
+        return outcome
+    }
+
+    private func perform(
+        _ content: ShareContent, to peer: JID, timeout: TimeInterval,
+        progress: (@Sendable (_ sent: Int, _ total: Int) -> Void)?,
+    ) async -> Outcome {
         let deadline = Date().addingTimeInterval(timeout)
         let database: AppDatabase
         let staged: [Message]
@@ -187,6 +199,21 @@ public struct ShareSender: Sendable {
             }
         } catch {
             return .queued(String(localized: "The server didn't respond."))
+        }
+    }
+}
+
+/// How a share ended, for the diagnostics log.
+enum ShareResult: String, DiagEnum {
+    case sent, queued, handedToApp, failed, failedInApp
+
+    init(_ outcome: ShareSender.Outcome) {
+        switch outcome {
+        case .sent: self = .sent
+        case .queued: self = .queued
+        case .handedToApp: self = .handedToApp
+        case .failed: self = .failed
+        case .failedInApp: self = .failedInApp
         }
     }
 }

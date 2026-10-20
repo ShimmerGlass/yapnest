@@ -70,6 +70,11 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
     private var attempt = 0;
     /// The SRV records not tried yet in this attempt, in the order to try them.
     private var remainingCandidates: [SocketConnectorNetwork.Endpoint] = [];
+    /// When the DNS query, and the endpoint being connected to, began, for the durations in `ConnectEvent`.
+    private var dnsStartedAt = Date();
+    private var resolving = false;
+    private var endpointStartedAt = Date();
+    private var currentKind: EndpointKind = .redirect;
 
     public required init(context: Context) {
         self.userJid = context.connectionConfiguration.userJid;
@@ -124,13 +129,16 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
             state = .connecting;
             attempt += 1;
             remainingCandidates = [];
+            resolving = false;
             // Armed before resolving so that a hung DNS query ends too; every endpoint re-arms it.
             armTimeout();
             if let endpoint = endpoint as? SocketConnectorNetwork.Endpoint {
-                self.connect(endpoint: endpoint);
+                self.connect(endpoint: endpoint, kind: .redirect);
             } else if let details = self.options.connectionDetails {
-                self.connect(endpoint: details);
+                self.connect(endpoint: details, kind: .configured);
             } else {
+                self.dnsStartedAt = Date();
+                self.resolving = true;
                 self.logger.debug("\(self.userJid) - connecting to server: \(self.server)");
                 let attempt = self.attempt;
                 self.options.dnsResolver.resolve(domain: server, for: self.userJid) { result in
@@ -139,15 +147,19 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
                         guard self.attempt == attempt, self.state == .connecting else {
                             return;
                         }
+                        self.resolving = false;
                         var candidates: [SocketConnectorNetwork.Endpoint] = [];
                         if case .success(let dnsResult) = result {
                             candidates = dnsResult.candidates().map { SocketConnectorNetwork.Endpoint(proto: $0.directTls ? .XMPPS : .XMPP, host: $0.target, port: $0.port) };
                         }
-                        if candidates.isEmpty {
+                        let found = candidates.count;
+                        let fallback = candidates.isEmpty;
+                        if fallback {
                             candidates = [SocketConnectorNetwork.Endpoint(proto: .XMPP, host: self.server, port: 5222)];
                         }
+                        self.report(.resolved(candidates: found, fallback: fallback, duration: Date().timeIntervalSince(self.dnsStartedAt)));
                         self.remainingCandidates = Array(candidates.dropFirst());
-                        self.connect(endpoint: candidates[0]);
+                        self.connect(endpoint: candidates[0], kind: fallback ? .fallbackHost : nil);
                     }
                 }
             }
@@ -167,7 +179,7 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
     /**
      Should always be called from local dispatch queue!
      */
-    private func connect(endpoint: SocketConnectorNetwork.Endpoint) -> Void {
+    private func connect(endpoint: SocketConnectorNetwork.Endpoint, kind: EndpointKind?) -> Void {
         logger.debug("connecting to: \(endpoint)");
         guard state == .connecting else {
             logger.log("connect(addr) - stopping connetion as state is not connecting \(self.state)");
@@ -175,6 +187,10 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
         }
 
         self.currentEndpoint = endpoint;
+        let kind = kind ?? (endpoint.proto == .XMPPS ? .srvDirectTLS : .srvStartTLS);
+        currentKind = kind;
+        endpointStartedAt = Date();
+        report(.attempting(kind: kind, port: endpoint.port));
         armTimeout();
 
         let tcpOptions = NWProtocolTCP.Options();
@@ -232,6 +248,7 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
                     }
                     that.logger.debug("\(that.userJid) - TLS version: \(String(describing: that.negotiatedTLSVersion))");
                 }
+                that.report(.ready(kind: that.currentKind, port: endpoint.port, family: Self.addressFamily(of: conn), duration: Date().timeIntervalSince(that.endpointStartedAt)));
                 that.state = .connected;
                 that.initiateParser();
                 that.scheduleRead(conn);
@@ -247,6 +264,7 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
                 // and the others aren't tried. A refused connection is reported the same
                 // way but with a network, and that one falls back.
                 if that.state == .connecting, let status = conn.currentPath?.status, status != .satisfied {
+                    that.reportFailure(.noRoute, error, triesNext: false);
                     that.close(with: .noRouteToServer);
                     return;
                 }
@@ -265,16 +283,18 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
     /// not doing STARTTLS, or the connection not coming up.
     private func disconnect(becauseOf error: NWError) {
         if let trust = rejectedTrust?.trust {
+            reportFailure(.certificate, error, triesNext: false);
             close(with: .sslCertError(trust));
             return;
         }
         if let failure = startTLS?.failure {
             logger.error("\(self.userJid) - STARTTLS failed: \(String(describing: failure))");
+            reportFailure(.startTLS, error, triesNext: false);
             close(with: .xmlError(failure == .notOffered ? Self.startTLSNotOffered : "STARTTLS: \(failure)"));
             return;
         }
         if state == .connecting {
-            endpointFailed(.noRouteToServer);
+            endpointFailed(.noRouteToServer, error: error);
             return;
         }
         close(with: .timeout);
@@ -285,14 +305,22 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
             return;
         }
         logger.debug("\(self.userJid) - establishing connection to:\(self.server, privacy: .auto(mask: .hash)) timed out!");
-        endpointFailed(.timeout);
+        if resolving {
+            // No endpoint is at fault: the lookup never answered.
+            resolving = false;
+            report(.resolveTimedOut(duration: Date().timeIntervalSince(dnsStartedAt)));
+            close(with: .timeout);
+            return;
+        }
+        endpointFailed(.timeout, error: nil);
     }
 
     /// The endpoint being connected to didn't come up. It's avoided for a while, and the next
     /// SRV record is tried, so that one dead port doesn't keep the account offline. Only when
     /// none is left does the attempt end, for the last endpoint's reason.
-    private func endpointFailed(_ reason: ConnectorState.DisconnectionReason) {
+    private func endpointFailed(_ reason: ConnectorState.DisconnectionReason, error: NWError?) {
         if let endpoint = currentEndpoint as? SocketConnectorNetwork.Endpoint {
+            reportFailure(error == nil ? .timeout : .network, error, triesNext: !remainingCandidates.isEmpty);
             options.dnsResolver.markAsInvalid(for: server, host: endpoint.host, port: endpoint.port, for: 15 * 60.0);
         }
         guard !remainingCandidates.isEmpty else {
@@ -303,7 +331,7 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
         logger.debug("\(self.userJid) - \(String(describing: self.currentEndpoint)) failed, trying \(next)");
         // Dropped without a state change: the attempt goes on.
         dropConnection();
-        connect(endpoint: next);
+        connect(endpoint: next, kind: nil);
     }
 
     /// Drops the connection and, unless it's gone already, reports why. Only the
@@ -507,6 +535,83 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
         }
     }
 
+    /// What happened while connecting, as plain values: no host, address or
+    /// error text, so a client can log them wherever it likes. Martin's own
+    /// logging can't be read back by the app.
+    public enum ConnectEvent: Sendable {
+        /// The SRV lookup came back with `candidates` records, or with none and the domain itself
+        /// will be tried at the default port (`fallback`).
+        case resolved(candidates: Int, fallback: Bool, duration: TimeInterval)
+        /// The SRV lookup didn't answer before the connection timeout.
+        case resolveTimedOut(duration: TimeInterval)
+        case attempting(kind: EndpointKind, port: Int)
+        case ready(kind: EndpointKind, port: Int, family: AddressFamily, duration: TimeInterval)
+        case failed(kind: EndpointKind, port: Int, reason: FailureReason, error: ErrorKind?, code: Int, duration: TimeInterval, triesNext: Bool)
+    }
+
+    public enum EndpointKind: String, Sendable, CaseIterable {
+        case srvStartTLS, srvDirectTLS
+        /// The domain itself, as nothing was found by SRV.
+        case fallbackHost
+        /// Fixed by the options.
+        case configured
+        /// Given by the server (a resumption location or another host).
+        case redirect
+    }
+
+    public enum AddressFamily: String, Sendable, CaseIterable {
+        case ipv4, ipv6, unknown
+    }
+
+    public enum FailureReason: String, Sendable, CaseIterable {
+        case timeout, noRoute, network, certificate, startTLS
+    }
+
+    /// The kind of a Network.framework error, which with its code says what went wrong.
+    public enum ErrorKind: String, Sendable, CaseIterable {
+        case posix, dns, tls, other
+
+        init(_ error: NWError) {
+            switch error {
+            case .posix: self = .posix
+            case .dns: self = .dns
+            case .tls: self = .tls
+            default: self = .other
+            }
+        }
+    }
+
+    private func report(_ event: ConnectEvent) {
+        options.diagnostics?(event);
+    }
+
+    private func reportFailure(_ reason: FailureReason, _ error: NWError?, triesNext: Bool) {
+        guard let endpoint = currentEndpoint as? SocketConnectorNetwork.Endpoint else {
+            return;
+        }
+        report(.failed(kind: currentKind, port: endpoint.port, reason: reason, error: error.map(ErrorKind.init), code: error.map(Self.errorCode) ?? 0, duration: Date().timeIntervalSince(endpointStartedAt), triesNext: triesNext));
+    }
+
+    private static func errorCode(_ error: NWError) -> Int {
+        switch error {
+        case .posix(let code): return Int(code.rawValue);
+        case .dns(let code): return Int(code);
+        case .tls(let status): return Int(status);
+        default: return 0;
+        }
+    }
+
+    private static func addressFamily(of connection: NWConnection) -> AddressFamily {
+        guard case .hostPort(let host, _)? = connection.currentPath?.remoteEndpoint else {
+            return .unknown;
+        }
+        switch host {
+        case .ipv4: return .ipv4;
+        case .ipv6: return .ipv6;
+        default: return .unknown;
+        }
+    }
+
     /// The certificate a validator turned down, handed from the verify block to the
     /// connection's failure.
     private final class RejectedTrust: @unchecked Sendable {
@@ -559,6 +664,8 @@ open class SocketConnectorNetwork: XMPPConnectorBase, Connector, NetworkDelegate
         public var connectionTimeout: Double?;
         public var dnsResolver: DNSSrvResolver = XMPPDNSSrvResolver(directTlsEnabled: true);
         public var tcpNoDelay: Bool = true;
+        /// Told what happens while connecting, from the connector's queue.
+        public var diagnostics: (@Sendable (ConnectEvent) -> Void)?;
 
         /// For features that aren't TLS, such as compression.
         public var networkProcessorProviders: [NetworkProcessorProvider] = []

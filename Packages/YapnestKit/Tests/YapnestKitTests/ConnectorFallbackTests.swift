@@ -2,6 +2,7 @@ import Combine
 import Foundation
 import Martin
 import Network
+import os
 import Testing
 @testable import Martin
 
@@ -24,6 +25,13 @@ private final class StubResolver: DNSSrvResolver, @unchecked Sendable {
     func markAsInvalid(for domain: String, host: String, port: Int, for: TimeInterval) {
         lock.withLock { _invalid.append(port) }
     }
+}
+
+/// A resolver that never calls back, like a DNS query that hangs.
+private final class SilentResolver: DNSSrvResolver, @unchecked Sendable {
+    func resolve(domain: String, for jid: BareJID, completionHandler: @escaping (Result<XMPPSrvResult, DNSError>) -> Void) {}
+    func markAsInvalid(for domain: String, record: XMPPSrvRecord, for: TimeInterval) {}
+    func markAsInvalid(for domain: String, host: String, port: Int, for: TimeInterval) {}
 }
 
 /// A server that answers the opening of a stream with features that don't offer STARTTLS.
@@ -72,7 +80,7 @@ private final class StateLog: @unchecked Sendable {
 }
 
 struct ConnectorFallbackTests {
-    private func connector(records: [XMPPSrvRecord], timeout: Double = 1, disableTLS: Bool = true) -> (SocketConnectorNetwork, StubResolver, XMPPClient) {
+    private func connector(records: [XMPPSrvRecord], timeout: Double = 1, disableTLS: Bool = true, diagnostics: (@Sendable (SocketConnectorNetwork.ConnectEvent) -> Void)? = nil) -> (SocketConnectorNetwork, StubResolver, XMPPClient) {
         let resolver = StubResolver(records)
         let client = XMPPClient()
         client.connectionConfiguration.userJid = BareJID("alice@localhost")
@@ -80,6 +88,7 @@ struct ConnectorFallbackTests {
         var options = SocketConnectorNetwork.Options()
         options.connectionTimeout = timeout
         options.dnsResolver = resolver
+        options.diagnostics = diagnostics
         client.connectionConfiguration.connectorOptions = options
         return (SocketConnectorNetwork(context: client), resolver, client)
     }
@@ -125,6 +134,72 @@ struct ConnectorFallbackTests {
         await eventually("the second record to connect", timeout: 8) { log.last == .connected }
         #expect(resolver.invalidPorts == [Int(closed)])
         #expect(log.disconnections == 1, "states: \(log.states)")
+        connector.stop(force: true) {}
+    }
+
+    @Test func reportsALookupThatNeverAnswers() async {
+        let events = OSAllocatedUnfairLock(initialState: [SocketConnectorNetwork.ConnectEvent]())
+        let client = XMPPClient()
+        client.connectionConfiguration.userJid = BareJID("alice@localhost")
+        var options = SocketConnectorNetwork.Options()
+        options.connectionTimeout = 0.5
+        options.dnsResolver = SilentResolver()
+        options.diagnostics = { event in events.withLock { $0.append(event) } }
+        client.connectionConfiguration.connectorOptions = options
+        let connector = SocketConnectorNetwork(context: client)
+        let log = StateLog(connector)
+
+        defer { withExtendedLifetime(client) {} }
+        connector.start(endpoint: nil)
+        await eventually("the attempt to end", timeout: 5) { log.disconnections == 2 }
+        let seen = events.withLock { $0 }
+        guard seen.count == 1, case .resolveTimedOut(let duration) = seen[0] else {
+            Issue.record("events: \(seen)")
+            return
+        }
+        #expect(duration >= 0.4)
+    }
+
+    @Test func reportsEachStepOfAFallbackAsEvents() async throws {
+        let closed = try await closedPort()
+        let working = try await LocalServer()
+        defer { working.stop() }
+        let events = OSAllocatedUnfairLock(initialState: [SocketConnectorNetwork.ConnectEvent]())
+        let (connector, _, client) = connector(records: [record(closed), record(working.port)], timeout: 5) { event in
+            events.withLock { $0.append(event) }
+        }
+        let log = StateLog(connector)
+
+        defer { withExtendedLifetime(client) {} }
+        connector.start(endpoint: nil)
+        await eventually("the second record to connect", timeout: 8) { log.last == .connected }
+        let seen = events.withLock { $0 }
+        guard seen.count == 5 else {
+            Issue.record("events: \(seen)")
+            return
+        }
+        guard case .resolved(let records, let fallback, _) = seen[0], records == 2, !fallback else {
+            Issue.record("first: \(seen[0])")
+            return
+        }
+        guard case .attempting(.srvStartTLS, let firstPort) = seen[1], firstPort == Int(closed) else {
+            Issue.record("second: \(seen[1])")
+            return
+        }
+        guard case .failed(.srvStartTLS, _, .network, .posix?, let code, _, true) = seen[2], code != 0 else {
+            Issue.record("third: \(seen[2])")
+            return
+        }
+        guard case .attempting(_, let nextPort) = seen[3], nextPort == Int(working.port) else {
+            Issue.record("fourth: \(seen[3])")
+            return
+        }
+        guard case .ready(_, _, .ipv4, _) = seen[4] else {
+            Issue.record("fifth: \(seen[4])")
+            return
+        }
+        // Nothing in an event names a host or an address.
+        #expect(!seen.map { "\($0)" }.joined().contains("127.0.0.1"))
         connector.stop(force: true) {}
     }
 

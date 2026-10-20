@@ -70,7 +70,7 @@ extension XMPPSession {
         do {
             _ = try await loadHistory(for: peer, newest: true)
         } catch {
-            logger.info("Couldn't restore the chat with \(peer, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.info("Couldn't restore the chat with \(peer, privacy: .private): \(error.localizedDescription, privacy: .private)")
         }
     }
 }

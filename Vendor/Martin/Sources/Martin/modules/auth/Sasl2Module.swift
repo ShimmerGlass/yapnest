@@ -146,6 +146,8 @@ open class Sasl2Module: XmppModuleBase, XmppModule, Resetable {
     }
 
     open func login() {
+        lastMechanism = nil;
+        signedInWithToken = false;
         guard let context = context, let authentication = authentication else {
             state = .error(SaslError.invalid_mechanism);
             return;

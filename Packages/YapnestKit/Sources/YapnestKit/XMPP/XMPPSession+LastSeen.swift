@@ -69,7 +69,7 @@ extension XMPPSession {
         } catch XMPPError.remote_server_timeout {
             // Worth asking again later.
         } catch {
-            logger.info("No last seen from \(peer.description, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.info("No last seen from \(peer.description, privacy: .private): \(error.localizedDescription, privacy: .private)")
             lock.withLock { $0.lastSeenSchedule.refuse(peer) }
         }
     }

@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import os
 
 /// An identifier (an address, a message id, a room) as a short keyed hash:
 /// the same value gives the same id within this install, so lines can be
@@ -16,25 +15,27 @@ public struct Redacted: Sendable, Equatable {
 
     static func id(_ value: String, key: SymmetricKey) -> Redacted {
         let mac = HMAC<SHA256>.authenticationCode(for: Data(value.utf8), using: key)
-        return Redacted(hex: mac.prefix(4).map { String(format: "%02x", $0) }.joined())
+        return Redacted(hex: Data(mac.prefix(4)).hex)
     }
 
     private static let defaultsKey = "yapnest.diagnostics.redactionKey"
-    private static let cached = OSAllocatedUnfairLock<SymmetricKey?>(initialState: nil)
-
-    static var installKey: SymmetricKey {
-        cached.withLock { cached in
-            if let cached { return cached }
-            let defaults = SharedContainer.defaults
-            let key: SymmetricKey
-            if let data = defaults.data(forKey: defaultsKey), data.count == 32 {
-                key = SymmetricKey(data: data)
-            } else {
-                key = SymmetricKey(size: .bits256)
-                defaults.set(key.withUnsafeBytes { Data($0) }, forKey: defaultsKey)
-            }
-            cached = key
-            return key
-        }
+    /// Makes the key now, so the extensions find it rather than each making
+    /// their own on first use.
+    public static func prepare() {
+        _ = installKey
     }
+
+    /// Two processes can make a key at once; whichever wrote last is kept, and
+    /// both read it back.
+    static let installKey: SymmetricKey = {
+        let defaults = SharedContainer.defaults
+        if let data = defaults.data(forKey: defaultsKey), data.count == 32 {
+            return SymmetricKey(data: data)
+        }
+        defaults.set(SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }, forKey: defaultsKey)
+        if let data = defaults.data(forKey: defaultsKey), data.count == 32 {
+            return SymmetricKey(data: data)
+        }
+        return SymmetricKey(size: .bits256)
+    }()
 }

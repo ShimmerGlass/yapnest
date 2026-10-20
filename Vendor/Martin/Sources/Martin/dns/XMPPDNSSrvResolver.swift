@@ -79,9 +79,9 @@ open class XMPPDNSSrvResolver: DNSSrvResolver {
         func start(forServices services: [String], timeout: TimeInterval = 30.0) {
             for service in services {
                 dispatchGroup.enter();
-                logger.debug("starting for service: \(service, privacy: .public) at: \(self.domain, privacy: .public)");
+                logger.debug("starting for service: \(service, privacy: .public) at: \(self.domain, privacy: .private(mask: .hash))");
                 requests.append(Request(srvName: "\(service)\(self.domain)", completionHandler: { result in
-                    self.logger.debug("finished for service: \(service, privacy: .public) at: \(self.domain, privacy: .public) with results: \(result, privacy: .public)")
+                    self.logger.debug("finished for service: \(service, privacy: .public) at: \(self.domain, privacy: .private(mask: .hash)) with results: \(result, privacy: .private(mask: .hash))")
                     self.queue.async {
                         self.results.append(result);
                         self.dispatchGroup.leave();
@@ -89,7 +89,7 @@ open class XMPPDNSSrvResolver: DNSSrvResolver {
                 }))
             }
             requests.forEach { (request) in
-                logger.debug("starting for service: \(request.srvName, privacy: .public) at: \(self.domain, privacy: .public)");
+                logger.debug("starting for service: \(request.srvName, privacy: .private(mask: .hash)) at: \(self.domain, privacy: .private(mask: .hash))");
                 request.resolve(timeout: timeout);
             }
             dispatchGroup.notify(queue: queue, execute: {

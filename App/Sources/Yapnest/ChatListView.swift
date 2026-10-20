@@ -644,7 +644,7 @@ private struct ChatListContent: View {
         // Removing the attachment files is disk work.
         let session = session
         Task.detached(priority: .userInitiated) {
-            do { try session.deleteConversation(id: item.id) } catch { print("Chat action failed: \(error)") }
+            do { try session.deleteConversation(id: item.id) } catch { DiagLog.error(.app, "Chat action failed", .error(error)) }
         }
         onDelete(item.conversation.peer)
     }
@@ -653,7 +653,7 @@ private struct ChatListContent: View {
     /// when the observation sees them.
     private func perform(_ action: @escaping @Sendable () throws -> Void) {
         Task {
-            do { try await offMain(action) } catch { print("Chat action failed: \(error)") }
+            do { try await offMain(action) } catch { DiagLog.error(.app, "Chat action failed", .error(error)) }
         }
     }
 }

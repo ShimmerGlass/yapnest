@@ -162,6 +162,7 @@ final class AppModel {
         guard case .loading = phase, !isStarting else { return }
         isStarting = true
         Self.moveToSharedContainer()
+        Redacted.prepare()
         #if DEBUG
         if let fixture = DevFixture.requested {
             startFixture(fixture)
@@ -173,7 +174,7 @@ final class AppModel {
             phase = .signedOut
             let credentials = XMPPSession.Credentials(jid: jid, password: password, host: env["YAPNEST_DEV_HOST"] ?? "127.0.0.1", port: 5222, disableTLS: true)
             Task {
-                do { try await signIn(credentials) } catch { print("Dev sign-in failed: \(error)") }
+                do { try await signIn(credentials) } catch { DiagLog.error(.app, "Dev sign-in failed", .error(error)) }
             }
             return
         }
@@ -195,7 +196,7 @@ final class AppModel {
                         didSignIn(session)
                         applyScenePhase(to: session)
                     } catch {
-                        print("Failed to restore account: \(error)")
+                        DiagLog.error(.app, "Failed to restore account", .error(error))
                         phase = .signedOut
                     }
                     isStarting = false
@@ -203,7 +204,7 @@ final class AppModel {
                 return
             }
         } catch {
-            print("Failed to restore account: \(error)")
+            DiagLog.error(.app, "Failed to restore account", .error(error))
         }
         phase = .signedOut
         isStarting = false
@@ -234,7 +235,7 @@ final class AppModel {
                 DevFixture.deliverIncoming(into: session.database)
                 phase = .signedIn(session)
             } catch {
-                print("Fixture failed: \(error)")
+                DiagLog.error(.app, "Fixture failed", .error(error))
                 phase = .signedOut
             }
             isStarting = false
@@ -367,6 +368,9 @@ final class AppModel {
     func scenePhaseChanged(active: Bool, background: Bool) {
         isActive = active
         isBackground = background
+        DiagLog.info(.app, "Scene phase changed", .bool("active", active), .bool("background", background))
+        // A suspended app is not given time to write what it buffered.
+        if background { DiagLog.flushSoon() }
         guard let session = SessionScope.current(signedIn: session, pendingSignIn: pendingSignIn) else { return }
         if active {
             suspension?.cancel()
@@ -461,6 +465,8 @@ final class AppModel {
         suspension = nil
         if pendingSignIn === session { suspendedSignIn = session }
         session.suspend()
+        DiagLog.info(.app, "Session suspended")
+        DiagLog.flush()
         sessionLock.unlock()
         AppDatabase.suspend()
         endBackgroundTask()
@@ -777,7 +783,7 @@ final class AppModel {
             try fileManager.createDirectory(at: SharedContainer.url, withIntermediateDirectories: true)
             try fileManager.moveItem(at: old, to: SharedContainer.accounts)
         } catch {
-            print("Couldn't move the accounts to the shared container: \(error)")
+            DiagLog.error(.app, "Moving the accounts to the shared container failed", .error(error))
         }
     }
 }

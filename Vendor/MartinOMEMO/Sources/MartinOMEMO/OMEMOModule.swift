@@ -415,7 +415,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                       listEl.name == "list" && listEl.xmlns == OMEMOModule.XMLNS else {
                     if case .failure(let error) = result {
                         self.devicesQueue.sync { self.deviceListErrors[jid] = error.error.errorCondition };
-                        self.logger.info("No device list for \(jid.stringValue, privacy: .public): \(error.description, privacy: .public)");
+                        self.logger.info("No device list for \(jid.stringValue, privacy: .private(mask: .hash)): \(error.description, privacy: .public)");
                     }
                     return;
                 }
@@ -1493,7 +1493,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             switch result {
             case .success(let items):
                 guard let bundle = OMEMOBundle(from: items.items.first?.payload), !bundle.preKeys.isEmpty else {
-                    self.logger.warning("Unusable bundle for \(address.name, privacy: .public):\(address.deviceId)");
+                    self.logger.warning("Unusable bundle for \(address.name, privacy: .private(mask: .hash)):\(address.deviceId)");
                     self.markDeviceAsFailed(for: pepJid, andDeviceId: address.deviceId);
                     return;
                 }
@@ -1502,7 +1502,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 guard let preKeyBundle = SignalPreKeyBundle(registrationId: 0, deviceId: address.deviceId, preKey: preKey, bundle: bundle),
                       let builder = SignalSessionBuilder(withAddress: address, andContext: self.signalContext),
                       builder.processPreKeyBundle(bundle: preKeyBundle) else {
-                    self.logger.warning("Couldn't start a session with \(address.name, privacy: .public):\(address.deviceId)");
+                    self.logger.warning("Couldn't start a session with \(address.name, privacy: .private(mask: .hash)):\(address.deviceId)");
                     self.markDeviceAsFailed(for: pepJid, andDeviceId: address.deviceId);
                     return;
                 }
@@ -1510,7 +1510,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                     _ = self.devicesFetchError[pepJid]?.removeValue(forKey: address.deviceId);
                 }
             case .failure(let pubsubError):
-                self.logger.warning("No bundle for \(address.name, privacy: .public):\(address.deviceId): \(pubsubError.description, privacy: .public)");
+                self.logger.warning("No bundle for \(address.name, privacy: .private(mask: .hash)):\(address.deviceId): \(pubsubError.description, privacy: .public)");
                 if let account = self.context?.userBareJid, pubsubError.error == .item_not_found, account == pepJid {
                     // One of our devices without a bundle: dropped from our
                     // list once the round of sessions is through, unless it

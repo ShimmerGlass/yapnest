@@ -41,6 +41,7 @@ struct YapnestApp: App {
                 return .handled
             })
             .onOpenURL { delegate.model.open(link: $0) }
+            .diagnosticsErrorAlert(delegate.diagnostics)
             .errorAlert("Couldn't open the link", Binding(get: { delegate.model.linkProblem }, set: { delegate.model.linkProblem = $0 }))
             .errorAlert("Couldn't place the call", Binding(get: { delegate.model.calls.error }, set: { delegate.model.calls.error = $0 }))
             .fullScreenCover(isPresented: Binding(get: { delegate.model.calls.showsCallView }, set: { _ in })) {
@@ -65,6 +66,10 @@ struct YapnestApp: App {
                     .keyboardShortcut(",")
                     .disabled(delegate.model.session == nil || delegate.model.hasConversationSheet)
             }
+            CommandGroup(after: .help) {
+                Button("Export Logs…") { Task { await delegate.diagnostics.start() } }
+                    .disabled(delegate.diagnostics.isExporting)
+            }
             CommandGroup(after: .textEditing) {
                 Button("Find in Chat") { delegate.model.chatSearchRequests += 1 }
                     .keyboardShortcut("f")
@@ -83,6 +88,7 @@ struct YapnestApp: App {
 /// notifications.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     @MainActor let model = AppModel()
+    @MainActor let diagnostics = DiagnosticsExporter()
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
@@ -94,7 +100,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        print("No push token: \(error)")
+        DiagLog.error(.push, "No push token", .error(error))
     }
 
     /// The app posts its own notifications whenever it isn't active, which

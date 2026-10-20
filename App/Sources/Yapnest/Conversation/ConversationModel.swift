@@ -1971,6 +1971,7 @@ final class ConversationModel {
         }
         noteDraft()
         followsOwnSend = false
+        DiagLog.error(.send, "Send error shown", .error(error))
         prompt = .error(error.localizedDescription)
     }
 
@@ -2070,6 +2071,7 @@ final class ConversationModel {
 
     func reportSendFailure(_ error: Error) {
         followsOwnSend = false
+        DiagLog.error(.send, "Send error shown", .error(error))
         prompt = .notice(title: String(localized: "Couldn't send"), message: error.localizedDescription)
     }
 

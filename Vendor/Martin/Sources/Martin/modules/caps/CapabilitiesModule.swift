@@ -165,7 +165,7 @@ open class CapabilitiesModule: XmppModuleBase, XmppModule, EventHandler {
                         self.dispatcher.async {
                             if let idx = self.inProgress.firstIndex(of: nodeName) {
                                 self.inProgress.remove(at: idx);
-                                self.logger.debug("\(self.context) - caps disco#info received from: \(from, privacy: .public) result: \(result, privacy: .public)");
+                                self.logger.debug("\(self.context) - caps disco#info received from: \(from, privacy: .private(mask: .hash)) result: \(result, privacy: .private(mask: .hash))");
                             }
                             switch result {
                             case .success(let info):

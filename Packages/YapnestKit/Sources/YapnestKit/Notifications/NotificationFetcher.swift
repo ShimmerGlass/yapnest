@@ -37,6 +37,13 @@ public struct NotificationFetcher: Sendable {
 
     /// Leaves a few seconds of the extension's 30 for the rest.
     public func fetch(timeout: TimeInterval = 20) async -> Outcome {
+        let started = Date()
+        let outcome = await run(timeout: timeout)
+        DiagLog.info(.notificationExtension, "Fetch finished", .value("outcome", FetchResult(outcome)), .duration("took", since: started))
+        return outcome
+    }
+
+    private func run(timeout: TimeInterval) async -> Outcome {
         // Servers push for presence and group traffic too, so pushes come in
         // bursts, and the extension handles them at once. One catch-up at a
         // time: a push that arrived before the latest one started only needs
@@ -92,12 +99,15 @@ public struct NotificationFetcher: Sendable {
             let session = try XMPPSession(
                 credentials: credentials, resource: resource, directory: account, database: database, mode: .notificationService,
             )
-            if await !session.catchUpOnce(timeout: timeout) {
+            let caughtUp = await session.catchUpOnce(timeout: timeout)
+            DiagLog.info(.notificationExtension, "Catch-up finished", .bool("completed", caughtUp), .duration("budget", timeout))
+            if !caughtUp {
                 Self.logger.warning("Catch-up didn't finish: \(String(describing: session.state.value), privacy: .public)")
             }
             // What did arrive is worth showing even if the rest didn't.
             return try claimed(from: database)
         } catch {
+            DiagLog.error(.notificationExtension, "Fetching failed", .error(error))
             Self.logger.error("Fetching for notifications failed: \(error)")
             return .failed(error.localizedDescription)
         }
@@ -183,4 +193,18 @@ extension UNNotificationContent {
 
 extension UNNotification {
     public var isQuiet: Bool { request.content.userInfo[MessageNotification.quietKey] as? Bool == true }
+}
+
+/// How a fetch ended, for the diagnostics log.
+enum FetchResult: String, DiagEnum {
+    case notifications, appIsRunning, busy, failed
+
+    init(_ outcome: NotificationFetcher.Outcome) {
+        switch outcome {
+        case .notifications: self = .notifications
+        case .appIsRunning: self = .appIsRunning
+        case .busy: self = .busy
+        case .failed: self = .failed
+        }
+    }
 }

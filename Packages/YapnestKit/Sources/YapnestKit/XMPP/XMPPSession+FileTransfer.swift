@@ -118,7 +118,7 @@ extension XMPPSession {
         do {
             stored = try database.insertFileOffer(from: peer, sid: sid, offer: offer)
         } catch {
-            transferLogger.error("Couldn't store file offer \(sid, privacy: .public): \(error, privacy: .public)")
+            transferLogger.error("Couldn't store file offer \(sid, privacy: .private): \(error, privacy: .private)")
             turnDown(.failedApplication)
             return
         }
@@ -157,7 +157,7 @@ extension XMPPSession {
         do {
             try ft.startReceiving(into: try attachments.temporaryFile(), blockSize: ft.offer.blockSize)
         } catch {
-            transferLogger.error("Couldn't start receiving \(ft.sid, privacy: .public): \(error, privacy: .public)")
+            transferLogger.error("Couldn't start receiving \(ft.sid, privacy: .private): \(error, privacy: .private)")
             failTransfer(ft, .failed, tell: .failedApplication)
             return
         }
@@ -221,7 +221,7 @@ extension XMPPSession {
         do {
             localFile = try attachments.adopt(partial, name: ft.offer.name)
         } catch {
-            transferLogger.error("Couldn't keep received file \(ft.sid, privacy: .public): \(error, privacy: .public)")
+            transferLogger.error("Couldn't keep received file \(ft.sid, privacy: .private): \(error, privacy: .private)")
             failTransfer(ft, .failed, tell: .failedApplication)
             return
         }
@@ -244,7 +244,7 @@ extension XMPPSession {
                     width: dimensions?.width, height: dimensions?.height, duration: duration,
                 )
             } catch {
-                transferLogger.error("Couldn't record received file for message \(messageId): \(error, privacy: .public)")
+                transferLogger.error("Couldn't record received file for message \(messageId): \(error, privacy: .private)")
                 try? database.setAttachmentState(.unavailable, messageId: messageId)
             }
         }
@@ -370,7 +370,7 @@ extension XMPPSession {
         do {
             try await sendOverJingle(message, attachment, to: device)
         } catch {
-            transferLogger.error("Jingle transfer of \(id, privacy: .public) failed: \(error, privacy: .public)")
+            transferLogger.error("Jingle transfer of \(id, privacy: .private) failed: \(error, privacy: .private)")
             let reason = (error as? LocalizedError)?.errorDescription ?? FileTransferFailure.failed.message
             try? database.markFailed(conversationId: message.conversationId, remoteId: id, error: reason)
         }

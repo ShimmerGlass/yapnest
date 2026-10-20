@@ -582,7 +582,7 @@ final class CallController {
             let found = await withTaskCancellationHandler { await waiting.value } onCancel: { waiting.cancel() }
             timeout.cancel()
             guard !Task.isCancelled else { return }
-            if found { self?.startCall(to: peer, video: video) } else { print("Dev call: \(peer) never advertised calls") }
+            if found { self?.startCall(to: peer, video: video) } else { DiagLog.error(.calls, "Dev call: the peer never advertised calls") }
         })
     }
 

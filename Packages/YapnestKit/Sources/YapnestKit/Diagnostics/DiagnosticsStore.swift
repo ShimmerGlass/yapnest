@@ -34,12 +34,11 @@ public final class DiagnosticsStore: @unchecked Sendable {
     var currentFile: URL { directory.appending(path: "\(process.rawValue).log") }
     var previousFile: URL { directory.appending(path: "\(process.rawValue).1.log") }
 
-    func append(date: Date, category: DiagCategory, level: DiagLevel, message: String, fields: [DiagField]) {
+    /// `text` is the message with its fields, already rendered.
+    func append(date: Date, category: DiagCategory, level: DiagLevel, text: String) {
         queue.async {
-            var line = "\(self.formatter.string(from: date)) \(self.process.rawValue) \(category.rawValue) \(level.rawValue) \(message)"
-            for field in fields { line += " \(field.key)=\(field.rendered)" }
-            line += "\n"
-            self.buffer.append(Data(line.utf8))
+            let line = "\(self.formatter.string(from: date)) \(self.process.rawValue) \(category.rawValue) \(level.rawValue) \(text)\n"
+            self.buffer.append(contentsOf: line.utf8)
             if self.buffer.count >= 64 * 1024 {
                 self.writeBuffer()
             } else if !self.flushScheduled {
@@ -57,12 +56,16 @@ public final class DiagnosticsStore: @unchecked Sendable {
         queue.sync { writeBuffer() }
     }
 
+    /// Like `flush()`, without waiting for the disk.
+    func flushSoon() {
+        queue.async { self.writeBuffer() }
+    }
+
     private func writeBuffer() {
         guard !buffer.isEmpty else { return }
         let data = buffer
         buffer = Data()
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             if handle == nil { try openCurrent() }
             if size > 0, size + data.count > maxFileBytes { try rotate() }
             try handle?.write(contentsOf: data)
@@ -74,6 +77,7 @@ public final class DiagnosticsStore: @unchecked Sendable {
     }
 
     private func openCurrent() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: currentFile.path) {
             FileManager.default.createFile(atPath: currentFile.path, contents: nil)
         }

@@ -20,6 +20,7 @@ struct SettingsView: View {
     @State private var photo: PhotosPickerItem?
     @State private var isChangingAvatar = false
     @State private var profileError: String?
+    @State private var diagnostics = DiagnosticsExporter()
     @State private var name = ""
     @State private var savedName = ""
     @State private var isSavingName = false
@@ -169,6 +170,24 @@ struct SettingsView: View {
                     Text(AppLinks.versionDescription)
                 }
 
+                Section {
+                    Button {
+                        Task { await diagnostics.start() }
+                    } label: {
+                        HStack {
+                            Label("Export Logs", systemImage: "doc.text.magnifyingglass")
+                            if diagnostics.isExporting {
+                                Spacer()
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(diagnostics.isExporting)
+                    .accessibilityIdentifier("exportLogs")
+                } footer: {
+                    Text("Connection and sending events, the app version and the device model, for finding a problem. It holds no messages, contacts or addresses.")
+                }
+
                 Section("Account") {
                     if offersPasswordChange {
                         NavigationLink {
@@ -210,6 +229,7 @@ struct SettingsView: View {
             } message: {
                 Text("Messages and keys stored on this device are deleted.")
             }
+            .diagnosticsErrorAlert(diagnostics)
             .errorAlert("Couldn't change the setting", $privacyError)
             .errorAlert("Couldn't update your profile", $profileError)
             .onChange(of: photo) { _, item in

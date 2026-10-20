@@ -178,6 +178,7 @@ open class SaslModule: XmppModuleBase, XmppModule, Resetable {
      Begin SASL authentication process
      */
     open func login() {
+        lastMechanism = nil;
         if state != .notAuthorized {
             self.state = .notAuthorized;
         }

@@ -548,7 +548,7 @@ extension XMPPSession {
             client.module(.ping).ping(room.martin.with(resource: nickname), timeout: 30) { [weak self] result in
                 guard let self, Self.selfPingResult(result) == .notJoined,
                       self.roomStatus(room)?.isJoined == true, self.roomStatus(room)?.nickname == nickname else { return }
-                self.logger.info("No longer in \(room, privacy: .public); joining again")
+                self.logger.info("No longer in \(room, privacy: .private); joining again")
                 self.updateRoom(room) { $0 = nil }
                 self.join(room, nickname: (try? self.database.groupChat(room))??.nickname ?? nickname)
             }
@@ -630,7 +630,7 @@ extension XMPPSession {
     private func rejoinFailed(_ room: JID) {
         guard isConnected, let status = roomStatus(room), case .failed = status.phase, status.canRetry,
               let group = try? database.groupChat(room), !group.hasLeft else { return }
-        logger.info("Joining \(room, privacy: .public) again")
+        logger.info("Joining \(room, privacy: .private) again")
         lock.withLock { _ = $0.rejoinTasks.removeValue(forKey: room) }
         updateRoom(room) { $0 = nil }
         join(room, nickname: group.nickname)
@@ -670,7 +670,7 @@ extension XMPPSession {
         case "not-allowed": String(localized: "You're not allowed to create this group.")
         default: String(localized: "Couldn't join the group.")
         }
-        logger.warning("Joining \(room, privacy: .public) failed: \(condition ?? "?", privacy: .public)")
+        logger.warning("Joining \(room, privacy: .private) failed: \(condition ?? "?", privacy: .private)")
         let retryable = Self.isRetryable(joinCondition: condition)
         updateRoom(room) {
             $0?.phase = .failed(reason)
@@ -856,7 +856,7 @@ extension XMPPSession {
                 try? self.database.updateGroupChat(room) { $0.lastArchiveId = nil }
                 self.fetchRoomArchivePage(room, rsm: RSM.Query(lastItems: 50), visit, onePage: true)
             case .failure(let error):
-                self.logger.error("Archive sync of \(room, privacy: .public) failed: \(error)")
+                self.logger.error("Archive sync of \(room, privacy: .private) failed: \(error)")
                 self.finishRoomCatchUp(room, visit, reachedEnd: false)
             }
         }
@@ -914,7 +914,7 @@ extension XMPPSession {
             self.omemo.module.mamSyncFinished(for: room.martin)
             guard stored, case .success(let page) = result, let last = page.rsm?.last else {
                 if case .failure(let error) = result {
-                    self.logger.info("Couldn't read the archive of \(room, privacy: .public): \(error)")
+                    self.logger.info("Couldn't read the archive of \(room, privacy: .private): \(error)")
                 }
                 return done()
             }
@@ -1019,7 +1019,7 @@ extension XMPPSession {
                     }
                     return
                 case .failed(let reason):
-                    logger.warning("Couldn't decrypt group message \(stanza.id ?? "?", privacy: .public): \(reason, privacy: .public)")
+                    logger.warning("Couldn't decrypt group message \(stanza.id ?? "?", privacy: .private): \(reason, privacy: .private)")
                     encryption = .omemoUndecryptable
                 }
             } else {
@@ -1134,16 +1134,16 @@ extension XMPPSession {
         // Someone we invited said no. Nothing is shown for it, but it isn't
         // an invitation either.
         if let (room, from) = Self.decline(in: stanza) {
-            logger.info("\(from, privacy: .public) declined the invitation to \(room, privacy: .public)")
+            logger.info("\(from, privacy: .private) declined the invitation to \(room, privacy: .private)")
             return
         }
         guard let invitation = Self.invitation(in: stanza) else {
-            logger.info("Ignoring a malformed or forged invitation from \(stanza.from?.stringValue ?? "nobody", privacy: .public)")
+            logger.info("Ignoring a malformed or forged invitation from \(stanza.from?.stringValue ?? "nobody", privacy: .private)")
             return
         }
         let room = invitation.room, inviter = invitation.inviter
         guard (try? database.isInRoster(inviter)) == true else {
-            logger.info("Ignoring invitation to \(room, privacy: .public) from \(inviter, privacy: .public), who isn't a contact")
+            logger.info("Ignoring invitation to \(room, privacy: .private) from \(inviter, privacy: .private), who isn't a contact")
             return
         }
         if let group = try? database.groupChat(room), !group.hasLeft { return }
@@ -1151,7 +1151,7 @@ extension XMPPSession {
         // name anyone. It can only speak for its own server's users; for any
         // other the user decides, knowing that.
         if !invitation.isDirect, !Self.vouches(room: room, for: inviter) {
-            logger.info("Holding invitation to \(room, privacy: .public) for \(inviter, privacy: .public): the room can't speak for them")
+            logger.info("Holding invitation to \(room, privacy: .private) for \(inviter, privacy: .private): the room can't speak for them")
             do {
                 try database.recordGroupInvitation(room: room, inviter: inviter, reason: invitation.reason)
             } catch {
@@ -1166,12 +1166,12 @@ extension XMPPSession {
                 // A direct one names any address its sender likes. If the room
                 // can't be looked up it isn't joined: joining would create it.
                 if try await !isGroupChatRoom(room) {
-                    logger.info("Ignoring invitation to \(room, privacy: .public), which isn't a group chat")
+                    logger.info("Ignoring invitation to \(room, privacy: .private), which isn't a group chat")
                     return
                 }
                 try await joinGroup(room, mayCreate: false)
             } catch {
-                logger.warning("Couldn't accept invitation to \(room, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                logger.warning("Couldn't accept invitation to \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
             }
         }
     }
@@ -1216,7 +1216,7 @@ extension XMPPSession {
                 self.applyBookmarks([])
             case .failure(let error):
                 // No bookmarks on this server: our own list is all there is.
-                self.logger.info("Bookmarks unavailable: \(error.localizedDescription, privacy: .public)")
+                self.logger.info("Bookmarks unavailable: \(error.localizedDescription, privacy: .private)")
                 self.joinRooms()
             }
         }
@@ -1289,7 +1289,7 @@ extension XMPPSession {
         let once = Once()
         let failed: @Sendable (String) -> Void = { [weak self] reason in
             guard let self else { return }
-            self.logger.warning("Couldn't bookmark \(group.jid, privacy: .public): \(reason, privacy: .public)")
+            self.logger.warning("Couldn't bookmark \(group.jid, privacy: .private): \(reason, privacy: .private)")
             self.publishLegacyBookmark(bookmark, for: group)
         }
         client.module(.pubsub).publishItem(
@@ -1319,7 +1319,7 @@ extension XMPPSession {
         }
         client.module(.pubsub).retractItem(at: nil, from: NS.bookmarks, itemId: room.description, notify: true) { [weak self] result in
             if case .failure(let error) = result {
-                self?.logger.warning("Couldn't remove bookmark for \(room, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                self?.logger.warning("Couldn't remove bookmark for \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
             }
         }
         try? database.updateGroupChat(room) { $0.isBookmarked = false }
@@ -1504,7 +1504,7 @@ extension XMPPSession {
                 case .failure(let error) where error.error == .item_not_found:
                     continuation.resume()
                 case .failure(let error):
-                    self?.logger.warning("Couldn't remove bookmark for \(room, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    self?.logger.warning("Couldn't remove bookmark for \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
                     continuation.resume(throwing: GroupError.couldntLeave)
                 }
             }

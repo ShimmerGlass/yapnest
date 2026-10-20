@@ -275,7 +275,7 @@ extension XMPPSession {
                 events.send(.newMessage(row))
             }
         } catch {
-            logger.error("Failed to record call \(signal.sid, privacy: .public): \(error)")
+            logger.error("Failed to record call \(signal.sid, privacy: .private): \(error)")
         }
     }
 
@@ -420,7 +420,7 @@ extension XMPPSession {
         do {
             if let row = try database.recordCall(record) { events.send(.newMessage(row)) }
         } catch {
-            logger.error("Failed to record call \(record.sid, privacy: .public): \(error)")
+            logger.error("Failed to record call \(record.sid, privacy: .private): \(error)")
         }
     }
 
@@ -557,7 +557,7 @@ extension XMPPSession {
                 expires: services.compactMap(\.expires).filter { $0 > now }.min(),
             )
         } catch {
-            logger.warning("Couldn't get relays for a call: \(error.localizedDescription, privacy: .public)")
+            logger.warning("Couldn't get relays for a call: \(error.localizedDescription, privacy: .private)")
             return nil
         }
     }

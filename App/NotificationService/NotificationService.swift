@@ -94,6 +94,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             defer { handler = nil }
             return handler
         }
+        DiagLog.flush()
         handler?(content)
         return handler != nil
     }

@@ -74,7 +74,7 @@ extension XMPPSession {
         ) { [weak self] (result: Result<Iq, PubSubError>) in
             guard case .failure(let error) = result, let self else { return }
             self.lock.withLock { _ = $0.publishedDisplayed.removeValue(forKey: peer) }
-            self.logger.info("Couldn't publish read state for \(peer, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            self.logger.info("Couldn't publish read state for \(peer, privacy: .private): \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -101,7 +101,7 @@ extension XMPPSession {
             case .failure(let error) where error.error == .item_not_found:
                 break
             case .failure(let error):
-                self.logger.info("Read states unavailable: \(error.localizedDescription, privacy: .public)")
+                self.logger.info("Read states unavailable: \(error.localizedDescription, privacy: .private)")
             }
         }
     }
