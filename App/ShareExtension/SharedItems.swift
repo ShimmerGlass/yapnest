@@ -65,7 +65,7 @@ struct SharedItemLoader: Sendable {
     private func load(_ provider: NSItemProvider) async -> SharedItem.Content? {
         let types = provider.registeredTypeIdentifiers.compactMap(UTType.init)
         if let type = types.first(where: { $0.conforms(to: .image) }) ?? types.first(where: { $0.conforms(to: .movie) }) {
-            return await file(from: provider, type: type, isPhoto: type.conforms(to: .image) && !type.conforms(to: .gif))
+            return await file(from: provider, type: type, isPhoto: Self.isPhoto(type))
         }
         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
             return await fileFromURL(of: provider)
@@ -114,7 +114,12 @@ struct SharedItemLoader: Sendable {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let type = UTType(filenameExtension: url.pathExtension)
-        return Self.copy(url, into: folder, isPhoto: type.map { $0.conforms(to: .image) && !$0.conforms(to: .gif) } ?? false)
+        return Self.copy(url, into: folder, isPhoto: Self.isPhoto(type))
+    }
+
+    private static func isPhoto(_ type: UTType?) -> Bool {
+        guard let type else { return false }
+        return type.conforms(to: .image) && !type.conforms(to: .gif)
     }
 
     private static func copy(_ url: URL, into folder: URL, isPhoto: Bool) -> SharedItem.Content {

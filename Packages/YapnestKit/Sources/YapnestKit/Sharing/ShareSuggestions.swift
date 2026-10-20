@@ -22,16 +22,7 @@ public enum ShareSuggestions {
             return true
         }
         guard due else { return }
-        let intent = intent(for: peer, database: database, avatars: avatars)
-        let interaction = INInteraction(intent: intent, response: nil)
-        interaction.direction = .outgoing
-        // What `remove` finds them by.
-        interaction.groupIdentifier = peer.description
-        do {
-            try await interaction.donate()
-        } catch {
-            logger.info("Couldn't donate \(peer, privacy: .private): \(error)")
-        }
+        await ConversationIntents.donate(intent(for: peer, database: database, avatars: avatars), peer: peer, direction: .outgoing)
     }
 
     /// For a chat that's gone, or that we can't write to any more.

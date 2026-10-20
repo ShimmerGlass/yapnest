@@ -69,7 +69,9 @@ public struct ShareSender: Sendable {
     /// The chats to choose from, most recent first. Conversations we can't
     /// write to (groups we left, blocked contacts) are left out.
     public func recipients() throws -> [ChatListItem] {
-        try openDatabase().chatList().filter { $0.groupChat?.hasLeft != true && $0.contact?.isBlocked != true }
+        try openDatabase().chatList()
+            .filter { $0.groupChat?.hasLeft != true && $0.contact?.isBlocked != true }
+            .sorted { $0.conversation.lastActivityAt > $1.conversation.lastActivityAt }
     }
 
     /// Where `item`'s avatar is, if it has one.

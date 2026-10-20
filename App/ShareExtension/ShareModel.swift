@@ -56,7 +56,7 @@ final class ShareModel {
             async let loaded = SharedItemLoader(folder: folder).load(extensionItems)
             async let chats = Task.detached { try? sender.recipients() }.value
             items = await loaded
-            let all = (await chats ?? []).sorted { $0.conversation.lastActivityAt > $1.conversation.lastActivityAt }
+            let all = await chats ?? []
             recipients = all
             avatarURLs = Dictionary(uniqueKeysWithValues: all.compactMap { item in sender.avatarURL(for: item).map { (item.id, $0) } })
             if let selection, !all.contains(where: { $0.conversation.peer == selection }) { self.selection = nil }

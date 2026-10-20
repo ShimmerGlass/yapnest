@@ -115,9 +115,9 @@ public enum ConversationIntents {
 
     /// Tells the system it's an incoming message from this chat, which is
     /// what makes it draw the notification with the intent's pictures.
-    static func donate(_ intent: INSendMessageIntent, peer: JID) async {
+    static func donate(_ intent: INSendMessageIntent, peer: JID, direction: INInteractionDirection) async {
         let interaction = INInteraction(intent: intent, response: nil)
-        interaction.direction = .incoming
+        interaction.direction = direction
         // What `ShareSuggestions.remove` finds them by.
         interaction.groupIdentifier = peer.description
         do {
@@ -136,12 +136,12 @@ extension MessageNotification {
         guard !edited.isEmpty else { return }
         let center = UNUserNotificationCenter.current()
         let delivered = Set(await center.deliveredNotifications().map(\.request.identifier))
-        for notification in edited where delivered.contains("message-\(notification.messageId)") {
+        for notification in edited where delivered.contains(notification.requestIdentifier) {
             let content = await notification.content(badge: badge, avatars: avatars)
             let silent = (content.mutableCopy() as? UNMutableNotificationContent) ?? notification.content(badge: badge)
             silent.sound = nil
             silent.interruptionLevel = .passive
-            try? await center.add(UNNotificationRequest(identifier: "message-\(notification.messageId)", content: silent, trigger: nil))
+            try? await center.add(UNNotificationRequest(identifier: notification.requestIdentifier, content: silent, trigger: nil))
         }
     }
 
@@ -151,11 +151,11 @@ extension MessageNotification {
     public func content(badge: Int?, avatars: AvatarStore) async -> UNNotificationContent {
         let plain = content(badge: badge)
         guard let intent = ConversationIntents.incomingIntent(for: self, avatars: avatars) else { return plain }
-        await ConversationIntents.donate(intent, peer: peer)
+        await ConversationIntents.donate(intent, peer: peer, direction: .incoming)
         return (try? plain.updating(from: intent)) ?? plain
     }
 
     public func request(badge: Int?, avatars: AvatarStore) async -> UNNotificationRequest {
-        UNNotificationRequest(identifier: "message-\(messageId)", content: await content(badge: badge, avatars: avatars), trigger: nil)
+        UNNotificationRequest(identifier: requestIdentifier, content: await content(badge: badge, avatars: avatars), trigger: nil)
     }
 }

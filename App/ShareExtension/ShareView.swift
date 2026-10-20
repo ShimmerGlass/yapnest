@@ -70,6 +70,7 @@ struct ShareView: View {
 
     private var form: some View {
         ScrollViewReader { proxy in
+            let visible = model.visibleRecipients
             List {
                 Section {
                     SharedItemsPreview(items: model.items)
@@ -77,7 +78,7 @@ struct ShareView: View {
                         .lineLimit(1...4)
                 }
                 Section("Send to") {
-                    ForEach(model.visibleRecipients) { item in
+                    ForEach(visible) { item in
                         Button {
                             model.selection = item.conversation.peer
                         } label: {
@@ -86,7 +87,7 @@ struct ShareView: View {
                         .buttonStyle(.plain)
                         .id(item.conversation.peer)
                     }
-                    if model.visibleRecipients.isEmpty {
+                    if visible.isEmpty {
                         Text(model.query.isEmpty ? "No chats yet." : "No matches.")
                             .foregroundStyle(.secondary)
                     }

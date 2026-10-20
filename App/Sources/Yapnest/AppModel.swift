@@ -381,7 +381,7 @@ final class AppModel {
             let database = session.database
             Task { await offMain { _ = try? database.claimNotifications() } }
             // The unread observation clears quiet notifications only when the counts change.
-            if environment.managesBadge { Task { await Self.removeQuietNotifications() } }
+            if environment.managesBadge { Task { await UNUserNotificationCenter.current().removeQuietNotifications() } }
         } else if background, !Platform.staysConnected {
             suspendSoon(session)
         }
@@ -593,14 +593,6 @@ final class AppModel {
                 center.removeDeliveredNotifications(withIdentifiers: stale + quiet)
             }
         }
-    }
-
-    /// Muted messages are shown silently by the notification extension, which
-    /// takes them down again if it lives long enough. This clears the rest.
-    private static func removeQuietNotifications() async {
-        let center = UNUserNotificationCenter.current()
-        let quiet = await center.deliveredNotifications().filter(\.isQuiet).map(\.request.identifier)
-        center.removeDeliveredNotifications(withIdentifiers: quiet)
     }
 
     /// The chats that are alive. A link that prefills the composer of one

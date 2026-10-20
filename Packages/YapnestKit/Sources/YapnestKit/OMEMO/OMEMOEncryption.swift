@@ -68,9 +68,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         defer {
             if let device { store.noteUsed(name: sender.description, deviceId: device, at: sentAt) }
         }
-        let status = device.flatMap { device in
-            store.identities(forName: sender.description).first { $0.address.deviceId == device }?.status
-        }
+        let status = device.flatMap { store.status(forName: sender.description, deviceId: $0) }
         // Signal checks trust only when it builds a session, so a device with
         // a session would go on being read. Not decoding also leaves the
         // ratchet alone and starts no session repair.
@@ -81,7 +79,7 @@ final class OMEMOEncryption: @unchecked Sendable {
             // Decoding is where a first message's identity is saved, so read
             // the status again: a new device of a verified contact is
             // undecided only from here on.
-            let decoded = store.identities(forName: sender.description).first { $0.address.deviceId == device }?.status
+            let decoded = store.status(forName: sender.description, deviceId: device)
             return .decrypted(device: device, trust: (decoded ?? status).map(OMEMODevice.Trust.init))
         case .successTransportKey:
             return .ignore

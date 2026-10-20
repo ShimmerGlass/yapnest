@@ -24,7 +24,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         fallback = request.content
         let identifier = request.identifier
         task = Task {
-            await Self.removeQuietLeftovers()
+            await UNUserNotificationCenter.current().removeQuietNotifications()
             await handle(identifier)
         }
     }
@@ -80,12 +80,6 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             try? await Task.sleep(for: .seconds(1))
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
         }
-    }
-
-    private static func removeQuietLeftovers() async {
-        let center = UNUserNotificationCenter.current()
-        let quiet = await center.deliveredNotifications().filter(\.isQuiet).map(\.request.identifier)
-        center.removeDeliveredNotifications(withIdentifiers: quiet)
     }
 
     @discardableResult

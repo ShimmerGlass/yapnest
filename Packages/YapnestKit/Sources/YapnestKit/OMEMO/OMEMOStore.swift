@@ -111,7 +111,9 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func containsSessionRecord(forAddress address: SignalAddress) -> Bool {
-        sessionRecord(forAddress: address) != nil
+        read { db in
+            try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM omemoSession WHERE name = ? AND deviceId = ?)", arguments: [address.name, address.deviceId])
+        } == true
     }
 
     func deleteSessionRecord(forAddress address: SignalAddress) -> Bool {
@@ -141,7 +143,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func containsPreKey(withId id: UInt32) -> Bool {
-        loadPreKey(withId: id) != nil
+        read { db in try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM omemoPreKey WHERE id = ?)", arguments: [id]) } == true
     }
 
     func deletePreKey(withId id: UInt32) -> Bool {
@@ -172,7 +174,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func containsSignedPreKey(withId id: UInt32) -> Bool {
-        loadSignedPreKey(withId: id) != nil
+        read { db in try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM omemoSignedPreKey WHERE id = ?)", arguments: [id]) } == true
     }
 
     func deleteSignedPreKey(withId id: UInt32) -> Bool {
@@ -251,6 +253,12 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         } ?? []
     }
 
+    func status(forName name: String, deviceId: Int32) -> IdentityStatus? {
+        read { db in
+            try Int.fetchOne(db, sql: "SELECT status FROM omemoIdentity WHERE name = ? AND deviceId = ?", arguments: [name, deviceId])
+        }.flatMap { $0 }.map { IdentityStatus(rawValue: $0) ?? .undecidedActive }
+    }
+
     // MARK: Usage
 
     struct Usage: Equatable {
@@ -302,17 +310,20 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// a contact whose devices have all gone quiet is more likely away than
     /// gone, and a message should stay readable somewhere.
     func excludingInactive(_ devices: [Int32], of name: String) -> [Int32] {
-        let usage = usage(forName: name), now = now()
-        let active = devices.filter { usage[$0].map { !$0.isInactive(now: now) } ?? true }
+        let active = withoutInactive(devices, of: name)
         return active.isEmpty ? devices : active
+    }
+
+    private func withoutInactive(_ devices: [Int32], of name: String) -> [Int32] {
+        let usage = usage(forName: name), now = now()
+        return devices.filter { usage[$0].map { !$0.isInactive(now: now) } ?? true }
     }
 
     /// Our own devices to encrypt to: the usable ones that haven't gone
     /// quiet. Unlike a contact's, they may all be left out, since we hold
     /// the plaintext ourselves.
     func ownDevicesToEncryptTo() -> [Int32] {
-        let usage = usage(forName: account), now = now()
-        return allDevices(for: account, activeAndTrusted: true).filter { usage[$0].map { !$0.isInactive(now: now) } ?? true }
+        withoutInactive(allDevices(for: account, activeAndTrusted: true), of: account)
     }
 
     func identityFingerprint(forAddress address: SignalAddress) -> String? {
@@ -328,7 +339,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// form other clients show.
     static func fingerprint(of key: Data) -> String {
         let bytes = key.count == 33 ? key.dropFirst() : key[...]
-        return bytes.map { String(format: "%02x", $0) }.joined()
+        return bytes.hex
     }
 
     // MARK: Sender keys (group sessions; unused by OMEMO 0.3)

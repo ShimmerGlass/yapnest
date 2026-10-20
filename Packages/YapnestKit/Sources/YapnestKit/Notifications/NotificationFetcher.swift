@@ -174,9 +174,7 @@ extension MessageNotification {
         return content
     }
 
-    public func request(badge: Int?) -> UNNotificationRequest {
-        UNNotificationRequest(identifier: "message-\(messageId)", content: content(badge: badge), trigger: nil)
-    }
+    public var requestIdentifier: String { "message-\(messageId)" }
 }
 
 extension UNNotificationContent {
@@ -193,6 +191,14 @@ extension UNNotificationContent {
 
 extension UNNotification {
     public var isQuiet: Bool { request.content.userInfo[MessageNotification.quietKey] as? Bool == true }
+}
+
+extension UNUserNotificationCenter {
+    /// Muted messages are shown silently by the notification extension, which
+    /// takes them down again if it lives long enough. This clears the rest.
+    public func removeQuietNotifications() async {
+        removeDeliveredNotifications(withIdentifiers: await deliveredNotifications().filter(\.isQuiet).map(\.request.identifier))
+    }
 }
 
 /// How a fetch ended, for the diagnostics log.
