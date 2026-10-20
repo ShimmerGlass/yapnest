@@ -11,8 +11,8 @@ import YapnestKit
 @MainActor
 enum Presenter {
     static var top: UIViewController? {
-        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive } ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
         guard var presenter = scene?.keyWindow?.rootViewController else { return nil }
         while let next = presenter.presentedViewController { presenter = next }
         return presenter
@@ -94,19 +94,12 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
         picker.dismiss(animated: true)
         guard !results.isEmpty else { return }
         let model = model
-        model.preparingAttachments += 1
-        Task {
-            defer { model.preparingAttachments -= 1 }
+        model.preparing {
             // In order, so they arrive the way they were picked.
             for result in results {
                 let provider = result.itemProvider
                 let isImage = provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
-                do {
-                    let file = try await Self.copy(from: provider, type: isImage ? .image : .movie)
-                    model.stage(file, isPhoto: isImage)
-                } catch {
-                    model.reportAttachFailure(error)
-                }
+                await model.stage(isPhoto: isImage) { try await Self.copy(from: provider, type: isImage ? .image : .movie) }
             }
         }
     }
@@ -116,24 +109,12 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
         let model = model
         if let movie = info[.mediaURL] as? URL {
             // The camera's file isn't in a folder of ours, which discarding needs.
-            model.preparingAttachments += 1
-            Task {
-                defer { model.preparingAttachments -= 1 }
-                do {
-                    model.stage(try await Self.copyIntoOwnFolder(movie), isPhoto: false)
-                } catch {
-                    model.reportAttachFailure(error)
-                }
+            model.preparing {
+                await model.stage(isPhoto: false) { try await Self.copyIntoOwnFolder(movie) }
             }
         } else if let image = info[.originalImage] as? UIImage {
-            model.preparingAttachments += 1
-            Task {
-                defer { model.preparingAttachments -= 1 }
-                do {
-                    model.stage(try await Self.writeJPEG(image), isPhoto: true)
-                } catch {
-                    model.reportAttachFailure(error)
-                }
+            model.preparing {
+                await model.stage(isPhoto: true) { try await Self.writeJPEG(image) }
             }
         }
     }
@@ -144,15 +125,9 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         let model = model
-        model.preparingAttachments += 1
-        Task {
-            defer { model.preparingAttachments -= 1 }
+        model.preparing {
             for url in urls {
-                do {
-                    model.stage(try await Self.copyIntoOwnFolder(url), isPhoto: false)
-                } catch {
-                    model.reportAttachFailure(error)
-                }
+                await model.stage(isPhoto: false) { try await Self.copyIntoOwnFolder(url) }
             }
         }
     }
@@ -173,14 +148,8 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
         name = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty { name = String(localized: "Contact") }
-        model.preparingAttachments += 1
-        Task { [name] in
-            defer { model.preparingAttachments -= 1 }
-            do {
-                model.stage(try await Self.writeVCard(data, named: name), isPhoto: false)
-            } catch {
-                model.reportAttachFailure(error)
-            }
+        model.preparing {
+            await model.stage(isPhoto: false) { try await Self.writeVCard(data, named: name) }
         }
     }
 
@@ -188,11 +157,7 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
     /// like `writeJPEG`.
     static func writeVCard(_ data: Data, named name: String) async throws -> URL {
         try await Task.detached(priority: .userInitiated) {
-            let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let file = folder.appending(path: name + ".vcf")
-            try data.write(to: file)
-            return file
+            try writeIntoOwnFolder(data, named: name + ".vcf")
         }.value
     }
 
@@ -202,12 +167,19 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
     static func writeJPEG(_ image: UIImage) async throws -> URL {
         try await Task.detached(priority: .userInitiated) {
             guard let data = image.jpegData(compressionQuality: 0.95) else { throw CocoaError(.fileWriteUnknown) }
-            let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let file = folder.appending(path: "photo-\(UUID().uuidString.prefix(8)).jpg")
-            try data.write(to: file)
-            return file
+            return try writeIntoOwnFolder(data, named: "photo-\(UUID().uuidString.prefix(8)).jpg")
         }.value
+    }
+
+    /// Writes `data` as `name` in a new folder directly under the temporary
+    /// directory, which is the layout `discardCopy` relies on. Blocking, so
+    /// call it off the main thread.
+    nonisolated static func writeIntoOwnFolder(_ data: Data, named name: String) throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appending(path: name)
+        try data.write(to: file)
+        return file
     }
 
     /// Copies a file the system handed over into a folder of our own, off the

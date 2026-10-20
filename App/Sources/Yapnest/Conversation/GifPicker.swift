@@ -39,7 +39,8 @@ struct GifPicker: View {
     }
 
     private var columnCount: Int { sizeClass == .compact ? 2 : 3 }
-    private var isSearching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var isSearching: Bool { !trimmedQuery.isEmpty }
     /// Searching always asks KLIPY, so it leaves the favorites aside.
     private var showsFavorites: Bool { !isSearching && source == .favorites }
 
@@ -219,7 +220,7 @@ struct GifPicker: View {
         moreTask?.cancel()
         moreTask = nil
         guard let service, !showsFavorites else { return }
-        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = trimmedQuery
         // Back from Favorites, the pages already loaded are still right. A
         // failed load, and so Retry, has no loaded query and goes on.
         if loadedQuery == text, error == nil {
@@ -259,7 +260,7 @@ struct GifPicker: View {
         guard let service, hasNext, !isLoading, !isLoadingMore else { return }
         isLoadingMore = true
         nextPageError = false
-        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = trimmedQuery
         let next = page + 1
         moreTask = Task {
             defer { if !Task.isCancelled { isLoadingMore = false } }

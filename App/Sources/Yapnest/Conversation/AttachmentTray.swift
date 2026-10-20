@@ -165,17 +165,18 @@ private final class AttachmentTile: UIView {
     nonisolated private static func videoFrame(_ file: URL) async -> UIImage? {
         // The first frame is black for videos that fade in, so try one a
         // little in with some tolerance, then fall back to the very first.
-        let duration = (try? await AVURLAsset(url: file).load(.duration).seconds) ?? 0
+        let asset = AVURLAsset(url: file)
+        let duration = (try? await asset.load(.duration).seconds) ?? 0
         if duration.isFinite, duration > 0 {
             let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
             let time = CMTime(seconds: min(0.5, duration / 2), preferredTimescale: 600)
-            if let frame = await videoFrame(file, at: time, tolerance: tolerance) { return frame }
+            if let frame = await videoFrame(asset, at: time, tolerance: tolerance) { return frame }
         }
-        return await videoFrame(file, at: .zero, tolerance: .positiveInfinity)
+        return await videoFrame(asset, at: .zero, tolerance: .positiveInfinity)
     }
 
-    nonisolated private static func videoFrame(_ file: URL, at time: CMTime, tolerance: CMTime) async -> UIImage? {
-        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: file))
+    nonisolated private static func videoFrame(_ asset: AVURLAsset, at time: CMTime, tolerance: CMTime) async -> UIImage? {
+        let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 256, height: 256)
         generator.requestedTimeToleranceBefore = tolerance

@@ -70,7 +70,7 @@ struct VoiceMessageView: View {
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .frame(minWidth: 0, idealWidth: Self.width, maxWidth: Self.width, minHeight: Self.height, maxHeight: Self.height)
         .contentShape(Rectangle())
-        .onTapGesture { if playableURL == nil || isFailed { onTap() } }
+        .onTapGesture { if urlToPlay == nil { onTap() } }
         .task(id: display.fileURL) { await loadShape() }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([AttachmentStatus.spokenSound(attachment), attachment.duration.map(AudioFormat.clock)].compactMap { $0 }.joined(separator: ", "))
@@ -83,12 +83,16 @@ struct VoiceMessageView: View {
         shape.flatMap { $0.url == display.fileURL ? $0 : nil }
     }
 
+    private var urlToPlay: URL? {
+        Self.playsOnTap(canPlay: playableURL != nil, isFailed: isFailed) ? playableURL : nil
+    }
+
     private func primary() {
-        if let url = playableURL, Self.playsOnTap(canPlay: true, isFailed: isFailed) { play(url, nil) } else { onTap() }
+        if let url = urlToPlay { play(url, nil) } else { onTap() }
     }
 
     private func seek(at x: CGFloat) {
-        guard let url = playableURL, Self.playsOnTap(canPlay: true, isFailed: isFailed) else {
+        guard let url = urlToPlay else {
             onTap()
             return
         }

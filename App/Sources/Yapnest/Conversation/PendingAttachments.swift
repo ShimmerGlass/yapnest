@@ -45,14 +45,26 @@ extension ConversationModel {
     /// showed, and adds it to the composer like any other picture.
     func addGif(_ gif: Gif) {
         guard refuseUnlessCanSend() else { return }
+        preparing {
+            await self.stage(isPhoto: true) { try await GifDownload.fetch(gif) }
+        }
+    }
+
+    /// Runs `work` with the attach button's spinner showing.
+    func preparing(_ work: @escaping @MainActor () async -> Void) {
         preparingAttachments += 1
         Task {
             defer { preparingAttachments -= 1 }
-            do {
-                stage(try await GifDownload.fetch(gif), isPhoto: true)
-            } catch {
-                reportAttachFailure(error)
-            }
+            await work()
+        }
+    }
+
+    /// Stages the file `make` produces, or reports why there isn't one.
+    func stage(isPhoto: Bool, _ make: () async throws -> URL) async {
+        do {
+            stage(try await make(), isPhoto: isPhoto)
+        } catch {
+            reportAttachFailure(error)
         }
     }
 
@@ -60,16 +72,10 @@ extension ConversationModel {
     /// the pasteboard or drag does, and adds them to the composer.
     func offerAttachments(_ providers: [NSItemProvider]) {
         guard refuseUnlessCanSend() else { return }
-        preparingAttachments += 1
-        Task {
-            defer { preparingAttachments -= 1 }
+        preparing {
             // In order, so they are sent the way they were put there.
             for (provider, kind) in AttachmentIntake.attachments(in: providers) {
-                do {
-                    stage(try await Self.copyOut(provider, kind: kind), isPhoto: kind == .image)
-                } catch {
-                    reportAttachFailure(error)
-                }
+                await self.stage(isPhoto: kind == .image) { try await Self.copyOut(provider, kind: kind) }
             }
         }
     }
@@ -83,16 +89,11 @@ extension ConversationModel {
     func offerLongText(_ text: String) -> Bool {
         guard editingItem == nil else { return false }
         guard refuseUnlessCanSend() else { return true }
-        preparingAttachments += 1
-        Task {
-            defer { preparingAttachments -= 1 }
-            do {
-                let file = try await Task.detached(priority: .userInitiated) {
+        preparing {
+            await self.stage(isPhoto: false) {
+                try await Task.detached(priority: .userInitiated) {
                     try LongText.write(text, under: FileManager.default.temporaryDirectory)
                 }.value
-                stage(file, isPhoto: false)
-            } catch {
-                reportAttachFailure(error)
             }
         }
         return true
@@ -139,7 +140,7 @@ struct AttachmentDropDelegate: DropDelegate {
         AttachmentIntake.attachments(in: info.itemProviders(for: [.item])).map(\.provider)
     }
 
-    func validateDrop(info: DropInfo) -> Bool { !attachments(info).isEmpty }
+    func validateDrop(info: DropInfo) -> Bool { AttachmentIntake.containsAttachment(info.itemProviders(for: [.item])) }
 
     func dropEntered(info: DropInfo) { isTargeted = true }
     func dropExited(info: DropInfo) { isTargeted = false }
@@ -170,11 +171,7 @@ enum GifDownload {
               CGImageSourceGetType(source) as String? == UTType.gif.identifier
         else { throw NotAGif() }
         return try await Task.detached(priority: .userInitiated) {
-            let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let file = folder.appending(path: fileName(for: gif) + ".gif")
-            try data.write(to: file)
-            return file
+            try AttachmentPicker.writeIntoOwnFolder(data, named: fileName(for: gif) + ".gif")
         }.value
     }
 

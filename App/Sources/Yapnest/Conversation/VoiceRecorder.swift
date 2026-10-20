@@ -63,10 +63,9 @@ final class VoiceRecorder {
     private let now: () -> TimeInterval
     /// When the button went down, which a hold is measured from.
     private var pressStarted: TimeInterval = 0
-    /// The button came up before the recording had started.
-    private var releasedWhileStarting = false
     /// When the finger came up during the start, which is what a tap or a
-    /// hold is measured to, however long the start took after it.
+    /// hold is measured to, however long the start took after it. Set only
+    /// if the button came up before the recording had started.
     private var releasedAt: TimeInterval?
     /// The system is asking for the microphone for this press, so the finger
     /// that comes up is answering that, not holding a button.
@@ -107,7 +106,6 @@ final class VoiceRecorder {
         }
         audio.activeRecorder = self
         phase = .starting
-        releasedWhileStarting = false
         releasedAt = nil
         willCancel = false
         pressStarted = now()
@@ -126,7 +124,7 @@ final class VoiceRecorder {
             // A press that was spent on the permission question is over when
             // the finger is up. Otherwise it is a tap or a hold like any,
             // that the start only delayed.
-            guard locked || !(releasedWhileStarting && promptShown) else {
+            guard locked || !(releasedAt != nil && promptShown) else {
                 phase = .idle
                 return
             }
@@ -147,7 +145,7 @@ final class VoiceRecorder {
                 return
             }
             phase = locked ? .locked : .holding
-            if releasedWhileStarting, !locked { release(at: releasedAt) }
+            if let releasedAt, !locked { release(at: releasedAt) }
         }
     }
 
@@ -165,7 +163,6 @@ final class VoiceRecorder {
     private func release(at time: TimeInterval?) {
         switch phase {
         case .starting:
-            releasedWhileStarting = true
             releasedAt = now()
         case .holding:
             switch VoiceRecordingRules.release(pressDuration: (time ?? now()) - pressStarted, willCancel: willCancel) {
@@ -323,9 +320,8 @@ final class SystemVoiceRecordingEngine: VoiceRecordingEngine {
         releaseSession()
     }
 
-    /// Gives the session back, unless a call has it.
     private func releaseSession() {
-        if !audio.isInCall { audio.session.end() }
+        audio.endSession()
     }
 
     private enum RecorderError: LocalizedError {

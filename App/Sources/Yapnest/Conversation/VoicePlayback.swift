@@ -194,6 +194,11 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
         seconds = 0
         playedFraction = 0
         // Whatever was playing before (music) goes on.
+        endSession()
+    }
+
+    /// Gives the session back, unless a call has it.
+    func endSession() {
         if !isInCall { session.end() }
     }
 
