@@ -55,7 +55,11 @@ struct SharedItemLoader: Sendable {
         if loaded.contains(where: { if case .text(_, true) = $0.content { true } else { false } }) {
             loaded.removeAll { if case .text(_, false) = $0.content { true } else { false } }
         }
-        return loaded
+        // After the rule above, which has to see this as text.
+        return loaded.map { item in
+            guard case .text(let text, false) = item.content, let file = longTextFile(text) else { return item }
+            return SharedItem(content: file)
+        }
     }
 
     private func load(_ provider: NSItemProvider) async -> SharedItem.Content? {
@@ -83,6 +87,14 @@ struct SharedItemLoader: Sendable {
             return await file(from: provider, type: type, isPhoto: false)
         }
         return nil
+    }
+
+    /// Shared text too long for a message (`LongText`), as a file to send.
+    private func longTextFile(_ text: String) -> SharedItem.Content? {
+        guard LongText.isLong(text),
+              let file = try? LongText.write(text, prefix: String(localized: "Shared text"), under: folder)
+        else { return nil }
+        return .file(.init(url: file, name: file.lastPathComponent, isPhoto: false), size: file.fileSize)
     }
 
     /// The provider's own file, copied before its callback returns.

@@ -22,6 +22,7 @@ struct ComposerBar: UIViewRepresentable {
         bar.onAttach = { [weak picker] source in picker?.attach(from: source) }
         bar.onGif = { [weak model] in model?.openGifPicker() }
         bar.onAttachments = { [weak model] providers in model?.offerAttachments(providers) }
+        bar.onLongText = { [weak model] text in model?.offerLongText(text) ?? false }
         bar.onRemovePending = { [weak model] id in model?.removePendingAttachment(id) }
         bar.onDropTargeted = { [weak model] targeted in model?.composerDropTargeted = targeted }
         bar.onVoicePress = { [weak model] locked in model?.voicePress(locked: locked) }

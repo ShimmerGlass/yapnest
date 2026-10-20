@@ -74,6 +74,30 @@ extension ConversationModel {
         }
     }
 
+    /// Text too long to type (`LongText`) is staged as a .txt file, so the
+    /// user can still look at it and remove it before sending. While a
+    /// message is being edited the text is the edit, and the caller types it
+    /// (a staged file would wait for the next message, not join the edit).
+    /// Returns whether the text was taken.
+    @discardableResult
+    func offerLongText(_ text: String) -> Bool {
+        guard editingItem == nil else { return false }
+        guard refuseUnlessCanSend() else { return true }
+        preparingAttachments += 1
+        Task {
+            defer { preparingAttachments -= 1 }
+            do {
+                let file = try await Task.detached(priority: .userInitiated) {
+                    try LongText.write(text, under: FileManager.default.temporaryDirectory)
+                }.value
+                stage(file, isPhoto: false)
+            } catch {
+                reportAttachFailure(error)
+            }
+        }
+        return true
+    }
+
     func removePendingAttachment(_ id: PendingAttachment.ID) {
         guard let item = pendingAttachments.first(where: { $0.id == id }) else { return }
         pendingAttachments.removeAll { $0.id == id }

@@ -23,6 +23,8 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     /// Pictures or files pasted or dropped on the bar, which are added to the
     /// tray rather than inserted into the text.
     var onAttachments: (([NSItemProvider]) -> Void)?
+    /// Text too long for the field (`LongText`), which goes out as a file.
+    var onLongText: ((String) -> Bool)?
     /// A drag carrying something to send is over the bar.
     var onDropTargeted: ((Bool) -> Void)?
     /// The nickname being typed after an "@", or nil when there's none.
@@ -136,6 +138,10 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         textView.onPasteAttachments = { [weak self] providers in
             guard self?.voice?.isRecording != true else { return }
             self?.onAttachments?(providers)
+        }
+        textView.onPasteLongText = { [weak self] text in
+            guard self?.voice?.isRecording != true else { return true }
+            return self?.onLongText?(text) ?? false
         }
         // The text view takes text drops itself; these take what it can't,
         // and the text view is told to leave text files to them.
@@ -898,9 +904,16 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
 
     /// Nothing is typed while a voice message is recorded: the field keeps
     /// the keyboard's focus (the Mac's Return still finishes the recording),
-    /// but what is typed or pasted into it is turned away.
+    /// but what is typed or pasted into it is turned away. Paste is handled
+    /// by the text view itself; a long text that arrives some other way,
+    /// such as dropped on the field, goes out as a file. Typing, dictation
+    /// and corrections insert far less.
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-        voice?.isRecording != true
+        guard voice?.isRecording != true else { return false }
+        guard LongText.isLong(text) else { return true }
+        // Undo and redo put back what was there, however long.
+        if let undo = textView.undoManager, undo.isUndoing || undo.isRedoing { return true }
+        return onLongText?(text) != true
     }
 
     func textViewDidChange(_ textView: UITextView) {
@@ -925,12 +938,16 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
 /// On the Mac, Return sends, as in other chat apps there; Command-Return
 /// starts a new line, as do Shift- and Option-Return. The iPhone's Return
 /// key always starts one.
-fileprivate final class ComposerTextView: UITextView {
+final class ComposerTextView: UITextView {
     enum SuggestionKey { case previous, next, accept, dismiss }
 
     var onReturn: (() -> Void)?
     /// Pictures or files being pasted, which aren't text for the field.
     var onPasteAttachments: (([NSItemProvider]) -> Void)?
+    /// Text over `LongText.threshold`, which is a file to send, not words to type.
+    var onPasteLongText: ((String) -> Bool)?
+    /// Where Paste reads from; a test swaps it.
+    var pasteboard = UIPasteboard.general
     var onSuggestionKey: ((SuggestionKey) -> Void)?
     /// True while there are emoji to pick, when the arrow, Tab and Escape
     /// keys belong to them rather than to the text.
@@ -1002,10 +1019,14 @@ fileprivate final class ComposerTextView: UITextView {
     /// `paste(itemProviders:)` isn't used because UITextView implements Paste
     /// itself and never reaches it.
     override func paste(_ sender: Any?) {
-        let providers = UIPasteboard.general.itemProviders
+        let providers = pasteboard.itemProviders
         let classified = AttachmentIntake.attachments(in: providers)
         let attachments = classified.map(\.provider)
-        guard !attachments.isEmpty else { return super.paste(sender) }
+        guard !attachments.isEmpty else {
+            // Only where the text would have been typed is long text a file.
+            if pasteboard.hasStrings, let text = pasteboard.string, redirectsLongText(text) { return }
+            return super.paste(sender)
+        }
         // Text next to a picture is usually its address or name, but a page
         // or note copied with both means the text. Files offer their name as
         // text, which says nothing.
@@ -1020,12 +1041,18 @@ fileprivate final class ComposerTextView: UITextView {
             Task { @MainActor in
                 guard let self else { return }
                 if let text, !AttachmentIntake.isLabel(text) {
-                    self.insertText(text)
+                    if !self.redirectsLongText(text) { self.insertText(text) }
                 } else {
                     self.onPasteAttachments?(offered)
                 }
             }
         }
+    }
+
+    /// Hands text over the limit to the bar, which may turn it down (while
+    /// editing a message, the text is the edit).
+    func redirectsLongText(_ text: String) -> Bool {
+        LongText.isLong(text) && onPasteLongText?(text) == true
     }
 
     @objc private func sendFromKeyboard() { onReturn?() }
