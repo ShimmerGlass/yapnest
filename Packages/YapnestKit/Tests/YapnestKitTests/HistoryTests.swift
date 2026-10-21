@@ -145,6 +145,26 @@ struct HistoryTests {
         #expect(all.contains { $0.remoteId == "m1" })
     }
 
+    @Test func aCorrectionThenARetractionLeavesOneTombstoneWhenTheOriginalArrives() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try correction("c1", of: "m1", body: "secret fix", at: 300), try retraction("r1", of: "m1", at: 400)])
+        try db.ingest([try archived("m1", body: "secret", at: 100, history: true)])
+        let all = try shown()
+        #expect(all.count == 1)
+        #expect(all[0].isRetracted)
+        #expect(all[0].remoteId == "m1")
+    }
+
+    @Test func aRetractionThenACorrectionLeavesOneTombstoneWhenTheOriginalArrives() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try retraction("r1", of: "m1", at: 400), try correction("c1", of: "m1", body: "secret fix", at: 300)])
+        try db.ingest([try archived("m1", body: "secret", at: 100, history: true)])
+        let all = try shown()
+        #expect(all.count == 1)
+        #expect(all[0].isRetracted)
+        #expect(all[0].remoteId == "m1")
+    }
+
     @Test func twoCorrectionsOfAMissingMessageShareOneStandIn() throws {
         try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
         try db.ingest([try correction("c2", of: "m1", body: "second", at: 400), try correction("c1", of: "m1", body: "first", at: 300)])

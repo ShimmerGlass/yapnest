@@ -31,15 +31,15 @@ extension AppDatabase {
         return !known
     }
 
+    /// Whether any message in the conversation carries the room's stanza-id.
+    func hasStanzaIds(conversationId: Int64) throws -> Bool {
+        try reader.read { try !Message.filter(Column("conversationId") == conversationId && Column("serverId") != nil).isEmpty($0) }
+    }
+
     /// Stores `message` unless it is a duplicate of a stored one (same server
     /// stanza-id, or same sender and origin/remote id), in which case the stored
     /// copy is returned with its server id filled in.
     @discardableResult
-    /// Whether any message in the conversation carries the room's stanza-id.
-    func hasStanzaIds(conversationId: Int64) throws -> Bool {
-        try reader.read { try Message.filter(Column("conversationId") == conversationId && Column("serverId") != nil).fetchCount($0) > 0 }
-    }
-
     public func insert(_ message: Message) throws -> Message {
         try writer.write { db in try Self.insert(db, message).message }
     }

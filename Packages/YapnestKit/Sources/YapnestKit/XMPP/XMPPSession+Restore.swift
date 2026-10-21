@@ -22,7 +22,19 @@ extension XMPPSession {
     }
 
     func markChatRestorePending() {
+        try? database.setSetting(.historyRestored, nil)
         try? database.setSetting(.historyRestore, "pending")
+    }
+
+    private func restoredPeers() -> Set<String> {
+        guard let json = try? database.setting(.historyRestored), let data = json.data(using: .utf8),
+              let list = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(list)
+    }
+
+    private func saveRestoredPeers(_ peers: Set<String>) {
+        guard let data = try? JSONEncoder().encode(peers.sorted()) else { return }
+        try? database.setSetting(.historyRestored, String(decoding: data, as: UTF8.self))
     }
 
     /// Runs after the sync is reported done, so "connected" never waits on it.
@@ -45,29 +57,39 @@ extension XMPPSession {
         // it hasn't arrived there is nobody to ask about yet, which is no
         // reason to call the job done.
         guard let roster = try? database.roster().map(\.jid), !roster.isEmpty else { return }
+        // A contact that finished without leaving a message (no archive) isn't
+        // among those with messages, and would be asked at every connect while
+        // another one keeps failing.
+        var restored = restoredPeers()
         let stored = (try? database.peersWithMessages()) ?? []
-        var queue = Self.contactsToRestore(roster: roster, withMessages: stored)[...]
+        var queue = Self.contactsToRestore(roster: roster, withMessages: stored).filter { !restored.contains($0.description) }[...]
 
         var allFinished = true
-        await withTaskGroup(of: Bool.self) { group in
+        await withTaskGroup(of: (JID, Bool).self) { group in
             func next() -> JID? {
                 guard isCurrent(attempt: attempt) else { return nil }
                 return queue.popFirst()
             }
             for _ in 0..<Self.restoreConcurrency {
                 guard let peer = next() else { break }
-                group.addTask { await self.restore(peer) }
+                group.addTask { (peer, await self.restore(peer)) }
             }
-            while let finished = await group.next() {
-                if !finished { allFinished = false }
+            while let (done, finished) = await group.next() {
+                if finished {
+                    restored.insert(done.description)
+                    saveRestoredPeers(restored)
+                } else {
+                    allFinished = false
+                }
                 guard let peer = next() else { continue }
-                group.addTask { await self.restore(peer) }
+                group.addTask { (peer, await self.restore(peer)) }
             }
         }
         // Not while it was cut short, or when a contact's query failed in a way
         // that may pass: those are for the next connect, which skips the restored.
         guard isCurrent(attempt: attempt), queue.isEmpty, allFinished else { return }
         try? database.setSetting(.historyRestore, nil)
+        try? database.setSetting(.historyRestored, nil)
     }
 
     /// Whether there is nothing more to do for `peer`: it was restored, has no

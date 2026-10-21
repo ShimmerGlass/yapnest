@@ -9,6 +9,9 @@ extension AppDatabase {
         /// `pending` from a sync that began without a cursor until the chats
         /// older than its window are restored: see `XMPPSession.restoreChats`.
         case historyRestore
+        /// The contacts that restore has finished with, as a JSON list of
+        /// addresses, kept while it's pending so a later connect skips them.
+        case historyRestored
         /// This device's OMEMO device id.
         case omemoRegistrationId
         /// This device's OMEMO identity key pair, base64.

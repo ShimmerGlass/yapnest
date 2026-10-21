@@ -115,14 +115,15 @@ extension AppDatabase {
     }
 
     /// A retraction of a message we don't have also takes back the text of
-    /// the corrections that stand in for it.
+    /// the corrections that stand in for it. Their rows stay, so that the
+    /// original, when it arrives, takes the stand-ins' tombstones with it
+    /// instead of leaving them beside its own.
     static func retractStandIns(_ db: Database, of edits: [PendingEdit]) throws {
         for edit in edits {
             if let id = edit.standInId, var standIn = try Message.fetchOne(db, key: id), !standIn.isRetracted {
                 _ = try retract(db, &standIn)
             }
         }
-        try PendingEdit.deleteAll(db, keys: edits.compactMap(\.id))
     }
 
     /// The stand-ins of corrections that found their original: left, they

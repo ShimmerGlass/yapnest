@@ -79,4 +79,27 @@ private let me = JID("me@example.org")!
         _ = await second.value
         #expect(await third.value == .busy)
     }
+
+    @Test func pushesQueuedWhileTheAppHoldsTheSessionDontEachWaitForIt() async {
+        let app = ProcessLock(url: lockURL)
+        #expect(app.tryLock(as: .app))
+        defer { app.unlock() }
+        let fetcher = fetcher()
+
+        let first = Task { await fetcher.fetch() }
+        try? await Task.sleep(for: .milliseconds(200))
+        let started = Date()
+        let second = Task { await fetcher.fetch() }
+        let third = Task { await fetcher.fetch() }
+
+        #expect(await first.value == .appIsRunning)
+        for outcome in [await second.value, await third.value] {
+            guard case .notifications = outcome else {
+                Issue.record("expected only the stored notifications, got \(outcome)")
+                continue
+            }
+        }
+        // Waiting in turn would take 9 seconds in all.
+        #expect(Date().timeIntervalSince(started) < 4)
+    }
 }

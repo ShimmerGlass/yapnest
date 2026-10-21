@@ -76,13 +76,7 @@ public struct GifService: Sendable {
 
     /// For everything fetched from KLIPY and its CDN: no cookies and no cache,
     /// so nothing ties one request to the next beyond the connection.
-    public static let privateSession: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpCookieAcceptPolicy = .never
-        configuration.httpShouldSetCookies = false
-        configuration.urlCache = nil
-        return URLSession(configuration: configuration)
-    }()
+    public static let privateSession = URLSession.privateEphemeral()
 
     public init(apiKey: String, locale: String?, session: URLSession = GifService.privateSession) {
         self.apiKey = apiKey

@@ -87,6 +87,36 @@ struct RestoreChatsTests {
         #expect(try db.setting(.historyRestore) == nil)
     }
 
+    @Test func aLaterRunSkipsTheContactsThatFinishedWhileAnotherKeepsFailing() async throws {
+        let session = try makeSession(me, database: db)
+        let wire = FakeWire()
+        session.connectForTesting(wire)
+        session.lock.withLock { $0.archiveVersion = .MAM2 }
+        wire.answer { request in
+            guard request.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") != nil else { return nil }
+            let condition = request.description.contains("alice@example.org") ? "forbidden" : "internal-server-error"
+            return FakeWire.error(to: request, condition: condition)
+        }
+        try await db.writer.write {
+            try Contact(jid: alice, isInRoster: true).insert($0)
+            try Contact(jid: bob, isInRoster: true).insert($0)
+        }
+        session.markChatRestorePending()
+        func queries(about peer: String) -> Int {
+            wire.written.filter { $0.description.contains("urn:xmpp:mam:2") && $0.description.contains(peer) }.count
+        }
+
+        await session.restoreChats(attempt: session.lock.withLock { $0.attempt })
+        #expect(queries(about: "alice@example.org") == 1)
+        let bobAsked = queries(about: "bob@example.org")
+        #expect(bobAsked >= 1)
+        #expect(try db.setting(.historyRestore) == "pending")
+
+        await session.restoreChats(attempt: session.lock.withLock { $0.attempt })
+        #expect(queries(about: "alice@example.org") == 1)
+        #expect(queries(about: "bob@example.org") > bobAsked)
+    }
+
     @Test func nothingRunsUnlessASyncBeganWithoutACursor() throws {
         let session = try makeSession(me, database: db)
         #expect(try db.setting(.historyRestore) == nil)

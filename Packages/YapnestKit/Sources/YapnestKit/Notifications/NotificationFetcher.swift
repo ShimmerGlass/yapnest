@@ -58,12 +58,17 @@ public struct NotificationFetcher: Sendable {
             case .claimOnly:
                 return claim()
             case .catchUp(let lockWait, let timeout):
-                // Only a catch-up that finished lets later pushes go without
-                // one. A push that found the lock taken, or a catch-up that
-                // timed out, leaves them to try for themselves.
+                // Only a catch-up that finished, or one that found the app
+                // holding the session (it has the connection and notifies by
+                // itself), lets later pushes go without one. A push that found
+                // another extension holding the lock, or a catch-up that timed
+                // out, leaves them to try for themselves.
                 let started = Date()
                 let (outcome, completed) = await catchUpAndClaim(lockWait: lockWait, timeout: timeout)
                 if completed { await Self.queue.setLastCatchUp(started) }
+                // The pushes that arrived during the wait are the app's to show,
+                // so the mark is when the wait ended, not when it began.
+                else if outcome == .appIsRunning { await Self.queue.setLastCatchUp(Date()) }
                 return outcome
             }
         }
@@ -96,7 +101,8 @@ public struct NotificationFetcher: Sendable {
     private func catchUpAndClaim(lockWait: TimeInterval, timeout: TimeInterval) async -> (Outcome, completed: Bool) {
         // The app connects and resumes in a moment, then lets go.
         guard await Task.detached(operation: { [lock] in lock.lock(timeout: lockWait, as: .notification) }).value else {
-            return (lock.holder == .app ? .appIsRunning : .busy, false)
+            if lock.holder == .app { return (.appIsRunning, false) }
+            return (.busy, false)
         }
         defer { lock.unlock() }
         do {

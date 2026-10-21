@@ -200,7 +200,9 @@ extension AppDatabase {
                             try Self.keepPending(db, .correct, ref: target, inbound, conversationId: conversationId, standInId: id)
                         }
                     } else {
-                        // Retracted already, so its text never shows.
+                        // Retracted already, so its text never shows. It stays linked,
+                        // so the original takes this tombstone with it.
+                        try Self.keepPending(db, .correct, ref: target, inbound, conversationId: conversationId, standInId: id)
                         result.retractedAttachment = try Self.retract(db, &stored)
                         result.newMessage = stored
                         result.newAttachment = nil

@@ -9,18 +9,12 @@ struct UploadService: Sendable {
 }
 
 extension XMPPSession {
-    /// Files larger than this are never downloaded.
     /// For every upload and download: no cookies and no cache, so a file host
     /// can't tie one fetch to the next, and no plaintext file is kept by the
     /// system. Redirects are still checked by `DownloadPolicy`.
-    static let transferSession: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpCookieAcceptPolicy = .never
-        configuration.httpShouldSetCookies = false
-        configuration.urlCache = nil
-        return URLSession(configuration: configuration)
-    }()
+    static let transferSession = URLSession.privateEphemeral()
 
+    /// Files larger than this are never downloaded.
     static let maxDownloadSize: Int64 = 200 * 1024 * 1024
     /// Images from contacts download on their own up to this size.
     static let autoDownloadSize: Int64 = 15 * 1024 * 1024

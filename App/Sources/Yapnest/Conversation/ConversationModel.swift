@@ -569,9 +569,9 @@ final class ConversationModel {
         if let history { historyChanged(history.state, room: history.room) }
     }
 
+    private var wasReady = false
+
     private func historyChanged(_ state: XMPPSession.State, room: RoomStatus?) {
-        var wasOnline = false
-        if case .connected(isSyncing: false)? = history?.state { wasOnline = true }
         history = (state, room)
         let fetching = switch state {
         case .connecting, .connected(isSyncing: true): true
@@ -582,12 +582,17 @@ final class ConversationModel {
         case .disconnected, .failed: false
         }
         // Back online, or through catching up: older messages were waiting on that.
+        var isReady = false
         if case .connected(isSyncing: false) = state, !fetching {
+            isReady = true
             olderWaitsForConnection = false
             loadOlderIfNeeded()
             // A preview that failed offline is asked for again once, not on every emission.
-            if !wasOnline { retryMissingPreviews() }
+            // A group's room joins after the account is connected, so the
+            // transition is into connected and no longer fetching.
+            if !wasReady { retryMissingPreviews() }
         }
+        wasReady = isReady
         guard fetching != isFetchingHistory else { return }
         isFetchingHistory = fetching
     }

@@ -1307,12 +1307,7 @@ extension XMPPSession {
             publishLegacyBookmark(bookmark, for: group)
             return
         }
-        let options = Self.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options", fields: [
-            "pubsub#persist_items": ["true"],
-            "pubsub#max_items": ["max"],
-            "pubsub#send_last_published_item": ["never"],
-            "pubsub#access_model": ["whitelist"],
-        ])
+        let options = Self.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options", fields: Self.settingsNodeFields(maxItems: "max"))
         // Some servers never answer a publish with max_items=max (Openfire),
         // so the wait is bounded, and the old kind of bookmark takes over.
         let once = Once()
