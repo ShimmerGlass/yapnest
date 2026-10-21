@@ -25,6 +25,8 @@ struct PendingEdit: Codable, FetchableRecord, MutablePersistableRecord {
     var occupantId: String?
     var encryption: Message.Encryption
     var createdAt: Date
+    /// When the edit was made, which no message it names can be after.
+    var editedAt: Date
     /// For a correction, the message that stands in for its missing original.
     var standInId: Int64?
 
@@ -45,10 +47,10 @@ extension AppDatabase {
         var edit = PendingEdit(
             conversationId: conversationId, ref: ref, kind: kind, outgoing: inbound.isOutgoing,
             sender: inbound.author.jid, nick: inbound.author.nick, occupantId: inbound.author.occupantId,
-            encryption: inbound.encryption, createdAt: now, standInId: standInId,
+            encryption: inbound.encryption, createdAt: now, editedAt: inbound.timestamp, standInId: standInId,
         )
         try edit.insert(db)
-        try PendingEdit.filter(Column("createdAt") < now.addingTimeInterval(-pendingEditLifetime)).deleteAll(db)
+        try PendingEdit.filter(Column("conversationId") == conversationId && Column("createdAt") < now.addingTimeInterval(-pendingEditLifetime)).deleteAll(db)
         let excess = try PendingEdit.filter(Column("conversationId") == conversationId).fetchCount(db) - pendingEditsPerConversation
         if excess > 0 {
             let oldest = try PendingEdit.filter(Column("conversationId") == conversationId)
@@ -74,31 +76,57 @@ extension AppDatabase {
         let fitting = waiting.filter { edit in
             (message.direction == .outgoing) == edit.outgoing
                 && (edit.outgoing || message.author.isSame(as: edit.author, room: room))
+                && message.timestamp <= edit.editedAt
         }
         if fitting.contains(where: { $0.kind == .retract }) {
             let attachment = try retract(db, &message)
-            try deleteStandIns(db, waiting)
+            try deleteStandIns(db, fitting)
             return (true, attachment)
         }
         var changed = false
+        var applied: [PendingEdit] = []
         let corrections = try fitting.compactMap { edit -> (PendingEdit, Message)? in
             guard let id = edit.standInId, let standIn = try Message.fetchOne(db, key: id) else { return nil }
             return (edit, standIn)
         }.sorted { ($0.1.editedAt ?? $0.1.timestamp) < ($1.1.editedAt ?? $1.1.timestamp) }
         for (edit, standIn) in corrections where edit.encryption == message.encryption && !standIn.isRetracted {
-            let applied = try applyCorrection(
+            let result = try applyCorrection(
                 db, to: &message, body: standIn.body, at: standIn.editedAt ?? standIn.timestamp, mentionsMe: standIn.mentionsMe,
                 quickResponses: standIn.quickResponses, omemoDevice: standIn.omemoDevice, omemoTrust: standIn.omemoTrust,
                 outgoing: edit.outgoing,
             )
-            changed = changed || applied != nil
+            if result != nil {
+                changed = true
+                applied.append(edit)
+            }
         }
-        try deleteStandIns(db, waiting)
+        // A stand-in that wasn't applied stays a message of its own.
+        try deleteStandIns(db, applied)
         return changed ? (false, nil) : nil
     }
 
-    /// The stand-ins of corrections that found their original, or never
-    /// could: left, they would show the same message twice.
+    /// The waiting edits of `kind` for `ref` that `author` could have made.
+    static func fittingPending(_ db: Database, _ kind: PendingEdit.Kind, conversationId: Int64, ref: String, by author: Author, outgoing: Bool, room: JID?) throws -> [PendingEdit] {
+        try PendingEdit
+            .filter(Column("conversationId") == conversationId && Column("ref") == ref && Column("kind") == kind.rawValue)
+            .order(Column("id"))
+            .fetchAll(db)
+            .filter { $0.outgoing == outgoing && (outgoing || $0.author.isSame(as: author, room: room)) }
+    }
+
+    /// A retraction of a message we don't have also takes back the text of
+    /// the corrections that stand in for it.
+    static func retractStandIns(_ db: Database, of edits: [PendingEdit]) throws {
+        for edit in edits {
+            if let id = edit.standInId, var standIn = try Message.fetchOne(db, key: id), !standIn.isRetracted {
+                _ = try retract(db, &standIn)
+            }
+        }
+        try PendingEdit.deleteAll(db, keys: edits.compactMap(\.id))
+    }
+
+    /// The stand-ins of corrections that found their original: left, they
+    /// would show the same message twice.
     private static func deleteStandIns(_ db: Database, _ edits: [PendingEdit]) throws {
         let ids = edits.compactMap(\.standInId)
         try Message.deleteAll(db, keys: ids)

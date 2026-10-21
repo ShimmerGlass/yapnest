@@ -620,10 +620,12 @@ public final class AppDatabase: Sendable {
                 t.column("occupantId", .text)
                 t.column("encryption", .text).notNull()
                 t.column("createdAt", .datetime).notNull()
+                t.column("editedAt", .datetime).notNull()
                 // The message that stands in for a correction's original.
                 t.column("standInId", .integer).references("message", onDelete: .cascade)
             }
             try db.create(index: "pendingEdit_on_ref", on: "pendingEdit", columns: ["conversationId", "ref"])
+            try db.create(index: "pendingEdit_on_createdAt", on: "pendingEdit", columns: ["createdAt"])
         }
 
         return migrator

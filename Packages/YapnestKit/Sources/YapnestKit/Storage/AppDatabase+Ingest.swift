@@ -78,6 +78,7 @@ extension AppDatabase {
             if var original = try Self.ownedMessage(db, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room) {
                 result.retractedAttachment = try Self.retract(db, &original)
             } else if try Self.referencedMessage(db, conversationId: conversationId, id: target) == nil {
+                try Self.retractStandIns(db, of: Self.fittingPending(db, .correct, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room))
                 try Self.keepPending(db, .retract, ref: target, inbound, conversationId: conversationId, standInId: nil)
             }
             return result
@@ -103,6 +104,23 @@ extension AppDatabase {
         // replay of it would bring back what was deleted.
         if let target = inbound.correctionOf, try Self.referencedMessage(db, conversationId: conversationId, id: target) != nil {
             return result
+        }
+
+        // A second correction of a message we still don't have changes the
+        // stand-in of the first, not a message of its own.
+        if let target = inbound.correctionOf, let body = inbound.body, inbound.encryption != .omemoUndecryptable,
+           try Self.fittingPending(db, .retract, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room).isEmpty {
+            for edit in try Self.fittingPending(db, .correct, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room)
+            where edit.encryption == inbound.encryption {
+                if let id = edit.standInId, var standIn = try Message.fetchOne(db, key: id), !standIn.isRetracted {
+                    _ = try Self.applyCorrection(
+                        db, to: &standIn, body: body, at: inbound.timestamp, mentionsMe: inbound.mentionsMe,
+                        quickResponses: inbound.quickResponses, omemoDevice: inbound.omemoDevice, omemoTrust: inbound.omemoTrust,
+                        outgoing: inbound.isOutgoing,
+                    )
+                    return result
+                }
+            }
         }
 
         if let body = inbound.body {
@@ -176,7 +194,17 @@ extension AppDatabase {
                     result.newAttachment = attachment
                 }
                 if let target = inbound.correctionOf, inbound.encryption != .omemoUndecryptable, let id = stored.id {
-                    try Self.keepPending(db, .correct, ref: target, inbound, conversationId: conversationId, standInId: id)
+                    if try Self.fittingPending(db, .retract, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room).isEmpty {
+                        // A stand-in with a file is never linked: nothing would delete it.
+                        if file == nil {
+                            try Self.keepPending(db, .correct, ref: target, inbound, conversationId: conversationId, standInId: id)
+                        }
+                    } else {
+                        // Retracted already, so its text never shows.
+                        result.retractedAttachment = try Self.retract(db, &stored)
+                        result.newMessage = stored
+                        result.newAttachment = nil
+                    }
                 }
                 if let applied = try Self.applyPending(db, to: &stored, room: room) {
                     result.newMessage = stored

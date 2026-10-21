@@ -117,6 +117,67 @@ struct HistoryTests {
         #expect(dropped?.isRetracted == false)
     }
 
+    private func correction(_ id: String, of target: String, body: String, at seconds: TimeInterval) throws -> InboundMessage {
+        try archivedXML(id, payload: "<body>\(body)</body><replace id='\(target)' xmlns='urn:xmpp:message-correct:0'/>", at: seconds)
+    }
+
+    private func retraction(_ id: String, of target: String, at seconds: TimeInterval) throws -> InboundMessage {
+        try archivedXML(id, payload: "<retract id='\(target)' xmlns='urn:xmpp:message-retract:1'/>", at: seconds)
+    }
+
+    private func shown(_ exclude: String = "newest") throws -> [YapnestKit.Message] {
+        try db.reader.read { try Message.filter(Column("body") != exclude).order(Column("timestamp")).fetchAll($0) }
+    }
+
+    @Test func aRetractionThenACorrectionOfAMissingMessageShowsNoText() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try retraction("r1", of: "m1", at: 400), try correction("c1", of: "m1", body: "secret fix", at: 300)])
+        #expect(try shown().allSatisfy { $0.isRetracted && $0.body == "" })
+    }
+
+    @Test func aCorrectionThenARetractionOfAMissingMessageShowsNoText() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try correction("c1", of: "m1", body: "secret fix", at: 300), try retraction("r1", of: "m1", at: 400)])
+        #expect(try shown().allSatisfy { $0.isRetracted && $0.body == "" })
+        try db.ingest([try archived("m1", body: "secret", at: 100, history: true)])
+        let all = try shown()
+        #expect(all.allSatisfy { $0.isRetracted && $0.body == "" })
+        #expect(all.contains { $0.remoteId == "m1" })
+    }
+
+    @Test func twoCorrectionsOfAMissingMessageShareOneStandIn() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try correction("c2", of: "m1", body: "second", at: 400), try correction("c1", of: "m1", body: "first", at: 300)])
+        #expect(try shown().map(\.body) == ["second"])
+        try db.ingest([try archived("m1", body: "typo", at: 100, history: true)])
+        #expect(try shown().map(\.body) == ["second"])
+        #expect(try pendingCount() == 0)
+    }
+
+    @Test func aReadableCorrectionSurvivesAnUndecryptableOriginal() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try correction("c1", of: "m1", body: "readable", at: 300)])
+        var original = try archived("m1", body: "🔒", at: 100, history: true)
+        original.encryption = .omemoUndecryptable
+        try db.ingest([original])
+        #expect(try shown().contains { $0.body == "readable" })
+    }
+
+    @Test func aPendingRetractionDoesNotApplyToANewerMessageReusingTheId() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try retraction("r1", of: "m1", at: 300)])
+        try db.ingest([try archived("m1", body: "reused", at: 500, history: true)])
+        let message = try #require(try shown().first { $0.remoteId == "m1" })
+        #expect(!message.isRetracted)
+        #expect(message.body == "reused")
+    }
+
+    @Test func aCorrectionCarryingAFileIsNotLinked() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try correction("c1", of: "m1", body: "aesgcm://example.org/pic.jpg#00112233", at: 300)])
+        #expect(try pendingCount() == 0)
+    }
+
     @Test func olderHistoryIsStoredReadAndLeavesTheChatWhereItIs() throws {
         // A chat with news from t=1000, archived by the user.
         try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
