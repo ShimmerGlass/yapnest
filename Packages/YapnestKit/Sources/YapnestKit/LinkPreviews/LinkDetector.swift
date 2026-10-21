@@ -7,10 +7,33 @@ public enum LinkDetector {
     /// Schemes worth making tappable; anything else a sender writes stays text.
     private static let openableSchemes: Set<String> = ["http", "https", "mailto", "xmpp"]
 
+    /// A `geo:` URI as a word of its own. The data detector doesn't know the scheme.
+    private static let geoPattern = try! NSRegularExpression(pattern: #"(?<![\w/:.])geo:[-+0-9.,]+(?:;[\w.=-]+)*"#, options: .caseInsensitive)
+
     public static func links(in text: String) -> [(range: NSRange, url: URL)] {
-        detector.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+        let whole = NSRange(text.startIndex..., in: text)
+        let links: [(range: NSRange, url: URL)] = detector.matches(in: text, range: whole).compactMap { match in
             guard let url = match.url, let scheme = url.scheme?.lowercased(), openableSchemes.contains(scheme) else { return nil }
             return (match.range, url)
+        }
+        let places = geoLinks(in: text, range: whole).filter { place in
+            !links.contains { NSIntersectionRange($0.range, place.range).length > 0 }
+        }
+        return (links + places).sorted { $0.range.location < $1.range.location }
+    }
+
+    /// Places written among other text, linked to the map rather than to
+    /// `geo:`, which nothing on iOS or the Mac opens.
+    private static func geoLinks(in text: String, range: NSRange) -> [(range: NSRange, url: URL)] {
+        let source = text as NSString
+        return geoPattern.matches(in: text, range: range).compactMap { match in
+            var range = match.range
+            // A sentence's full stop or comma after the link isn't part of it.
+            while range.length > 0, ".,".contains(source.substring(with: NSRange(location: range.upperBound - 1, length: 1))) {
+                range.length -= 1
+            }
+            guard let url = GeoLocation(body: source.substring(with: range))?.mapsURL else { return nil }
+            return (range, url)
         }
     }
 

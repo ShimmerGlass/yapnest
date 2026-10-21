@@ -51,6 +51,13 @@ public struct GeoLocation: Hashable, Sendable {
         self.init(latitude: latitude, longitude: longitude, accuracy: accuracy)
     }
 
+    /// Apple Maps through its web URL, which opens the Maps app on iOS and on the Mac.
+    public var mapsURL: URL? {
+        var components = URLComponents(string: "https://maps.apple.com/")
+        components?.queryItems = [URLQueryItem(name: "ll", value: String(format: "%.6f,%.6f", latitude, longitude)), URLQueryItem(name: "q", value: String(localized: "Location"))]
+        return components?.url
+    }
+
     /// The body to send: six decimals is about a tenth of a metre.
     public var uri: String {
         var uri = "geo:" + Self.format(latitude) + "," + Self.format(longitude)

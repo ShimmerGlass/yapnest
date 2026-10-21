@@ -62,6 +62,21 @@ struct LinkDetectorTests {
         #expect(links.map(\.url.scheme) == ["xmpp", "xmpp"])
         #expect(links.compactMap { XMPPURI($0.url)?.action } == [.join, .addContact(name: nil, preauth: "abc")])
     }
+
+    @Test func geoLinksAmongTextOpenTheMap() {
+        let text = "meet me at geo:12.5,-3.25 later"
+        let links = LinkDetector.links(in: text)
+        #expect(links.count == 1)
+        #expect((text as NSString).substring(with: links[0].range) == "geo:12.5,-3.25")
+        #expect(links[0].url == GeoLocation(latitude: 12.5, longitude: -3.25).mapsURL)
+    }
+
+    @Test func geoLinksLeaveOutTrailingPunctuationAndSkipInvalidOnes() {
+        let text = "see https://a.example/geo:1,2 or geo:91,0 or GEO:1,2;u=30, then geo:3,4."
+        let links = LinkDetector.links(in: text)
+        #expect(links.map { (text as NSString).substring(with: $0.range) } == ["https://a.example/geo:1,2", "GEO:1,2;u=30", "geo:3,4"])
+        #expect(links.map(\.url.host) == ["a.example", "maps.apple.com", "maps.apple.com"])
+    }
 }
 
 /// Serves canned responses by URL, as the fetcher would after its checks.

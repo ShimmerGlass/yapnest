@@ -3,13 +3,6 @@ import SwiftUI
 import YapnestKit
 
 extension GeoLocation {
-    /// Apple Maps through its web URL, which opens the Maps app on iOS and on the Mac.
-    var mapsURL: URL? {
-        var components = URLComponents(string: "https://maps.apple.com/")
-        components?.queryItems = [URLQueryItem(name: "ll", value: String(format: "%.6f,%.6f", latitude, longitude)), URLQueryItem(name: "q", value: String(localized: "Location"))]
-        return components?.url
-    }
-
     func openInMaps() {
         if let url = mapsURL { UIApplication.shared.open(url) }
     }
