@@ -42,6 +42,7 @@ An XMPP client for iOS 18+ and the Mac (Mac Catalyst, Mac idiom). `README.md` co
   - `+Messages`, `+Conversations`, `+Groups`, `+Notifications`, `+Session`, `+Settings`.
   - `+SyncedSettings`: the synced settings' entries, versions (a hybrid logical clock) and merging; `touch` records a local change in the setter's transaction.
   - `+GroupInvitations`: invitations through a room that can't vouch for the inviter, held until the user answers.
+  - `+PendingEdits`: a retraction or correction that names a message not stored yet (archive pages arrive newest first), kept and applied when that message arrives if its author fits. A correction shows meanwhile as a stand-in message, removed once applied.
 
   `ChatListItem` and `ConversationItem` are the read models the UI observes.
 - `Storage/SharedContainer.swift`, `Keychain.swift`, `FastTokenStore.swift`: what the app and the extension share, and the account's credentials.
