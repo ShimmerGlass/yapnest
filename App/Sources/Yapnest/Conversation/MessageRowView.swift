@@ -25,7 +25,7 @@ struct MessageRowView: View, Equatable {
     /// would move away from the button it was heading for.
     @State private var pointerX: CGFloat = 0
     /// Room under the bubble for the reactions chip, which grows with Dynamic Type.
-    @ScaledMetric private var chipClearance: CGFloat = 22
+    @ScaledMetric private var chipClearance: CGFloat = Platform.isMac ? 28 : 22
 
     private static let swipeThreshold: CGFloat = 60
     /// How far the hover bar comes down over the bubble's top edge, so it

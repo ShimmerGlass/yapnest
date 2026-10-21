@@ -45,12 +45,23 @@ enum MessageText {
         var swiftUI: Font
         var style: UIFont.TextStyle
         var isItalic = false
+        /// A size of its own instead of the style's, still scaled by the
+        /// style's Dynamic Type metrics.
+        var size: CGFloat?
 
         static let body = BodyFont(swiftUI: .body, style: .body)
         static let italicBody = BodyFont(swiftUI: .body.italic(), style: .body, isItalic: true)
 
+        /// A font bigger than any text style, which scales as `style` does.
+        static func scaled(_ size: CGFloat, like style: UIFont.TextStyle) -> BodyFont {
+            var font = BodyFont(swiftUI: .body, style: style, size: size)
+            font.swiftUI = Font(font.uiFont)
+            return font
+        }
+
         var uiFont: UIFont {
-            let base = UIFont.preferredFont(forTextStyle: style)
+            let base = size.map { UIFontMetrics(forTextStyle: style).scaledFont(for: .systemFont(ofSize: $0)) }
+                ?? UIFont.preferredFont(forTextStyle: style)
             return isItalic ? base.with(traits: .traitItalic) : base
         }
     }
@@ -145,8 +156,8 @@ enum MessageText {
 
     private static func bodyFont(forEmojiCount emoji: Int?) -> BodyFont {
         switch emoji {
-        case let count? where count <= 3: BodyFont(swiftUI: .largeTitle, style: .largeTitle)
-        case _?: BodyFont(swiftUI: .title, style: .title1)
+        case let count? where count <= 3: .scaled(56, like: .largeTitle)
+        case _?: .scaled(40, like: .title1)
         case nil: .body
         }
     }

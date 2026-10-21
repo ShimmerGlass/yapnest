@@ -367,7 +367,7 @@ struct ReactionsChip: View {
     let onTap: () -> Void
 
     /// The chip's height at the default text size, growing with Dynamic Type.
-    @ScaledMetric private var height: CGFloat = 28
+    @ScaledMetric private var height: CGFloat = Platform.isMac ? 34 : 28
 
     private var isPending: Bool { reactions.contains(where: \.isPending) }
 
@@ -376,19 +376,22 @@ struct ReactionsChip: View {
         let emojis = reactions.prefix(3).map(\.emoji).joined()
         Button(action: onTap) {
             Text(total > 1 ? "\(emojis) \(total)" : emojis)
-                .font(.footnote)
+                // The Mac's footnote is too small to tell one emoji from another.
+                .font(Platform.isMac ? .title3 : .footnote)
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
                 .frame(minHeight: height)
                 // The shadow is part of the capsule's fill: a layer shadow on
-                // the chip was an offscreen pass per chip.
-                .background(
-                    Capsule().fill(
-                        (reactions.contains(where: \.includesMe) ? Color.accentColor.opacity(0.25) : Color(.tertiarySystemBackground))
-                            .shadow(.drop(color: .black.opacity(0.12), radius: 2, y: 1)),
-                    ),
-                )
+                // the chip was an offscreen pass per chip. Our own reaction's
+                // tint sits on the opaque fill, so the bubble under the chip
+                // doesn't show through it.
+                .background {
+                    Capsule().fill(Color(.tertiarySystemBackground).shadow(.drop(color: .black.opacity(0.12), radius: 2, y: 1)))
+                    if reactions.contains(where: \.includesMe) {
+                        Capsule().fill(Color.accentColor.opacity(0.25))
+                    }
+                }
                 // The dots of the sending icon: ours isn't acknowledged yet.
                 .overlay {
                     if isPending {
