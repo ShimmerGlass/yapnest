@@ -47,8 +47,13 @@ tasks:
         done
         exit $failed
 
+  testflight:
+    desc: Archive and upload both apps, and set What to Test from changelogs/ (key in keys/)
+    cmds:
+      - dev/testflight.sh
+
   check:
-    desc: Everything above
+    desc: kit, build, unit and ui
     cmds:
       - task: kit
       - task: build
