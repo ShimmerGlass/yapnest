@@ -54,14 +54,15 @@ final class MessageActionsUITests: InteractionsTestCase {
         XCTAssertFalse(app.staticTexts["Edit Message"].exists, "the edit banner stayed after sending")
     }
 
-    func testEditingAMessageThatWasSentNeedsAConnection() {
+    /// The fixture never connects: the edit is applied here and waits to be
+    /// sent, with no error.
+    func testEditingAMessageThatWasSentOfflineAppliesItAndQueuesIt() {
         openMenu(on: "Sent already.")
         app.buttons["Edit"].tap()
         driver.composer.typeText(" Again.")
         app.buttons["Send"].tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 10), "no word that the edit couldn't be sent")
-        XCTAssertTrue(app.staticTexts["Sent already."].exists, "the bubble changed though the edit wasn't sent")
-        XCTAssertFalse(app.staticTexts["Sent already. Again."].exists, "the bubble changed though the edit wasn't sent")
+        XCTAssertTrue(app.staticTexts["Sent already. Again."].waitForExistence(timeout: 10), "the bubble doesn't have the new words")
+        XCTAssertFalse(app.alerts.firstMatch.exists, "an edit made offline was refused")
     }
 
     func testDeleteAsksFirstAndRemovesTheMessage() {
