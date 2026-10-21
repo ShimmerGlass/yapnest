@@ -30,6 +30,8 @@ struct ChatListView: View {
     @State private var devCommands: DevCommands?
     #endif
     @State private var me: Contact?
+    /// What we show contacts, for the Mac's account footer.
+    @State private var ownStatus: XMPPSession.OwnStatus?
 
     private var isSplit: Bool { sizeClass == .regular }
 
@@ -183,6 +185,33 @@ struct ChatListView: View {
                 me = contact
             }
         }
+        .task(id: session.account) {
+            guard Platform.isMac else { return }
+            await session.database.forEachValue(of: session.observeOwnStatus(), "Own status") { status in
+                ownStatus = status
+            }
+        }
+    }
+
+    /// What contacts see of us: nothing while we're not connected.
+    private var ownPresence: (presence: ContactPresence?, status: String?) {
+        switch model.connection {
+        case .connected:
+            guard let ownStatus else { return (nil, nil) }
+            let label = switch ownStatus.availability {
+            case .available: String(localized: "Available")
+            case .away: String(localized: "Away")
+            case .dnd: String(localized: "Do Not Disturb")
+            }
+            let presence: ContactPresence = switch ownStatus.availability {
+            case .available: .online
+            case .away: .away
+            case .dnd: .busy
+            }
+            return (presence, ownStatus.message.isEmpty ? label : ownStatus.message)
+        case .connecting: return (.offline, String(localized: "Connecting…"))
+        case .disconnected, .failed: return (.offline, String(localized: "Offline"))
+        }
     }
 
     private var chats: some View {
@@ -215,6 +244,8 @@ struct ChatListView: View {
                 name: me?.displayName ?? session.account.shortName,
                 seed: session.account.description,
                 imageURL: session.avatars.url(for: me),
+                presence: ownPresence.presence,
+                status: ownPresence.status,
             ) { sheet = .settings }
             .navigationTitle("Chats")
             .navigationBarTitleDisplayMode(.inline)

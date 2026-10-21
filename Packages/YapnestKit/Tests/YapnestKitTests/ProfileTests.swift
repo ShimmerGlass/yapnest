@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import Martin
 import Testing
 @testable import YapnestKit
@@ -10,6 +11,16 @@ struct ProfileTests {
 
     init() throws {
         session = try makeSession(me)
+    }
+
+    @Test func ownStatusFollowsTheAvailabilityAndMessage() async throws {
+        var values = session.observeOwnStatus()
+            .values(in: session.database.reader, bufferingPolicy: .bufferingNewest(1)).makeAsyncIterator()
+        #expect(try await values.next() == .init(availability: .available, message: ""))
+        try session.setAvailability(.dnd)
+        #expect(try await values.next() == .init(availability: .dnd, message: ""))
+        try session.setStatusMessage("  At the\nbeach ")
+        #expect(try await values.next() == .init(availability: .dnd, message: "At the beach"))
     }
 
     @Test func avatarNodesAreOpenToEveryone() throws {

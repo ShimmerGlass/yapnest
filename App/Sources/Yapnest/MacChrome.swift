@@ -1,4 +1,5 @@
 import SwiftUI
+import YapnestKit
 
 /// The Mac's window chrome, as modifiers that do nothing on iOS so the
 /// views using them have one line per seam.
@@ -6,10 +7,10 @@ extension View {
     /// Who you're signed in as, with Settings, at the foot of the sidebar.
     /// iOS has the same button in the navigation bar instead.
     @ViewBuilder
-    func accountFooter(name: String, seed: String, imageURL: URL?, openSettings: @escaping () -> Void) -> some View {
+    func accountFooter(name: String, seed: String, imageURL: URL?, presence: ContactPresence?, status: String?, openSettings: @escaping () -> Void) -> some View {
         if Platform.isMac {
             safeAreaInset(edge: .bottom, spacing: 0) {
-                AccountFooter(name: name, seed: seed, imageURL: imageURL, openSettings: openSettings)
+                AccountFooter(name: name, seed: seed, imageURL: imageURL, presence: presence, status: status, openSettings: openSettings)
             }
         } else {
             self
@@ -262,6 +263,9 @@ private struct AccountFooter: View {
     let name: String
     let seed: String
     let imageURL: URL?
+    let presence: ContactPresence?
+    /// Our status message, or else the availability or connection.
+    let status: String?
     let openSettings: () -> Void
 
     var body: some View {
@@ -270,10 +274,18 @@ private struct AccountFooter: View {
             HStack(spacing: 8) {
                 Button(action: openSettings) {
                     HStack(spacing: 8) {
-                        AvatarView(name: name, seed: seed, imageURL: imageURL)
+                        AvatarView(name: name, seed: seed, imageURL: imageURL, presence: presence)
                             .frame(width: 34, height: 34)
-                        Text(name)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(name)
+                                .lineLimit(1)
+                            if let status {
+                                Text(status)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
                         Spacer(minLength: 0)
                     }
                     .contentShape(Rectangle())

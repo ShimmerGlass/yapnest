@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import GRDB
 @preconcurrency import Martin
 
 /// What others see of us: our avatar (XEP-0084), kept in PEP. Contacts read
@@ -303,6 +304,25 @@ extension XMPPSession {
 
     public var statusMessage: String {
         Self.normalizedStatus(try? database.setting(.statusMessage)) ?? ""
+    }
+
+    /// What we show contacts, together.
+    public struct OwnStatus: Equatable, Sendable {
+        public let availability: Availability
+        /// Empty when there's none.
+        public let message: String
+    }
+
+    /// What we show contacts as it changes, here or through the settings
+    /// another device syncs.
+    public func observeOwnStatus() -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<OwnStatus>>> {
+        ValueObservation.tracking { db in
+            OwnStatus(
+                availability: try AppDatabase.setting(db, .availability).flatMap(Availability.init(rawValue:)) ?? .available,
+                message: Self.normalizedStatus(try AppDatabase.setting(db, .statusMessage)) ?? "",
+            )
+        }
+        .removeDuplicates()
     }
 
     /// Saves what we show contacts and sends it, to be sent on every connection
