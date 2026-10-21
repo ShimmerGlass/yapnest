@@ -956,6 +956,8 @@ final class ComposerTextView: UITextView {
     /// re-measure. The bar's own layout runs before this view is given its
     /// frame, and a text size change can arrive before the new font is applied.
     var onWidthChange: (() -> Void)?
+    /// Whether a hardware Return sends; a test sets it off the Mac.
+    var returnSends = ProcessInfo.processInfo.isMacCatalystApp
     private var fit = FitTrigger()
 
     override func layoutSubviews() {
@@ -981,9 +983,13 @@ final class ComposerTextView: UITextView {
                 UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(suggestionDismiss)),
             ]
         }
-        if ProcessInfo.processInfo.isMacCatalystApp {
+        if returnSends {
             commands.append(UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(sendFromKeyboard)))
-            commands.append(UIKeyCommand(input: "\r", modifierFlags: .command, action: #selector(insertNewLine)))
+            // Each modifier needs its own command: without one, UIKit lets the
+            // plain Return command answer Shift-Return, which then sent.
+            for flags: UIKeyModifierFlags in [.command, .shift, .alternate] {
+                commands.append(UIKeyCommand(input: "\r", modifierFlags: flags, action: #selector(insertNewLine)))
+            }
         } else if capturing {
             // A hardware Return picks the emoji instead of starting a line.
             commands.append(UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(sendFromKeyboard)))
