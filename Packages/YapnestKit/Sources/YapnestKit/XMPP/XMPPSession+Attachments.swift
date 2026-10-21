@@ -76,16 +76,22 @@ extension XMPPSession {
                 // Refused before it is read: a file the server can't take
                 // may be too big to hold in memory.
                 if let max = service.maxSize, file.fileSize > Int64(max) { throw AttachmentError.tooLarge(max: max) }
-                guard let plain = try? Data(contentsOf: file) else { throw AttachmentError.unreadable }
-                var data = plain
+                // Plain files go up from where they are stored. Encrypted ones
+                // are sealed into a file of ours, so the upload never holds
+                // the file in memory. It's in the system's temporary folder, not
+                // the attachments', whose partial files a reconnect sweeps.
+                var source = file
                 var fragment: String?
+                let temporary = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: temporary) }
                 if message.encryption == .omemo {
-                    let encrypted = try FileCrypto.encrypt(plain)
-                    data = encrypted.data
-                    fragment = encrypted.fragment
+                    guard let sealed = try? FileCrypto.encrypt(fileAt: file, to: temporary) else { throw AttachmentError.unreadable }
+                    source = temporary
+                    fragment = sealed
                 }
+                let size = Int(source.fileSize)
                 // Encryption adds to the size.
-                if let max = service.maxSize, data.count > max { throw AttachmentError.tooLarge(max: max) }
+                if let max = service.maxSize, size > max { throw AttachmentError.tooLarge(max: max) }
                 // Encrypted files are opaque bytes; don't reveal their type or their
                 // name to the upload server, which sees the slot request and often
                 // puts the name in the URL. The message carries the real name.
@@ -93,8 +99,8 @@ extension XMPPSession {
                 phase = .slot
                 started = Date()
                 let slot = try await client.module(.httpFileUpload)
-                    .requestUploadSlot(componentJid: service.jid, filename: UploadName.slotName(for: attachment.name, encrypted: fragment != nil), size: data.count, contentType: contentType)
-                DiagLog.info(.upload, "Upload slot granted", .id("msg", transferId), .int("bytes", data.count), .duration("took", since: started))
+                    .requestUploadSlot(componentJid: service.jid, filename: UploadName.slotName(for: attachment.name, encrypted: fragment != nil), size: size, contentType: contentType)
+                DiagLog.info(.upload, "Upload slot granted", .id("msg", transferId), .int("bytes", size), .duration("took", since: started))
                 phase = .put
                 started = Date()
 
@@ -103,9 +109,9 @@ extension XMPPSession {
                 request.setValue(contentType, forHTTPHeaderField: "Content-Type")
                 for (header, value) in slot.putHeaders { request.setValue(value, forHTTPHeaderField: header) }
                 let delegate = ProgressDelegate { [weak self] progress in self?.setProgress(progress, for: messageId) }
-                let (_, response) = try await Self.transferSession.upload(for: request, from: data, delegate: delegate)
+                let (_, response) = try await Self.transferSession.upload(for: request, fromFile: source, delegate: delegate)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                DiagLog.info(.upload, "Upload finished", .id("msg", transferId), .int("status", status), .int("bytes", data.count), .duration("took", since: started))
+                DiagLog.info(.upload, "Upload finished", .id("msg", transferId), .int("status", status), .int("bytes", size), .duration("took", since: started))
                 guard (200..<300).contains(status) else {
                     throw AttachmentError.uploadFailed(HTTPURLResponse.localizedString(forStatusCode: status))
                 }
@@ -208,9 +214,15 @@ extension XMPPSession {
                 let (file, response) = try await Self.transferSession.download(from: source, delegate: progress)
                 defer { try? FileManager.default.removeItem(at: file) }
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
-                var data = try Data(contentsOf: file, options: .mappedIfSafe)
-                guard data.count <= limit else { throw TooLarge(size: Int64(data.count)) }
-                if let fragment { data = try FileCrypto.decrypt(data, fragment: fragment) }
+                // The ciphertext stays mapped, not read, and goes out of scope
+                // once opened: only the plaintext is held while it is saved.
+                // `open` verifies the tag before it returns anything.
+                let data: Data
+                do {
+                    let mapped = try Data(contentsOf: file, options: .mappedIfSafe)
+                    guard mapped.count <= limit else { throw TooLarge(size: Int64(mapped.count)) }
+                    data = if let fragment { try FileCrypto.decrypt(mapped, fragment: fragment) } else { mapped }
+                }
 
                 let localFile = try attachments.save(data, name: attachment.name)
                 let mimeType = fragment == nil ? http.mimeType : nil

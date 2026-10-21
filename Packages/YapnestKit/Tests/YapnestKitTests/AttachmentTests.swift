@@ -26,6 +26,30 @@ struct AttachmentTests {
         #expect(throws: FileCrypto.Failure.self) { try FileCrypto.decrypt(tampered, fragment: encrypted.fragment) }
     }
 
+    @Test func fileCryptoEncryptsAFileAsCiphertextThenTag() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let plain = Data((0..<70_000).map { UInt8($0 % 241) })
+        let source = folder.appending(path: "plain.bin")
+        let sealed = folder.appending(path: "sealed.bin")
+        try plain.write(to: source)
+
+        let fragment = try FileCrypto.encrypt(fileAt: source, to: sealed)
+        let output = try Data(contentsOf: sealed)
+        #expect(output.count == plain.count + 16)
+        #expect(fragment.count == 88)
+        #expect(try FileCrypto.decrypt(output, fragment: fragment) == plain)
+        #expect(output.prefix(plain.count) != plain)
+    }
+
+    @Test func fileCryptoLeavesNothingWhenTheSourceIsMissing() {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let sealed = folder.appending(path: "sealed.bin")
+        #expect(throws: (any Error).self) { try FileCrypto.encrypt(fileAt: folder.appending(path: "nope"), to: sealed) }
+        #expect(!FileManager.default.fileExists(atPath: sealed.path))
+    }
+
     @Test func aesgcmURLs() throws {
         let url = try #require(FileCrypto.aesgcmURL(for: URL(string: "https://up.example/abc/photo.jpg")!, fragment: "00ff"))
         #expect(url.absoluteString == "aesgcm://up.example/abc/photo.jpg#00ff")
