@@ -296,12 +296,14 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     /// Drops everything about these devices of `name`. One that turns up again
-    /// is met as new.
+    /// is met as new, except a compromised one: its row stays, so removing a
+    /// device the user blocked doesn't let it come back trusted.
     func forget(deviceIds: [Int32], of name: String) {
         _ = write { db in
             for id in deviceIds {
                 try db.execute(sql: "DELETE FROM omemoSession WHERE name = ? AND deviceId = ?", arguments: [name, id])
-                try db.execute(sql: "DELETE FROM omemoIdentity WHERE name = ? AND deviceId = ?", arguments: [name, id])
+                try db.execute(sql: "DELETE FROM omemoIdentity WHERE name = ? AND deviceId = ? AND status NOT IN (?, ?)",
+                               arguments: [name, id, IdentityStatus.compromisedActive.rawValue, IdentityStatus.compromisedInactive.rawValue])
             }
         }
     }

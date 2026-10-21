@@ -1,4 +1,5 @@
 import Foundation
+import Martin
 
 /// Chats a reinstall lost. The first sync reads only the last
 /// `initialSyncWindow` of the archive, and the chat list shows conversations,
@@ -47,7 +48,8 @@ extension XMPPSession {
         let stored = (try? database.peersWithMessages()) ?? []
         var queue = Self.contactsToRestore(roster: roster, withMessages: stored)[...]
 
-        await withTaskGroup(of: Void.self) { group in
+        var allFinished = true
+        await withTaskGroup(of: Bool.self) { group in
             func next() -> JID? {
                 guard isCurrent(attempt: attempt) else { return nil }
                 return queue.popFirst()
@@ -56,21 +58,38 @@ extension XMPPSession {
                 guard let peer = next() else { break }
                 group.addTask { await self.restore(peer) }
             }
-            while await group.next() != nil {
+            while let finished = await group.next() {
+                if !finished { allFinished = false }
                 guard let peer = next() else { continue }
                 group.addTask { await self.restore(peer) }
             }
         }
-        // Not while it was cut short: the contacts left are for the next connect.
-        guard isCurrent(attempt: attempt), queue.isEmpty else { return }
+        // Not while it was cut short, or when a contact's query failed in a way
+        // that may pass: those are for the next connect, which skips the restored.
+        guard isCurrent(attempt: attempt), queue.isEmpty, allFinished else { return }
         try? database.setSetting(.historyRestore, nil)
     }
 
-    private func restore(_ peer: JID) async {
+    /// Whether there is nothing more to do for `peer`: it was restored, has no
+    /// archive, or the server refused in a way that won't change. A failure that
+    /// may pass (a timeout, a busy chat, a page that couldn't be stored) isn't
+    /// finished, or the chat would be lost for good.
+    private func restore(_ peer: JID) async -> Bool {
         do {
             _ = try await loadHistory(for: peer, newest: true)
+            return true
         } catch {
             logger.info("Couldn't restore the chat with \(peer, privacy: .private): \(error.localizedDescription, privacy: .private)")
+            return Self.isDefinitive(error)
+        }
+    }
+
+    static func isDefinitive(_ error: Error) -> Bool {
+        if case HistoryError.noArchive = error { return true }
+        guard let error = error as? XMPPError else { return false }
+        switch error.errorCondition {
+        case .item_not_found, .forbidden, .not_allowed, .feature_not_implemented, .service_unavailable: return true
+        default: return false
         }
     }
 }

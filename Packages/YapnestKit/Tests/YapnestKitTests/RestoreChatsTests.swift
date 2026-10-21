@@ -2,6 +2,7 @@ import Foundation
 import GRDB
 import Martin
 import Testing
+@testable import Martin
 @testable import YapnestKit
 
 private let me = YapnestKit.JID("me@example.org")!
@@ -54,6 +55,36 @@ struct RestoreChatsTests {
         session.markChatRestorePending()
         await session.restoreChats(attempt: 0)
         #expect(try db.setting(.historyRestore) == "pending")
+    }
+
+    @Test func aFailureWhileConnectedLeavesTheRestorePending() async throws {
+        let session = try makeSession(me, database: db)
+        let wire = FakeWire()
+        session.connectForTesting(wire)
+        session.lock.withLock { $0.archiveVersion = .MAM2 }
+        wire.answer { request in
+            guard let query = request.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") else { return nil }
+            session.client.module(.mam).archivedMessagesPublisher.send(.init(
+                messageId: "s-old", source: me.martin, query: .init(id: query.getAttribute("queryid") ?? "", version: .MAM2),
+                timestamp: Date(timeIntervalSince1970: 100),
+                message: parseStanza("<message from='alice@example.org/phone' to='me@example.org' type='chat' id='old'><body>older</body></message>"),
+            ))
+            let fin = Element(name: "fin", xmlns: "urn:xmpp:mam:2")
+            fin.setAttribute("complete", value: "true")
+            fin.addChild(Element(name: "set", xmlns: "http://jabber.org/protocol/rsm", children: [Element(name: "first", cdata: "s-old")]))
+            return FakeWire.result(to: request, fin)
+        }
+        try await db.writer.write { try Contact(jid: alice, isInRoster: true).insert($0) }
+        session.markChatRestorePending()
+        try failStoringMessages(db)
+
+        await session.restoreChats(attempt: session.lock.withLock { $0.attempt })
+        #expect(try db.setting(.historyRestore) == "pending")
+
+        try allowStoringMessages(db)
+        await session.restoreChats(attempt: session.lock.withLock { $0.attempt })
+        #expect(try db.peersWithMessages() == [alice])
+        #expect(try db.setting(.historyRestore) == nil)
     }
 
     @Test func nothingRunsUnlessASyncBeganWithoutACursor() throws {

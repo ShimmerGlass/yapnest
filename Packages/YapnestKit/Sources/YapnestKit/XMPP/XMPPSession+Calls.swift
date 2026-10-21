@@ -114,15 +114,33 @@ extension XMPPSession {
 
     /// Whether some device supports every feature in `results`, one per feature.
     static func supportsAll(_ results: [CapabilitiesModule.FeatureSupported]) -> Bool {
+        switch devicesSupportingAll(results) {
+        case .none: false
+        case .every: true
+        case .some(let devices): !devices.isEmpty
+        }
+    }
+
+    /// Which devices support every feature in `results`, one per feature.
+    enum SupportingDevices {
+        /// Some feature has no device that supports it.
+        case none
+        /// Every feature is supported by whichever device, so nothing narrows it.
+        case every
+        /// Only these devices support them all.
+        case some(Set<Martin.JID>)
+    }
+
+    static func devicesSupportingAll(_ results: [CapabilitiesModule.FeatureSupported]) -> SupportingDevices {
         var devices: Set<Martin.JID>?
         for result in results {
             switch result {
-            case .none: return false
+            case .none: return .none
             case .all: continue
             case .some(let jids): devices = devices.map { $0.intersection(jids) } ?? Set(jids)
             }
         }
-        return devices?.isEmpty != true
+        return devices.map { .some($0) } ?? .every
     }
 
     /// Rings `peer`. Throws if another call is going on or the session can't call.

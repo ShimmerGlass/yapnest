@@ -309,16 +309,14 @@ extension XMPPSession {
     /// every feature, preferring the most available.
     func fileTransferDevice(of peer: JID) -> Martin.JID? {
         guard let caps = client.modulesManager.moduleOrNil(CapabilitiesModule.IDENTIFIER) else { return nil }
-        var devices: Set<Martin.JID>?
-        for feature in JingleFile.requiredFeatures {
-            switch caps.isFeatureSupported(feature, by: peer.martin) {
-            case .none: return nil
-            case .all: continue
-            case .some(let jids): devices = devices.map { $0.intersection(jids) } ?? Set(jids)
-            }
-        }
+        let supported = JingleFile.requiredFeatures.map { caps.isFeatureSupported($0, by: peer.martin) }
         let resources = lock.withLock { $0.resources[peer] } ?? [:]
-        let candidates = devices ?? Set(resources.keys.map { Martin.JID(peer.martin, resource: $0) })
+        let candidates: Set<Martin.JID>
+        switch Self.devicesSupportingAll(supported) {
+        case .none: return nil
+        case .every: candidates = Set(resources.keys.map { Martin.JID(peer.martin, resource: $0) })
+        case .some(let devices): candidates = devices
+        }
         return candidates.max { lhs, rhs in
             let a = lhs.resource.flatMap { resources[$0] }, b = rhs.resource.flatMap { resources[$0] }
             return (a?.availability ?? .offline, a?.order ?? -1) < (b?.availability ?? .offline, b?.order ?? -1)

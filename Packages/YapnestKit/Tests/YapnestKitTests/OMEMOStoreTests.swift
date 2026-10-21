@@ -26,6 +26,21 @@ struct OMEMOStoreTests {
         #expect(store.isTrusted(identity: laptop, publicKeyData: key(2)))
     }
 
+    @Test func aForgottenCompromisedDeviceStaysCompromisedWhenItReturns() throws {
+        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me)
+        let own = SignalAddress(name: me.description, deviceId: 2)
+        #expect(store.save(identity: own, publicKeyData: key(2)))
+        _ = store.storeSessionRecord(Data([1]), forAddress: own)
+        #expect(store.setStatus(.compromisedActive, forIdentity: own))
+
+        store.forget(deviceIds: [2], of: me.description)
+        #expect(!store.containsSessionRecord(forAddress: own))
+        _ = store.save(identity: own, publicKeyData: key(2))
+
+        #expect(!store.isTrusted(identity: own, publicKeyData: key(2)))
+        #expect(store.status(forName: me.description, deviceId: 2)?.trust == .compromised)
+    }
+
     @Test func rejectsChangedOrCompromisedKeys() throws {
         let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me)
         let phone = SignalAddress(name: bob, deviceId: 1)
