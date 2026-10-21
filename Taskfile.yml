@@ -1,0 +1,56 @@
+version: '3'
+
+# Checks to run before pushing. `task check` runs them all, in order.
+
+vars:
+  # Each UI test worker boots a simulator clone of 1.5 to 2.5 GB.
+  WORKERS: 6
+  IPHONE: platform=iOS Simulator,name=iPhone 17
+  # The keyboard jumps reproduce only on the iOS 26 runtime (CLAUDE.md).
+  IOS26: platform=iOS Simulator,name=Yapnest iOS 26,OS=26.5
+
+tasks:
+  project:
+    desc: Regenerate Yapnest.xcodeproj from project.yml
+    run: once
+    cmds:
+      - xcodegen generate
+
+  kit:
+    desc: YapnestKit's tests (serially, as timing tests flake in parallel)
+    dir: Packages/YapnestKit
+    cmds:
+      - swift test --no-parallel
+
+  build:
+    desc: Build for the iOS simulator and the Mac
+    deps: [project]
+    cmds:
+      - xcodebuild -scheme Yapnest -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO -quiet
+      - xcodebuild -scheme Yapnest -destination 'platform=macOS,variant=Mac Catalyst' build CODE_SIGNING_ALLOWED=NO -quiet
+
+  unit:
+    desc: The app's unit tests
+    deps: [project]
+    cmds:
+      - xcodebuild test -scheme Yapnest -destination '{{.IPHONE}}' -only-testing:YapnestTests -parallel-testing-worker-count {{.WORKERS}} -quiet
+
+  ui:
+    desc: UI tests on the iPhone 17 and the iOS 26 simulators; extra arguments go to xcodebuild
+    deps: [project]
+    # Both run even if the first fails, as each catches what the other can't.
+    cmds:
+      - |
+        failed=0
+        for destination in '{{.IPHONE}}' '{{.IOS26}}'; do
+          xcodebuild test -scheme YapnestUITests -destination "$destination" -parallel-testing-worker-count {{.WORKERS}} -quiet {{.CLI_ARGS}} || failed=1
+        done
+        exit $failed
+
+  check:
+    desc: Everything above
+    cmds:
+      - task: kit
+      - task: build
+      - task: unit
+      - task: ui

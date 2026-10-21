@@ -91,8 +91,10 @@ Two more servers have ports of their own, so all four can run together:
 The conversation's frame recorder (`ScrollRecorder.swift`) keeps what the list did on every frame: how far it strayed from the bottom while it was to stay there, how far the topmost message moved when older ones came in, how many rows were on screen. A glitch that lasts a frame is caught even though the test looks at the screen only now and then. The tests read it from an invisible element in the list's margin.
 
 ```sh
-xcodebuild test -scheme YapnestUITests -destination 'platform=iOS Simulator,name=iPhone 17'
+task ui   # iPhone 17, then the iOS 26 simulator
 ```
+
+`task ui -- -only-testing:YapnestUITests/MessageActionsUITests` runs some of them. Each parallel worker boots a simulator clone of up to 2.5 GB, so the Taskfile caps them at 6 (`WORKERS`); pass `-parallel-testing-worker-count 6` to any `xcodebuild test` you run by hand. `task check` runs YapnestKit's tests, both builds, the unit tests and the UI tests.
 
 The scheme runs test classes in parallel, on clones of the simulator; add `-parallel-testing-worker-count 4` to cap them (15 to 25 minutes depending on what else the Mac is doing, against 52 in one; more workers on a 12-core Mac made tests fail from load). The long fuzz and scroll checks are split over classes so that none runs for much longer than the rest; `-parallel-testing-enabled NO` runs them one by one.
 
@@ -106,7 +108,7 @@ The keyboard tests need the simulator's software keyboard: turn off I/O > Keyboa
 
 ```sh
 TEST_RUNNER_YAPNEST_FUZZ_SEEDS=31,32,33 xcodebuild test -scheme YapnestUITests \
-  -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -destination 'platform=iOS Simulator,name=iPhone 17' -parallel-testing-worker-count 6 \
   -only-testing:YapnestUITests/FuzzScrollingUITests/testSeedsFromTheEnvironment
 ```
 
