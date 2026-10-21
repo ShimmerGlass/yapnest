@@ -50,6 +50,14 @@ struct ScrollRecord: Equatable {
     /// stack lay out again while the list rested at its end. A list that
     /// shows its newest message there needs none.
     private(set) var endNudges = 0
+    /// How many times the chat's name in the header changed after it was
+    /// first drawn. The bar sizes the header for what it first shows and
+    /// measures it again only a moment later, so a later name is cut short.
+    private(set) var titleChanges = 0
+    private var title: String?
+    /// How many times the header was laid out narrower than what it shows
+    /// needs, though that would fit in its slot: the name cut short.
+    private(set) var headerSqueezes = 0
 
     /// Whether the list has reached the bottom yet. The first geometry report
     /// comes before the scroll view applies its bottom anchor, in the same
@@ -142,6 +150,15 @@ struct ScrollRecord: Equatable {
         endNudges += 1
     }
 
+    mutating func titled(_ title: String) {
+        if let shown = self.title, shown != title { titleChanges += 1 }
+        self.title = title
+    }
+
+    mutating func headerLaidOut(squeezed: Bool) {
+        if squeezed { headerSqueezes += 1 }
+    }
+
     mutating func visibleChanged(count: Int) {
         reported = count
     }
@@ -160,14 +177,16 @@ struct ScrollRecord: Equatable {
         maxPrependShift = 0
         latestTaps = 0
         endNudges = 0
+        titleChanges = 0
+        headerSqueezes = 0
         anchorBeforePrepend = nil
     }
 
     /// What a test reads, as `key=value` pairs.
     var summary: String {
         String(
-            format: "samples=%d maxAway=%.1f prepends=%d measuredPrepends=%d maxPrependShift=%.1f rows=%d visible=%d top=%.0f latestTaps=%d endNudges=%d",
-            samples, maxAway, prepends, measuredPrepends, maxPrependShift, rows, visible, top, latestTaps, endNudges,
+            format: "samples=%d maxAway=%.1f prepends=%d measuredPrepends=%d maxPrependShift=%.1f rows=%d visible=%d top=%.0f latestTaps=%d endNudges=%d titleChanges=%d headerSqueezes=%d",
+            samples, maxAway, prepends, measuredPrepends, maxPrependShift, rows, visible, top, latestTaps, endNudges, titleChanges, headerSqueezes,
         )
     }
 }
@@ -251,6 +270,39 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+extension View {
+    /// Has the chat's header tell the recorder when it's laid out narrower
+    /// than it needs. `room` is the most its slot in the bar can give it.
+    @ViewBuilder
+    func recordingSqueezes(_ model: ConversationModel, room: CGFloat?) -> some View {
+        if let recorder = model.recorder {
+            HeaderSqueezeProbe(recorder: recorder, room: room ?? .infinity) { self }
+        } else {
+            self
+        }
+    }
+}
+
+/// Compares the width the header is given with the width it needs in the
+/// same layout pass, which two separate measurements couldn't: one would
+/// report before the other caught up.
+private struct HeaderSqueezeProbe: Layout {
+    let recorder: ScrollRecorder
+    let room: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews.first?.sizeThatFits(proposal) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let header = subviews.first else { return }
+        let needed = header.sizeThatFits(.unspecified).width
+        let squeezed = bounds.width + 0.5 < min(needed, room)
+        MainActor.assumeIsolated { recorder.update { $0.headerLaidOut(squeezed: squeezed) } }
+        header.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
     }
 }
 

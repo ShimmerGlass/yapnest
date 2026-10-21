@@ -28,6 +28,12 @@ struct ConversationView: View {
     /// How tall the composer, or the bar in its place, is. The list runs on
     /// under it and keeps this much room past its newest message.
     @State private var bottomBarHeight: CGFloat = 0
+    /// The screen's width, which the header's slot in the bar is sized from.
+    @State private var width: CGFloat = 0
+    /// The group has been joining for a while. A group is joined again on
+    /// every connection, which usually takes a moment, so "Joining…" waits
+    /// to show until it's taking longer than that.
+    @State private var joinIsSlow = false
 
     @State private var confirmsBlock = false
     /// A contact request is being answered.
@@ -47,6 +53,14 @@ struct ConversationView: View {
 
     private var title: String {
         group?.displayName ?? contact?.displayName ?? peer.shortName
+    }
+
+    private var isJoining: Bool {
+        guard let group, !group.hasLeft else { return false }
+        switch model.rooms[peer]?.phase {
+        case .joining?, nil: return true
+        case .joined?, .failed?: return false
+        }
     }
 
     private var presence: ContactPresence? {
@@ -78,7 +92,7 @@ struct ConversationView: View {
             switch model.rooms[peer]?.phase {
             case .joined?: return Text("\(model.rooms[peer]?.memberCount ?? 0) members")
             case .failed(let reason)?: return Text(reason)
-            case .joining?, nil: return Text("Joining…")
+            case .joining?, nil: return joinIsSlow ? Text("Joining…") : nil
             }
         }
         if model.typing.contains(peer) { return Text("typing…") }
@@ -96,6 +110,9 @@ struct ConversationView: View {
 
     var body: some View {
         messages
+            // Not on the Mac, whose header isn't in the bar, so resizing the
+            // window doesn't redraw the screen at every step.
+            .onGeometryChange(for: CGFloat.self) { Platform.usesChatHeader ? 0 : $0.size.width } action: { width = $0 }
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar(.hidden, for: .tabBar)
@@ -106,6 +123,7 @@ struct ConversationView: View {
                 if !Platform.usesChatHeader {
                     ToolbarItem(placement: .principal) {
                         header
+                            .frame(width: headerWidth)
                     }
                 }
                 if canCall, !Platform.usesChatHeader {
@@ -149,6 +167,14 @@ struct ConversationView: View {
             .task(id: presence) {
                 guard presence == .offline else { return }
                 await session.refreshLastSeen(of: peer)
+            }
+            .task(id: isJoining) {
+                joinIsSlow = false
+                guard isJoining else { return }
+                do {
+                    try await Task.sleep(for: .seconds(3))
+                    joinIsSlow = true
+                } catch {}
             }
             .task {
                 await session.database.forEachValue(of: session.database.observeGroupChat(peer), "Group") { group in
@@ -315,7 +341,26 @@ struct ConversationView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Chat Settings")
+        #if DEBUG
+        .onChange(of: identity.title, initial: true) { _, title in
+            conversation.recorder?.update { $0.titled(title) }
+        }
+        .recordingSqueezes(conversation, room: headerWidth)
+        #endif
     }
+
+    /// The header's slot in the bar is as wide as the bar allows whatever
+    /// it shows, so it never has to grow. The bar sizes the slot for what
+    /// it first shows and doesn't measure it again while a push runs, so a
+    /// name or status that came in then was cut short ("N…") until the push
+    /// ended. Room for a bar button on both sides keeps it centred.
+    private var headerWidth: CGFloat? {
+        width > 0 ? width - 2 * Self.barButtonRoom : nil
+    }
+
+    /// A bar button with the margins beside it. The call button takes 84 on
+    /// iOS 26; with less, the bar moves the slot off centre to fit.
+    private static let barButtonRoom: CGFloat = 88
 
     /// Click for the chat's settings, as with the header in Messages.
     private var macHeader: some View {
@@ -341,8 +386,8 @@ struct ConversationView: View {
             }
         }
         .padding(.horizontal, 16)
-        // The top 40 points belong to the title bar, which takes clicks there
-        // to drag the window, so the header and call button sit mostly below.
+        // Below the window buttons, in the title bar's band, which on the
+        // compact style passes the pointer on from 17 points down.
         .padding(.top, 32)
         .padding(.bottom, 10)
         .background(.bar)

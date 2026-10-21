@@ -32,6 +32,27 @@ final class ChatListUITests: InteractionsTestCase {
         XCTAssertTrue(row("Nest").waitForExistence(timeout: ConversationDriver.listTimeout), "the list isn't back")
     }
 
+    /// The bar sizes the header for what it first shows and is slow to
+    /// measure it again, so a name that arrived after the push was cut to
+    /// "N…" for a moment. The row's name has to be there from the start.
+    func testTheHeaderShowsTheNameFromTheStart() {
+        waitForRow("Nest").tap()
+        XCTAssertTrue(driver.recorderElement.waitForExistence(timeout: ConversationDriver.openTimeout), "the chat didn't open")
+        XCTAssertTrue(app.staticTexts["React to this one."].waitForExistence(timeout: ConversationDriver.contentTimeout), "the chat's messages aren't shown")
+        driver.waitForStillness()
+        XCTAssertEqual(driver.recorder()["titleChanges"], 0, "the header's name changed after the push: \(driver.recorderSummary())")
+    }
+
+    /// The bar doesn't measure the header again while a push runs, so one
+    /// that changed then was cut short until the push ended.
+    func testTheHeaderIsNeverCutShortAsTheChatOpens() {
+        waitForRow("Nest").tap()
+        XCTAssertTrue(driver.recorderElement.waitForExistence(timeout: ConversationDriver.openTimeout), "the chat didn't open")
+        XCTAssertTrue(app.staticTexts["React to this one."].waitForExistence(timeout: ConversationDriver.contentTimeout), "the chat's messages aren't shown")
+        driver.waitForStillness()
+        XCTAssertEqual(driver.recorder()["headerSqueezes"], 0, "the header was cut short: \(driver.recorderSummary())")
+    }
+
     func testTheUnreadBadgeClearsOnceTheChatIsOpened() {
         let unread = waitForRow("Unread")
         XCTAssertEqual(unreadCount(of: unread), 3, "the row doesn't count the 3 unread messages: \(unread.label)")

@@ -304,7 +304,11 @@ extension View {
 
     /// Takes the title bar's toolbar and title away, so the sidebar and the
     /// chat run to the top of the window, as in Messages, and the chat's
-    /// header sits in the band the window buttons share.
+    /// header sits in the band the window buttons share. The compact style
+    /// keeps that band short: the default one takes the top 52 points, where
+    /// the pointer never reaches the app, which left the header's name with
+    /// no pointing hand. It also hides the sidebar button while the chat list
+    /// is collapsed, so the Mac's list can't be (`ChatListView`).
     @ViewBuilder
     func hidesWindowToolbar() -> some View {
         #if targetEnvironment(macCatalyst)
@@ -312,6 +316,7 @@ extension View {
             for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
                 scene.titlebar?.titleVisibility = .hidden
                 scene.titlebar?.toolbar = nil
+                scene.titlebar?.toolbarStyle = .unifiedCompact
             }
         }
         #else

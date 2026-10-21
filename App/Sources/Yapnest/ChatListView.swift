@@ -19,8 +19,12 @@ struct ChatListView: View {
     /// The message the open chat was opened on, from a search.
     @State private var selectedMessage: Int64?
     /// The list's row for a chat opened from it, which starts the header off.
-    @State private var openedItems: [JID: ChatListItem] = [:]
+    /// A reference, as the stack builds a pushed chat with the
+    /// `navigationDestination` closure of an earlier body, which would
+    /// otherwise still hold the items from before the tap.
+    @State private var openedItems = OpenedItems()
     @State private var sidebarPath: [ChatRoute] = []
+    @State private var columnVisibility = NavigationSplitViewVisibility.automatic
     @State private var sheet: ChatListSheet?
     #if DEBUG
     @State private var devCommands: DevCommands?
@@ -42,13 +46,16 @@ struct ChatListView: View {
     var body: some View {
         Group {
             if isSplit {
-                NavigationSplitView {
+                NavigationSplitView(columnVisibility: Platform.isMac ? .constant(.all) : $columnVisibility) {
                     NavigationStack(path: $sidebarPath) {
                         chats
                             .navigationDestination(for: ChatRoute.self) { route in
                                 if case .archive = route { archive }
                             }
                     }
+                    // The Mac's compact title bar loses the sidebar button
+                    // while the list is hidden, with no way to bring it back.
+                    .toolbar(removing: Platform.isMac ? .sidebarToggle : nil)
                     .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 440)
                 } detail: {
                     NavigationStack {
@@ -923,3 +930,14 @@ enum DevCommands: Identifiable {
     }
 }
 #endif
+
+/// The list's rows for the chats opened from it, by peer.
+@MainActor
+private final class OpenedItems {
+    private var items: [JID: ChatListItem] = [:]
+
+    subscript(peer: JID) -> ChatListItem? {
+        get { items[peer] }
+        set { items[peer] = newValue }
+    }
+}
