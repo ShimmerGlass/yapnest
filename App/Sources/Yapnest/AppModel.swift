@@ -124,6 +124,8 @@ final class AppModel {
     /// Kept for a session that appears while the app is already away.
     @ObservationIgnored private var isBackground = false
     @ObservationIgnored private var suspension: Task<Void, Never>?
+    /// Waits for a call to end so the suspension it held back can follow.
+    @ObservationIgnored private var callWatch: AnyCancellable?
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     /// The sign-out cleanup still running. It frees state that belongs to the
     /// account being left, so a new session must not start before it ends.
@@ -375,6 +377,7 @@ final class AppModel {
         if active {
             suspension?.cancel()
             suspension = nil
+            callWatch = nil
             endBackgroundTask()
             connect(session)
             // Seen here: no notification for any of it.
@@ -448,7 +451,8 @@ final class AppModel {
     /// the server keep the session, so it pushes, and lets go of what iOS
     /// would kill a suspended app for holding.
     private func suspendSoon(_ session: XMPPSession) {
-        guard suspension == nil else { return }
+        guard suspension == nil, callWatch == nil else { return }
+        guard !holdsForCall(session) else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Suspend session") { [weak self] in
             MainActor.assumeIsolated { self?.suspend(session) }
         }
@@ -463,6 +467,12 @@ final class AppModel {
         guard !isActive, suspension != nil || backgroundTask != .invalid else { return }
         suspension?.cancel()
         suspension = nil
+        // The audio background mode keeps the process running during a call,
+        // and a suspended session would cut it. The task still has to end here.
+        if holdsForCall(session) {
+            endBackgroundTask()
+            return
+        }
         if pendingSignIn === session { suspendedSignIn = session }
         session.suspend()
         DiagLog.info(.app, "Session suspended")
@@ -470,6 +480,25 @@ final class AppModel {
         sessionLock.unlock()
         AppDatabase.suspend()
         endBackgroundTask()
+    }
+
+    /// Whether a call keeps the session from being suspended. If so, suspends
+    /// once the call is over.
+    private func holdsForCall(_ session: XMPPSession) -> Bool {
+        guard session.callState.value?.isOver == false else { return false }
+        guard callWatch == nil else { return true }
+        callWatch = session.callState
+            .filter { $0?.isOver != false }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak session] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let session else { return }
+                    self.callWatch = nil
+                    guard SessionScope.isWanted(session, signedIn: self.session, pendingSignIn: self.pendingSignIn) else { return }
+                    if !self.isActive, self.isBackground, !Platform.staysConnected { self.suspendSoon(session) }
+                }
+            }
+        return true
     }
 
     private func endBackgroundTask() {

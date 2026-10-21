@@ -570,6 +570,8 @@ final class ConversationModel {
     }
 
     private func historyChanged(_ state: XMPPSession.State, room: RoomStatus?) {
+        var wasOnline = false
+        if case .connected(isSyncing: false)? = history?.state { wasOnline = true }
         history = (state, room)
         let fetching = switch state {
         case .connecting, .connected(isSyncing: true): true
@@ -583,6 +585,8 @@ final class ConversationModel {
         if case .connected(isSyncing: false) = state, !fetching {
             olderWaitsForConnection = false
             loadOlderIfNeeded()
+            // A preview that failed offline is asked for again once, not on every emission.
+            if !wasOnline { retryMissingPreviews() }
         }
         guard fetching != isFetchingHistory else { return }
         isFetchingHistory = fetching
@@ -1183,6 +1187,13 @@ final class ConversationModel {
     private func decision(for message: Message) -> LinkPreviewPolicy.Decision {
         LinkPreviewPolicy.decide(global: linkPreviewSetting, chat: linkPreviewsAllowed,
                                   isOurs: Message.isTrustedOutgoing(isOutgoing: message.direction == .outgoing, isWrittenHere: message.isWrittenHere, inGroup: isGroup))
+    }
+
+    private func retryMissingPreviews() {
+        for item in items.values where item.preview == nil {
+            if let string = item.message.link { requestedLinks.remove(string) }
+        }
+        fetchMissingPreviews()
     }
 
     private func fetchMissingPreviews() {

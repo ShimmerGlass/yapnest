@@ -126,6 +126,24 @@ struct AppModelSessionTests {
         await eventually("the session lets go of the lock") { !fixture.lock.isLocked }
     }
 
+    @Test func aCallKeepsTheSessionConnectedInTheBackgroundUntilItEnds() async throws {
+        let fixture = AppModelFixture()
+        let model = fixture.model!
+        try await model.signIn(fixture.credentialsToSignIn)
+        let session = try #require(model.session)
+        let peer = JID("bob@example.org")!
+        func call(_ phase: CallPhase) -> CallState {
+            CallState(sid: "s", peer: peer, direction: .outgoing, phase: phase, isVideo: false, isCameraOn: false)
+        }
+        session.callState.send(call(.active))
+
+        model.scenePhaseChanged(active: false, background: true)
+
+        #expect(await stays(for: .milliseconds(500)) { fixture.lock.isLocked })
+        session.callState.send(call(.ended(.completed)))
+        await eventually("the session lets go of the lock") { !fixture.lock.isLocked }
+    }
+
     // MARK: Leaving the app during sign-in
 
     /// A sign-in the app suspended in the background, its connection dropped.
