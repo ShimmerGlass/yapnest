@@ -81,10 +81,12 @@ final class ExportLogsUITests: InteractionsTestCase {
     func testExportLogsOpensTheShareSheetWithoutAnError() {
         driver.openSettings()
         let row = app.buttons["exportLogs"].firstMatch
-        for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp() }
+        let footer = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "holds no messages, contacts or addresses")).firstMatch
+        // The row can be hittable at the screen's bottom edge with its footer
+        // still below, not yet in the list.
+        for _ in 0..<8 where !row.exists || !row.isHittable || !footer.exists { app.swipeUp() }
         XCTAssertTrue(row.exists, "no Export Logs row in Settings")
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "holds no messages, contacts or addresses")).firstMatch.exists,
-            "the footer doesn't say what the logs hold")
+        XCTAssertTrue(footer.exists, "the footer doesn't say what the logs hold")
         row.tap()
         XCTAssertFalse(app.alerts["Couldn't export the logs"].waitForExistence(timeout: 3), "the export failed")
         let shown = app.otherElements["diagnosticsShareSheet"].firstMatch.waitForExistence(timeout: 10)
