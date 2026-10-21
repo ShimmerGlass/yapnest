@@ -1996,8 +1996,11 @@ public final class XMPPSession: @unchecked Sendable {
     /// Sends the correction or retraction `id` of a message, built from what
     /// is stored when its turn comes: by then the message may have been
     /// corrected again, or retracted, and only the latest state is sent. Where
-    /// the stanza can no longer be built it stops being pending.
+    /// the stanza can no longer be built, or can never be sent, it stops
+    /// being pending.
     private func sendAction(id: String, of messageId: Int64, to peer: JID) {
+        // A room we left never becomes ready, so it would wait for good.
+        if (try? database.groupChat(peer))?.hasLeft == true { return giveUpAction(id) }
         whenReady(route(to: peer)) { [self] in
             // After any correction still being encrypted.
             sendQueue(for: peer).async { [self] in
@@ -2021,9 +2024,14 @@ public final class XMPPSession: @unchecked Sendable {
                 switch deliver(stanza, to: peer, encrypted: !message.isRetracted && message.encryption == .omemo, onDropped: dropped) {
                 case .success(let (_, acknowledged)):
                     if !acknowledged { confirmByPing(stanza) }
-                case .failure(let error):
+                case .failure(.offline):
                     dropped()
-                    logger.error("Couldn't send correction or retraction of \(messageId): \(String(describing: error), privacy: .private)")
+                case .failure(.failed(_, let reason)):
+                    // Like a message that can't be encrypted for the chat, it
+                    // won't go next session either.
+                    dropped()
+                    giveUpAction(id)
+                    DiagLog.error(.send, "Correction or retraction failed", .value("reason", reason))
                 }
             }
         }

@@ -186,4 +186,42 @@ struct PendingActionTests {
         #expect(corrections().count == 1)
         #expect(corrections().first?.body == "hi all")
     }
+
+    private func roomMessage(encryption: YapnestKit.Message.Encryption = .none) throws -> YapnestKit.Message {
+        try database.joinGroupChat(room, nickname: "me")
+        session.reloadKnownRooms()
+        let id = try #require(try database.conversation(with: room).id)
+        return try database.insert(YapnestKit.Message(
+            conversationId: id, direction: .outgoing, sender: me, body: "hi", status: .sent, encryption: encryption, remoteId: "g1", serverId: "s1",
+        ))
+    }
+
+    @Test func aCorrectionThatCanNeverBeEncryptedStopsBeingPending() throws {
+        let mine = try roomMessage(encryption: .omemo)
+        session.updateRoom(room) { $0 = RoomStatus(phase: .joined, nickname: "me") }
+
+        // The room isn't private, so it can't be encrypted for its members.
+        try session.edit(mine, to: "hi all")
+        session.drainSendQueue(room)
+        #expect(corrections().isEmpty)
+        #expect(try stored(mine).actionPendingId == nil)
+        #expect(try stored(mine).body == "hi all")
+    }
+
+    @Test func anActionWaitingForARoomWeLeftIsDropped() throws {
+        let mine = try roomMessage()
+        session.updateRoom(room) {
+            var status = RoomStatus(phase: .joined, nickname: "me")
+            status.isSyncing = true
+            $0 = status
+        }
+        try session.retract(mine)
+        #expect(try stored(mine).actionPendingId != nil)
+
+        session.leaveRoom(room)
+        session.sendUnclaimedPending()
+        session.drainSendQueue(room)
+        #expect(retractions().isEmpty)
+        #expect(try stored(mine).actionPendingId == nil)
+    }
 }

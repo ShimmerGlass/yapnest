@@ -82,19 +82,20 @@ extension XMPPSession {
                 // the attachments', whose partial files a reconnect sweeps.
                 var source = file
                 var fragment: String?
-                let temporary = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-                defer { try? FileManager.default.removeItem(at: temporary) }
+                var temporary: URL?
+                defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
                 if message.encryption == .omemo {
-                    guard let sealed = try? FileCrypto.encrypt(fileAt: file, to: temporary) else { throw AttachmentError.unreadable }
-                    source = temporary
-                    fragment = sealed
+                    let sealed = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+                    temporary = sealed
+                    fragment = try FileCrypto.encrypt(fileAt: file, to: sealed)
+                    source = sealed
                 }
                 let size = Int(source.fileSize)
                 // Encryption adds to the size.
                 if let max = service.maxSize, size > max { throw AttachmentError.tooLarge(max: max) }
-                // Encrypted files are opaque bytes; don't reveal their type or their
-                // name to the upload server, which sees the slot request and often
-                // puts the name in the URL. The message carries the real name.
+                // An encrypted file is opaque bytes under a random name, so the
+                // upload server, which sees the slot request and often puts the
+                // name in the URL, learns no more than its extension.
                 let contentType = fragment == nil ? attachment.mimeType ?? "application/octet-stream" : "application/octet-stream"
                 let slotName = fragment == nil ? attachment.name : AttachmentStore.freshName(keeping: attachment.name)
                 phase = .slot

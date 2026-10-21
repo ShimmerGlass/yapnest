@@ -24,9 +24,8 @@ enum FileCrypto {
 
     /// Encrypts the file at `source` into `destination`, the ciphertext then
     /// the 16-byte tag, and returns the URL's fragment: IV then key, hex.
-    /// The plaintext is mapped rather than read, and the ciphertext is written
-    /// out and dropped before the tag, so no more than one copy of the file is
-    /// ever held. Nothing is left at `destination` if it fails.
+    /// The plaintext is mapped rather than read, so the ciphertext is the only
+    /// copy of the file held. Nothing is left at `destination` if it fails.
     static func encrypt(fileAt source: URL, to destination: URL) throws -> String {
         let key = SymmetricKey(size: .bits256)
         let iv = AES.GCM.Nonce()
@@ -35,9 +34,15 @@ enum FileCrypto {
             let box = try AES.GCM.seal(plain, using: key, nonce: iv)
             guard FileManager.default.createFile(atPath: destination.path, contents: nil) else { throw CocoaError(.fileWriteUnknown) }
             let handle = try FileHandle(forWritingTo: destination)
-            defer { try? handle.close() }
-            try handle.write(contentsOf: box.ciphertext)
-            try handle.write(contentsOf: box.tag)
+            do {
+                try handle.write(contentsOf: box.ciphertext)
+                try handle.write(contentsOf: box.tag)
+            } catch {
+                try? handle.close()
+                throw error
+            }
+            // A failed close can mean a short file, which no one could open.
+            try handle.close()
         } catch {
             try? FileManager.default.removeItem(at: destination)
             throw error
