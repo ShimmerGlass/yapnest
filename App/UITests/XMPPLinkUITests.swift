@@ -43,7 +43,7 @@ final class XMPPLinkUITests: InteractionsTestCase {
         XCTAssertTrue(app.buttons["Join"].exists)
     }
 
-    func testALinkThatIsntAnAddressIsRefused() {
+    func testALinkWithAControlCharacterInItsBodyIsRefused() {
         open("xmpp:nest@fixture.test?message;body=%00")
         XCTAssertTrue(app.alerts["Couldn't open the link"].waitForExistence(timeout: 15), "no alert for a refused link")
     }

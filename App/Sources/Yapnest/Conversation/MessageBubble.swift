@@ -1,8 +1,8 @@
 import SwiftUI
 import YapnestKit
 
-/// A message's bubble: the parts that are present stacked as the old cell
-/// stacked them, with the footer at the trailing edge.
+/// A message's bubble: the parts that are present stacked, with the footer
+/// at the trailing edge.
 struct MessageBubble: View {
     let row: MessageRow
     let model: ConversationModel

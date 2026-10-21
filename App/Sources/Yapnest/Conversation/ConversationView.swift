@@ -2,7 +2,7 @@ import SwiftUI
 import YapnestKit
 
 /// The conversation screen: the navigation bar, the messages, and the composer,
-/// which is the one part that's UIKit.
+/// which is UIKit, as is each bubble's host on iOS and the emoji picker.
 struct ConversationView: View {
     let session: XMPPSession
     let peer: JID

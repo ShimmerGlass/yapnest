@@ -40,8 +40,8 @@ extension XMPPSession {
         askToSubscribe(to: jid, preauth: preauth)
     }
 
-    /// Before anything is sent, so their request, which may come straight
-    /// back, is already known to be welcome.
+    /// Before the subscription request is sent, so their request, which may
+    /// come straight back, is already known to be welcome.
     private func markAddedBeforeAsking(_ jid: JID) {
         do {
             try database.markAddedByUser(jid)

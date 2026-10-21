@@ -15,7 +15,8 @@ public enum CallVideoSide: Sendable {
 }
 
 /// One call's audio, and video if it has any, over WebRTC: Unified Plan, a
-/// sendrecv Opus transceiver and a sendrecv video one, ICE and DTLS-SRTP.
+/// sendrecv Opus transceiver and a sendrecv video one, ICE and DTLS-SRTP. A
+/// receive-only side has recvOnly ones instead.
 public final class WebRTCCallMedia: CallMedia, @unchecked Sendable {
     public let events: AsyncStream<CallMediaEvent>
 
@@ -91,8 +92,8 @@ public final class WebRTCCallMedia: CallMedia, @unchecked Sendable {
             transceiverInit.direction = .recvOnly
             added = connection.addTransceiver(of: .audio, init: transceiverInit) != nil
         }
-        // The same goes for video. A receive-only side, which never sends
-        // audio, still sends a generated picture: that opens no device.
+        // The same goes for video, except that a receive-only side with a
+        // synthetic camera still sends a generated picture: that opens no device.
         var videoTrack: RTCVideoTrack?
         var capture: CallVideoCapture?
         var videoAdded = true

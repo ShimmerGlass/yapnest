@@ -32,7 +32,7 @@ struct ContactRequestTests {
 
     @Test func approvalOnAnotherDeviceAnswersIt() throws {
         try db.recordContactRequest(from: alice, nickname: nil)
-        // Their own request, pending, doesn't answer ours.
+        // Our own request, pending, doesn't answer theirs.
         try db.updateRosterItem(jid: alice, name: nil, subscription: .none, isPending: true)
         #expect(try db.contact(alice)?.hasContactRequest == true)
         try db.updateRosterItem(jid: alice, name: "Alice", subscription: .from, isPending: true)

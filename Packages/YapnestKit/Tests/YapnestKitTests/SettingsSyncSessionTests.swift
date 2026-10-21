@@ -17,8 +17,9 @@ private final class SettingsServer: @unchecked Sendable {
     private var log: [String] = []
     private var published: [(id: String, options: [String: [String]])] = []
     var exists: Bool
-    /// The access model the node reports, and keeps whatever it is asked.
+    /// The access model the node reports; it takes the one a publish asks for.
     var access: String
+    /// Ignores the access model a publish asks for, and keeps its own.
     var keepsAccess = false
     /// Never answers a publish that asks for `max_items=max`, like Openfire.
     var silentOnMax = false

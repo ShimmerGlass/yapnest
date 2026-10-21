@@ -5,7 +5,7 @@ import Testing
 import MartinOMEMO
 
 extension LiveServer {
-    /// OMEMO between Yapnest sessions on the local Prosody. Enable with
+    /// OMEMO between Yapnest sessions on the local dev server (`YAPNEST_SERVER`). Enable with
     /// `YAPNEST_INTEGRATION=1 swift test --filter OMEMOIntegration`.
     @Suite
     struct OMEMOIntegrationTests {

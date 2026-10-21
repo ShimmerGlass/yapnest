@@ -19,7 +19,8 @@ extension AppDatabase {
     static func usageItem(_ deviceId: String) -> String { SettingsItemID.usage(device: deviceId).raw }
     static let gifKey = "gif"
 
-    /// How long a removed GIF's tombstone is kept before any device may retract it.
+    /// How long a tombstone is kept before any device may retract it: a removed
+    /// GIF's, or a chat item whose settings are all reset.
     static let gifTombstoneLifetime: TimeInterval = 30 * 24 * 3600
 
     /// Whether this build manages the item. Other kinds, such as one a newer

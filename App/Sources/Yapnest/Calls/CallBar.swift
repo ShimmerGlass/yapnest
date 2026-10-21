@@ -2,8 +2,8 @@ import SwiftUI
 import YapnestKit
 
 /// A strip across the top of the app for a call that isn't filling the screen,
-/// so a call never blocks the app. It is all of an audio call's interface where
-/// CallKit isn't used, rings an incoming call there with its answer and decline
+/// so a call never blocks the app. Where CallKit isn't used it is where an audio
+/// call starts, and rings an incoming call with its answer and decline
 /// buttons, and under CallKit, whose own screen can't be presented from here,
 /// it is how a user in the app sees the call and ends it. Tapping the name
 /// opens our call view where there is one.

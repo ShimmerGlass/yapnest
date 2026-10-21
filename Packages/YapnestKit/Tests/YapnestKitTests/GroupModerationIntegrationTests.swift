@@ -4,8 +4,9 @@ import Testing
 @testable import YapnestKit
 
 extension LiveServer {
-    /// Moderating and managing a group on the local dev server, which
-    /// needs mod_muc_moderation on Prosody for the message tests (dev/prosody/setup.sh).
+    /// Moderating and managing a group on the local dev server, where
+    /// every test needs the room to advertise moderation (XEP-0425), which on Prosody
+    /// is mod_muc_moderation (dev/prosody/setup.sh).
     /// Enable with `YAPNEST_INTEGRATION=1 swift test --filter GroupModerationIntegration`.
     @Suite
     struct GroupModerationIntegrationTests {

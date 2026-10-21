@@ -41,7 +41,7 @@ struct ConversationRowsTests {
         try f.add("c", at: morning.addingTimeInterval(600), read: true)
         try f.add("d", .outgoing, at: morning.addingTimeInterval(630))
         try f.add("late", at: beforeMidnight, read: true)
-        // Ten seconds after the last, but on the next day.
+        // Forty seconds after the last, which is ten seconds past midnight.
         try f.add("early", at: beforeMidnight.addingTimeInterval(40), read: true)
         await f.start()
 

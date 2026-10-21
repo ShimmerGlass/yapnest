@@ -1629,11 +1629,8 @@ public final class XMPPSession: @unchecked Sendable {
         }
     }
 
-    /// Sends messages that never reached the server: still pending from
-    /// before this session, as the server never acknowledged them (XEP-0198),
-    /// e.g. when stream resumption failed, and whatever was written meanwhile,
-    /// such as by the share extension. Resending with the same id is safe:
-    /// recipients dedupe on it.
+    /// What the app does once it has caught up with the server: ends the sync
+    /// state, refreshes what it keeps in sync, and sends what is still pending.
     private func finishCatchUpAsApp() {
         lock.withLock { $0.isSyncing = false }
         omemo.module.mamSyncFinished(for: nil)
@@ -1647,9 +1644,11 @@ public final class XMPPSession: @unchecked Sendable {
         fetchNickname()
         syncSettings()
         enablePush()
-        // However long ago: a message still pending was never sent, and the
-        // share extension leaves its messages so, possibly for days when the
-        // app isn't opened.
+        // However long ago: a message still pending was never sent, as the
+        // server never acknowledged it (XEP-0198, e.g. when stream resumption
+        // failed), or the share extension left it so, possibly for days when
+        // the app isn't opened. Resending with the same id is safe: recipients
+        // dedupe on it.
         sendUnclaimedPending()
         restoreChatsIfPending()
     }
@@ -2195,7 +2194,6 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Adds or removes our `emoji` reaction on `message`.
     public func toggleReaction(_ emoji: String, on message: Message, peer: JID) throws {
-        // Offline, it stays pending and goes out once a session is back.
         guard let target = reference(to: message) else {
             throw try reactionBlocker(for: message, peer: peer)
         }
@@ -2203,6 +2201,7 @@ public final class XMPPSession: @unchecked Sendable {
         var mine = try database.reactions(on: message, from: account)
         if mine.contains(emoji) { mine.remove(emoji) } else { mine.insert(emoji) }
         let me = Author(jid: account, nick: try nickname(in: peer), occupantId: route.occupantId)
+        // Offline, it stays pending and goes out once a session is back.
         let id = OutboundStanza.newId()
         try database.setReactions(mine, from: me, conversationId: message.conversationId, messageRef: target, pendingId: id)
         let stanza = OutboundStanza.reactions(mine, to: route, target: target, id: id)

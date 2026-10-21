@@ -2,10 +2,11 @@
 import AVFoundation
 @preconcurrency import WebRTC
 
-/// What the app's CXProviderDelegate calls. CallKit activates and deactivates
-/// the audio session itself, so WebRTC is told rather than asked.
+/// What the app's CXProviderDelegate calls, or the app itself on a call
+/// without CallKit. CallKit or the app activates and deactivates the audio
+/// session, never WebRTC, so WebRTC is told rather than asked.
 public enum CallAudioSession {
-    /// Sets the category before the call starts; CallKit activates it later.
+    /// Sets the category before the call starts; CallKit, or the app without it, activates it later.
     /// A video call defaults to the loudspeaker, as the phone is held away.
     public static func configure(video: Bool = false) throws {
         let session = RTCAudioSession.sharedInstance()

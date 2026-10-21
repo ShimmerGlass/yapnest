@@ -7,7 +7,7 @@ private let me = YapnestKit.JID("me@example.org")!
 private let room = YapnestKit.JID("cake@rooms.example.org")!
 private let other = YapnestKit.JID("book@rooms.example.org")!
 
-/// What a resumed stream does, and how the rooms follow their archive.
+/// What a resumed stream does.
 struct ResumeTests {
     @Test func theFollowUpWaitsForMartinToHoldTheNewState() {
         // Martin publishes the state before storing it: still connecting.
@@ -43,6 +43,7 @@ struct ResumeTests {
     }
 }
 
+/// How the rooms follow their archive.
 struct RoomFollowsArchiveTests {
     private func status(reachedEnd: Bool, syncing: Bool = false) -> RoomStatus {
         var status = RoomStatus(phase: .joined, nickname: "me")

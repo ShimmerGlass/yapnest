@@ -70,8 +70,8 @@ final class FreezableProxy: Sendable {
     }
 
     /// The next time `pattern` goes by in `direction`, what the server sends
-    /// from then on is kept back until `release()`, once. The read containing
-    /// the pattern still goes through.
+    /// from then on is kept back until `release()`, once. With `.toServer`, the read containing
+    /// the pattern still goes through; with `.toClient` it is held too.
     func holdServerWhen(_ direction: Direction, sees pattern: String) {
         traffic.withLock { $0.triggers.append(Trigger(direction: direction, pattern: pattern, action: .hold)) }
     }

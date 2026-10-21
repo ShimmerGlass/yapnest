@@ -182,7 +182,7 @@ final class StreamProxy: Sendable {
 
 extension LiveServer {
     /// A device's database, kept across runs like `OMEMOIntegrationTests.device`, but in a folder of its own:
-    /// other runs of the live suites clear theirs, which fails a test with a disk I/O error halfway through.
+    /// the dev servers' reset.sh scripts clear theirs, which fails a test with a disk I/O error halfway through.
     static func keptDevice(_ name: String) throws -> AppDatabase {
         let directory = FileManager.default.temporaryDirectory.appending(path: "yapnest-integration-kept/\(target.name)-\(target.port)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

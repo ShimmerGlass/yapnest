@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 /// Stores account credentials in the keychain. With an access group, the
-/// app and its notification extension share them.
+/// app and its extensions share them.
 public struct CredentialStore: Sendable {
     public var service: String
     public var accessGroup: String?

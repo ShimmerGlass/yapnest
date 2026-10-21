@@ -489,7 +489,7 @@ struct CallSessionIncomingTests {
         #expect(state.sid == "s1")
         await eventually("ringing") { h.sentSignals.contains { $0.action == "ringing" } }
         #expect(h.sentSignals.first { $0.action == "ringing" }?.to == aliceDevice)
-        // Nothing is chosen for the user yet.
+        // No call media is made, the microphone included, until the user answers.
         #expect(h.factory.made.isEmpty)
 
         h.session.answerCall()
@@ -904,7 +904,7 @@ struct CallSessionHistoryTests {
 
     @Test func aCarbonOfACallFromAnotherDeviceMakesARow() async throws {
         let h = try CallSessionHarness()
-        // Our tablet called alice a minute ago and gave up.
+        // Our tablet called alice five minutes ago and gave up, past the ring window.
         let old = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-300))
         let delay = "<delay xmlns='urn:xmpp:delay' from='example.org' stamp='\(old)'/>"
         h.receive("<message from='me@example.org/tablet' to='alice@example.org' type='chat' id='p'><propose xmlns='urn:xmpp:jingle-message:0' id='t1'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='audio'/></propose>\(delay)</message>", source: .carbon(sent: true))

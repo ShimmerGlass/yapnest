@@ -1,8 +1,9 @@
 import XCTest
 
 /// What a group's owner is offered for its members and their messages, and
-/// that a plain member is offered none of it. The fixture has two groups, one
-/// where we own the room and one where we're an ordinary member, and a session
+/// that a plain member is offered none of it. The fixture has four groups: one
+/// where we own the room, one where we're an administrator, one where we're an
+/// ordinary member and one without a name, and a session
 /// that never connects, so acting on the server fails with "You're offline."
 @MainActor
 final class GroupModerationUITests: XCTestCase {

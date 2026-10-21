@@ -89,7 +89,7 @@ struct StreamManagementTests {
 
     @Test func ackWrapsAroundAt32Bits() {
         let h = Harness()
-        // Start just below the wrap by acknowledging a long run.
+        // Start just below the wrap by setting the counter directly.
         let start = UInt32.max - 1
         h.module.setOutgoingCounterForTesting(start)
         h.send("A"); h.send("B"); h.send("C")   // counter wraps to 1

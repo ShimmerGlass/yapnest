@@ -53,7 +53,8 @@ extension LiveServer {
 }
 
 extension LiveServer {
-    /// A session for the local dev server, with TLS off since its certificate is self-signed.
+    /// A session for the local dev server, with TLS off so the plaintext suites keep working;
+    /// the TLS suites use `makeTLSSession`, which trusts the local CA.
     static func makeSession(
         _ jid: JID, resource: String, database: AppDatabase, attachments: AttachmentStore? = nil, port: Int = LiveServer.target.port,
         callMedia: (any CallMediaFactory)? = nil,

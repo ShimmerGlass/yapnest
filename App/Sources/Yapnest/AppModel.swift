@@ -38,7 +38,7 @@ final class AppModel {
     private var typingExpiry: Task<Void, Never>?
     /// Contacts' availability, from the session.
     private(set) var presences: [JID: ContactPresence] = [:]
-    /// Contacts online with a device that takes calls. Always empty on the Mac.
+    /// Contacts online with a device that takes calls.
     private(set) var callablePeers: Set<JID> = []
     /// The callable peers with a device that takes video too.
     private(set) var videoCallablePeers: Set<JID> = []
@@ -117,8 +117,8 @@ final class AppModel {
     @ObservationIgnored private let environment: Environment
     @ObservationIgnored private var credentials: any CredentialStoring { environment.credentials }
     @ObservationIgnored private var cancellables = Set<AnyCancellable>()
-    /// Shared with the notification extension: whoever holds it runs the
-    /// account's session.
+    /// Shared with the notification and share extensions: whoever holds it runs
+    /// the account's session.
     @ObservationIgnored private var sessionLock: ProcessLock { environment.sessionLock }
     @ObservationIgnored private(set) var isActive = true
     /// Kept for a session that appears while the app is already away.
@@ -403,7 +403,7 @@ final class AppModel {
 
     // MARK: Background
 
-    /// Connects once the notification extension is done with the session.
+    /// Connects once the notification or share extension is done with the session.
     private func connect(_ session: XMPPSession) {
         #if DEBUG
         if DevFixture.isActive { return }

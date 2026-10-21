@@ -327,7 +327,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         ])
     }
 
-    /// Nicknames to mention, in a row above the text.
+    /// Nicknames to mention and `:code` emoji matches, in a row above the text.
     private func buildSuggestions() {
         suggestions.spacing = 6
         suggestions.translatesAutoresizingMaskIntoConstraints = false

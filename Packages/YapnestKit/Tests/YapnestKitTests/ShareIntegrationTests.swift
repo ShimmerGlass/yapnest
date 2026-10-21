@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 @testable import YapnestKit
 
 extension LiveServer {
-    /// The share extension's sending, against the local Prosody. Enable with
+    /// The share extension's sending, against the local dev server (`YAPNEST_SERVER`). Enable with
     /// `YAPNEST_INTEGRATION=1 swift test --filter ShareIntegration`.
     @Suite
     struct ShareIntegrationTests {

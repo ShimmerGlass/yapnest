@@ -4,7 +4,7 @@ import Testing
 @testable import YapnestKit
 
 extension LiveServer {
-    /// Presence and avatars between alice and bob on the local Prosody.
+    /// Presence and avatars between alice and bob on the local dev server (`YAPNEST_SERVER`).
     /// `YAPNEST_INTEGRATION=1 swift test --filter PresenceIntegration`
     @Suite
     struct PresenceIntegrationTests {

@@ -1,10 +1,11 @@
 import SwiftUI
 import YapnestKit
 
-/// The messages, scrolled to the newest. The scroll view anchors its bottom
-/// edge, so a bubble that grows (a preview or a photo arriving, a reaction, an
-/// edit) or a message that arrives pushes the older ones up rather than
-/// growing past the bottom for a frame and jumping back.
+/// The messages, scrolled to the newest. A bubble that grows (a preview or a
+/// photo arriving, a reaction, an edit) or a message that arrives pushes the
+/// older ones up rather than growing past the newest for a frame and jumping
+/// back. Flipped, that is because the newest is at scroll offset 0; on the
+/// Mac the scroll view anchors its bottom edge.
 struct MessageList: View {
     @Bindable var model: ConversationModel
     /// The height of the bars over the top of the list.

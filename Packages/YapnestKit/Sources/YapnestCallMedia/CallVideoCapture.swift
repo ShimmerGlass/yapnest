@@ -14,8 +14,9 @@ final class CallVideoCapture: @unchecked Sendable {
     private var camera: RTCCameraVideoCapturer?
     private var synthetic: SyntheticVideoCapturer?
     private var position = AVCaptureDevice.Position.front
-    // Set once the user switches. A Mac's cameras have no front or back, so
-    // the position alone couldn't tell them apart.
+    // Set once the user switches, and on the Mac from the chosen device at
+    // every start. A Mac's cameras have no front or back, so the position
+    // alone couldn't tell them apart.
     private var chosenID: String?
     private var choiceObserver: (any NSObjectProtocol)?
 

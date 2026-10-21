@@ -265,7 +265,6 @@ private struct MediaThumbnail: View {
     }
 }
 
-/// The round glyph over media and beside files: download, progress, play, failure.
 /// A picture filling its frame, clipped on its own layer. The frame is fixed:
 /// a flexible one grows to the filled picture's size, so a clip on it crops
 /// nothing.
@@ -284,6 +283,7 @@ struct FilledImage<S: Shape>: View {
     }
 }
 
+/// The round glyph over media and beside files: download, progress, play, failure.
 struct AttachmentBadge: View {
     enum State: Equatable {
         case hidden, download, failed, unavailable, play, pause, file, contact

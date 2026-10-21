@@ -113,8 +113,9 @@ public enum ConversationIntents {
         return CGImageDestinationFinalize(destination) ? output as Data : nil
     }
 
-    /// Tells the system it's an incoming message from this chat, which is
-    /// what makes it draw the notification with the intent's pictures.
+    /// Tells the system about this chat's message. Incoming, that is what makes
+    /// it draw the notification with the intent's pictures; outgoing, it ranks
+    /// the share sheet's suggestions.
     static func donate(_ intent: INSendMessageIntent, peer: JID, direction: INInteractionDirection) async {
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = direction

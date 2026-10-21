@@ -48,7 +48,7 @@ public struct FileMetadata: Sendable, Equatable {
     /// A thumbnail claiming more pixels than this on a side is ignored without
     /// being decoded: a small file can declare a huge canvas.
     static let maxThumbnailSide = 256
-    /// What we send, like Dino's.
+    /// What we send: larger than the 8 pixels Dino sends.
     static let sentThumbnailSide = 16
 
     /// Whether the claimed type leaves room for a picture or video.

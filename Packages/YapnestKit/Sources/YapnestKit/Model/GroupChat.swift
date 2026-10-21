@@ -23,9 +23,10 @@ public struct GroupChat: Codable, Hashable, Sendable, FetchableRecord, Persistab
     /// Whether the room is in our bookmarks (XEP-0402), so we can tell a
     /// bookmark removed on another device from one we never published.
     public var isBookmarked: Bool
-    /// Only members may join, and occupants' addresses are visible to them:
-    /// what OMEMO needs to know who to encrypt for.
+    /// Only members may join.
     public var isMembersOnly: Bool
+    /// Occupants' addresses are visible to them: what OMEMO needs to know who
+    /// to encrypt for, together with `isMembersOnly`.
     public var isNonAnonymous: Bool
     /// Last item we have from the room's own archive.
     public var lastArchiveId: String?

@@ -8,7 +8,7 @@ import Testing
 /// The connector's STARTTLS handling against a server that doesn't do it
 /// properly. A server that does is the live suites' (`TLSIntegrationTests`);
 /// what only a broken one shows is here, and needs no TLS on the
-/// server's side: in each case the client must stop before the handshake.
+/// server's side: in each case but the last the client must stop before the handshake.
 @Suite(.serialized)
 struct StartTLSConnectionTests {
     private static let header = "<?xml version='1.0'?><stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' version='1.0' from='localhost' id='x1'>"

@@ -20,7 +20,7 @@ struct RenderedText: Equatable {
     }
 
     var segments: [Segment]
-    /// Only the start of a long body is here; `MessageText.collapse` says why.
+    /// Only the start of a long body is here; `MessageText.collapsedLineLimit` says why.
     var isCollapsed = false
     /// The body is nothing but a few emoji, drawn large (see `emojiOnlyCount`).
     var isEmojiOnly = false

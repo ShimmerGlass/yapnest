@@ -184,7 +184,6 @@ enum InteractionsFixture {
         try add(database, conversation, from: long, longBody, at: next())
     }
 
-    /// A long message with others after it, so it grows above the newest.
     /// Emoji alone in each direction, which are drawn without a bubble, and
     /// one as a reply, which keeps its bubble.
     private static func fillEmoji(_ database: AppDatabase) throws {
@@ -256,6 +255,7 @@ enum InteractionsFixture {
         try AVAudioFile(forWriting: url, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false).write(from: buffer)
     }
 
+    /// A long message with others after it, so it grows above the newest.
     private static func fillWordy(_ database: AppDatabase) throws {
         let conversation = try chat(database, wordy, "Wordy")
         var time = Date().addingTimeInterval(-500)

@@ -240,7 +240,7 @@ extension XMPPSession {
 }
 
 /// Notifies us when contacts, and our other devices, change their published
-/// name (XEP-0172 §PEP).
+/// name (XEP-0172 §4.3).
 final class NickModule: AbstractPEPModule, XmppModule, @unchecked Sendable {
     static let ID = NS.nick
     static let IDENTIFIER = XmppModuleIdentifier<NickModule>()
@@ -338,7 +338,7 @@ extension XMPPSession {
     /// capabilities that tell the server what notifications we want. Martin
     /// keeps it and sends it again when we reconnect.
     func sendPresence() {
-        // The notification extension sends no presence.
+        // The extensions send no presence.
         guard policy.announcesPresence else { return }
         client.module(.presence).setPresence(show: availability.show, status: Self.normalizedStatus(try? database.setting(.statusMessage)), priority: nil)
     }

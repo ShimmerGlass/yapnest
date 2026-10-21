@@ -109,7 +109,7 @@ final class ChatSearch {
 
     /// The current match stays the same message wherever it moves in the list.
     /// When it's the one that dropped out, the one that took its place is
-    /// current, which is the next older, or the newest of what's left if it
+    /// current, which is the next older, or the oldest of what's left if it
     /// was the oldest.
     private func matchesChanged(to found: [Int64]) {
         let shown = matches.indices.contains(current) ? matches[current] : nil

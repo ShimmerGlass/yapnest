@@ -202,7 +202,8 @@ private struct Envelope: Decodable {
             }
             guard let preview = gif("sm") ?? gif("xs") ?? gif("md") else { return nil }
             // The medium size if it's small enough to upload quickly, else the
-            // smallest that's there. An oversized medium still beats the larger hd.
+            // small one, or the extra small. An oversized medium still beats
+            // the larger hd.
             let medium = gif("md")
             let fitting = medium.flatMap { ($0.size ?? 0) <= GifService.maxSharedSize ? $0 : nil }
             guard let shared = fitting ?? gif("sm") ?? gif("xs") ?? medium ?? gif("hd") else { return nil }

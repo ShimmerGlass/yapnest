@@ -5,9 +5,10 @@ import os
 
 private let callLogger = Logger(subsystem: "Yapnest", category: "Calls")
 
-/// Audio calls (XEP-0353 ringing, XEP-0166 sessions). `CallMachine` decides
-/// what a call does with each message and tap; this runs what it asks for,
-/// with Martin's Jingle module for the session and `CallMedia` for the audio.
+/// Audio and video calls (XEP-0353 ringing, XEP-0166 sessions). `CallMachine`
+/// decides what a call does with each message and tap; this runs what it asks
+/// for, with Martin's Jingle module for the session and `CallMedia` for the
+/// audio and video.
 ///
 /// One call at a time, and only in sessions that were given media: the
 /// extensions' sessions don't register any of this, but still read the call
@@ -62,14 +63,15 @@ extension XMPPSession {
 
     // MARK: Calling
 
-    /// Whether this session can make or take calls at all; the Mac's has no media.
+    /// Whether this session can make or take calls at all: it needs media.
     public var supportsCalls: Bool { callMedia != nil }
 
     /// Whether `peer` has a device that can take an audio call: one that
     /// advertises Jingle Message Initiation and RTP audio.
     /// With `video`, one that advertises RTP video too. The features have to
-    /// be of one device: a peer's phone with video and a desktop without
-    /// audio don't add up to a device that can take a video call.
+    /// be of one device: a peer's phone with audio but no video and a desktop
+    /// with video but no audio don't add up to a device that can take a video
+    /// call.
     public func canCall(_ peer: JID, video: Bool = false) -> Bool {
         guard callMedia != nil, let caps = client.modulesManager.moduleOrNil(CapabilitiesModule.IDENTIFIER) else { return false }
         let features = video ? Self.videoCallFeatures : Self.callFeatures

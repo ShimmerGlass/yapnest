@@ -21,18 +21,18 @@ public final class LinkPreviewer: Sendable {
 
     static let maxPageSize = 1024 * 1024
     static let maxImageSize = 10 * 1024 * 1024
-    /// Larger images are scaled down to this many points on their long side.
+    /// Larger images are scaled down to this many pixels on their long side.
     static let maxImageDimension = 1600
     /// Refuse to decode anything bigger, whatever its file size.
     static let maxImagePixels = 50_000_000
 
-    /// - Parameter fetcher: for tests to replace the network. The default
-    ///   fetcher keeps previews away from the local network and sends no
-    ///   cookies, so nothing links fetches together.
+    /// Fetches with a fetcher that keeps previews away from the local network
+    /// and sends no cookies, so nothing links fetches together.
     public convenience init(database: AppDatabase, directory: URL) {
         self.init(database: database, directory: directory, fetcher: SafeFetcher())
     }
 
+    /// - Parameter fetcher: for tests to replace the network.
     init(database: AppDatabase, directory: URL, fetcher: LinkFetching) {
         self.database = database
         self.directory = directory

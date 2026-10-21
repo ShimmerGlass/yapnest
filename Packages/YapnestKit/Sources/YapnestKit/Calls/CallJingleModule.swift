@@ -67,7 +67,7 @@ final class CallJingleBridge: JingleSessionManager, @unchecked Sendable {
     /// Read by `XMPPSession` from the message itself.
     func messageInitiation(for context: Context, from jid: Martin.JID, action: Jingle.MessageInitiationAction) throws {}
 
-    /// Audio only: nothing is added or changed mid-call.
+    /// Nothing is added or changed mid-call, video included.
     func contentModified(for context: Context, with jid: Martin.JID, sid: String, action: Jingle.ContentAction, contents: [Jingle.Content], bundle: [String]?) throws {
         throw XMPPError.feature_not_implemented
     }

@@ -15,7 +15,7 @@ import YapnestCallMedia
 /// and what the user does in CallKit's own screens is passed on to the session.
 ///
 /// The Simulator and the Mac don't use CallKit: the session is driven directly,
-/// our own screen rings, and `CallRinger` makes the sound.
+/// an incoming call rings in `CallBar`, and `CallRinger` makes the sound.
 @MainActor
 @Observable
 final class CallController {
@@ -154,11 +154,9 @@ final class CallController {
         }
     }
 
-    // The screen's decision does not depend on CallKit.
-
     /// The iOS Simulator's callservicesd ends every call it is given ~50 ms after
-    /// accepting it, so there the session is driven directly and the in-call
-    /// screen rings. The Mac has no CallKit to take a call, so it does the same.
+    /// accepting it, so there the session is driven directly and the call
+    /// bar rings. The Mac has no CallKit to take a call, so it does the same.
     #if targetEnvironment(simulator) || targetEnvironment(macCatalyst)
     static let usesCallKit = false
     #else
@@ -419,7 +417,7 @@ final class CallController {
         request(CXEndCallAction(call: uuid))
     }
 
-    /// Answers the incoming call, from the in-call screen's button.
+    /// Answers the incoming call, from the call bar's button.
     func answer() {
         guard Self.usesCallKit else {
             guard let session, session.callState.value?.phase == .incoming else { return }

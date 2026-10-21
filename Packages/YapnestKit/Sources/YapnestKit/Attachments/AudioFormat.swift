@@ -2,7 +2,7 @@ import Foundation
 
 /// Which files are sound, and which of those the player can play. A voice
 /// message is an audio file like any other, and what clients call one varies:
-/// Conversations sends Opus in Ogg, Monal and Siskin AAC in MPEG-4. So the
+/// Conversations sends Opus in Ogg, Monal AAC in MPEG-4. So the
 /// extension counts when the media type is missing or generic.
 public enum AudioFormat {
     static let extensions: Set<String> = ["m4a", "aac", "mp3", "ogg", "opus", "oga", "wav", "caf"]

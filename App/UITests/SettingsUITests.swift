@@ -63,7 +63,7 @@ final class SettingsUITests: InteractionsTestCase {
         XCTAssertEqual(problem.label, "The new passwords don't match.")
         XCTAssertFalse(save.isEnabled, "Save is on though the passwords differ")
 
-        // Typing the rest of the matching password fixes it.
+        // Replacing the confirmation with the matching password fixes it.
         let confirm = app.secureTextFields["Confirm New Password"]
         confirm.tap()
         confirm.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "other-password".count))

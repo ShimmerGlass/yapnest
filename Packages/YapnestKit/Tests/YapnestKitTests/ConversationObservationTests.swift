@@ -270,7 +270,7 @@ struct ConversationObservationTests {
 
     // MARK: Cost
 
-    /// A receipt for the newest message, with the window at 500 and 2500.
+    /// A receipt for the newest outgoing message, with the window at 500 and 2500.
     @Test(arguments: [500, 2500]) func receiptCostsLessThanAFullFetch(window: Int) throws {
         try fill(window)
         let cache = ConversationItemCache(me: me)

@@ -15,8 +15,8 @@ import Testing
 enum LiveServer {}
 
 extension LiveServer {
-    /// Runs against the local Prosody from `dev/prosody/setup.sh`. Enable with
-    /// `YAPNEST_INTEGRATION=1 swift test --filter Integration`.
+    /// Runs against the local dev server (`YAPNEST_SERVER`, Prosody by default). Enable with
+    /// `YAPNEST_INTEGRATION=1 swift test --filter LiveServer`.
     @Suite
     struct IntegrationTests {
         let alice = LiveServer.jid("alice")

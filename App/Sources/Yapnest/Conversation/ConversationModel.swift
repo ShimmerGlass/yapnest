@@ -411,7 +411,8 @@ final class ConversationModel {
                     linkPreviewSetting: database.linkPreviewSetting,
                     contactNames: (try? database.contactNames()) ?? [:],
                     // Reach back far enough to open at the first unread message,
-                    // however old, so there's no settling for the oldest one loaded.
+                    // up to the window's limit, so there's usually no settling for
+                    // the oldest one loaded.
                     openingStart: (try? database.openingWindow(peer: peer))?.start,
                     group: try? database.groupChat(peer),
                 )
@@ -987,12 +988,13 @@ final class ConversationModel {
         var showsWholeBody: Bool
         /// Nothing is newer, so a message's suggested replies are still on offer.
         var isNewest: Bool
-        /// Names, the chat's link preview choice and the app's: see `inputsEpoch`.
+        /// Names, link preview choices and the day: see `inputsEpoch`.
         var epoch: Int
     }
 
     /// Bumped when something row-wide that isn't in a row's item changes: the
-    /// contacts' names, or the link preview choices.
+    /// contacts' names, the link preview choices, or the day, time or locale
+    /// (which the day headers read).
     @ObservationIgnored private var inputsEpoch = 0
     @ObservationIgnored private var inputsByID: [Int64: RowInputs] = [:]
     /// The time zone and locale the rows were last built in.
@@ -1300,7 +1302,8 @@ final class ConversationModel {
     /// Scrolls to the newest row once the list's size has stopped changing,
     /// if the rows the user should see aren't there. While the keyboard is
     /// dragged away by hand, every frame changes the list's height, and the
-    /// bottom anchor already holds the end in place. Jumping to the newest row
+    /// end is already held in place (by the bottom anchor on the Mac, by the
+    /// resting offset when flipped). Jumping to the newest row
     /// on each of those frames made the lazy stack swap between two guesses
     /// of its height, a few hundred points apart, so the offset swung between
     /// them and every other frame showed no rows: a black flash, or a blank
@@ -1516,7 +1519,7 @@ final class ConversationModel {
         noteInteraction()
     }
 
-    /// Scrolls to the newest row by its id rather than to the bottom edge:
+    /// Scrolls to the newest row, by its id where the bottom edge is a guess:
     /// the edge is where the lazy stack guesses its content ends, and before
     /// it has measured the rows around it that guess can be past the real end.
     func scrollToBottom(animated: Bool, reason: StaticString = "other", byID: Bool = false) {
@@ -2597,7 +2600,8 @@ final class ConversationModel {
         restartIdleTimer()
     }
 
-    /// The user has left the chat or the app, so nothing can be pending.
+    /// The user has left the chat or the app, or been idle for a while, so nothing
+    /// can be pending.
     private func becomeInactive() {
         pausedTimer?.invalidate()
         idleTimer?.invalidate()

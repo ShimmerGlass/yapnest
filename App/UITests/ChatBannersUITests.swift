@@ -1,7 +1,6 @@
 import XCTest
 
-/// What a chat shows when the contact needs an answer or is blocked, and the
-/// chat's settings from the header.
+/// The chat's settings from the header.
 final class ChatSettingsUITests: InteractionsTestCase {
     func testChatSettingsOpensFromTheHeaderAndDoneClosesIt() {
         driver.openChatSettings()

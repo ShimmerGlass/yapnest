@@ -68,8 +68,9 @@ final class SystemVoiceAudioSession: VoiceAudioSession, @unchecked Sendable {
 /// another.
 ///
 /// A bubble reads `seconds` and `playedFraction` only while its own clip is
-/// the current one. They change a few times a second at most, so the clock
-/// ticking redraws that bubble only when what it shows is different.
+/// the current one. They move in steps of 1/64 of the clip, so the clock
+/// ticking redraws that bubble only when a step is crossed: nearly every tick
+/// on a short clip, rarely on a long one.
 @MainActor
 @Observable
 final class VoicePlayback: NSObject, AVAudioPlayerDelegate {

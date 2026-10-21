@@ -1,12 +1,12 @@
 import Foundation
 import os
 
-/// Where the app and its notification extension keep what they share: the
-/// accounts' databases and files, and the lock that keeps them from running a
-/// session at the same time.
+/// Where the app and its extensions keep what they share: the accounts'
+/// databases and files, and the lock that keeps them from running a session at
+/// the same time.
 public enum SharedContainer {
-    /// The app group, from the `YapnestAppGroup` key both targets' Info.plist
-    /// set from the bundle id.
+    /// The app group, from the `YapnestAppGroup` key the app's and both extensions'
+    /// Info.plist set from the bundle id.
     public static let appGroup = Bundle.main.object(forInfoDictionaryKey: "YapnestAppGroup") as? String ?? "group.fr.yapnest.app"
 
     /// The group's container, or the process's own Application Support where

@@ -25,7 +25,7 @@ public struct AdHocCommand: Sendable, Hashable, Identifiable {
     public var id: String { "\(jid) \(node)" }
 }
 
-/// What a client asks of a command (XEP-0050 §3.3).
+/// What a client asks of a command (XEP-0050 §3.4).
 public enum AdHocAction: String, Sendable, Hashable {
     /// Starts the command.
     case execute

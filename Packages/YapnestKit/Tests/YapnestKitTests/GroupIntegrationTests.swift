@@ -6,7 +6,7 @@ import Testing
 @testable import YapnestKit
 
 extension LiveServer {
-    /// Group chats on the local Prosody (conference.localhost). Enable with
+    /// Group chats on the local dev server (`YAPNEST_SERVER`). Enable with
     /// `YAPNEST_INTEGRATION=1 swift test --filter GroupIntegration`.
     @Suite
     struct GroupIntegrationTests {

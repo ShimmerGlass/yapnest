@@ -136,6 +136,7 @@ extension LiveServer {
 
         // MARK: Certificates
 
+        // `Process` doesn't exist on iOS, where the package's tests also run.
         #if os(macOS)
         /// A server that offers STARTTLS with a certificate this test made, and
         /// records what the client does once the handshake is over.
@@ -144,7 +145,6 @@ extension LiveServer {
             let port: Int
             private let process: Process
 
-            /// `Process` doesn't exist on iOS, where the package's tests also run.
             init(certificateFor subjectAlternativeName: String, from start: Date, until end: Date) throws {
                 directory = FileManager.default.temporaryDirectory.appendingPathComponent("tls-certificates-\(UUID().uuidString)")
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

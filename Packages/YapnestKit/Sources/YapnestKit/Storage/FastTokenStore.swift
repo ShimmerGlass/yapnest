@@ -3,8 +3,9 @@ import Foundation
 import Security
 
 /// Where a session keeps its XEP-0484 FAST token, which signs in without
-/// the password. Each client (the app, the notification extension) has its
-/// own, so one rotating its token never invalidates the other's.
+/// the password. Each client (the app, the notification extension, the
+/// share extension) has its own, so one rotating its token never invalidates
+/// another's.
 public protocol FastTokenStore: Sendable {
     func load() -> Sasl2Module.FastToken?
     func save(_ token: Sasl2Module.FastToken?)

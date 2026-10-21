@@ -175,7 +175,7 @@ enum GifDownload {
         }.value
     }
 
-    /// The slug as a file name: letters, digits and dashes only.
+    /// The slug as a file name: letters, digits, dashes and underscores only.
     nonisolated static func fileName(for gif: Gif) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
         let cleaned = String(gif.slug.unicodeScalars.filter { allowed.contains($0) }.prefix(60).map(Character.init))

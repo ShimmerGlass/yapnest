@@ -151,7 +151,7 @@ struct CallMachine: Sendable, Equatable {
     }
 
     /// A call that came in as `propose`. One that has waited past the ring
-    /// window starts over: its caller has hung up by now, so it is missed.
+    /// window is already over: its caller has hung up by now, so it is missed.
     static func incoming(_ propose: CallSignal, account: JID, me: String, now: Date) -> (CallMachine, [Effect])? {
         guard case .propose(let media) = propose.action, media.contains(.audio) else { return nil }
         var machine = CallMachine(

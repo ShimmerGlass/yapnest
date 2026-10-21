@@ -32,7 +32,7 @@ extension XMPPSession {
     }
 
     /// Makes `member` an owner, or takes ownership away, leaving an admin
-    /// (§10.6 allows either that or a member; an admin keeps what they could
+    /// (§10.4 allows either that or a member; an admin keeps what they could
     /// do as an owner short of changing the room). Only owners do either.
     /// We may give up ours too, unless we are the last owner.
     public func setOwner(_ isOwner: Bool, member: JID, in room: JID) async throws {

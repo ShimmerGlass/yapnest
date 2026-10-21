@@ -214,8 +214,9 @@ struct ConversationWindowTests {
         #expect(second.first { $0.message.remoteId == "m15" }?.reactions.map(\.emoji) == ["🎉"])
     }
 
-    /// What one observation costs as the window grows: every change to any
-    /// message re-reads the whole window, joins included.
+    /// What a full fetch of the window costs, joins included. An observation
+    /// rebuilds only the messages that changed (`ConversationItemCache`), so this is
+    /// the worst case.
     @Test func fetchingTwoThousandItemsIsCheap() throws {
         try fill(2000)
         let clock = ContinuousClock()

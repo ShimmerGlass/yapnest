@@ -3,7 +3,6 @@ import XCTest
 /// Drives the app on a dev fixture and reads its frame recorder, for UI
 /// tests that check the message list. Every failure starts with `context`,
 /// so a fuzz failure says which seed to replay.
-///
 @MainActor
 final class ConversationDriver {
     /// How far from the bottom a list that follows it may be, in points.

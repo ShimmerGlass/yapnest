@@ -68,8 +68,9 @@ extension XMPPSession {
     /// One at a time: each change reads the list and writes it back.
     private static let legacyBookmarkQueue = DispatchQueue(label: "Yapnest.XMPPSession.legacyBookmarks")
 
-    /// Whether our server keeps XEP-0402 bookmarks where other clients see
-    /// them, as `#compat` (Prosody) or `#compat-pep` (ejabberd) say.
+    /// Whether our server doesn't keep XEP-0402 bookmarks where other clients
+    /// see them, which `#compat` (Prosody) or `#compat-pep` (ejabberd) say it
+    /// does.
     var usesLegacyBookmarks: Bool {
         let features = client.module(.disco).accountDiscoResult.features
         return !features.contains(NS.bookmarks + "#compat") && !features.contains(NS.bookmarks + "#compat-pep")

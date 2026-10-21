@@ -2,8 +2,8 @@ import PhotosUI
 import SwiftUI
 import YapnestKit
 
-/// An owner's or moderator's edit of a group: its picture, name, description
-/// and subject, and for owners who may join and who sees what. Each part is
+/// An edit of a group: its subject, and for owners also its picture, name,
+/// description, who may join and who sees what. Each part is
 /// sent on its own, and only if it changed.
 struct EditGroupView: View {
     let session: XMPPSession

@@ -234,7 +234,7 @@ struct FileMetadataIngestTests {
             // The newest are the ones kept.
             #expect(try AppDatabase.takeAnnouncement(db, key: "k0") == nil)
             #expect(try AppDatabase.takeAnnouncement(db, key: "k\(limit + 19)") != nil)
-            // A day later, whatever is left has expired.
+            // Days later, whatever is left has expired.
             try AppDatabase.keepAnnouncement(db, key: "fresh", FileMetadata(width: 1, height: 1), now: now.addingTimeInterval(3 * 24 * 60 * 60))
             #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM fileAnnouncement") == 1)
         }

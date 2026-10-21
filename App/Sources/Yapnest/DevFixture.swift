@@ -34,8 +34,9 @@ enum DevFixture: String, CaseIterable {
     /// An offline contact whom the user shares last seen with, two hours
     /// after they left.
     case lastSeen = "last-seen"
-    /// Two groups with other people in them: one where we're the owner and
-    /// a moderator, one where we're a plain member. The room's state is set
+    /// Four groups with other people in them: one where we're the owner, an
+    /// unnamed one we own, one where we're only an admin, and one where we're
+    /// a plain member. The room's state is set
     /// by hand, as the session never connects; see `configure(_:)`.
     case moderation
     /// Seeded chats of every kind of content, set with `fuzz:<seed>`; see `FuzzFixture`.
@@ -156,7 +157,7 @@ enum DevFixture: String, CaseIterable {
     static let cara = JID("cara@fixture.test")!
     /// Banned from the owned and the admin room.
     static let dora = JID("dora@fixture.test")!
-    /// What the others say in both groups, and what we say in the owned one.
+    /// What the others say in every group, and what we say in the owned one.
     static let othersWords = "Moderate this message."
     static let ownWords = "My own words."
 

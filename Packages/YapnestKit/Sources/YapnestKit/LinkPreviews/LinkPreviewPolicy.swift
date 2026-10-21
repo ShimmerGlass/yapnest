@@ -1,6 +1,6 @@
 import GRDB
 
-/// The app-wide link preview choice. Per-chat choices only apply under `ask`.
+/// The app-wide link preview choice. Per-chat choices only apply under `askPerConversation`.
 public enum LinkPreviewSetting: String, Sendable, CaseIterable {
     case askPerConversation
     case never

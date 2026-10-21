@@ -180,8 +180,6 @@ private struct UnreadDivider: View {
     }
 }
 
-/// Emphasises the message that was just jumped to. A view of its own, so the
-/// rows don't all depend on which one it is.
 /// Listens for the hover menu closing, on the Mac only: on iOS it never
 /// posts, and every row would still hold a subscription to it.
 private struct ClearsHoverWhenMenuCloses: ViewModifier {
@@ -203,6 +201,8 @@ private struct ClearsHoverWhenMenuCloses: ViewModifier {
     }
 }
 
+/// Emphasises the message that was just jumped to. A view of its own, so the
+/// rows don't all depend on which one it is.
 private struct FlashEffect: ViewModifier {
     let id: Int64
     let model: ConversationModel

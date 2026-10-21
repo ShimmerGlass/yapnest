@@ -208,7 +208,8 @@ struct SettingsSyncTests {
 
         try db.writer.write { try AppDatabase.clearDirty($0, "global") }
         let current = try #require(try stored("global")["statusMessage"])
-        // The same entry back, and one from a newer writer, leave it alone.
+        // The same entry back leaves it alone, while an older one from another writer marks it dirty.
+        // An entry newer than ours is taken over without marking it dirty.
         #expect(try apply("global", [current]).markedDirty == false)
         #expect(try apply("global", [entry("statusMessage", "newest", 1, by: "q")]).markedDirty == true)
         try db.writer.write { try AppDatabase.clearDirty($0, "global") }

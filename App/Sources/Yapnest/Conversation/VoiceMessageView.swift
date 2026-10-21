@@ -14,7 +14,8 @@ struct VoiceMessageView: View {
     let onTap: () -> Void
     /// A clip we failed to send explains that, through `onTap`, rather than playing.
     let isFailed: Bool
-    /// Plays the file from a fraction of its length, or from the start if nil.
+    /// Plays the file from a fraction of its length, or if nil toggles it: pauses
+    /// a playing clip, resumes a paused one, starts any other from the start.
     let play: (URL, Double?) -> Void
 
     static let height: CGFloat = 40

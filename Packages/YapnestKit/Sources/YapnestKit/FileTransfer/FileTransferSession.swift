@@ -334,7 +334,8 @@ final class FileTransferSession: @unchecked Sendable {
         waiter?.resume(with: result.mapError { $0 as Error })
     }
 
-    /// Closes the files, which a session that ended no longer needs.
+    /// Closes the file being sent, which a session that ended no longer needs.
+    /// The one being received is closed by finishing or discarding it.
     func release() {
         lock.withLock {
             try? input?.close()

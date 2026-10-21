@@ -222,8 +222,8 @@ struct HistoryTests {
     }
 
     @Test func historyOfAChatWithNoNewsGivesItItsNewestMessagesDate() throws {
-        // The chat exists without messages, as sorted last until news. A
-        // restored chat has only history, and sorts by it.
+        // The chat exists without messages, so it sorts last until news
+        // arrives. A restored chat has only history, and sorts by it.
         try db.conversation(with: alice)
         try db.ingest(try archived("old", body: "from long ago", at: 100, history: true))
         #expect(try conversation().lastActivityAt == Date(timeIntervalSince1970: 100))
