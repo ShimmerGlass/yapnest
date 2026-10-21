@@ -42,7 +42,8 @@ Yapnest uses OMEMO 0.3, the version most XMPP apps speak. It encrypts a
 message's text and files and nothing else. Your server still sees who talks
 to whom and when, and reactions, deletions, read markers, typing
 notifications and which message a reply or edit refers to travel
-unencrypted.
+unencrypted. An encrypted file is uploaded under a random name (keeping its
+extension), so the upload server doesn't learn what it was called.
 
 ## Requirements
 

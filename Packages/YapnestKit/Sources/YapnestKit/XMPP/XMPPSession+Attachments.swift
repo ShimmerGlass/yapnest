@@ -86,12 +86,14 @@ extension XMPPSession {
                 }
                 // Encryption adds to the size.
                 if let max = service.maxSize, data.count > max { throw AttachmentError.tooLarge(max: max) }
-                // Encrypted files are opaque bytes; don't reveal their type.
+                // Encrypted files are opaque bytes; don't reveal their type or their
+                // name to the upload server, which sees the slot request and often
+                // puts the name in the URL. The message carries the real name.
                 let contentType = fragment == nil ? attachment.mimeType ?? "application/octet-stream" : "application/octet-stream"
                 phase = .slot
                 started = Date()
                 let slot = try await client.module(.httpFileUpload)
-                    .requestUploadSlot(componentJid: service.jid, filename: attachment.name, size: data.count, contentType: contentType)
+                    .requestUploadSlot(componentJid: service.jid, filename: UploadName.slotName(for: attachment.name, encrypted: fragment != nil), size: data.count, contentType: contentType)
                 DiagLog.info(.upload, "Upload slot granted", .id("msg", transferId), .int("bytes", data.count), .duration("took", since: started))
                 phase = .put
                 started = Date()
