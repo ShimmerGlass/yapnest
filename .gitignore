@@ -22,3 +22,7 @@ dev/certs/*.key
 
 # The dev ejabberd's TURN address (dev/ejabberd/setup.sh)
 dev/ejabberd/.env
+
+# App Store Connect API key and other secrets, never committed
+keys/
+*.p8
