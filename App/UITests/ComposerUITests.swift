@@ -21,9 +21,11 @@ final class ComposerUITests: InteractionsTestCase {
         driver.composer.tap()
         driver.composer.typeText("Hello")
         waitUntilHittable(send, "the send button")
-        // Only whitespace is nothing to send.
         driver.composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5))
         waitUntilHidden(send, "the send button after the text was deleted")
+        // Only whitespace is nothing to send.
+        driver.composer.typeText("   ")
+        waitUntilHidden(send, "the send button with only spaces")
     }
 
     func testTheMicrophoneIsThereOnlyWithoutText() {

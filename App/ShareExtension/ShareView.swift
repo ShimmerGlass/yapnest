@@ -59,12 +59,13 @@ struct ShareView: View {
                 Button("Done") { model.acknowledgeFailure() }
                     .buttonStyle(.borderedProminent)
             }
-        case .done(let done):
+        case .done(.queued):
             ContentUnavailableView(
-                done == .sent ? "Sent" : "Saved",
-                systemImage: done == .sent ? "checkmark.circle.fill" : "clock.badge.checkmark",
-                description: done == .sent ? nil : Text("Yapnest will send it the next time it opens."),
+                "Saved", systemImage: "clock.badge.checkmark",
+                description: Text("Yapnest will send it the next time it opens."),
             )
+        case .done:
+            ContentUnavailableView("Sent", systemImage: "checkmark.circle.fill")
         }
     }
 

@@ -20,8 +20,8 @@ esac
 
 cd "$(dirname "$0")/.."
 bundle=fr.yapnest.app
-sim_a=${SIM_A:-EF723AAD-6E48-4E46-87D5-F59AB6C4684F}
-sim_b=${SIM_B:-52D6F67C-F25D-4BD9-8A58-CE683B1AC7A7}
+sim_a=${SIM_A:-iPhone 17}
+sim_b=${SIM_B:-Yapnest iOS 26}
 hangup=${HANGUP_SECONDS:-12}
 output=${OUTPUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/yapnest-call-e2e.XXXXXX")}
 derived=${DERIVED_DATA:-$output/derived}

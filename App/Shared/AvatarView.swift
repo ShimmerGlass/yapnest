@@ -12,6 +12,8 @@ struct AvatarView: View {
     var presence: ContactPresence?
     /// Group chats show a group glyph rather than initials.
     var isGroup = false
+    /// Drawn larger than about 80 pt, so it is decoded at a higher resolution.
+    var isLarge = false
 
     /// What the off-main decode produced, with the file it came from so a
     /// changed picture never shows the old one.
@@ -43,14 +45,14 @@ struct AvatarView: View {
     /// main thread, with the initials showing meanwhile.
     private var image: UIImage? {
         guard let imageURL else { return nil }
-        if let cached = AvatarImageCache.cached(at: imageURL) { return cached }
+        if let cached = AvatarImageCache.cached(at: imageURL, large: isLarge) { return cached }
         if let decoded, decoded.url == imageURL { return decoded.image }
         return nil
     }
 
     private func decodeIfNeeded() async {
         guard let url = imageURL else { return }
-        if let cached = AvatarImageCache.cached(at: url) {
+        if let cached = AvatarImageCache.cached(at: url, large: isLarge) {
             // Kept here too, so evicting it from the cache can't blank the view.
             decoded = (url, cached)
             return
@@ -60,7 +62,7 @@ struct AvatarView: View {
         for attempt in 0..<5 {
             if attempt > 0 { try? await Task.sleep(for: .seconds(2)) }
             if Task.isCancelled { return }
-            if let image = await AvatarImageCache.load(at: url) {
+            if let image = await AvatarImageCache.load(at: url, large: isLarge) {
                 decoded = (url, image)
                 return
             }
@@ -139,24 +141,34 @@ extension ContactPresence {
     }
 }
 
-/// Decoded avatars, keyed by file; the files are named by content hash, so
-/// an entry never goes stale.
+/// Decoded avatars, keyed by file and size; the files are named by content
+/// hash, so an entry never goes stale.
 enum AvatarImageCache {
     // NSCache is thread-safe; lookups come from `body`, decoding from a task.
-    nonisolated(unsafe) private static let cache = NSCache<NSURL, UIImage>()
+    nonisolated(unsafe) private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        // Bytes of decoded pixels, about 32 MB.
+        cache.totalCostLimit = 32_000_000
+        return cache
+    }()
 
-    static func cached(at url: URL) -> UIImage? {
-        cache.object(forKey: url as NSURL)
+    private static func key(_ url: URL, large: Bool) -> NSString {
+        (url.absoluteString + (large ? "#large" : "")) as NSString
     }
 
-    /// Decodes at the size it's drawn, as the file comes from other people
-    /// and may be far larger than an avatar; the largest one shown is 72 pt.
-    static func load(at url: URL) async -> UIImage? {
+    static func cached(at url: URL, large: Bool) -> UIImage? {
+        cache.object(forKey: key(url, large: large))
+    }
+
+    /// Decodes at 256 px, which covers an avatar up to 80 pt at 3x, or at
+    /// 512 px for the larger ones (140 pt on the call screen), as the file
+    /// comes from other people and may be far larger than an avatar.
+    static func load(at url: URL, large: Bool) async -> UIImage? {
         await Task.detached(priority: .userInitiated) {
-            if let image = cached(at: url) { return image }
-            guard let cgImage = AvatarStore.thumbnail(at: url, pixels: 256) else { return nil }
+            if let image = cached(at: url, large: large) { return image }
+            guard let cgImage = AvatarStore.thumbnail(at: url, pixels: large ? 512 : 256) else { return nil }
             let image = UIImage(cgImage: cgImage)
-            cache.setObject(image, forKey: url as NSURL)
+            cache.setObject(image, forKey: key(url, large: large), cost: cgImage.bytesPerRow * cgImage.height)
             return image
         }.value
     }

@@ -2,7 +2,7 @@
 # Makes the dev servers' TLS certificate: a local CA, and one server
 # certificate signed by it, for localhost and every component domain the dev
 # servers use. The servers offer it on STARTTLS (TLS stays optional, so the
-# plaintext test suites still work), and the SASL2/Bind 2/FAST tests trust
+# plaintext test suites still work), and the SASL2/Bind 2/FAST and TLS live tests trust
 # ca.pem, so they run over real TLS with the hostname and expiry checked.
 # Nothing here leaves the dev machine; the files are git-ignored.
 #

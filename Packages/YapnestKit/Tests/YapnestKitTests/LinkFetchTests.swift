@@ -35,7 +35,7 @@ struct AddressPolicyTests {
     }
 
     @Test func allowsPublicIPv6() {
-        for address in ["2606:4700:4700::1111", "2a00:1450:4001::200e", "2001:4860:4860::8888", "100:0:0:1::1", "fec0:ffff::1".replacingOccurrences(of: "fec0:ffff::1", with: "2620:fe::fe")] {
+        for address in ["2606:4700:4700::1111", "2a00:1450:4001::200e", "2001:4860:4860::8888", "100:0:0:1::1", "2620:fe::fe"] {
             #expect(!blocked(address), "\(address)")
         }
     }

@@ -89,6 +89,12 @@ struct ReplyFallbackTrustTests {
         #expect(m.reply?.fallback == "hi")
     }
 
+    @Test func aQuoteRangeThatEndsMidLineIsIgnoredOnAnEncryptedBody() throws {
+        let m = try message("&gt; hi\nsure", fallback: "<body start='0' end='4'/>", encryption: .omemo)
+        #expect(m.body == "&gt; hi\nsure".replacingOccurrences(of: "&gt;", with: ">"))
+        #expect(m.reply?.fallback == nil)
+    }
+
     @Test func aForgedMidBodyRangeIsIgnoredOnAnEncryptedBody() throws {
         let m = try message("I do not agree", fallback: "<body start='5' end='9'/>", encryption: .omemo)
         #expect(m.body == "I do not agree")
@@ -181,5 +187,12 @@ struct ArchivedGroupSenderTests {
         #expect(stored[0].id == sent.id)
         #expect(stored[0].serverId == "r1")
         #expect(stored[0].direction == YapnestKit.Message.Direction.outgoing)
+    }
+}
+
+struct SearchMarkerTrustTests {
+    @Test func aSenderCannotForgeAMatchMarkerInABody() throws {
+        let m = try #require(parse("<message from='alice@example.org/phone' type='chat' id='m'><body>he\u{E000}llo wor\u{E001}ld</body></message>"))
+        #expect(m.body == "hello world")
     }
 }

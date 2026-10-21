@@ -4,6 +4,9 @@ import Testing
 
 private struct TestFailure: Error {}
 
+/// One at a time: `PendingSendsSignal` is a Darwin notification, so one
+/// test's signal to the app reaches every other test listening for it.
+@Suite(.serialized)
 struct ShareTests {
     let me = JID("me@example.org")!, alice = JID("alice@example.org")!
     let directory = FileManager.default.temporaryDirectory.appending(path: "share-\(UUID().uuidString)")

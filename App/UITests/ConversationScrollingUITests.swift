@@ -9,9 +9,6 @@ import XCTest
 /// Keyboard > Connect Hardware Keyboard on, no keyboard comes up.
 @MainActor
 final class ConversationScrollingUITests: XCTestCase {
-    /// How far from the bottom a list that follows it may be, in points.
-    /// It's held exactly at the bottom, so this only covers rounding.
-    private static let bottomTolerance: CGFloat = 2
     /// The most the topmost message may move when older ones come in above
     /// it. The drag that gets there is held still at its end, but a load can
     /// land a frame or two before it stops; a row that wasn't held moves by
@@ -185,13 +182,13 @@ final class ConversationScrollingUITests: XCTestCase {
     private func recorderSummary() -> String { d.recorderSummary() }
     private func resetRecorder() { d.resetRecorder() }
 
-    /// These chats have no reactions chip under the newest bubble, so the
-    /// bubble must end within 40 points of the composer, not the driver's 60.
     private func assertListUnderComposer(holding text: String, _ when: String, file: StaticString = #filePath, line: UInt = #line) {
         let list = d.app.scrollViews.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
         XCTAssertGreaterThanOrEqual(list.frame.maxY, d.composer.frame.maxY, "the list stops above the composer \(when): \(list.frame), composer at \(d.composer.frame)", file: file, line: line)
     }
 
+    /// These chats have no reactions chip under the newest bubble, so the
+    /// bubble must end within 40 points of the composer, not the driver's 60.
     private func assertShown(_ message: XCUIElement, _ when: String, file: StaticString = #filePath, line: UInt = #line) {
         d.assertShown(message, when, maxGap: 40, file: file, line: line)
     }

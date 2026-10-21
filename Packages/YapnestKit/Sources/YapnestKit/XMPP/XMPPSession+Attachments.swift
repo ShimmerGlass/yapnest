@@ -110,7 +110,7 @@ extension XMPPSession {
                 request.httpMethod = "PUT"
                 request.setValue(contentType, forHTTPHeaderField: "Content-Type")
                 for (header, value) in slot.putHeaders { request.setValue(value, forHTTPHeaderField: header) }
-                let delegate = ProgressDelegate { [weak self] progress in self?.setProgress(progress, for: messageId) }
+                let delegate = ProgressDelegate(policy: DownloadPolicy(allowsInsecure: allowsInsecureTransfers)) { [weak self] progress in self?.setProgress(progress, for: messageId) }
                 let (_, response) = try await Self.transferSession.upload(for: request, fromFile: source, delegate: delegate)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 DiagLog.info(.upload, "Upload finished", .id("msg", transferId), .int("status", status), .int("bytes", size), .duration("took", since: started))
@@ -275,7 +275,7 @@ private struct TooLarge: Error {
 /// Reports a transfer's progress, and cancels downloads that turn out too big.
 final class ProgressDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate, Sendable {
     private let limit: Int64?
-    private let policy: DownloadPolicy?
+    private let policy: DownloadPolicy
     private let report: @Sendable (Double) -> Void
     private let exceeded = OSAllocatedUnfairLock<Int64?>(initialState: nil)
 
@@ -283,7 +283,7 @@ final class ProgressDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownlo
     /// if the server said, else 0.
     var exceededSize: Int64? { exceeded.withLock { $0 } }
 
-    init(limit: Int64? = nil, policy: DownloadPolicy? = nil, report: @escaping @Sendable (Double) -> Void) {
+    init(limit: Int64? = nil, policy: DownloadPolicy, report: @escaping @Sendable (Double) -> Void) {
         self.limit = limit
         self.policy = policy
         self.report = report
@@ -307,7 +307,6 @@ final class ProgressDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownlo
     /// A redirect is a new request to wherever the server says, so it gets the
     /// same checks as the first.
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest) async -> URLRequest? {
-        guard let policy else { return request }
         guard let url = request.url, (try? await policy.check(url)) != nil else { return nil }
         return request
     }

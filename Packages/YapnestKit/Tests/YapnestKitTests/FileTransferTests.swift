@@ -623,10 +623,11 @@ struct FileTransferSendingTests {
         let handled = await h.session.sendOverJingleInstead(after: XMPPSession.AttachmentError.noUploadService, message, attachment, to: alice)
         #expect(!handled)
         #expect(h.sentAction("session-initiate") == nil)
-        // The same message, unencrypted, would have.
+        // The same message, unencrypted, does.
         message.encryption = .none
-        let handledPlain = h.session.fileTransferDevice(of: alice) != nil
+        let handledPlain = await h.session.sendOverJingleInstead(after: XMPPSession.AttachmentError.noUploadService, message, attachment, to: alice)
         #expect(handledPlain)
+        #expect(h.sentAction("session-initiate") != nil)
     }
 
     @Test func anEncryptedChatIsNotSentOverJingleEvenToADeviceThatCould() async throws {

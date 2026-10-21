@@ -61,10 +61,6 @@ extension LiveServer {
             }
         }
 
-        private func sentOverTheWire(_ body: String, by session: XMPPSession) throws {
-            try #require(true)
-        }
-
         /// The devices this run has left on each account, to take out again: with
         /// every run the lists would grow, and with them what each first message
         /// is encrypted for and every other suite's sign-ins.
@@ -147,11 +143,11 @@ extension LiveServer {
             if let last = previous { previous = nil; await retire(last.a, last.b) }
         }
 
-        // MARK: A refused publish
+        // MARK: A publish that gets no answer
 
         /// A key publish that never gets an answer, because the link drops,
         /// is made again; a device whose keys aren't published never registers.
-        @Test func aRefusedBundlePublishIsRetried() async throws {
+        @Test func aBundlePublishLostWithTheLinkIsRetried() async throws {
             let proxy = try await FreezableProxy(to: UInt16(LiveServer.target.port))
             defer { proxy.stop() }
             // The publish is swallowed, as is the answer to it, with the stream.

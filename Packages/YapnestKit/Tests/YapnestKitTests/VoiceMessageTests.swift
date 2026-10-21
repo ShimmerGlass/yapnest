@@ -62,8 +62,10 @@ struct AudioDetectionTests {
         #expect(!plays("a.opus", "audio/ogg"))
         #expect(!plays("a.oga"))
         #expect(!plays("noextension", "audio/ogg"))
-        // Still audio, so it is summarised as a voice message but shown as a file.
-        #expect(Attachment(messageId: 1, url: nil, name: "a.opus", state: .ready).isAudio)
+        // Still audio, so it is summarised as sound, though the player can't play it.
+        let opus = Attachment(messageId: 1, url: nil, name: "a.opus", state: .ready)
+        #expect(opus.isAudio)
+        #expect(opus.summary == "🎵 a.opus")
     }
 
     @Test func aVoiceMessageIsSummarised() {

@@ -15,8 +15,9 @@ public struct MessageSearchResult: Hashable, Sendable, Identifiable {
 
     public var id: Int64 { messageId }
 
-    /// Private-use characters, so they can't be in a message and the UI can
-    /// turn them into bold without parsing markup.
+    /// Private-use characters, which `InboundMessage.withoutSearchMarkers` takes out of
+    /// every incoming body, so the UI can turn them into bold without parsing
+    /// markup.
     public static let matchStart: Character = "\u{E000}"
     public static let matchEnd: Character = "\u{E001}"
 }

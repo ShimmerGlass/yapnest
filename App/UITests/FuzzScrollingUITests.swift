@@ -158,9 +158,9 @@ class FuzzScrollingTestCase: XCTestCase {
 
 @MainActor
 final class FuzzScrollingUITests: FuzzScrollingTestCase {
-    /// 22 messages, all on the first screens.
+    /// A chat of 22 messages, all on the first screens, and a group of 120.
     func testSeed1() { run(seed: 1) }
-    /// 33 messages.
+    /// A chat of 33 messages and a group of 114.
     func testSeed13() { run(seed: 13) }
 
     func testSeedsFromTheEnvironment() throws {
@@ -209,7 +209,7 @@ final class FuzzSeed19GroupUITests: FuzzScrollingTestCase {
 /// The chats that went blank far up the history: seed 1's group (before
 /// the list was flipped), seed 28's chat and group on iOS 26.5. Only the
 /// blank is checked, at rest after every flick, so a chat whose top is
-/// out of reach (see the bug list) doesn't fail them.
+/// out of reach doesn't fail them.
 @MainActor
 final class FuzzNeverBlankUITests: FuzzScrollingTestCase {
     func testSeed1GroupNeverBlankFarUp() { neverBlank(seed: 1, name: "Fuzz Group", address: "fuzz-group@conference.fixture.test", flicks: 20) }

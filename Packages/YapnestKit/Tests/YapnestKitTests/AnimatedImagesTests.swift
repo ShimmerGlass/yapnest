@@ -54,8 +54,9 @@ struct AnimatedImagesTests {
         #expect(header.plan == .play)
         #expect(AnimatedImages.header(of: Data("nope".utf8)) == nil)
         // A big picture that isn't a GIF is left to ImageIO's own subsampling.
-        let png = try AvatarImages.png(side: 8)
-        #expect(AnimatedImages.header(of: png)?.isGIF == false)
+        let png = try #require(AnimatedImages.header(of: try AvatarImages.png(side: 2200)))
+        #expect(!png.isGIF)
+        #expect(png.plan == .play)
     }
 
     @Test func aSmallerCopyKeepsFramesDelaysAndLoops() throws {

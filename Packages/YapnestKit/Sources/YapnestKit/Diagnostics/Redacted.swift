@@ -18,24 +18,40 @@ public struct Redacted: Sendable, Equatable {
         return Redacted(hex: Data(mac.prefix(4)).hex)
     }
 
-    private static let defaultsKey = "yapnest.diagnostics.redactionKey"
+    static let defaultsKey = "yapnest.diagnostics.redactionKey"
     /// Makes the key now, so the extensions find it rather than each making
     /// their own on first use.
     public static func prepare() {
         _ = installKey
     }
 
-    /// Two processes can make a key at once; whichever wrote last is kept, and
-    /// both read it back.
-    static let installKey: SymmetricKey = {
-        let defaults = SharedContainer.defaults
-        if let data = defaults.data(forKey: defaultsKey), data.count == 32 {
-            return SymmetricKey(data: data)
+    /// The app and both extensions share one key, in a file of the app group.
+    /// Whoever gets there first publishes it whole and the rest read that one.
+    static let installKey: SymmetricKey = loadKey(in: SharedContainer.url, defaults: SharedContainer.defaults)
+
+    static let keyFileName = "redaction.key"
+
+    /// Reads the key from `directory`, making it if there is none. An install
+    /// that kept its key in `defaults` before the file existed carries that
+    /// key over, so the ids it logged stay the same.
+    static func loadKey(in directory: URL, defaults: UserDefaults) -> SymmetricKey {
+        let file = directory.appending(path: keyFileName)
+        if let key = readKey(file) { return key }
+        let candidate = defaults.data(forKey: defaultsKey).flatMap { $0.count == 32 ? $0 : nil }
+            ?? SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
+        // Linking a finished file into place fails if one is already there,
+        // and no one can read it half written, as they could if the key were
+        // written to its own name.
+        let temporary = directory.appending(path: keyFileName + "." + UUID().uuidString.lowercased())
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        if (try? candidate.write(to: temporary)) != nil {
+            _ = link(temporary.path, file.path)
         }
-        defaults.set(SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }, forKey: defaultsKey)
-        if let data = defaults.data(forKey: defaultsKey), data.count == 32 {
-            return SymmetricKey(data: data)
-        }
-        return SymmetricKey(size: .bits256)
-    }()
+        return readKey(file) ?? SymmetricKey(data: candidate)
+    }
+
+    private static func readKey(_ file: URL) -> SymmetricKey? {
+        guard let data = try? Data(contentsOf: file), data.count == 32 else { return nil }
+        return SymmetricKey(data: data)
+    }
 }

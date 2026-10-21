@@ -28,6 +28,10 @@ struct ChatStateSessionTests {
         session = try makeSession(me, database: database)
     }
 
+    private func addAliceToRoster() throws {
+        try database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+    }
+
     private func tracker() -> ChatStateTracker? {
         session.lock.withLock { $0.chatStates[alice] }
     }
@@ -76,6 +80,7 @@ struct ChatStateSessionTests {
     }
 
     @Test func activeIsIncludedUntilTheyShowTheyDontUseStates() throws {
+        try addAliceToRoster()
         #expect(session.includesActiveState(to: alice))
         #expect(tracker()?.sent == .active)
         session.noteChatStates(of: try parse(body), source: .live)
@@ -85,11 +90,24 @@ struct ChatStateSessionTests {
     }
 
     @Test func activeIsLeftOutWhenTheUserTurnedStatesOff() throws {
+        try addAliceToRoster()
         try session.setSendsChatStates(false)
         #expect(!session.includesActiveState(to: alice))
         #expect(tracker() == nil)
         try session.setSendsChatStates(true)
         #expect(session.includesActiveState(to: alice))
+    }
+
+    @Test func activeIsLeftOutForSomeoneNotInTheRoster() throws {
+        let stranger = YapnestKit.JID("mallory@example.org")!
+        #expect(!session.includesActiveState(to: stranger))
+        #expect(session.lock.withLock { $0.chatStates[stranger] } == nil)
+    }
+
+    @Test func activeIsLeftOutFromASessionThatSendsNoStates() throws {
+        try addAliceToRoster()
+        let share = try XMPPSession(credentials: .init(jid: me, password: "x"), resource: "share", database: database, mode: .share)
+        #expect(!share.includesActiveState(to: alice))
     }
 
     @Test func sendingNothingWhileDisconnected() throws {
@@ -102,7 +120,7 @@ struct ChatStateSessionTests {
     // MARK: What would be sent
 
     private func befriendAndLearnSupport() throws {
-        try database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        try addAliceToRoster()
         session.noteChatStates(of: try parse(bodyWithState), source: .live)
     }
 
@@ -123,7 +141,7 @@ struct ChatStateSessionTests {
     }
 
     @Test func nothingGoesToAContactWhoDoesntUseStates() throws {
-        try database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        try addAliceToRoster()
         #expect(session.claimChatState(.composing, to: alice) == nil)
         session.noteChatStates(of: try parse(body), source: .live)
         #expect(session.claimChatState(.composing, to: alice) == nil)
@@ -132,7 +150,7 @@ struct ChatStateSessionTests {
     @Test func nothingGoesToAContactOutsideTheRoster() throws {
         session.noteChatStates(of: try parse(bodyWithState), source: .live)
         #expect(session.claimChatState(.composing, to: alice) == nil)
-        try database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        try addAliceToRoster()
         #expect(session.claimChatState(.composing, to: alice) != nil)
     }
 
@@ -191,7 +209,7 @@ struct ChatStateSessionTests {
     }
 
     @Test func aMessageIsMarkedDisplayedOnce() throws {
-        try database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        try addAliceToRoster()
         let id = try ingestMarkable("m1")
         #expect(session.claimDisplayed(conversationId: id, to: alice, through: .distantFuture) == "m1")
         #expect(session.claimDisplayed(conversationId: id, to: alice, through: .distantFuture) == nil)
@@ -202,7 +220,7 @@ struct ChatStateSessionTests {
     @Test func markersGoOnlyToTheRosterAndWhenOn() throws {
         let id = try ingestMarkable("m1")
         #expect(session.claimDisplayed(conversationId: id, to: alice, through: .distantFuture) == nil)
-        try database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        try addAliceToRoster()
         try session.setSendsReadMarkers(false)
         #expect(session.claimDisplayed(conversationId: id, to: alice, through: .distantFuture) == nil)
         try session.setSendsReadMarkers(true)

@@ -19,6 +19,9 @@ final class ShareModel {
 
     enum Done: Equatable {
         case sent
+        /// Written, and Yapnest, which is running and holds the session, has
+        /// been told to send it now.
+        case handedToApp
         /// Written, to be sent by Yapnest when it next opens.
         case queued
         /// Written, but a message failed. It waits in Yapnest, where it can
@@ -97,7 +100,9 @@ final class ShareModel {
             switch outcome {
             case .sent:
                 phase = .done(.sent)
-            case .handedToApp, .queued:
+            case .handedToApp:
+                phase = .done(.handedToApp)
+            case .queued:
                 phase = .done(.queued)
             case .failed(let reason):
                 // Nothing was written, so trying again is safe.
@@ -111,7 +116,7 @@ final class ShareModel {
                 return
             }
             // The preview stays up a moment, so the user sees it went.
-            try? await Task.sleep(for: .milliseconds(phase == .done(.sent) ? 700 : 2200))
+            try? await Task.sleep(for: .milliseconds(phase == .done(.queued) ? 2200 : 700))
             done()
         }
     }

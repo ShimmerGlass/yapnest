@@ -82,12 +82,17 @@ struct ReactionRankingTests {
     }
 
     @Test func tiesGoToTheMoreRecentThenTheDefaultOrder() {
-        // All worth 2: the most recent pick first, then a default before a non-default.
+        // All worth exactly 2 at the end: 🔥 has 4 left after one half-life, so
+        // the scores match without rounding. The most recent pick comes first,
+        // then a default (👍, whose prior makes up the rest) before a non-default.
+        let now = later(14)
         let ranking = ReactionRanking(entries: [
-            "🔥": .init(score: 2, updated: start), "🎉": .init(score: 2, updated: later(1)),
-            "👍": .init(score: 0.5, updated: start),
+            "🔥": .init(score: 4, updated: start), "🎉": .init(score: 2, updated: now),
+            "👍": .init(score: 0.5, updated: now),
         ])
-        #expect(ranking.row(at: later(1)).prefix(3) == ["🎉", "👍", "🔥"])
+        #expect(ranking.score(of: "🔥", at: now) == 2)
+        #expect(ranking.score(of: "👍", at: now) + ReactionRanking.prior(of: "👍") == 2)
+        #expect(ranking.row(at: now).prefix(3) == ["👍", "🎉", "🔥"])
     }
 
     @Test func aFullPickerEmojiEntersTheRow() {

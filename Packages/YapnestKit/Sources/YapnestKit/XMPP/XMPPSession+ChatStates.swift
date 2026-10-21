@@ -47,11 +47,18 @@ extension XMPPSession {
         if chatState == .inactive { scheduleGone(to: peer, generation: generation) }
     }
 
+    /// Whether we tell `peer` anything about our chat states: the build's
+    /// policy allows it, they're a contact rather than a group, the user
+    /// hasn't turned it off, and they're in our roster.
+    func mayShareChatStates(with peer: JID) -> Bool {
+        policy.sendsChatStates && !isGroup(peer) && sendsChatStates
+            && (try? database.isInRoster(peer)) == true
+    }
+
     /// Decides whether `chatState` goes to `peer` now, and if so records it
     /// as sent. Returns the tracker's inactive generation, or nil to send nothing.
     func claimChatState(_ chatState: InboundMessage.ChatState, to peer: JID) -> Int? {
-        guard policy.sendsChatStates, !isGroup(peer), sendsChatStates,
-              (try? database.isInRoster(peer)) == true else { return nil }
+        guard mayShareChatStates(with: peer) else { return nil }
         return lock.withLock { state -> Int? in
             var tracker = state.chatStates[peer] ?? ChatStateTracker()
             guard tracker.supported == true, tracker.sent != chatState else { return nil }
@@ -81,7 +88,7 @@ extension XMPPSession {
     /// (XEP-0085 §5.1); if they then write without chat states, never again.
     /// Records that they've been told.
     func includesActiveState(to peer: JID) -> Bool {
-        guard sendsChatStates else { return false }
+        guard mayShareChatStates(with: peer) else { return false }
         return lock.withLock { state in
             guard state.chatStates[peer]?.supported != false else { return false }
             state.chatStates[peer, default: ChatStateTracker()].sent = .active

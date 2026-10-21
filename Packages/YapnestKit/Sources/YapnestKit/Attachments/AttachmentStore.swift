@@ -89,9 +89,9 @@ public final class AttachmentStore: Sendable {
     /// which the share extension can't afford: photos are scaled down by
     /// ImageIO straight into the store, and other files are copied. An
     /// animated image is copied too, since re-encoding would keep only its
-    /// first frame. Files copied as they are lose their location: a phone's
-    /// videos and image sequences carry it as photos do, and are sent on to
-    /// people the user may not want to tell where they were.
+    /// first frame. Videos and images copied as they are lose their location,
+    /// as photos do, since they are sent on to people the user may not want to
+    /// tell where they were. Other files are copied untouched.
     func importFile(at url: URL, name: String, asPhoto: Bool) async throws -> Imported {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         if asPhoto, let source = CGImageSourceCreateWithURL(url as CFURL, nil), CGImageSourceGetCount(source) == 1, let (width, height) = Self.pixelSize(of: source), width * height <= Self.maxImagePixels {
@@ -126,7 +126,9 @@ public final class AttachmentStore: Sendable {
         do {
             if isVideo {
                 try await Self.stripVideoMetadata(at: destination)
-            } else if asPhoto {
+            } else if Self.isImage(name: name) {
+                // Only images go to ImageIO, so a PDF or an archive isn't parsed by it.
+                // It does nothing to an image it can't read.
                 try Self.stripLocation(fromImageAt: destination)
             }
         } catch {
@@ -221,6 +223,10 @@ public final class AttachmentStore: Sendable {
 
     static func isVideo(name: String) -> Bool {
         UTType(filenameExtension: (name as NSString).pathExtension)?.conforms(to: .movie) ?? false
+    }
+
+    static func isImage(name: String) -> Bool {
+        UTType(filenameExtension: (name as NSString).pathExtension)?.conforms(to: .image) ?? false
     }
 
     /// Displayed size of a video: its first track's natural size, turned by

@@ -306,10 +306,10 @@ extension InboundMessage {
 
         if let replyEl = stanza.firstChild(name: "reply", xmlns: NS.reply), let replyId = replyEl.getAttribute("id") {
             let (body, fallback) = Self.strip(fallbackFor: NS.reply, from: stanza, encrypted: encryption == .omemo)
-            self.body = body.map(Self.capped)
+            self.body = body.map { Self.capped(Self.withoutSearchMarkers($0)) }
             self.reply = Reply(id: replyId, to: replyEl.getAttribute("to"), fallback: fallback.map(Self.capped))
         } else {
-            self.body = stanza.body.map(Self.capped)
+            self.body = stanza.body.map { Self.capped(Self.withoutSearchMarkers($0)) }
             self.reply = nil
         }
         if self.body?.isEmpty == true { self.body = nil }
@@ -412,6 +412,17 @@ extension InboundMessage {
         return String(text.prefix(maxBodyCharacters))
     }
 
+    /// `text` without the characters that mark a match in a search result, as
+    /// a sender could otherwise make words in one look matched.
+    static func withoutSearchMarkers(_ text: String) -> String {
+        let start = MessageSearchResult.matchStart.unicodeScalars.first!
+        let end = MessageSearchResult.matchEnd.unicodeScalars.first!
+        guard text.unicodeScalars.contains(where: { $0 == start || $0 == end }) else { return text }
+        var text = text
+        text.unicodeScalars.removeAll { $0 == start || $0 == end }
+        return text
+    }
+
     /// Removes the XEP-0428 fallback range for `namespace` from the body.
     /// Offsets count Unicode code points. Returns the remaining body and the
     /// removed text with its leading `> ` quote markers dropped.
@@ -453,8 +464,9 @@ extension InboundMessage {
     /// Whether `text` is nothing but lines starting with `>`, the last one
     /// ended by a newline.
     static func isQuote(_ text: String) -> Bool {
+        guard text.unicodeScalars.last == "\n" else { return false }
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        if lines.last == "" { lines.removeLast() }
+        lines.removeLast()
         return !lines.isEmpty && lines.allSatisfy { $0.hasPrefix(">") }
     }
 }

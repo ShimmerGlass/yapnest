@@ -39,12 +39,14 @@ private let me = JID("me@example.org")!
     }
 
     @Test func aPushQueuedBehindASlowOneKeepsItsOwnDeadline() async {
-        let app = ProcessLock(url: lockURL)
-        #expect(app.tryLock(as: .app))
-        defer { app.unlock() }
+        let share = ProcessLock(url: lockURL)
+        #expect(share.tryLock(as: .share))
+        defer { share.unlock() }
         let fetcher = fetcher()
 
-        // The first waits the full 3 seconds for the lock, then gives up.
+        // The first waits the full 3 seconds for the lock, then gives up. It
+        // finds the share extension there, not the app, so it leaves no mark
+        // that would make the second skip its catch-up for that reason.
         let first = Task { await fetcher.fetch(timeout: 20) }
         try? await Task.sleep(for: .milliseconds(500))
 

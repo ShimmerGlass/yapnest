@@ -62,4 +62,23 @@ struct DownloadRedirectTests {
         #expect(failed)
         #expect(server.accepted == 0)
     }
+
+    @Test func anUploadRedirectedIntoTheLocalNetworkIsNotFollowed() async throws {
+        let server = try await LocalHTTPServer()
+        defer { server.stop() }
+        server.queue(redirect(to: "http://127.0.0.1:\(server.port)/secret"))
+        server.queue(.send([LocalHTTPServer.response(201, ["Connection": "close"])]))
+        let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try Data("payload".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(server.port)/slot")!)
+        request.httpMethod = "PUT"
+
+        let delegate = ProgressDelegate(policy: DownloadPolicy(allowsInsecure: false)) { _ in }
+        let (_, response) = try await URLSession(configuration: .ephemeral).upload(for: request, fromFile: file, delegate: delegate)
+
+        #expect((response as? HTTPURLResponse)?.statusCode == 302)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(server.requests.count == 1)
+    }
 }

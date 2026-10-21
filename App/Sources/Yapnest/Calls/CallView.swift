@@ -38,7 +38,7 @@ struct CallView: View {
     private var audioBody: some View {
         VStack(spacing: 0) {
             Spacer()
-            AvatarView(name: name, seed: state.peer.description, imageURL: session.avatars.url(for: contact))
+            AvatarView(name: name, seed: state.peer.description, imageURL: session.avatars.url(for: contact), isLarge: true)
                 .frame(width: 140, height: 140)
             Text(name)
                 .font(.largeTitle.bold())

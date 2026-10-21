@@ -87,6 +87,38 @@ struct DiagnosticsTests {
         #expect(Set(all.map { $0.split(separator: " ").suffix(2).joined(separator: " ") }).count == threads * perThread)
     }
 
+    private func withKeyDirectory<T>(_ body: (URL) async throws -> T) async throws -> T {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "key-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        return try await body(directory)
+    }
+
+    @Test func racingProcessesEndWithOneKey() async throws {
+        try await withKeyDirectory { (directory: URL) async throws -> Void in
+            let suite = "key-\(UUID().uuidString)"
+            let keys = await withTaskGroup(of: Data.self) { group in
+                for _ in 0..<16 {
+                    group.addTask { Redacted.loadKey(in: directory, defaults: UserDefaults(suiteName: suite)!).withUnsafeBytes { Data($0) } }
+                }
+                return await group.reduce(into: Set<Data>()) { $0.insert($1) }
+            }
+            #expect(keys.count == 1)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [Redacted.keyFileName])
+        }
+    }
+
+    @Test func anExistingDefaultsKeyIsKept() async throws {
+        try await withKeyDirectory { (directory: URL) async throws -> Void in
+            let defaults = UserDefaults(suiteName: "key-\(UUID().uuidString)")!
+            let old = Data(repeating: 7, count: 32)
+            defaults.set(old, forKey: Redacted.defaultsKey)
+            #expect(Redacted.loadKey(in: directory, defaults: defaults).withUnsafeBytes { Data($0) } == old)
+            // Now the file decides, wherever the defaults went.
+            #expect(Redacted.loadKey(in: directory, defaults: UserDefaults(suiteName: "key-\(UUID().uuidString)")!).withUnsafeBytes { Data($0) } == old)
+        }
+    }
+
     @Test func redactedIdsAreStableShortAndKeyed() {
         let key = SymmetricKey(data: Data(repeating: 1, count: 32))
         let other = SymmetricKey(data: Data(repeating: 2, count: 32))

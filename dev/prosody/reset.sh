@@ -6,5 +6,5 @@
 set -e
 cd "$(dirname "$0")"
 docker compose down -v
-rm -rf "${TMPDIR:-/tmp}/yapnest-integration"
+rm -rf "${TMPDIR:-/tmp}/yapnest-integration" "${TMPDIR:-/tmp}/yapnest-integration-kept"
 ./setup.sh
