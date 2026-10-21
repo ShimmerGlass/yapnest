@@ -330,10 +330,11 @@ extension AppDatabase {
 
 extension AppDatabase {
     /// Our own correction of `message` (XEP-0308), stored before it's sent.
-    public func applyEdit(_ body: String, to messageId: Int64, at date: Date = Date(), marksEdited: Bool = true) throws -> Message? {
+    public func applyEdit(_ body: String, to messageId: Int64, at date: Date = Date(), marksEdited: Bool = true, actionId: String? = nil) throws -> Message? {
         try writer.write { db in
             guard var message = try Message.fetchOne(db, key: messageId), !message.isRetracted else { return nil }
             message.setBody(body)
+            if let actionId { message.actionPendingId = actionId }
             if marksEdited { message.editedAt = date }
             try message.update(db)
             return message
@@ -341,9 +342,11 @@ extension AppDatabase {
     }
 
     /// Our own retraction of `message` (XEP-0424); returns its file to delete.
-    public func applyRetraction(of messageId: Int64) throws -> Attachment? {
+    /// `actionId` is the stanza that carries it, kept until acknowledged.
+    public func applyRetraction(of messageId: Int64, actionId: String? = nil) throws -> Attachment? {
         try writer.write { db in
             guard var message = try Message.fetchOne(db, key: messageId), !message.isRetracted else { return nil }
+            if let actionId { message.actionPendingId = actionId }
             return try Self.retract(db, &message)
         }
     }

@@ -171,6 +171,8 @@ public final class XMPPSession: @unchecked Sendable {
         /// acknowledged, so none is written twice. A new session forgets
         /// them, as the server never got what it hadn't acknowledged.
         var writtenReactions: Set<String> = []
+        /// The same for the stanzas of corrections and retractions.
+        var writtenActions: Set<String> = []
         /// Whether we should be connected; drives automatic reconnection.
         var wantsConnection = false
         var reconnectAttempt = 0
@@ -973,6 +975,7 @@ public final class XMPPSession: @unchecked Sendable {
                     // What was unacknowledged is sent again, and claims anew.
                     $0.sends.reset()
                     $0.writtenReactions = []
+                    $0.writtenActions = []
                     $0.uploadService = nil
                     $0.mucService = nil
                     $0.publishedDisplayed = [:]
@@ -1300,6 +1303,14 @@ public final class XMPPSession: @unchecked Sendable {
     /// The server has the stanza, by XEP-0198 or by `confirmByPing`: a message
     /// of ours is sent.
     func acknowledged(_ stanza: Stanza) {
+        if stanza.name == "message", let id = stanza.id, lock.withLock({ $0.writtenActions.remove(id) != nil }) {
+            do {
+                try database.clearPendingAction(id: id)
+            } catch {
+                logger.error("Failed to mark a correction or retraction \(id, privacy: .private) sent: \(error)")
+            }
+            return
+        }
         if stanza.name == "message", let id = stanza.id, stanza.firstChild(name: "reactions", xmlns: NS.reactions) != nil {
             lock.withLock { _ = $0.writtenReactions.remove(id) }
             do {
@@ -1667,6 +1678,7 @@ public final class XMPPSession: @unchecked Sendable {
             }
             DiagLog.info(.send, "Sending unclaimed pending messages", .int("count", resent))
             resendPendingReactions()
+            resendPendingActions()
         } catch {
             logger.error("Failed to load unsent messages: \(error)")
         }
@@ -1934,6 +1946,8 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Replaces the text of one of our messages, here and for whoever got
     /// it (XEP-0308). One that never left is simply sent with the new text.
+    /// Offline, the correction is applied here and stays pending until the
+    /// server acknowledges its stanza; a new session sends it again.
     public func edit(_ message: Message, to text: String) throws {
         guard canEdit(message), let messageId = message.id, let original = message.remoteId, text != message.body,
               let peer = try database.conversation(id: message.conversationId)?.peer else { return }
@@ -1950,25 +1964,15 @@ public final class XMPPSession: @unchecked Sendable {
             _ = try database.applyEdit(text, to: messageId, marksEdited: false)
             return
         }
-        guard isConnected else { throw MessageActionError.offline }
-        guard let edited = try database.applyEdit(text, to: messageId) else { return }
-        // Built once the room is ready, as its occupants decide the mentions.
-        whenReady(route(to: peer)) { [self] in
-            let route = route(to: peer)
-            // Corrections name the original's stanza id, in groups too.
-            let stanza = OutboundStanza.text(text, to: route, id: OutboundStanza.newId(), replyingTo: quote(of: edited, in: route),
-                                             mentions: mentions(in: text, route: route))
-            stanza.addChild(Element(name: "replace", attributes: ["xmlns": NS.correction, "id": original]))
-            sendQueue(for: peer).async { [self] in
-                if case .failure(let error) = deliver(stanza, to: peer, encrypted: message.encryption == .omemo) {
-                    logger.error("Couldn't send correction of \(original, privacy: .private): \(String(describing: error), privacy: .private)")
-                }
-            }
-        }
+        // Offline, it stays pending and goes out once a session is back.
+        let id = OutboundStanza.newId()
+        guard try database.applyEdit(text, to: messageId, actionId: id) != nil else { return }
+        sendAction(id: id, of: messageId, to: peer)
     }
 
     /// Takes back one of our messages, here and for whoever got it
-    /// (XEP-0424). One that never left is just removed here.
+    /// (XEP-0424). One that never left is just removed here. Offline, it is
+    /// applied here and stays pending like a correction.
     public func retract(_ message: Message) throws {
         guard message.direction == .outgoing, !message.isRetracted, let messageId = message.id,
               let peer = try database.conversation(id: message.conversationId)?.peer else { return }
@@ -1981,15 +1985,61 @@ public final class XMPPSession: @unchecked Sendable {
             if let attachment = try database.applyRetraction(of: messageId) { attachments.remove(attachment) }
             return
         }
-        let route = route(to: peer)
         // Groups name messages by the room's stanza-id, 1:1 chats by the stanza's id.
-        guard let target = route.reference(to: message) else { throw MessageActionError.notYetConfirmed }
-        guard isConnected else { throw MessageActionError.offline }
-        if let attachment = try database.applyRetraction(of: messageId) { attachments.remove(attachment) }
-        let stanza = OutboundStanza.retraction(of: target, to: route, id: OutboundStanza.newId())
-        whenReady(route) { [self] in
+        guard route(to: peer).reference(to: message) != nil else { throw MessageActionError.notYetConfirmed }
+        // Offline, it stays pending and goes out once a session is back.
+        let id = OutboundStanza.newId()
+        if let attachment = try database.applyRetraction(of: messageId, actionId: id) { attachments.remove(attachment) }
+        sendAction(id: id, of: messageId, to: peer)
+    }
+
+    /// Sends the correction or retraction `id` of a message, built from what
+    /// is stored when its turn comes: by then the message may have been
+    /// corrected again, or retracted, and only the latest state is sent. Where
+    /// the stanza can no longer be built it stops being pending.
+    private func sendAction(id: String, of messageId: Int64, to peer: JID) {
+        whenReady(route(to: peer)) { [self] in
             // After any correction still being encrypted.
-            sendQueue(for: peer).async { [self] in write(stanza) }
+            sendQueue(for: peer).async { [self] in
+                guard isConnected, let message = try? database.reader.read({ try Message.fetchOne($0, key: messageId) }),
+                      message.actionPendingId == id else { return }
+                let route = route(to: peer)
+                let stanza: Martin.Message
+                if message.isRetracted {
+                    // Groups name messages by the room's stanza-id, 1:1 chats by the stanza's id.
+                    guard let target = route.reference(to: message) else { return giveUpAction(id) }
+                    stanza = OutboundStanza.retraction(of: target, to: route, id: id)
+                } else {
+                    guard let original = message.remoteId else { return giveUpAction(id) }
+                    // Corrections name the original's stanza id, in groups too.
+                    stanza = OutboundStanza.text(message.body, to: route, id: id, replyingTo: quote(of: message, in: route),
+                                                 mentions: mentions(in: message.body, route: route))
+                    stanza.addChild(Element(name: "replace", attributes: ["xmlns": NS.correction, "id": original]))
+                }
+                guard lock.withLock({ $0.writtenActions.insert(id).inserted }) else { return }
+                let dropped: @Sendable () -> Void = { [weak self] in self?.lock.withLock { _ = $0.writtenActions.remove(id) } }
+                switch deliver(stanza, to: peer, encrypted: !message.isRetracted && message.encryption == .omemo, onDropped: dropped) {
+                case .success(let (_, acknowledged)):
+                    if !acknowledged { confirmByPing(stanza) }
+                case .failure(let error):
+                    dropped()
+                    logger.error("Couldn't send correction or retraction of \(messageId): \(String(describing: error), privacy: .private)")
+                }
+            }
+        }
+    }
+
+    private func giveUpAction(_ id: String) {
+        try? database.clearPendingAction(id: id)
+    }
+
+    /// Sends the corrections and retractions the server never acknowledged,
+    /// which only a new session loses; see `resendPendingReactions`.
+    private func resendPendingActions() {
+        guard let pending = try? database.pendingActions() else { return }
+        for (message, peer, id) in pending {
+            guard let messageId = message.id, !lock.withLock({ $0.writtenActions.contains(id) }) else { continue }
+            sendAction(id: id, of: messageId, to: peer)
         }
     }
 

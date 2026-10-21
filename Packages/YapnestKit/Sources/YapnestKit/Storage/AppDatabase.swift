@@ -628,6 +628,15 @@ public final class AppDatabase: Sendable {
             try db.create(index: "pendingEdit_on_createdAt", on: "pendingEdit", columns: ["createdAt"])
         }
 
+        migrator.registerMigration("v37-pending-message-action") { db in
+            // Our correction or retraction of a message already sent, until the
+            // server acknowledges its stanza. A new session sends it again.
+            try db.alter(table: "message") { t in
+                t.add(column: "actionPendingId", .text)
+            }
+            try db.execute(sql: "CREATE INDEX message_on_actionPendingId ON message(actionPendingId) WHERE actionPendingId IS NOT NULL")
+        }
+
         return migrator
     }
 

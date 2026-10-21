@@ -106,6 +106,11 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
     /// Whether the call was proposed with video.
     public var callIsVideo = false
 
+    /// The stanza id of our correction or retraction of this message that the
+    /// server hasn't acknowledged. A later one replaces it, as only the latest
+    /// state needs to reach the peer.
+    public var actionPendingId: String?
+
     public init(
         id: Int64? = nil,
         conversationId: Int64,

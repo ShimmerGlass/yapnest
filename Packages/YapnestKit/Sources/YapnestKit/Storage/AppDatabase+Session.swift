@@ -171,6 +171,28 @@ extension AppDatabase {
         }
     }
 
+    /// The server has our correction or retraction stanza `id`.
+    func clearPendingAction(id: String) throws {
+        try writer.write { db in
+            try Message.filter(Column("actionPendingId") == id).updateAll(db, Column("actionPendingId").set(to: nil))
+        }
+    }
+
+    /// Our corrections and retractions the server hasn't acknowledged, as the
+    /// message they are of, its conversation's peer, and the stanza's id.
+    func pendingActions() throws -> [(message: Message, peer: JID, id: String)] {
+        try reader.read { db in
+            let messages = try Message.filter(Column("actionPendingId") != nil).fetchAll(db)
+            let peers = Dictionary(uniqueKeysWithValues: try Conversation.fetchAll(db, keys: Set(messages.map(\.conversationId))).compactMap { chat in
+                chat.id.map { ($0, chat.peer) }
+            })
+            return messages.compactMap { message in
+                guard let id = message.actionPendingId, let peer = peers[message.conversationId] else { return nil }
+                return (message, peer, id)
+            }
+        }
+    }
+
     public func reactions(on message: Message, from sender: JID) throws -> Set<String> {
         try reader.read { db in
             Set(try message.request(for: Message.reactions).filter(Column("sender") == sender).fetchAll(db).map(\.emoji))

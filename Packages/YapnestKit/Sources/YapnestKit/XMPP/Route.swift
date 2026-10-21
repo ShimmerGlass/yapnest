@@ -95,9 +95,9 @@ extension XMPPSession {
     }
 
     /// Runs `send` now if `route` is ready, else once the room has us and has
-    /// caught up (`sendDeferred`). These operations have nothing stored to
-    /// resend, unlike messages, which stay pending in the database; they
-    /// are lost if the app quits while they wait.
+    /// caught up (`sendDeferred`). What waits here is lost if the app quits, so
+    /// whatever matters is also stored as pending (a message, a reaction, a
+    /// correction or retraction) and sent again by `sendUnclaimedPending`.
     func whenReady(_ route: Route, _ send: @escaping @Sendable () -> Void) {
         guard case .room(let room, _) = route else { return send() }
         // Checked and queued under one lock hold, so the catch-up ending
