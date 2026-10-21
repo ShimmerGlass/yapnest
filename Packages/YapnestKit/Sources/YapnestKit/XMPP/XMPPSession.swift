@@ -239,11 +239,15 @@ public final class XMPPSession: @unchecked Sendable {
         var livenessCheck: UUID?
         /// Chat states (XEP-0085) by contact.
         var chatStates: [JID: ChatStateTracker] = [:]
-        /// Archive results of the page being fetched, stored together when
-        /// the page ends.
+        /// Archive results of the pages being fetched, each stored with the
+        /// rest of its query's page when that ends. Queries run at once, so
+        /// each result says which one it belongs to.
         var archiveBuffer: [ArchivedInbound] = []
         /// Calls signalled in those messages, applied after them.
         var archivedCallSignals: [ArchivedCallSignal] = []
+        /// Queries whose results were dropped by a flush in the middle of a
+        /// page, so the page's end must not count as stored.
+        var failedArchiveQueries: Set<String> = []
         /// Ids of the queries for older history, whose results are stored
         /// quietly.
         var historyQueries: Set<String> = []
@@ -264,11 +268,13 @@ public final class XMPPSession: @unchecked Sendable {
     /// An archived message parsed and decrypted, waiting to be stored, and
     /// what to do once it is.
     struct ArchivedInbound {
+        var query: String
         var inbound: InboundMessage
         var stored: @Sendable (IngestResult) -> Void
     }
 
     struct ArchivedCallSignal {
+        var query: String
         var signal: CallSignal
         var isHistory: Bool
     }
@@ -524,9 +530,9 @@ public final class XMPPSession: @unchecked Sendable {
                     return
                 }
                 if isAccount {
-                    self.handle(archived.message, source: origin, isHistory: isHistory)
+                    self.handle(archived.message, source: origin, isHistory: isHistory, query: archived.query.id)
                 } else {
-                    self.handleRoomStanza(archived.message, source: origin, isHistory: isHistory)
+                    self.handleRoomStanza(archived.message, source: origin, isHistory: isHistory, query: archived.query.id)
                 }
             }
             .store(in: &cancellables)
@@ -1123,7 +1129,7 @@ public final class XMPPSession: @unchecked Sendable {
         handle(stanza, source: .live)
     }
 
-    func handle(_ stanza: Martin.Message, source: InboundMessage.Source, isHistory: Bool = false) {
+    func handle(_ stanza: Martin.Message, source: InboundMessage.Source, isHistory: Bool = false, query: String = "") {
         if Self.isInvitation(stanza) {
             // Archived ones were dealt with when they arrived.
             if source == .live { invitationReceived(stanza) }
@@ -1135,7 +1141,7 @@ public final class XMPPSession: @unchecked Sendable {
             // Errors bounce our group messages; private messages through
             // the room aren't supported.
             if stanza.type == .error {
-                handleRoomStanza(stanza, source: source)
+                handleRoomStanza(stanza, source: source, query: query)
             } else if source == .live, !Self.isDelayed(stanza), stanza.from?.resource == nil {
                 // The room tells of an affiliation change of someone who isn't
                 // in it (XEP-0045 9.3-9.8) in a message without a type, which
@@ -1150,7 +1156,7 @@ public final class XMPPSession: @unchecked Sendable {
         // Calls are signalled in messages of their own, which carry nothing
         // else and are never encrypted.
         if let signal = CallSignal(stanza, account: account, source: source) {
-            callSignalReceived(signal, source: source, isHistory: isHistory)
+            callSignalReceived(signal, source: source, isHistory: isHistory, query: query)
             return
         }
         if source == .live, let sid = CallSignal.proposeReceipt(in: stanza) { callProposeDelivered(sid) }
@@ -1170,7 +1176,7 @@ public final class XMPPSession: @unchecked Sendable {
                 // our own encrypted messages would look unsent and be resent.
                 if case .archive = source, let inbound = InboundMessage(stanza, account: account, source: source) {
                     // After what came before it in the archive.
-                    flushArchive()
+                    flushArchive(query: query, endsPage: false)
                     try? database.confirmArchived(inbound)
                     // We wrote there, so we'd read what came before, though
                     // a new device can't read what.
@@ -1190,7 +1196,7 @@ public final class XMPPSession: @unchecked Sendable {
         inbound.isHistory = isHistory
         noteChatStates(of: inbound, source: source)
         if case .archive = source {
-            bufferArchived(inbound) { [weak self, inbound] result in
+            bufferArchived(inbound, query: query) { [weak self, inbound] result in
                 guard !isHistory else {
                     // Old, read and long answered: only a retraction still
                     // has something to clean up.
@@ -1239,32 +1245,43 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Holds an archived message until its page ends, to store the page in
     /// one transaction.
-    func bufferArchived(_ inbound: InboundMessage, then stored: @escaping @Sendable (IngestResult) -> Void) {
-        lock.withLockUnchecked { $0.archiveBuffer.append(ArchivedInbound(inbound: inbound, stored: stored)) }
+    func bufferArchived(_ inbound: InboundMessage, query: String = "", then stored: @escaping @Sendable (IngestResult) -> Void) {
+        lock.withLockUnchecked { $0.archiveBuffer.append(ArchivedInbound(query: query, inbound: inbound, stored: stored)) }
     }
 
-    /// Stores what the archive has delivered so far. Each page's results
-    /// arrive before its answer, so a page's callback flushes it whole.
-    /// Returns false if the database refused the page. Whoever tracks a
-    /// cursor must then leave it where it was, so the next catch-up reads the
-    /// page again; storing a message twice is harmless, as ingest matches it
-    /// to the copy it has by its ids.
+    /// Stores what the archive has delivered so far for one query, or for all
+    /// of them without one. Each page's results arrive before its answer, so
+    /// a page's callback flushes its own query whole; another query's
+    /// results stay for its own page to store, or lose.
+    /// Returns false if the database refused the page, or an earlier flush
+    /// in the middle of it (`endsPage: false`). Whoever tracks a cursor must
+    /// then leave it where it was, so the next catch-up reads the page
+    /// again; storing a message twice is harmless, as ingest matches it to
+    /// the copy it has by its ids.
     @discardableResult
-    func flushArchive() -> Bool {
-        let (batch, signals) = lock.withLockUnchecked { state -> ([ArchivedInbound], [ArchivedCallSignal]) in
-            defer { state.archiveBuffer = []; state.archivedCallSignals = [] }
-            return (state.archiveBuffer, state.archivedCallSignals)
+    func flushArchive(query: String? = nil, endsPage: Bool = true) -> Bool {
+        let (batch, signals, failedEarlier) = lock.withLockUnchecked { state -> ([ArchivedInbound], [ArchivedCallSignal], Bool) in
+            guard let query else {
+                defer { state.archiveBuffer = []; state.archivedCallSignals = []; state.failedArchiveQueries = [] }
+                return (state.archiveBuffer, state.archivedCallSignals, false)
+            }
+            let batch = state.archiveBuffer.filter { $0.query == query }
+            let signals = state.archivedCallSignals.filter { $0.query == query }
+            state.archiveBuffer.removeAll { $0.query == query }
+            state.archivedCallSignals.removeAll { $0.query == query }
+            return (batch, signals, endsPage && state.failedArchiveQueries.remove(query) != nil)
         }
-        guard !batch.isEmpty || !signals.isEmpty else { return true }
+        guard !batch.isEmpty || !signals.isEmpty else { return !failedEarlier }
         do {
             let (results, calls) = try database.ingest(batch.map(\.inbound), callSignals: signals.map { ($0.signal, $0.isHistory) }, account: account)
             for (item, result) in zip(batch, results) { item.stored(result) }
             for (row, signal) in zip(calls, signals) where !signal.isHistory {
                 if let row { events.send(.newMessage(row)) }
             }
-            return true
+            return !failedEarlier
         } catch {
             logger.error("Failed to store archived messages: \(error)")
+            if let query, !endsPage { lock.withLockUnchecked { _ = $0.failedArchiveQueries.insert(query) } }
             return false
         }
     }
@@ -1536,9 +1553,10 @@ public final class XMPPSession: @unchecked Sendable {
 
     private func fetchArchivePage(after: String?, start: Date?, attempt: Int) {
         let version = lock.withLock { $0.archiveVersion }
-        client.module(.mam).queryItems(version: version, start: start, queryId: UUID().uuidString, rsm: RSM.Query(after: after, max: 100)) { [weak self] result in
+        let queryId = UUID().uuidString
+        client.module(.mam).queryItems(version: version, start: start, queryId: queryId, rsm: RSM.Query(after: after, max: 100)) { [weak self] result in
             guard let self else { return }
-            let stored = self.flushArchive()
+            let stored = self.flushArchive(query: queryId)
             guard self.catchUpMayProceed(attempt: attempt) else { return }
             switch result {
             case .success where !stored:

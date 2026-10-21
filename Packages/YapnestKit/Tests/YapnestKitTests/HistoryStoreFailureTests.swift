@@ -14,6 +14,7 @@ struct HistoryStoreFailureTests {
     let database: AppDatabase
     let session: XMPPSession
     let wire = FakeWire()
+    let otherQuery = OSAllocatedBool()
 
     init() throws {
         database = try AppDatabase.inMemory()
@@ -27,6 +28,7 @@ struct HistoryStoreFailureTests {
         session.lock.withLock { $0.archiveVersion = .MAM2 }
 
         let session = self.session
+        let otherQuery = self.otherQuery
         wire.answer { request in
             guard let query = request.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") else { return nil }
             session.client.module(.mam).archivedMessagesPublisher.send(.init(
@@ -34,6 +36,14 @@ struct HistoryStoreFailureTests {
                 timestamp: Date(timeIntervalSince1970: 100),
                 message: parseStanza("<message from='alice@example.org/phone' to='me@example.org' type='chat' id='old'><body>older</body></message>"),
             ))
+            if otherQuery.value {
+                // Another query's result, delivered while this page is fetched.
+                session.client.module(.mam).archivedMessagesPublisher.send(.init(
+                    messageId: "s-bob", source: me.martin, query: .init(id: "other", version: .MAM2),
+                    timestamp: Date(timeIntervalSince1970: 200),
+                    message: parseStanza("<message from='bob@example.org/phone' to='me@example.org' type='chat' id='bob'><body>from bob</body></message>"),
+                ))
+            }
             let fin = Element(name: "fin", xmlns: "urn:xmpp:mam:2")
             fin.setAttribute("complete", value: "false")
             fin.addChild(Element(name: "set", xmlns: "http://jabber.org/protocol/rsm", children: [Element(name: "first", cdata: "s-old")]))
@@ -65,5 +75,19 @@ struct HistoryStoreFailureTests {
         try allowStoringMessages(database)
         #expect(try await session.loadOlderHistory(for: alice) == true)
         #expect(try bodies() == ["older", "newer"])
+    }
+
+    @Test func aFailedPageDoesNotLoseAnotherQuerysResults() async throws {
+        otherQuery.set()
+        try failStoringMessages(database)
+        await #expect(throws: HistoryError.notStored) { try await session.loadOlderHistory(for: alice) }
+        try allowStoringMessages(database)
+
+        // The other query's answer arrives later and moves its own cursor
+        // if this says its page is stored, so it must be.
+        let stored = session.flushArchive(query: "other")
+        let bodies = try bodies()
+        #expect(stored)
+        #expect(bodies.contains("from bob"))
     }
 }

@@ -122,7 +122,7 @@ extension XMPPSession {
             ) { [weak self] result in
                 // The page's messages arrived before its answer, and are
                 // stored before the caller looks at the database again.
-                let isStored = self?.flushArchive() ?? false
+                let isStored = self?.flushArchive(query: queryId) ?? false
                 continuation.resume(returning: result.map {
                     HistoryPage(isComplete: HistoryPage.isComplete(complete: $0.complete, first: $0.rsm?.first), first: $0.rsm?.first, isStored: isStored)
                 })

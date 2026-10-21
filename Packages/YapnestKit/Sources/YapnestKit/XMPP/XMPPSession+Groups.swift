@@ -856,9 +856,10 @@ extension XMPPSession {
 
     private func fetchRoomArchivePage(_ room: JID, rsm: RSM.Query, _ visit: RoomCatchUp, onePage: Bool = false) {
         // The room's archive, which discovery found speaks MAM 2.
-        client.module(.mam).queryItems(version: .MAM2, componentJid: Martin.JID(room.martin), queryId: UUID().uuidString, rsm: rsm) { [weak self] result in
+        let queryId = UUID().uuidString
+        client.module(.mam).queryItems(version: .MAM2, componentJid: Martin.JID(room.martin), queryId: queryId, rsm: rsm) { [weak self] result in
             guard let self else { return }
-            let stored = self.flushArchive()
+            let stored = self.flushArchive(query: queryId)
             guard self.roomCatchUpMayProceed(room, visit) else { return }
             switch result {
             case .success where !stored:
@@ -930,11 +931,12 @@ extension XMPPSession {
         // Without a cursor or a date the newest page, as the app reads on
         // joining; from the start it would be the room's oldest messages.
         let rsm = Self.notificationPage(after: after, since: since).query
+        let queryId = UUID().uuidString
         client.module(.mam).queryItems(
-            version: .MAM2, componentJid: Martin.JID(room.martin), start: since, queryId: UUID().uuidString, rsm: rsm,
+            version: .MAM2, componentJid: Martin.JID(room.martin), start: since, queryId: queryId, rsm: rsm,
         ) { [weak self] result in
             guard let self else { return done() }
-            let stored = self.flushArchive()
+            let stored = self.flushArchive(query: queryId)
             self.omemo.module.mamSyncFinished(for: room.martin)
             guard stored, case .success(let page) = result, let last = page.rsm?.last else {
                 if case .failure(let error) = result {
@@ -992,7 +994,7 @@ extension XMPPSession {
 
     // MARK: Messages
 
-    func handleRoomStanza(_ stanza: Martin.Message, source: InboundMessage.Source, isHistory: Bool = false) {
+    func handleRoomStanza(_ stanza: Martin.Message, source: InboundMessage.Source, isHistory: Bool = false, query: String = "") {
         guard let room = stanza.from.flatMap({ JID($0) }), let group = try? database.groupChat(room) else { return }
         reportSubjectOutcome(of: stanza, in: room)
         if stanza.type == .groupchat, stanza.from?.resource == nil {
@@ -1036,7 +1038,7 @@ extension XMPPSession {
                 case .ignore, .ownCopy:
                     // Our own message coming back; note the room's id for it.
                     if let inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: source) {
-                        flushArchive()
+                        flushArchive(query: query, endsPage: false)
                         try? database.confirmArchived(inbound)
                         // We wrote there, so we'd read what came before.
                         if case .ownCopy = result { try? database.markRead(before: inbound) }
@@ -1062,7 +1064,7 @@ extension XMPPSession {
         inbound.isHistory = isHistory
         let isPrivate = group.isPrivate
         if case .archive = source {
-            bufferArchived(inbound) { [weak self, inbound] result in
+            bufferArchived(inbound, query: query) { [weak self, inbound] result in
                 guard !isHistory else {
                     if let attachment = result.retractedAttachment { self?.attachments.remove(attachment) }
                     return

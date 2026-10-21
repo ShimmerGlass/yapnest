@@ -271,11 +271,11 @@ extension XMPPSession {
     /// A Jingle Message Initiation message from any source. The call this
     /// device is in, and a new call ringing here, are the machine's; the rest
     /// only add to the conversation's call rows.
-    func callSignalReceived(_ signal: CallSignal, source: InboundMessage.Source, isHistory: Bool) {
+    func callSignalReceived(_ signal: CallSignal, source: InboundMessage.Source, isHistory: Bool, query: String = "") {
         if callMedia != nil, routeToCall(signal, source: source, isHistory: isHistory) { return }
         if case .archive = source {
             // With the page's messages, in the transaction that ends it.
-            lock.withLockUnchecked { $0.archivedCallSignals.append(ArchivedCallSignal(signal: signal, isHistory: isHistory)) }
+            lock.withLockUnchecked { $0.archivedCallSignals.append(ArchivedCallSignal(query: query, signal: signal, isHistory: isHistory)) }
             return
         }
         do {
