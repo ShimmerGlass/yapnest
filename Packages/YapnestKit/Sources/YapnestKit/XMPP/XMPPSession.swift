@@ -983,8 +983,10 @@ public final class XMPPSession: @unchecked Sendable {
                     for peer in $0.chatStates.keys { $0.chatStates[peer]?.sent = nil }
                     $0.sentDisplayed = [:]
                 }
-                // Anything a query that never finished left behind.
+                // Anything a query that never finished left behind. New
+                // queries follow, so the old ones' marks are no use.
                 flushArchive()
+                lock.withLock { $0.failedArchiveQueries = [] }
                 self.state.send(.connected(isSyncing: true))
                 if policy.enablesCarbons { client.module(.messageCarbons).enable() }
                 // The archive module only knows which MAM version the server
@@ -1250,9 +1252,10 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     /// Stores what the archive has delivered so far for one query, or for all
-    /// of them without one. Each page's results arrive before its answer, so
-    /// a page's callback flushes its own query whole; another query's
-    /// results stay for its own page to store, or lose.
+    /// of them without one, which only a connection reset does: it would
+    /// store other queries' half-delivered pages. Each page's results arrive
+    /// before its answer, so a page's callback flushes its own query whole;
+    /// another query's results stay for its own page to store, or lose.
     /// Returns false if the database refused the page, or an earlier flush
     /// in the middle of it (`endsPage: false`). Whoever tracks a cursor must
     /// then leave it where it was, so the next catch-up reads the page
@@ -1262,7 +1265,7 @@ public final class XMPPSession: @unchecked Sendable {
     func flushArchive(query: String? = nil, endsPage: Bool = true) -> Bool {
         let (batch, signals, failedEarlier) = lock.withLockUnchecked { state -> ([ArchivedInbound], [ArchivedCallSignal], Bool) in
             guard let query else {
-                defer { state.archiveBuffer = []; state.archivedCallSignals = []; state.failedArchiveQueries = [] }
+                defer { state.archiveBuffer = []; state.archivedCallSignals = [] }
                 return (state.archiveBuffer, state.archivedCallSignals, false)
             }
             let batch = state.archiveBuffer.filter { $0.query == query }
@@ -1281,7 +1284,13 @@ public final class XMPPSession: @unchecked Sendable {
             return !failedEarlier
         } catch {
             logger.error("Failed to store archived messages: \(error)")
-            if let query, !endsPage { lock.withLockUnchecked { _ = $0.failedArchiveQueries.insert(query) } }
+            // Whoever's results were dropped must not report their page stored.
+            if let query {
+                if !endsPage { lock.withLockUnchecked { _ = $0.failedArchiveQueries.insert(query) } }
+            } else {
+                let queries = Set(batch.map(\.query) + signals.map(\.query))
+                lock.withLockUnchecked { $0.failedArchiveQueries.formUnion(queries) }
+            }
             return false
         }
     }
@@ -1584,8 +1593,7 @@ public final class XMPPSession: @unchecked Sendable {
         }
     }
 
-    private func finishCatchUp(attempt: Int) {
-        flushArchive()
+    func finishCatchUp(attempt: Int) {
         // Never report connected, or do the end-of-sync work, on a dead stream.
         guard catchUpMayProceed(attempt: attempt) else { return }
         if policy.syncsAccountState {

@@ -90,4 +90,19 @@ struct HistoryStoreFailureTests {
         #expect(stored)
         #expect(bodies.contains("from bob"))
     }
+
+    @Test func anotherQuerysCatchUpEndingKeepsAFailedPageFailed() throws {
+        let inbound = try #require(InboundMessage(
+            parseStanza("<message from='bob@example.org/phone' to='me@example.org' type='chat' id='b1'><body>hi</body></message>") as Martin.Message,
+            account: me, source: .archive(serverId: "s-b1", timestamp: Date()),
+        ))
+        session.bufferArchived(inbound, query: "B") { _ in }
+        try failStoringMessages(database)
+        #expect(session.flushArchive(query: "B", endsPage: false) == false)
+        try allowStoringMessages(database)
+
+        session.finishCatchUp(attempt: Int.min)
+
+        #expect(session.flushArchive(query: "B") == false)
+    }
 }

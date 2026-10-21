@@ -967,7 +967,6 @@ extension XMPPSession {
     /// Sends what never reached the room: it echoes every message it gets,
     /// so anything sent before this visit that didn't come back was lost.
     private func finishRoomCatchUp(_ room: JID, _ visit: RoomCatchUp, reachedEnd: Bool) {
-        flushArchive()
         // Not while the stream is down: the room stays syncing, and what
         // waited for it stays queued, until a catch-up on a live one ends.
         guard roomCatchUpMayProceed(room, visit) else { return }
