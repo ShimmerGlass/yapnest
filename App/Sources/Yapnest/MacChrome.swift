@@ -107,14 +107,61 @@ struct SheetConfirmButton: View {
 /// to match the phone). It is also what Esc presses.
 struct SheetDoneButton: View {
     @Environment(\.dismiss) private var dismiss
+    /// Set on a screen pushed in the sheet, where `dismiss` would only go back.
+    var close: DismissAction?
 
     var body: some View {
         if Platform.isMac {
-            SheetIconButton(title: "Done", systemImage: "checkmark") { dismiss() }
+            SheetIconButton(title: "Done", systemImage: "checkmark") { (close ?? dismiss)() }
                 .keyboardShortcut(.cancelAction)
         } else {
-            SheetConfirmButton("Done") { dismiss() }
+            SheetConfirmButton("Done") { (close ?? dismiss)() }
                 .keyboardShortcut(.cancelAction)
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// Closes the sheet whose navigation stack a screen is pushed in.
+    @Entry var closeSheet: DismissAction?
+}
+
+extension View {
+    /// On a sheet's navigation stack: its pushed screens show the sheet's
+    /// Done button too (`sheetDoneButton()`), so closing doesn't take going
+    /// back first. A sheet presented from inside inherits this, so one whose
+    /// stack pushes those screens needs it as well.
+    func closableFromPushedScreens() -> some View {
+        modifier(SheetCloser())
+    }
+
+    /// The sheet's Done button, on a screen that can be pushed in a sheet set
+    /// up with `closableFromPushedScreens()`. Nothing anywhere else.
+    func sheetDoneButton(isShown: Bool = true) -> some View {
+        modifier(PushedSheetDone(isShown: isShown))
+    }
+}
+
+private struct SheetCloser: ViewModifier {
+    /// Read outside the stack, so it closes the sheet rather than going back.
+    @Environment(\.dismiss) private var dismiss
+
+    func body(content: Content) -> some View {
+        content.environment(\.closeSheet, dismiss)
+    }
+}
+
+private struct PushedSheetDone: ViewModifier {
+    let isShown: Bool
+    @Environment(\.closeSheet) private var closeSheet
+
+    func body(content: Content) -> some View {
+        content.toolbar {
+            if isShown, let closeSheet {
+                ToolbarItem(placement: .confirmationAction) {
+                    SheetDoneButton(close: closeSheet)
+                }
+            }
         }
     }
 }

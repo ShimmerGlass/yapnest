@@ -368,10 +368,8 @@ struct ChatSettingsView: View {
             .sheet(item: $commandsTarget) { target in
                 NavigationStack {
                     CommandsListView(title: "Commands", session: session, entities: [(label: nil, jid: target.jid)])
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) { SheetDoneButton() }
-                        }
                 }
+                .closableFromPushedScreens()
                 .sheetSizedForMac()
             }
             .sheet(isPresented: $showsInvite) {
@@ -415,6 +413,7 @@ struct ChatSettingsView: View {
                 }
             }
         }
+        .closableFromPushedScreens()
     }
 
     private func saveNickname(_ name: String) async throws {

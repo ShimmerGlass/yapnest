@@ -26,6 +26,7 @@ struct NotificationSoundPicker: View {
         }
         .navigationTitle("Notification Sound")
         .navigationBarTitleDisplayMode(.inline)
+        .sheetDoneButton()
         .onDisappear { preview.stop() }
     }
 

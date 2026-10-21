@@ -38,6 +38,7 @@ struct BannedMembersView: View {
         }
         .navigationTitle("Banned")
         .navigationBarTitleDisplayMode(.inline)
+        .sheetDoneButton()
         .errorAlert("Couldn't load the banned list", $loadError)
         .errorAlert("Couldn't unban", $lifting.error)
         .task {

@@ -12,6 +12,19 @@ final class SettingsUITests: InteractionsTestCase {
         XCTAssertTrue(app.buttons["Settings"].exists, "the chat list isn't back")
     }
 
+    /// A pushed screen used to have only Back, so closing took going back first.
+    func testDoneOnAPushedScreenClosesSettings() {
+        driver.openSettings()
+        let licences = app.buttons["Open Source Licences"].firstMatch
+        for _ in 0..<5 where !licences.isHittable { app.swipeUp() }
+        licences.tap()
+        XCTAssertTrue(app.navigationBars["Licences"].waitForExistence(timeout: 10), "the licences didn't open")
+        app.navigationBars["Licences"].buttons["Done"].tap()
+        waitUntilGone(app.navigationBars["Licences"], "the licences")
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5), "the chat list isn't back")
+        XCTAssertFalse(app.navigationBars["Settings"].exists, "Done only went back to Settings")
+    }
+
     func testTheLicencesListNamesTheLibrariesAndOpensOne() {
         driver.openSettings()
         let licences = app.buttons["Open Source Licences"].firstMatch

@@ -90,6 +90,7 @@ struct LicencesView: View {
         }
         .navigationTitle("Licences")
         .navigationBarTitleDisplayMode(.inline)
+        .sheetDoneButton()
         #if DEBUG
         .navigationDestination(item: $devLibrary) { id in
             if let library = Self.licences?.libraries.first(where: { $0.id == id }) {
@@ -135,6 +136,7 @@ struct LicenceTextView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .sheetDoneButton()
         .task { text = await offMain { [file] in OpenSourceLicences.text(of: file).map(Self.reflowed) } }
     }
 

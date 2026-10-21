@@ -268,6 +268,7 @@ struct SettingsView: View {
                 }
             }
         }
+        .closableFromPushedScreens()
     }
 
     /// Read from the server's features, which are known once connected. The

@@ -9,6 +9,18 @@ final class ChatSettingsUITests: InteractionsTestCase {
         XCTAssertTrue(app.staticTexts["React to this one."].exists, "the chat isn't back")
     }
 
+    /// A pushed screen used to have only Back, so closing took going back first.
+    func testDoneOnAPushedScreenClosesChatSettings() {
+        driver.openChatSettings()
+        // Its label carries the chosen sound after the name.
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Notification sound")).firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Notification Sound"].waitForExistence(timeout: 10), "the sound picker didn't open")
+        app.navigationBars["Notification Sound"].buttons["Done"].tap()
+        waitUntilGone(app.navigationBars["Notification Sound"], "the sound picker")
+        XCTAssertFalse(app.navigationBars["Chat Settings"].exists, "Done only went back to the settings")
+        XCTAssertTrue(app.staticTexts["React to this one."].exists, "the chat isn't back")
+    }
+
     func testTheHeaderIsCenteredInTheBar() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .mac, "the Mac has its own strip")
         let header = app.buttons["Chat Settings"].firstMatch

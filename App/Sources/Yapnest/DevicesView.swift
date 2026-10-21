@@ -10,12 +10,8 @@ struct DevicesView: View {
     var body: some View {
         NavigationStack {
             DevicesList(session: session, peer: peer)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        SheetDoneButton()
-                    }
-                }
         }
+        .closableFromPushedScreens()
     }
 }
 
@@ -100,6 +96,7 @@ struct DevicesList: View {
         }
         .navigationTitle(peer == nil ? "Encryption" : "Devices")
         .navigationBarTitleDisplayMode(.inline)
+        .sheetDoneButton()
         .task { await reload() }
         .toolbar {
             if isRemoving {

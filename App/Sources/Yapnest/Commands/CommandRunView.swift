@@ -48,6 +48,8 @@ struct CommandRunView: View {
         .dismissesKeyboardOnTap()
         .navigationTitle(Text(verbatim: run.command.name))
         .navigationBarTitleDisplayMode(.inline)
+        // Not mid-command, where a checkmark would read as sending the step.
+        .sheetDoneButton(isShown: !run.isExecuting)
         .navigationBarBackButtonHidden(run.isExecuting)
         .toolbar {
             // A command's name can be long, and the inline title keeps one line.

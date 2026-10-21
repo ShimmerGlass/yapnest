@@ -48,6 +48,7 @@ struct CommandsListView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .sheetDoneButton()
         // A group's entities grow while its occupants are still being probed, so
         // a screen opened early gets a longer list later. Keyed on the addresses,
         // the load runs again and fetches the newcomers.
