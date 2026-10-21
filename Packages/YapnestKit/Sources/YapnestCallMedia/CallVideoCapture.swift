@@ -19,6 +19,8 @@ final class CallVideoCapture: @unchecked Sendable {
     // alone couldn't tell them apart.
     private var chosenID: String?
     private var choiceObserver: (any NSObjectProtocol)?
+    // The capturer holds its delegate weakly.
+    private lazy var upright = UprightFrames(target: source)
 
     /// `synthetic` skips the camera even if there is one, so a test never
     /// prompts for it.
@@ -88,7 +90,11 @@ final class CallVideoCapture: @unchecked Sendable {
             return
         }
         guard camera == nil else { return }
+        #if targetEnvironment(macCatalyst)
+        let capturer = RTCCameraVideoCapturer(delegate: upright)
+        #else
         let capturer = RTCCameraVideoCapturer(delegate: source)
+        #endif
         camera = capturer
         guard let format = Self.format(of: device, preferring: capturer.preferredOutputPixelFormat()) else { return }
         capturer.startCapture(with: device, format: format, fps: Self.frameRate(of: format))
@@ -121,6 +127,23 @@ final class CallVideoCapture: @unchecked Sendable {
     static func frameRate(of format: AVCaptureDevice.Format) -> Int {
         let best = format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? Double(maxFrameRate)
         return max(1, min(maxFrameRate, Int(best)))
+    }
+}
+
+/// Passes frames on with no rotation. On Catalyst the camera capturer takes
+/// its rotation from the device's orientation, which a Mac never reports, so
+/// it stays at portrait and tagged the Mac camera's upright frames as turned
+/// a quarter, for the preview and for the other side alike.
+final class UprightFrames: NSObject, RTCVideoCapturerDelegate, @unchecked Sendable {
+    private let target: any RTCVideoCapturerDelegate
+
+    init(target: any RTCVideoCapturerDelegate) {
+        self.target = target
+    }
+
+    func capturer(_ capturer: RTCVideoCapturer, didCapture frame: RTCVideoFrame) {
+        target.capturer(capturer, didCapture: frame.rotation == ._0
+            ? frame : RTCVideoFrame(buffer: frame.buffer, rotation: ._0, timeStampNs: frame.timeStampNs))
     }
 }
 
