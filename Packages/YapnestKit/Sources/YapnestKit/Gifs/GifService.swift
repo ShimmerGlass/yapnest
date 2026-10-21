@@ -204,7 +204,7 @@ private struct Envelope: Decodable {
         var gif: Gif? {
             guard type != "ad" else { return nil }
             func gif(_ size: String) -> Rendition? {
-                file?[size]?.value?.gif.map { Rendition(url: $0.url, width: $0.width, height: $0.height, size: $0.size.map { Int64($0) }) }
+                file?[size]?.value?.gif.map { Rendition(url: $0.url, width: $0.width, height: $0.height, size: $0.size.flatMap { $0.isFinite && $0 >= 0 && $0 < 9.2e18 ? Int64($0) : nil }) }
             }
             guard let preview = gif("sm") ?? gif("xs") ?? gif("md") else { return nil }
             // The medium size if it's small enough to upload quickly, else the

@@ -118,4 +118,28 @@ struct PendingReactionTests {
         #expect(reactionStanzas().count == 1)
         #expect(!(try isPending()))
     }
+
+    private let room = YapnestKit.JID("cake@rooms.example.org")!
+
+    private func roomMessage(_ direction: YapnestKit.Message.Direction, remoteId: String, serverId: String?) throws -> YapnestKit.Message {
+        try database.joinGroupChat(room, nickname: "me")
+        session.reloadKnownRooms()
+        let id = try #require(try database.conversation(with: room).id)
+        return try database.insert(YapnestKit.Message(
+            conversationId: id, direction: direction, sender: direction == .incoming ? room : me, body: "hi", remoteId: remoteId, serverId: serverId,
+        ))
+    }
+
+    @Test func reactingToAGroupMessageTheRoomHasntEchoedYetThrows() throws {
+        _ = try roomMessage(.incoming, remoteId: "g0", serverId: "s0")
+        let mine = try roomMessage(.outgoing, remoteId: "g1", serverId: nil)
+        #expect(throws: XMPPSession.MessageActionError.notYetConfirmed) { try session.toggleReaction("👍", on: mine, peer: room) }
+        #expect(try rows().isEmpty)
+    }
+
+    @Test func reactingInARoomThatGivesNoStanzaIdsThrowsAnotherError() throws {
+        let message = try roomMessage(.incoming, remoteId: "g1", serverId: nil)
+        #expect(throws: XMPPSession.MessageActionError.cannotReact) { try session.toggleReaction("👍", on: message, peer: room) }
+        #expect(try rows().isEmpty)
+    }
 }

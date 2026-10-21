@@ -124,6 +124,16 @@ struct GifServiceTests {
         #expect(page.gifs.map { $0.still?.lastPathComponent } == ["sm.jpg", "xs.jpg", nil])
     }
 
+    @Test func aSizeBeyondInt64IsDropped() throws {
+        let page = try GifService.decode(Data("""
+        {"result":true,"data":{"data":[
+        {"id":1,"file":{"md":{"gif":{"url":"https://s.test/a.gif","width":1,"height":1,"size":1e20}}}}
+        ]}}
+        """.utf8), page: 1)
+        #expect(page.gifs.count == 1)
+        #expect(page.gifs[0].shared.size == nil)
+    }
+
     @Test func floatSizesDecode() throws {
         let gif = try GifService.decode(fixture, page: 1).gifs[4]
         #expect(gif.preview.size == 330_000)

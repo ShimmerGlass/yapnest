@@ -6,6 +6,14 @@ import UniformTypeIdentifiers
 @testable import YapnestKit
 
 struct AttachmentTests {
+    @Test func transfersKeepNoCookiesAndNoCache() {
+        let configuration = XMPPSession.transferSession.configuration
+        #expect(configuration.httpCookieAcceptPolicy == .never)
+        #expect(!configuration.httpShouldSetCookies)
+        #expect(configuration.urlCache == nil)
+        #expect(configuration.httpCookieStorage == nil || configuration.httpCookieAcceptPolicy == .never)
+    }
+
     @Test func fileCryptoRoundTrip() throws {
         let plain = Data((0..<5000).map { UInt8($0 % 251) })
         let encrypted = try FileCrypto.encrypt(plain)

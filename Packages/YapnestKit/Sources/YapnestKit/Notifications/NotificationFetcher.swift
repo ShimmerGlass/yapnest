@@ -58,8 +58,13 @@ public struct NotificationFetcher: Sendable {
             case .claimOnly:
                 return claim()
             case .catchUp(let lockWait, let timeout):
-                await Self.queue.setLastCatchUp(Date())
-                return await catchUpAndClaim(lockWait: lockWait, timeout: timeout)
+                // Only a catch-up that finished lets later pushes go without
+                // one. A push that found the lock taken, or a catch-up that
+                // timed out, leaves them to try for themselves.
+                let started = Date()
+                let (outcome, completed) = await catchUpAndClaim(lockWait: lockWait, timeout: timeout)
+                if completed { await Self.queue.setLastCatchUp(started) }
+                return outcome
             }
         }
     }
@@ -88,10 +93,10 @@ public struct NotificationFetcher: Sendable {
 
     private static let queue = FetchQueue()
 
-    private func catchUpAndClaim(lockWait: TimeInterval, timeout: TimeInterval) async -> Outcome {
+    private func catchUpAndClaim(lockWait: TimeInterval, timeout: TimeInterval) async -> (Outcome, completed: Bool) {
         // The app connects and resumes in a moment, then lets go.
         guard await Task.detached(operation: { [lock] in lock.lock(timeout: lockWait, as: .notification) }).value else {
-            return lock.holder == .app ? .appIsRunning : .busy
+            return (lock.holder == .app ? .appIsRunning : .busy, false)
         }
         defer { lock.unlock() }
         do {
@@ -105,11 +110,11 @@ public struct NotificationFetcher: Sendable {
                 Self.logger.warning("Catch-up didn't finish: \(session.state.value.caseName, privacy: .public)")
             }
             // What did arrive is worth showing even if the rest didn't.
-            return try claimed(from: database)
+            return (try claimed(from: database), caughtUp)
         } catch {
             DiagLog.error(.notificationExtension, "Fetching failed", .error(error))
             Self.logger.error("Fetching for notifications failed: \(error)")
-            return .failed(error.localizedDescription)
+            return (.failed(error.localizedDescription), false)
         }
     }
 

@@ -10,6 +10,17 @@ struct UploadService: Sendable {
 
 extension XMPPSession {
     /// Files larger than this are never downloaded.
+    /// For every upload and download: no cookies and no cache, so a file host
+    /// can't tie one fetch to the next, and no plaintext file is kept by the
+    /// system. Redirects are still checked by `DownloadPolicy`.
+    static let transferSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
+
     static let maxDownloadSize: Int64 = 200 * 1024 * 1024
     /// Images from contacts download on their own up to this size.
     static let autoDownloadSize: Int64 = 15 * 1024 * 1024
@@ -96,7 +107,7 @@ extension XMPPSession {
                 request.setValue(contentType, forHTTPHeaderField: "Content-Type")
                 for (header, value) in slot.putHeaders { request.setValue(value, forHTTPHeaderField: header) }
                 let delegate = ProgressDelegate { [weak self] progress in self?.setProgress(progress, for: messageId) }
-                let (_, response) = try await URLSession.shared.upload(for: request, from: data, delegate: delegate)
+                let (_, response) = try await Self.transferSession.upload(for: request, from: data, delegate: delegate)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 DiagLog.info(.upload, "Upload finished", .id("msg", transferId), .int("status", status), .int("bytes", data.count), .duration("took", since: started))
                 guard (200..<300).contains(status) else {
@@ -198,7 +209,7 @@ extension XMPPSession {
 
                 let progress = ProgressDelegate(limit: limit, policy: policy) { [weak self] progress in self?.setProgress(progress, for: messageId) }
                 delegate = progress
-                let (file, response) = try await URLSession.shared.download(from: source, delegate: progress)
+                let (file, response) = try await Self.transferSession.download(from: source, delegate: progress)
                 defer { try? FileManager.default.removeItem(at: file) }
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
                 var data = try Data(contentsOf: file, options: .mappedIfSafe)

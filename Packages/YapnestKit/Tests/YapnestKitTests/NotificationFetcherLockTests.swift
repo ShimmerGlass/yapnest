@@ -62,4 +62,21 @@ private let me = JID("me@example.org")!
         }
         #expect(waited < 5)
     }
+
+    @Test func aPushBehindACatchUpThatFoundTheSessionBusyTriesForItself() async {
+        let share = ProcessLock(url: lockURL)
+        #expect(share.tryLock(as: .share))
+        defer { share.unlock() }
+        let fetcher = fetcher()
+
+        let first = Task { await fetcher.fetch() }
+        try? await Task.sleep(for: .milliseconds(200))
+        let second = Task { await fetcher.fetch() }
+        let third = Task { await fetcher.fetch() }
+
+        // The second never caught up, so it mustn't stand in for the third.
+        _ = await first.value
+        _ = await second.value
+        #expect(await third.value == .busy)
+    }
 }

@@ -1909,11 +1909,14 @@ public final class XMPPSession: @unchecked Sendable {
         case offline
         /// The room hasn't confirmed the message yet, so it can't be named.
         case notYetConfirmed
+        /// The chat gives its messages no id a reaction could name.
+        case cannotReact
 
         public var errorDescription: String? {
             switch self {
             case .offline: String(localized: "You're offline.")
             case .notYetConfirmed: String(localized: "The group hasn't received this message yet.")
+            case .cannotReact: String(localized: "This chat doesn't let this message be reacted to.")
             }
         }
     }
@@ -2124,11 +2127,20 @@ public final class XMPPSession: @unchecked Sendable {
         transmit(pending, to: peer)
     }
 
+    /// Why `message` has nothing to point at. Our own message in a room that
+    /// names its other messages will get an id once the room echoes it; any
+    /// other message never will.
+    private func reactionBlocker(for message: Message, peer: JID) throws -> MessageActionError {
+        guard isGroup(peer), message.direction == .outgoing else { return .cannotReact }
+        return try database.hasStanzaIds(conversationId: message.conversationId) ? .notYetConfirmed : .cannotReact
+    }
+
     /// Adds or removes our `emoji` reaction on `message`.
     public func toggleReaction(_ emoji: String, on message: Message, peer: JID) throws {
         // Offline, it stays pending and goes out once a session is back.
-        // A group message the room hasn't echoed yet has nothing to point at.
-        guard let target = reference(to: message) else { return }
+        guard let target = reference(to: message) else {
+            throw try reactionBlocker(for: message, peer: peer)
+        }
         let route = route(to: peer)
         var mine = try database.reactions(on: message, from: account)
         if mine.contains(emoji) { mine.remove(emoji) } else { mine.insert(emoji) }
