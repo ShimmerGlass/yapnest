@@ -41,12 +41,12 @@ extension AppDatabase {
         try reader.read { db in try Conversation.filter(Column("peer") == peer).fetchOne(db)?.draft }
     }
 
-    /// Marks the latest incoming message unread, so the conversation shows
+    /// Marks the latest incoming message that isn't retracted unread, so the conversation shows
     /// as unread until it's opened again.
     public func markUnread(conversationId: Int64) throws {
         try writer.write { db in
             guard var last = try Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming)
+                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming && Column("isRetracted") == false)
                 .order(Column("timestamp").desc, Column("id").desc)
                 .fetchOne(db) else { return }
             last.isRead = false

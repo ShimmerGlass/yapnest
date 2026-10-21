@@ -2,6 +2,8 @@ import Foundation
 import Testing
 @testable import YapnestKit
 
+private struct TestFailure: Error {}
+
 struct ShareTests {
     let me = JID("me@example.org")!, alice = JID("alice@example.org")!
     let directory = FileManager.default.temporaryDirectory.appending(path: "share-\(UUID().uuidString)")
@@ -83,7 +85,7 @@ struct ShareTests {
         let lockURL = directory.appending(path: "session.lock")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let app = ProcessLock(url: lockURL)
-        #expect(app.tryLock())
+        #expect(app.tryLock(as: .app))
 
         let told = Told()
         let signal = PendingSendsSignal { told.set() }
@@ -103,6 +105,50 @@ struct ShareTests {
         #expect(told.value)
         withExtendedLifetime(signal) {}
         app.unlock()
+    }
+
+    @Test func whenTheNotificationExtensionHoldsTheSessionItWaitsAndSendsItself() async throws {
+        let account = directory.appending(path: "account")
+        let lockURL = directory.appending(path: "session.lock")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let extensionLock = ProcessLock(url: lockURL)
+        #expect(extensionLock.tryLock(as: .notification))
+        Task.detached {
+            try await Task.sleep(for: .milliseconds(600))
+            extensionLock.unlock()
+        }
+
+        let told = Told()
+        let signal = PendingSendsSignal { told.set() }
+        var sender = ShareSender(
+            credentials: .init(jid: me, password: "x"), directory: account, resource: "share", lock: ProcessLock(url: lockURL),
+        )
+        sender.lockTimeout = 0.2
+        sender.makeSession = { _ in throw TestFailure() }
+        let outcome = await sender.send(ShareContent(files: [], comment: "hi"), to: alice)
+        // It got the lock, and went on to make its own session.
+        #expect(outcome != .handedToApp)
+        #expect(!told.value)
+        withExtendedLifetime(signal) {}
+    }
+
+    @Test func anExtensionThatNeverLetsGoIsNotReportedAsTheApp() async throws {
+        let account = directory.appending(path: "account")
+        let lockURL = directory.appending(path: "session.lock")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let extensionLock = ProcessLock(url: lockURL)
+        #expect(extensionLock.tryLock(as: .notification))
+        var sender = ShareSender(
+            credentials: .init(jid: me, password: "x"), directory: account, resource: "share", lock: ProcessLock(url: lockURL),
+        )
+        sender.lockTimeout = 0.2
+        sender.extensionLockWait = 0.3
+        let outcome = await sender.send(ShareContent(files: [], comment: "hi"), to: alice)
+        guard case .queued = outcome else {
+            Issue.record("expected queued, got \(outcome)")
+            return
+        }
+        extensionLock.unlock()
     }
 
     @Test func nothingToSendIsAFailure() async throws {

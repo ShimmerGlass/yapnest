@@ -41,6 +41,11 @@ public struct ShareSender: Sendable {
     /// the Mac, where it never does, the user isn't kept waiting.
     public var lockTimeout: TimeInterval = 3
 
+    /// How long to keep waiting when the lock is held by an extension rather
+    /// than the app: its fetch is bounded, and no app is listening for a
+    /// signal, so the messages would otherwise wait for the next launch.
+    public var extensionLockWait: TimeInterval = 20
+
     /// Stands in for the session that would connect to the server, so a send
     /// can be tried without one.
     var makeSession: (@Sendable (AppDatabase) throws -> XMPPSession)?
@@ -105,7 +110,7 @@ public struct ShareSender: Sendable {
         _ content: ShareContent, to peer: JID, timeout: TimeInterval,
         progress: (@Sendable (_ sent: Int, _ total: Int) -> Void)?,
     ) async -> Outcome {
-        let deadline = Date().addingTimeInterval(timeout)
+        var deadline = Date().addingTimeInterval(timeout)
         let database: AppDatabase
         let staged: [Message]
         do {
@@ -118,11 +123,10 @@ public struct ShareSender: Sendable {
         guard !staged.isEmpty else { return .failed(String(localized: "There's nothing to send.")) }
         await ShareSuggestions.donate(to: peer, database: database, avatars: account.avatars)
 
-        guard await Task.detached(operation: { [lock, lockTimeout] in lock.lock(timeout: lockTimeout, as: .share) }).value else {
-            PendingSendsSignal.post()
-            return .handedToApp
-        }
+        if let outcome = await takeLock() { return outcome }
         defer { lock.unlock() }
+        // The wait for the lock isn't the server's time.
+        deadline = max(deadline, Date().addingTimeInterval(10))
 
         let session: XMPPSession
         do {
@@ -152,6 +156,23 @@ public struct ShareSender: Sendable {
             progress?(index + 1, staged.count)
         }
         return .sent
+    }
+
+    /// Nil once this process holds the lock; else how the send ends without it.
+    private func takeLock() async -> Outcome? {
+        func acquire(_ wait: TimeInterval) async -> Bool {
+            await Task.detached(operation: { [lock] in lock.lock(timeout: wait, as: .share) }).value
+        }
+        if await acquire(lockTimeout) { return nil }
+        // Only the app listens for the signal.
+        if lock.holder != .app {
+            if await acquire(extensionLockWait) { return nil }
+        }
+        if lock.holder == .app {
+            PendingSendsSignal.post()
+            return .handedToApp
+        }
+        return .queued(String(localized: "Yapnest is busy. The messages are sent when it next opens."))
     }
 
     /// Writes the messages as pending. Files are copied into the account's

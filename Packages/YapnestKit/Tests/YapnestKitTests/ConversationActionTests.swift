@@ -32,6 +32,27 @@ struct ConversationActionTests {
     }
 }
 
+struct MarkUnreadTests {
+    let bob = JID("bob@example.org")!
+
+    @Test func aRetractedLastMessageStaysReadAndTheOneBeforeBecomesUnread() throws {
+        let database = try AppDatabase.inMemory()
+        let id = try #require(try database.conversation(with: bob).id)
+        let t = Date(timeIntervalSince1970: 1_000)
+        try database.insert(Message(conversationId: id, direction: .incoming, sender: bob, body: "kept", timestamp: t, remoteId: "1"))
+        var gone = Message(conversationId: id, direction: .incoming, sender: bob, body: "", timestamp: t.addingTimeInterval(10), remoteId: "2")
+        gone.isRetracted = true
+        try database.insert(gone)
+        try database.markRead(conversationId: id)
+
+        try database.markUnread(conversationId: id)
+
+        let rows = try database.reader.read { try Message.order(Column("timestamp")).fetchAll($0) }
+        #expect(rows.map(\.isRead) == [false, true])
+        #expect(try database.chatList().first?.unreadCount == 1)
+    }
+}
+
 struct DraftTests {
     let bob = JID("bob@example.org")!
 
