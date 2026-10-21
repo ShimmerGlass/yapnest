@@ -43,7 +43,9 @@ message's text and files and nothing else. Your server still sees who talks
 to whom and when, and reactions, deletions, read markers, typing
 notifications and which message a reply or edit refers to travel
 unencrypted. An encrypted file is uploaded under a random name (keeping its
-extension), so the upload server doesn't learn what it was called.
+extension), so the upload server doesn't learn what it was called; the
+people you send it to see that random name too, as OMEMO 0.3 has nowhere
+else to carry the real one.
 
 ## Requirements
 
