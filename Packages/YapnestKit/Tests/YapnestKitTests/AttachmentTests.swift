@@ -14,18 +14,6 @@ struct AttachmentTests {
         #expect(configuration.httpCookieStorage == nil || configuration.httpCookieAcceptPolicy == .never)
     }
 
-    @Test func fileCryptoRoundTrip() throws {
-        let plain = Data((0..<5000).map { UInt8($0 % 251) })
-        let encrypted = try FileCrypto.encrypt(plain)
-        #expect(encrypted.data.count == plain.count + 16)
-        #expect(encrypted.fragment.count == 88)
-        #expect(try FileCrypto.decrypt(encrypted.data, fragment: encrypted.fragment) == plain)
-
-        var tampered = encrypted.data
-        tampered[0] ^= 1
-        #expect(throws: FileCrypto.Failure.self) { try FileCrypto.decrypt(tampered, fragment: encrypted.fragment) }
-    }
-
     @Test func fileCryptoEncryptsAFileAsCiphertextThenTag() throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -41,6 +29,10 @@ struct AttachmentTests {
         #expect(fragment.count == 88)
         #expect(try FileCrypto.decrypt(output, fragment: fragment) == plain)
         #expect(output.prefix(plain.count) != plain)
+
+        var tampered = output
+        tampered[0] ^= 1
+        #expect(throws: FileCrypto.Failure.self) { try FileCrypto.decrypt(tampered, fragment: fragment) }
     }
 
     @Test func fileCryptoLeavesNothingWhenTheSourceIsMissing() {

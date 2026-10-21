@@ -33,7 +33,9 @@ public final class AttachmentStore: Sendable {
         try? FileManager.default.removeItem(at: AudioWaveform.cacheURL(for: url))
     }
 
-    private static func freshName(keeping name: String) -> String {
+    /// A random name with `name`'s extension, which is what tells viewers
+    /// and other clients the type.
+    static func freshName(keeping name: String) -> String {
         let ext = (name as NSString).pathExtension
         return UUID().uuidString.lowercased() + (ext.isEmpty ? "" : ".\(ext)")
     }

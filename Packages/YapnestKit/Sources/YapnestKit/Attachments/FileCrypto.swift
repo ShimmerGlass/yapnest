@@ -4,12 +4,6 @@ import Foundation
 /// XEP-0454: files encrypted with AES-256-GCM before upload, the key and IV
 /// carried in the `aesgcm://` URL's fragment inside the OMEMO message.
 enum FileCrypto {
-    struct Encrypted {
-        var data: Data
-        /// IV then key, hex, for the URL fragment.
-        var fragment: String
-    }
-
     enum Failure: Error {
         case badFragment
         case decryptionFailed
@@ -28,16 +22,8 @@ enum FileCrypto {
         return (size, Data(hasher.finalize()))
     }
 
-    static func encrypt(_ data: Data) throws -> Encrypted {
-        let key = SymmetricKey(size: .bits256)
-        let iv = AES.GCM.Nonce()
-        let box = try AES.GCM.seal(data, using: key, nonce: iv)
-        let keyData = key.withUnsafeBytes { Data($0) }
-        return Encrypted(data: Data(box.ciphertext) + Data(box.tag), fragment: (Data(iv) + keyData).hex)
-    }
-
-    /// Encrypts the file at `source` into `destination`: the ciphertext, then
-    /// the tag, as `encrypt(_:)` returns them, and the fragment for the URL.
+    /// Encrypts the file at `source` into `destination`, the ciphertext then
+    /// the 16-byte tag, and returns the URL's fragment: IV then key, hex.
     /// The plaintext is mapped rather than read, and the ciphertext is written
     /// out and dropped before the tag, so no more than one copy of the file is
     /// ever held. Nothing is left at `destination` if it fails.

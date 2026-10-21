@@ -2037,8 +2037,8 @@ public final class XMPPSession: @unchecked Sendable {
     /// which only a new session loses; see `resendPendingReactions`.
     private func resendPendingActions() {
         guard let pending = try? database.pendingActions() else { return }
-        for (message, peer, id) in pending {
-            guard let messageId = message.id, !lock.withLock({ $0.writtenActions.contains(id) }) else { continue }
+        for (messageId, peer, id) in pending {
+            guard !lock.withLock({ $0.writtenActions.contains(id) }) else { continue }
             sendAction(id: id, of: messageId, to: peer)
         }
     }

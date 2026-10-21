@@ -96,10 +96,11 @@ extension XMPPSession {
                 // name to the upload server, which sees the slot request and often
                 // puts the name in the URL. The message carries the real name.
                 let contentType = fragment == nil ? attachment.mimeType ?? "application/octet-stream" : "application/octet-stream"
+                let slotName = fragment == nil ? attachment.name : AttachmentStore.freshName(keeping: attachment.name)
                 phase = .slot
                 started = Date()
                 let slot = try await client.module(.httpFileUpload)
-                    .requestUploadSlot(componentJid: service.jid, filename: UploadName.slotName(for: attachment.name, encrypted: fragment != nil), size: size, contentType: contentType)
+                    .requestUploadSlot(componentJid: service.jid, filename: slotName, size: size, contentType: contentType)
                 DiagLog.info(.upload, "Upload slot granted", .id("msg", transferId), .int("bytes", size), .duration("took", since: started))
                 phase = .put
                 started = Date()
@@ -214,15 +215,9 @@ extension XMPPSession {
                 let (file, response) = try await Self.transferSession.download(from: source, delegate: progress)
                 defer { try? FileManager.default.removeItem(at: file) }
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
-                // The ciphertext stays mapped, not read, and goes out of scope
-                // once opened: only the plaintext is held while it is saved.
-                // `open` verifies the tag before it returns anything.
-                let data: Data
-                do {
-                    let mapped = try Data(contentsOf: file, options: .mappedIfSafe)
-                    guard mapped.count <= limit else { throw TooLarge(size: Int64(mapped.count)) }
-                    data = if let fragment { try FileCrypto.decrypt(mapped, fragment: fragment) } else { mapped }
-                }
+                var data = try Data(contentsOf: file, options: .mappedIfSafe)
+                guard data.count <= limit else { throw TooLarge(size: Int64(data.count)) }
+                if let fragment { data = try FileCrypto.decrypt(data, fragment: fragment) }
 
                 let localFile = try attachments.save(data, name: attachment.name)
                 let mimeType = fragment == nil ? http.mimeType : nil

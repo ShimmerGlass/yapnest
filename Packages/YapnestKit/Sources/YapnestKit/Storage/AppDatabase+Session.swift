@@ -179,16 +179,17 @@ extension AppDatabase {
     }
 
     /// Our corrections and retractions the server hasn't acknowledged, as the
-    /// message they are of, its conversation's peer, and the stanza's id.
-    func pendingActions() throws -> [(message: Message, peer: JID, id: String)] {
+    /// message they are of, its conversation's peer, and the stanza's id. Only
+    /// ids: what is sent is read again when it goes out.
+    func pendingActions() throws -> [(messageId: Int64, peer: JID, id: String)] {
         try reader.read { db in
             let messages = try Message.filter(Column("actionPendingId") != nil).fetchAll(db)
             let peers = Dictionary(uniqueKeysWithValues: try Conversation.fetchAll(db, keys: Set(messages.map(\.conversationId))).compactMap { chat in
                 chat.id.map { ($0, chat.peer) }
             })
             return messages.compactMap { message in
-                guard let id = message.actionPendingId, let peer = peers[message.conversationId] else { return nil }
-                return (message, peer, id)
+                guard let messageId = message.id, let id = message.actionPendingId, let peer = peers[message.conversationId] else { return nil }
+                return (messageId, peer, id)
             }
         }
     }
