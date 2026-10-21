@@ -34,7 +34,10 @@ extension XMPPSession {
     /// notification, a receipt or a displayed marker, and the chat keeps
     /// its place in the list. It goes through the same path as the catch-up,
     /// so decryption, duplicates, reactions, corrections and retractions all
-    /// work. Reactions and corrections of messages older than the page can't
+    /// work. Pages come newest first, so a retraction or correction can come
+    /// before the message it names: it is kept (`pendingEdit`) and applied
+    /// when that message is stored, and a correction shows meanwhile as a
+    /// message of its own. Reactions to a message older than the page can't
     /// find theirs yet, and are dropped like they would be anywhere else.
     public func loadOlderHistory(for peer: JID) async throws -> Bool {
         try await loadHistory(for: peer, newest: false)

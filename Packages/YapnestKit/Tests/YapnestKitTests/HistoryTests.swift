@@ -34,6 +34,89 @@ struct HistoryTests {
         try #require(try db.reader.read { try Conversation.fetchOne($0) })
     }
 
+    /// An archived message whose payload is raw XML, to carry a retraction or
+    /// a correction.
+    private func archivedXML(_ id: String, payload: String, from sender: String = "alice@example.org/phone", at seconds: TimeInterval, history: Bool = true, type: String = "chat") throws -> InboundMessage {
+        let message = stanza("<message from='\(sender)' to='me@example.org' type='\(type)' id='\(id)'>\(payload)</message>")
+        var inbound = try #require(InboundMessage(
+            message, account: me, source: .archive(serverId: "s-\(id)", timestamp: Date(timeIntervalSince1970: seconds)),
+        ))
+        inbound.isHistory = history
+        return inbound
+    }
+
+    private func pendingCount() throws -> Int {
+        try db.reader.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM pendingEdit") ?? 0 }
+    }
+
+    @Test func aRetractionInANewerPageRetractsTheOriginalWhenItArrives() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try archivedXML("r1", payload: "<retract id='m1' xmlns='urn:xmpp:message-retract:1'/><fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:message-retract:1'/>", at: 300)])
+        try db.ingest([try archived("m1", body: "secret", at: 100, history: true)])
+
+        let stored = try db.reader.read { try Message.filter(Column("remoteId") == "m1").fetchAll($0) }
+        #expect(stored.count == 1)
+        #expect(stored[0].isRetracted)
+        #expect(stored[0].body == "")
+        #expect(try pendingCount() == 0)
+    }
+
+    @Test func aCorrectionInANewerPageIsAppliedToTheOriginalWhenItArrives() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try archivedXML("c1", payload: "<body>fixed</body><replace id='m1' xmlns='urn:xmpp:message-correct:0'/>", at: 300)])
+        try db.ingest([try archived("m1", body: "typo", at: 100, history: true)])
+
+        let stored = try db.reader.read { try Message.filter(Column("body") != "newest").fetchAll($0) }
+        #expect(stored.count == 1)
+        #expect(stored[0].body == "fixed")
+        #expect(stored[0].remoteId == "m1")
+        #expect(stored[0].timestamp == Date(timeIntervalSince1970: 100))
+        #expect(stored[0].editedAt == Date(timeIntervalSince1970: 300))
+        #expect(try pendingCount() == 0)
+    }
+
+    @Test func aPendingEditFromSomeoneElseNeverApplies() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([
+            try archivedXML("r1", payload: "<retract id='m1' xmlns='urn:xmpp:message-retract:1'/>", from: "mallory@example.org/x", at: 300),
+            try archivedXML("c1", payload: "<body>forged</body><replace id='m1' xmlns='urn:xmpp:message-correct:0'/>", from: "mallory@example.org/x", at: 301),
+        ])
+        try db.ingest([try archived("m1", body: "mine", at: 100, history: true)])
+
+        let original = try #require(try db.reader.read { try Message.filter(Column("remoteId") == "m1").fetchOne($0) })
+        #expect(!original.isRetracted)
+        #expect(original.body == "mine")
+        #expect(original.editedAt == nil)
+    }
+
+    @Test func aPlainPendingCorrectionDoesNotApplyToAnEncryptedOriginal() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        try db.ingest([try archivedXML("c1", payload: "<body>forged</body><replace id='m1' xmlns='urn:xmpp:message-correct:0'/>", at: 300)])
+        var encrypted = try archived("m1", body: "secret", at: 100, history: true)
+        encrypted.encryption = .omemo
+        try db.ingest([encrypted])
+
+        let original = try #require(try db.reader.read { try Message.filter(Column("remoteId") == "m1").fetchOne($0) })
+        #expect(original.body == "secret")
+        #expect(original.editedAt == nil)
+    }
+
+    @Test func pendingEditsAreCappedPerConversation() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        let retractions = try (0..<250).map {
+            try archivedXML("r\($0)", payload: "<retract id='gone\($0)' xmlns='urn:xmpp:message-retract:1'/>", at: TimeInterval(300 + $0))
+        }
+        try db.ingest(retractions)
+        #expect(try pendingCount() == 200)
+        // The oldest were dropped, the newest kept.
+        try db.ingest([try archived("gone249", body: "x", at: 100, history: true)])
+        try db.ingest([try archived("gone0", body: "y", at: 100, history: true)])
+        let kept = try db.reader.read { try Message.filter(Column("remoteId") == "gone249").fetchOne($0) }
+        let dropped = try db.reader.read { try Message.filter(Column("remoteId") == "gone0").fetchOne($0) }
+        #expect(kept?.isRetracted == true)
+        #expect(dropped?.isRetracted == false)
+    }
+
     @Test func olderHistoryIsStoredReadAndLeavesTheChatWhereItIs() throws {
         // A chat with news from t=1000, archived by the user.
         try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))

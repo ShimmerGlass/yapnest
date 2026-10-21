@@ -77,6 +77,8 @@ extension AppDatabase {
         if let target = inbound.retractionOf {
             if var original = try Self.ownedMessage(db, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room) {
                 result.retractedAttachment = try Self.retract(db, &original)
+            } else if try Self.referencedMessage(db, conversationId: conversationId, id: target) == nil {
+                try Self.keepPending(db, .retract, ref: target, inbound, conversationId: conversationId, standInId: nil)
             }
             return result
         }
@@ -86,27 +88,12 @@ extension AppDatabase {
             // plain one of an encrypted message could come from anyone
             // able to forge the sender, such as a server.
             guard inbound.encryption == original.encryption else { return result }
-            // Archive catch-ups may replay an older correction.
-            let isAttachment = try Attachment.filter(Column("messageId") == original.id).isEmpty(db) == false
-            if !isAttachment, inbound.timestamp >= original.editedAt ?? .distantPast {
-                original.setBody(body)
-                original.editedAt = inbound.timestamp
-                original.mentionsMe = inbound.mentionsMe
-                // The offer is the correcting message's, which may make none.
-                // Actions already chosen stay chosen if the correction still offers them.
-                original.quickResponses = inbound.quickResponses.map { offer in
-                    var offer = offer
-                    let ids = Set(offer.actions.map(\.id))
-                    offer.chosen = (original.quickResponses?.chosen ?? []).filter(ids.contains)
-                    return offer
-                }
-                // The text now shown is the correcting device's.
-                if original.encryption == .omemo, !inbound.isOutgoing {
-                    original.omemoDevice = inbound.omemoDevice
-                    original.omemoTrust = inbound.omemoTrust
-                }
-                try original.update(db)
-                if !inbound.isOutgoing { result.editedMessage = original }
+            if let edited = try Self.applyCorrection(
+                db, to: &original, body: body, at: inbound.timestamp, mentionsMe: inbound.mentionsMe,
+                quickResponses: inbound.quickResponses, omemoDevice: inbound.omemoDevice, omemoTrust: inbound.omemoTrust,
+                outgoing: inbound.isOutgoing,
+            ), !inbound.isOutgoing {
+                result.editedMessage = edited
             }
             return result
         }
@@ -169,7 +156,8 @@ extension AppDatabase {
             message.isMarkable = inbound.isMarkable && !inbound.isOutgoing && !inbound.isGroupChat
             let file = AttachmentLink.parse(body: body, oob: inbound.oobURL, allowsInsecure: allowsInsecureLinks)
             if file != nil { message.link = nil }
-            let (stored, inserted) = try Self.insert(db, message)
+            let (insertedMessage, inserted) = try Self.insert(db, message)
+            var stored = insertedMessage
             if inserted {
                 result.newMessage = stored
                 if let file {
@@ -186,6 +174,16 @@ extension AppDatabase {
                     if let metadata = inbound.fileMetadata ?? announced { attachment.apply(metadata) }
                     try attachment.insert(db)
                     result.newAttachment = attachment
+                }
+                if let target = inbound.correctionOf, inbound.encryption != .omemoUndecryptable, let id = stored.id {
+                    try Self.keepPending(db, .correct, ref: target, inbound, conversationId: conversationId, standInId: id)
+                }
+                if let applied = try Self.applyPending(db, to: &stored, room: room) {
+                    result.newMessage = stored
+                    if applied.retracted {
+                        result.retractedAttachment = applied.attachment
+                        result.newAttachment = nil
+                    }
                 }
             }
         }
@@ -265,6 +263,36 @@ extension AppDatabase {
                     && (outgoing || message.author.isSame(as: author, room: room))
             }
             .max { $0.referenceRank(for: ref)! < $1.referenceRank(for: ref)! }
+    }
+
+    /// Changes `original` to the correcting message's text, unless that is
+    /// older than its last change or the message is a file. Returns the
+    /// message when it changed.
+    static func applyCorrection(
+        _ db: Database, to original: inout Message, body: String, at timestamp: Date, mentionsMe: Bool,
+        quickResponses: QuickResponses?, omemoDevice: Int32?, omemoTrust: OMEMODevice.Trust?, outgoing: Bool,
+    ) throws -> Message? {
+        // Archive catch-ups may replay an older correction.
+        let isAttachment = try Attachment.filter(Column("messageId") == original.id).isEmpty(db) == false
+        guard !isAttachment, timestamp >= original.editedAt ?? .distantPast else { return nil }
+        original.setBody(body)
+        original.editedAt = timestamp
+        original.mentionsMe = mentionsMe
+        // The offer is the correcting message's, which may make none.
+        // Actions already chosen stay chosen if the correction still offers them.
+        original.quickResponses = quickResponses.map { offer in
+            var offer = offer
+            let ids = Set(offer.actions.map(\.id))
+            offer.chosen = (original.quickResponses?.chosen ?? []).filter(ids.contains)
+            return offer
+        }
+        // The text now shown is the correcting device's.
+        if original.encryption == .omemo, !outgoing {
+            original.omemoDevice = omemoDevice
+            original.omemoTrust = omemoTrust
+        }
+        try original.update(db)
+        return original
     }
 
     /// Empties `message` into a tombstone, and returns its file to delete.

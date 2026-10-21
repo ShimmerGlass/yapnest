@@ -605,6 +605,27 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v36-pending-edit") { db in
+            // A retraction or correction that named a message we don't have
+            // yet, as when the archive's newer page comes before the older
+            // one. It waits for the message, and is applied if the author fits.
+            try db.create(table: "pendingEdit") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("conversationId", .integer).notNull().references("conversation", onDelete: .cascade)
+                t.column("ref", .text).notNull()
+                t.column("kind", .text).notNull()
+                t.column("outgoing", .boolean).notNull()
+                t.column("sender", .text).notNull()
+                t.column("nick", .text)
+                t.column("occupantId", .text)
+                t.column("encryption", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+                // The message that stands in for a correction's original.
+                t.column("standInId", .integer).references("message", onDelete: .cascade)
+            }
+            try db.create(index: "pendingEdit_on_ref", on: "pendingEdit", columns: ["conversationId", "ref"])
+        }
+
         return migrator
     }
 
