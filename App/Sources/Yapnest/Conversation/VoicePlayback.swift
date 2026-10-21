@@ -78,6 +78,7 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
     enum Result {
         case started
         case refusedInCall
+        case refusedWhileRecording
         case failed
     }
 
@@ -162,6 +163,10 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
     private func start(id: Int64, file: URL, at fraction: Double) -> Result {
         stop()
         guard !isInCall else { return .refusedInCall }
+        // A recording holds the session as `.playAndRecord`. Playing would
+        // switch it to `.playback`, and the clip's end would deactivate it
+        // under the recorder.
+        guard activeRecorder.map({ $0.phase == .idle }) ?? true else { return .refusedWhileRecording }
         do {
             try session.beginPlayback()
         } catch {

@@ -2041,12 +2041,14 @@ final class ConversationModel {
     }
 
     /// Plays a received or sent sound, or pauses it. Not during a call, which
-    /// has the audio session.
+    /// has the audio session, nor during a recording.
     func playVoice(id: Int64, file: URL, from fraction: Double?) {
         let playback = VoicePlayback.shared
         let result = fraction.map { playback.seek(id: id, file: file, to: $0) } ?? playback.toggle(id: id, file: file)
         if result == .refusedInCall {
             prompt = .notice(title: String(localized: "Can't play during a call"), message: String(localized: "Hang up first, then play the voice message."))
+        } else if result == .refusedWhileRecording {
+            prompt = .notice(title: String(localized: "Can't play while recording"), message: String(localized: "Finish the recording first, then play the voice message."))
         }
     }
 
