@@ -2101,8 +2101,10 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Whether `message` is ours to edit: a text we sent that's still there.
     public func canEdit(_ message: Message) -> Bool {
+        // A call row is ours with no words, and its remote id is the call's
+        // session id: a correction to it would turn the call into text.
         guard message.direction == .outgoing, !message.isRetracted, message.encryption != .omemoUndecryptable,
-              let id = message.id else { return false }
+              message.callOutcome == nil, let id = message.id else { return false }
         return (try? database.attachment(messageId: id)) == nil
     }
 

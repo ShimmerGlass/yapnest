@@ -20,6 +20,9 @@ struct EditLastMessageTests {
         try f.attach("a.png", to: withFile)
         let retracted = try f.add("gone", .outgoing)
         try await f.database.writer.write { try $0.execute(sql: "UPDATE message SET isRetracted = 1 WHERE id = ?", arguments: [retracted.id]) }
+        // A call row is ours with no words; editing it would turn the call into text.
+        let call = try f.add("", .outgoing)
+        try await f.database.writer.write { try $0.execute(sql: "UPDATE message SET callOutcome = 'answered' WHERE id = ?", arguments: [call.id]) }
         try f.add("theirs", .incoming)
         let bar = attach(f)
         await f.start()
@@ -32,6 +35,30 @@ struct EditLastMessageTests {
 
         f.model.cancelReplyOrEdit()
         #expect(bar.text == "half typed")
+    }
+
+    @Test func aReplyBeingWrittenIsLeftAlone() async throws {
+        let f = try ConversationFixture()
+        try f.add("mine", .outgoing)
+        let theirs = try f.add("theirs", .incoming)
+        _ = attach(f)
+        await f.start()
+        f.model.reply(to: theirs.id!)
+
+        #expect(!f.model.editLastMessage())
+        #expect(f.model.replyingTo?.id == theirs.id)
+        #expect(f.model.editingItem == nil)
+    }
+
+    /// A group left or a contact blocked has a bar in the composer's place;
+    /// an edit begun there would come back later in place of the draft.
+    @Test func nothingHappensWithoutAComposer() async throws {
+        let f = try ConversationFixture()
+        try f.add("mine", .outgoing)
+        await f.start()
+
+        #expect(!f.model.editLastMessage())
+        #expect(f.model.editingItem == nil)
     }
 
     @Test func nothingHappensWithoutAMessageToEdit() async throws {
@@ -59,7 +86,7 @@ struct EditLastMessageTests {
     private func upArrow(_ text: String, returnSends: Bool = true, suggestions: Bool = false) -> Bool {
         let field = ComposerTextView()
         field.returnSends = returnSends
-        field.onEditLast = { true }
+        field.onEditLast = {}
         field.capturesSuggestionKeys = { suggestions }
         field.text = text
         return field.keyCommands?.contains { $0.input == UIKeyCommand.inputUpArrow && $0.action == NSSelectorFromString("editLastMessage") } == true

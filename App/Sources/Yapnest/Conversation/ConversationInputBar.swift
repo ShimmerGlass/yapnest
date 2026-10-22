@@ -20,8 +20,8 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     }
     var onAttach: ((AttachmentSource) -> Void)?
     var onGif: (() -> Void)?
-    /// The Up arrow in an empty composer (Mac); true when it started an edit.
-    var onEditLast: (() -> Bool)? {
+    /// The Up arrow in an empty composer (Mac).
+    var onEditLast: (() -> Void)? {
         didSet { textView.onEditLast = onEditLast }
     }
     /// Pictures or files pasted or dropped on the bar, which are added to the
@@ -947,8 +947,7 @@ final class ComposerTextView: UITextView {
 
     var onReturn: (() -> Void)?
     /// Set on the Mac, where Up in an empty field edits the last message.
-    /// Returns whether it did, as Up is otherwise left to the text.
-    var onEditLast: (() -> Bool)?
+    var onEditLast: (() -> Void)?
     /// Pictures or files being pasted, which aren't text for the field.
     var onPasteAttachments: (([NSItemProvider]) -> Void)?
     /// Text over `LongText.threshold`, which is a file to send, not words to type.
@@ -1074,7 +1073,7 @@ final class ComposerTextView: UITextView {
     @objc private func sendFromKeyboard() { onReturn?() }
 
     @objc private func insertNewLine() { insertText("\n") }
-    @objc private func editLastMessage() { _ = onEditLast?() }
+    @objc private func editLastMessage() { onEditLast?() }
     @objc private func suggestionPrevious() { onSuggestionKey?(.previous) }
     @objc private func suggestionNext() { onSuggestionKey?(.next) }
     @objc private func suggestionAccept() { onSuggestionKey?(.accept) }

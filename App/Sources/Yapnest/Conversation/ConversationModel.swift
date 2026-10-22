@@ -2287,7 +2287,10 @@ final class ConversationModel {
     /// there might not be the last.
     @discardableResult
     func editLastMessage() -> Bool {
-        guard editingItem == nil, !isBounded,
+        // Not over a reply being written, and not without a composer (a
+        // group left, a contact blocked), where the edit would go unseen
+        // until it came back in place of the draft.
+        guard editingItem == nil, replyingTo == nil, composer.bar != nil, !isBounded,
               let id = order.last(where: { items[$0].map(canEdit) ?? false }) else { return false }
         startEditing(id)
         return true
@@ -2315,7 +2318,7 @@ final class ConversationModel {
     func canEdit(_ item: ConversationItem) -> Bool {
         let message = item.message
         return message.direction == .outgoing && !message.isRetracted && message.encryption != .omemoUndecryptable
-            && message.id != nil && item.attachment == nil
+            && message.id != nil && item.attachment == nil && message.callOutcome == nil
     }
 
     private func updateComposerBanner() {
