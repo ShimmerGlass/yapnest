@@ -218,6 +218,8 @@ struct MessagesPlaceholder: View {
 /// A round button above the composer that takes the user back to the newest
 /// message, with the number of messages they haven't read yet.
 struct ScrollToEndControl: View {
+    static let size: CGFloat = 44
+
     let model: ConversationModel
 
     var body: some View {
@@ -241,7 +243,7 @@ struct ScrollToEndControl: View {
             Image(systemName: "arrow.down")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.primary)
-                .frame(width: 44, height: 44)
+                .frame(width: Self.size, height: Self.size)
                 // A plain button only takes touches where its label draws,
                 // and neither the glass nor its clear circle counts, which
                 // left only the arrow itself to hit.

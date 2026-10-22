@@ -37,7 +37,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         didSet { voiceChanged() }
     }
 
-    private enum Metrics {
+    enum Metrics {
         static let controlSize: CGFloat = 40
         static let verticalMargin: CGFloat = 8
         static let outerMargin: CGFloat = 12

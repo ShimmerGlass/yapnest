@@ -51,6 +51,23 @@ final class ScrollToLatestFarEndUITests: ScrollToLatestTestCase {
 }
 
 @MainActor
+final class ScrollToLatestPlacementUITests: XCTestCase {
+    /// The button sits in a column with the microphone at the end of the
+    /// composer's row. It was laid out with its own margin, which put it to
+    /// the left of the microphone.
+    func testTheButtonIsCentredOverTheMicrophone() throws {
+        let driver = ConversationDriver(fixture: "fuzz:19", open: "fuzz@fixture.test", context: "seed 19, 1:1")
+        driver.waitForOpenChat()
+        driver.settle()
+        driver.flickTowardsOlder()
+        XCTAssertTrue(driver.scrollToLatestButton.waitForExistence(timeout: 5), "\(driver.context): no button after flicking up")
+        let microphone = driver.app.buttons["Record voice message"]
+        XCTAssertTrue(microphone.waitForExistence(timeout: 2), "\(driver.context): no microphone button")
+        XCTAssertEqual(driver.scrollToLatestButton.frame.midX, microphone.frame.midX, accuracy: 0.5, "\(driver.context): the button isn't over the microphone")
+    }
+}
+
+@MainActor
 class ScrollToLatestTestCase: XCTestCase {
     override func setUp() async throws {
         continueAfterFailure = false

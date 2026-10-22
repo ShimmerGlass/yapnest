@@ -305,8 +305,9 @@ struct ConversationView: View {
     }
 
     private var scrollToEnd: some View {
+        // Centred over the microphone button at the end of the composer's row.
         ScrollToEndControl(model: conversation)
-            .padding(.trailing, 16)
+            .padding(.trailing, ConversationInputBar.Metrics.outerMargin + (ConversationInputBar.Metrics.controlSize - ScrollToEndControl.size) / 2)
             .padding(.bottom, 12)
     }
 
