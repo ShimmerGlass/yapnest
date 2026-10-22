@@ -853,9 +853,10 @@ final class ConversationModel {
     }
 
     /// Asks again for the message to open on while the rows around it are
-    /// measured, then shows the list. It's shown once asking again no longer
-    /// moves it: the first scroll usually lands, and a fixed three tries kept
-    /// a chat opened at its unread messages hidden for over half a second.
+    /// measured, then shows the list. It's shown once asking again twice
+    /// over no longer moves it: the first scroll usually lands, and a fixed
+    /// three tries kept a chat opened at its unread messages hidden for over
+    /// half a second.
     /// Unflipped, rows measured above the message can still shift it, which
     /// the tries keep up with, for as long as `openingTries` allows.
     private func settleOpeningScroll(at id: Int64, anchor: UnitPoint, flashing: Int64? = nil) {
@@ -866,15 +867,22 @@ final class ConversationModel {
         scroll.scrollTo(id: id, anchor: anchor)
         tasks["opening"] = Task { [weak self] in
             var landed: CGFloat?
+            var still = 0
             for _ in 0..<Self.openingTries {
                 try? await Task.sleep(for: .milliseconds(50))
                 guard let self, !Task.isCancelled else { return }
+                // Twice still, as rows measured just after a scroll can move
+                // the message without moving the scroll view.
                 let offset = self.geometry?.contentOffset.y
-                if let offset, offset == landed { break }
+                still = offset != nil && offset == landed ? still + 1 : 0
+                if still == 2 { break }
                 landed = offset
                 FrameLog.event("scroll.scrollTo opening id=\(id)")
                 self.scroll.scrollTo(id: id, anchor: anchor)
             }
+            // Out of tries, the last scroll lands before what's on screen is
+            // marked read.
+            if still < 2 { try? await Task.sleep(for: .milliseconds(50)) }
             guard let self else { return }
             FrameLog.event("positioned")
             self.isPositioned = true

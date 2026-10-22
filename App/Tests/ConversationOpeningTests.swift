@@ -30,7 +30,9 @@ struct ConversationOpeningTests {
         f.model.geometryChanged(geometry(distanceFromBottom: 900))
 
         await eventually("the list was never shown") { f.model.isPositioned }
-        #expect(ContinuousClock.now - opened < .milliseconds(450))
+        // The old fixed wait took 600 ms at least; this leaves a loaded
+        // machine room.
+        #expect(ContinuousClock.now - opened < .milliseconds(550))
     }
 
     @Test func theListStaysHiddenWhileTheOpeningScrollStillMovesIt() async throws {
@@ -40,9 +42,9 @@ struct ConversationOpeningTests {
         await f.start()
         // Rows measured around the message keep shifting where it lands.
         // Faster than the tries, so no two of them find it in one place.
-        for step in 0..<15 {
+        for step in 0..<30 {
             f.model.geometryChanged(geometry(distanceFromBottom: 900 + CGFloat(step) * 40))
-            try await Task.sleep(for: .milliseconds(20))
+            try await Task.sleep(for: .milliseconds(10))
             #expect(!f.model.isPositioned)
         }
         await eventually("the list was never shown") { f.model.isPositioned }
