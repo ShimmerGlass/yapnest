@@ -409,6 +409,7 @@ private struct ChatListContent: View {
     @State private var invitations: [GroupInvitation]?
     @State private var messageResults: [MessageSearchResult] = []
     @State private var isSearchingMessages = false
+    @State private var selectionTrack = SelectionTrack()
 
     private var query: String { search.trimmingCharacters(in: .whitespaces) }
 
@@ -470,7 +471,7 @@ private struct ChatListContent: View {
                     )
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(ChatRowButtonStyle(isSelected: item.conversation.peer == selection))
+                .buttonStyle(ChatRowButtonStyle(isSelected: item.conversation.peer == selection, selectionTrack: selectionTrack))
                 .listRowInsets(ChatRowButtonStyle.rowInsets)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
@@ -504,7 +505,7 @@ private struct ChatListContent: View {
                             )
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(ChatRowButtonStyle(isSelected: false))
+                        .buttonStyle(ChatRowButtonStyle())
                         .listRowInsets(ChatRowButtonStyle.rowInsets)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -735,18 +736,77 @@ private struct ChatRowButtonStyle: ButtonStyle {
     static let overhang: CGFloat = 8
 
     var isSelected = false
+    var selectionTrack: SelectionTrack?
 
     func makeBody(configuration: ButtonStyleConfiguration) -> some View {
-        // Pressed and selected share a shape, so one turns into the other.
         configuration.label
             .background {
                 ZStack {
-                    if isSelected { Color.accentColor.opacity(0.18) }
-                    if configuration.isPressed { Color(uiColor: .systemFill) }
+                    if let selectionTrack {
+                        SelectionHighlight(isSelected: isSelected, track: selectionTrack)
+                    }
+                    if configuration.isPressed { Self.highlight(Color(uiColor: .systemFill)) }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .padding(.horizontal, -Self.overhang)
             }
+    }
+
+    static func highlight(_ color: Color) -> some View {
+        RoundedRectangle(cornerRadius: 10).fill(color).padding(.horizontal, -overhang)
+    }
+}
+
+/// Where the open chat's row is on screen, for the next row selected to
+/// slide its highlight in from. Not observed: it changes as the list
+/// scrolls, and nothing redraws for it.
+@MainActor
+private final class SelectionTrack {
+    var frame: CGRect?
+}
+
+/// A row's highlight while its chat is open. A newly selected row draws it
+/// where the last one was and slides it into place, so the selection reads
+/// as one highlight moving. Each row animates its own: the list doesn't
+/// carry an animation into the row that gains the selection, so a shared
+/// one moved out of the old row but popped up in the new one.
+private struct SelectionHighlight: View {
+    let isSelected: Bool
+    let track: SelectionTrack
+    /// Kept out of the view's state: it changes on every frame of a scroll.
+    @State private var ownFrame = FrameBox()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private final class FrameBox { var frame: CGRect? }
+
+    var body: some View {
+        // Always there and only shown when selected: the slide has to start
+        // in the update that selects the row, and a highlight inserted then
+        // would have drawn a frame at its destination first. A keyframe
+        // animation runs on its own clock, where an animated state change
+        // in a list row didn't move at all.
+        ChatRowButtonStyle.highlight(Color.accentColor.opacity(0.18))
+            .opacity(isSelected ? 1 : 0)
+            .keyframeAnimator(initialValue: 0, trigger: isSelected) { content, offset in
+                content.offset(y: offset)
+            } keyframes: { _ in
+                let start = startOffset()
+                KeyframeTrack {
+                    MoveKeyframe(start)
+                    SpringKeyframe(0, duration: 0.25, spring: .snappy(duration: 0.25))
+                }
+            }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                ownFrame.frame = frame
+                if isSelected { track.frame = frame }
+            }
+            .onChange(of: isSelected) { _, selected in
+                if selected { track.frame = ownFrame.frame }
+            }
+    }
+
+    /// From where the last selected row was, read before this row takes its place.
+    private func startOffset() -> CGFloat {
+        guard isSelected, !reduceMotion, let from = track.frame, let to = ownFrame.frame else { return 0 }
+        return from.minY - to.minY
     }
 }
 
