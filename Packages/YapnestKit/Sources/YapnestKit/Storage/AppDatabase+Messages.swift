@@ -149,6 +149,16 @@ extension AppDatabase {
         return request
     }
 
+    /// The message of ours with stanza id `remoteId` that the server hasn't acknowledged.
+    func pendingOutgoing(remoteId: String) throws -> Message? {
+        try reader.read { db in
+            try Message
+                .filter(Column("remoteId") == remoteId && Column("direction") == Message.Direction.outgoing)
+                .filter(Column("status") == Message.Status.pending)
+                .fetchOne(db)
+        }
+    }
+
     static func outgoingMessage(_ db: Database, conversationId: Int64, remoteId: String) throws -> Message? {
         try referencedMessage(db, conversationId: conversationId, id: remoteId, direction: .outgoing)
     }

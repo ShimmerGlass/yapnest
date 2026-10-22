@@ -524,6 +524,25 @@ Each entry gives what went wrong for users, why, and what changed.
   counts it, with `XMPPError.stanzaTooLarge`; a request fails with it rather
   than as a timeout. `stanzaRefused` reports a refusal. Pinned by
   `StreamLimitTests` and `StreamLimitIntegrationTests`.
+- *Also:* `StreamManagementModule.unacknowledgedStanzas` (and
+  `oldestUnacknowledged`) name the stanzas a server hadn't acknowledged when
+  it closed the stream, so Yapnest can tell which stanza it keeps closing
+  the stream on, and whether it was alone. The queue is still held when the
+  disconnect is reported; only a new session clears it. Pinned by
+  `StreamErrorStrikeTests`.
+
+**A control character in a message closed the stream** (`EscapeUtils.escape`)
+- *Symptom:* a message pasted from a terminal (with `\u{1B}` or `\u{07}`)
+  stayed pending, and nothing queued behind it was delivered.
+- *Cause:* the escaping handled `& < > " '` only, so a character XML 1.0
+  forbids was written as it was. Prosody and ejabberd close the stream with
+  `not-well-formed` on it and Openfire with `internal-server-error`, on
+  every reconnect, as the message was written first each time.
+- *Fix:* `escape` drops U+0000 to U+001F except tab, line feed and carriage
+  return, and U+FFFE and U+FFFF, from text and attribute values. Strings
+  without any are not rebuilt; `EscapeUtils.removingForbidden` is the same
+  filter for callers that must agree with the wire. Pinned by `XMLEscapingTests` and
+  `ControlCharacterIntegrationTests`.
 
 ### MartinOMEMO
 

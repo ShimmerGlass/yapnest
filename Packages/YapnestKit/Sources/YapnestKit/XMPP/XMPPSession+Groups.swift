@@ -988,7 +988,13 @@ extension XMPPSession {
             conversationId: group.conversationId, before: status.joinedAt, since: status.joinedAt.addingTimeInterval(-Self.initialSyncWindow),
         )) ?? []
         let pending = (try? database.pendingOutgoing(conversationId: group.conversationId)) ?? []
-        for message in Self.roomResends(hasArchive: status.hasArchive, unconfirmed: unconfirmed, pending: pending) { transmit(message, to: room, resend: true) }
+        let resends = Self.roomResends(hasArchive: status.hasArchive, unconfirmed: unconfirmed, pending: pending)
+        // As in `sendUnclaimedPending`: the room's join and catch-up are acknowledged first.
+        if !resends.isEmpty {
+            requestAcknowledgement()
+            beginProbation(among: resends.compactMap(\.remoteId))
+        }
+        for message in resends { transmit(message, to: room, resend: true) }
     }
 
     // MARK: Messages

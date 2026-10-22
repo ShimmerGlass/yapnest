@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import Martin
 
 /// Stores outgoing messages as pending, without a connection. The session
 /// sends from it, and so does the share extension, which writes its messages
@@ -59,7 +60,8 @@ struct OutgoingMessages: Sendable {
                 message.isWrittenHere = true
                 switch item {
                 case .text(let text, let reply):
-                    message.setBody(text)
+                    // Stored without what XML forbids, so the body, the offsets computed on it and the wire agree.
+                    message.setBody(EscapeUtils.removingForbidden(text))
                     message.replyToId = reply?.id
                     message.replyToSender = reply?.sender
                     stored.append(try AppDatabase.insert(db, message).message)

@@ -15,6 +15,7 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
     private var responder: (@Sendable (Iq) -> Iq?)?
     private var holding = false
     private var held: [() -> Void] = []
+    private var counting: StreamManagementModule?
 
     /// Everything written so far, requests included.
     var written: [Stanza] { lock.withLock { stanzas } }
@@ -27,6 +28,12 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
     var failsWrites: Bool {
         get { lock.withLock { failing } }
         set { lock.withLock { failing = newValue } }
+    }
+
+    /// Has `module` count and queue what is written, as Martin's session does for a stream with
+    /// stream management, so what the server left unacknowledged can be read back.
+    func countsWith(_ module: StreamManagementModule) {
+        lock.withLock { counting = module }
     }
 
     /// Answers a request with a result or error stanza; nil leaves it unanswered.
@@ -83,10 +90,11 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
     }
 
     func write(_ stanza: Stanza, writeCompleted: ((Result<Void, XMPPError>) -> Void)?) {
-        let fails = lock.withLock {
+        let (fails, module) = lock.withLock {
             stanzas.append(stanza)
-            return failing
+            return (failing, counting)
         }
+        if !fails { module?.processOutgoing(stanza: stanza) }
         writeCompleted?(fails ? .failure(.undefined_condition) : .success(()))
     }
 

@@ -259,6 +259,18 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         }
     }
     
+    /// The oldest stanza written that the server hasn't acknowledged. When the server closes the
+    /// stream on a stanza it read, this is the one it stopped at, provided it acknowledged
+    /// everything before. It is still there after a disconnect: only a new session clears the queue.
+    public var oldestUnacknowledged: Stanza? {
+        return queue.sync { outgoingQueue.peek() };
+    }
+
+    /// Every stanza written that the server hasn't acknowledged, oldest first.
+    public var unacknowledgedStanzas: [Stanza] {
+        return queue.sync { outgoingQueue.values };
+    }
+    
     open func isStanza(_ stanza: Stanza) -> Bool {
         switch stanza.name {
         case "iq", "message", "presence":
@@ -635,6 +647,16 @@ public class Queue<T> {
         
         tail = newNode;
         self._count += 1;
+    }
+    
+    open var values: [T] {
+        var result: [T] = [];
+        var node = head;
+        while let current = node {
+            result.append(current.value);
+            node = current.next;
+        }
+        return result;
     }
     
     open func peek() -> T? {

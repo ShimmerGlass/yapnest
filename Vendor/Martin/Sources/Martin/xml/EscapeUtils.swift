@@ -49,13 +49,34 @@ open class EscapeUtils {
         return result;
     }
     
+    /// Whether XML 1.0 forbids the character: control characters other than tab, line feed and
+    /// carriage return, and U+FFFE and U+FFFF.
+    private static func isForbidden(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x9, 0xA, 0xD: return false;
+        case 0x0...0x1F, 0xFFFE, 0xFFFF: return true;
+        default: return false;
+        }
+    }
+    
+    /// `value` without the characters XML 1.0 forbids; the string itself if it has none.
+    public static func removingForbidden(_ value: String) -> String {
+        guard value.unicodeScalars.contains(where: isForbidden) else {
+            return value;
+        }
+        var scalars = String.UnicodeScalarView();
+        scalars.append(contentsOf: value.unicodeScalars.lazy.filter({ !isForbidden($0) }));
+        return String(scalars);
+    }
+    
     /**
      Escape string
      - parameter value: string to escape
      - returns: escaped string
      */
     public static func escape(_ value:String) -> String {
-        var result = value;
+        // XML 1.0 has no way to write these, and a server closes the stream on one.
+        var result = removingForbidden(value);
         var i=0;
         while i < ENTITIES.count {
             result = result.replacingOccurrences(of: ENTITIES[i][0], with: ENTITIES[i][1]);

@@ -163,6 +163,11 @@ public final class XMPPSession: @unchecked Sendable {
         init(_ subscription: AnyCancellable) { self.subscription = subscription }
     }
 
+    struct Probation {
+        var id: String
+        var token: Int
+    }
+
     struct Mutable {
         var isSyncing = false
         /// What the send queues have taken up, and edits made before that.
@@ -173,6 +178,18 @@ public final class XMPPSession: @unchecked Sendable {
         var writtenReactions: Set<String> = []
         /// The same for the stanzas of corrections and retractions.
         var writtenActions: Set<String> = []
+        /// How many times the server closed the stream with an error while a stanza of ours,
+        /// by its id, was the oldest it hadn't acknowledged. An acknowledgement clears it.
+        /// Kept across reconnects: that is where the count comes from.
+        var streamErrorStrikes: [String: Int] = [:]
+        /// The stanza with a strike that the session is sending alone, with everything else held
+        /// until it is acknowledged, gives the stream error again, or the wait is over.
+        var probation: Probation?
+        var probationToken = 0
+        /// How long it is sent alone before the rest follows regardless: what a ping for
+        /// confirmation waits, past which it is as good as unanswered. Holding everything else
+        /// for good would be worse than the strike it avoids.
+        var probationTimeout = XMPPSession.confirmationTimeout
         /// Whether we should be connected; drives automatic reconnection.
         var wantsConnection = false
         var reconnectAttempt = 0
@@ -909,6 +926,109 @@ public final class XMPPSession: @unchecked Sendable {
         DiagLog.log(failureClass == .none ? .info : .notice, .connection, "Disconnected", fields)
     }
 
+    /// The stream errors a server answers a stanza it dislikes with. Others (a conflict, a shutdown,
+    /// a timeout, its own fault) say nothing about what we sent.
+    static let streamErrorsFromStanzas: Set<StreamCondition> = [
+        .policyViolation, .notWellFormed, .invalidXml, .badFormat, .restrictedXml, .improperAddressing,
+        .invalidFrom, .unsupportedStanzaType, .badNamespacePrefix, .invalidNamespace,
+    ]
+    static let strikesToGiveUp = 3
+
+    /// A stanza that a server keeps closing the stream on is written first again on every
+    /// reconnect, and everything queued behind it never goes out. But what the server stops at is
+    /// not always the cause: stanzas of other chats go out on queues of their own, and a rate
+    /// limit closes the stream with `policy-violation` too. So the first stream error blames the
+    /// oldest stanza the server hadn't acknowledged, as long as it is a message of ours (it
+    /// acknowledged all before, see `requestAcknowledgement` before the first resend), and that
+    /// puts it on probation: the next session sends it alone, first, and holds the rest. A
+    /// stream error then, with nothing else of ours unacknowledged, is a confirmed strike; the
+    /// third strike gives the stanza up. Anything else (another condition, other stanzas
+    /// unacknowledged, a stream without stream management) gives no strike. Runs before the
+    /// queue is cleared, which only a new session does.
+    func blameUnacknowledged(for element: Element) {
+        let condition = StreamCondition(name: Self.streamCondition(of: element))
+        let probing = lock.withLock { state -> String? in
+            defer { state.probation = nil; state.probationToken += 1 }
+            return state.probation?.id
+        }
+        guard Self.streamErrorsFromStanzas.contains(condition),
+              let queue = client.modulesManager.moduleOrNil(.streamManagement)?.unacknowledgedStanzas,
+              let stanza = queue.first, stanza.name == "message", let id = stanza.id else { return }
+        let alone = !queue.dropFirst().contains { $0.name == "message" }
+        let blamed = Redacted.id(id)
+        let reason = SendFailure.serverClosedStream
+        let (isAction, isReactions) = lock.withLock { ($0.writtenActions.contains(id), $0.writtenReactions.contains(id)) }
+        let giveUp: () -> Void
+        if isAction {
+            giveUp = { [self] in
+                DiagLog.error(.send, "Correction or retraction given up", .id("stanza", blamed), .value("reason", reason))
+                lock.withLock { _ = $0.writtenActions.remove(id) }
+                giveUpAction(id)
+            }
+        } else if isReactions {
+            giveUp = { [self] in
+                DiagLog.error(.send, "Reactions given up", .id("stanza", blamed), .value("reason", reason))
+                lock.withLock { _ = $0.writtenReactions.remove(id) }
+                try? database.clearPendingReactions(id: id)
+            }
+        } else if let message = try? database.pendingOutgoing(remoteId: id) {
+            giveUp = { [self] in
+                DiagLog.error(.send, "Marked failed", .id("msg", blamed), .value("reason", reason))
+                try? database.markFailed(
+                    conversationId: message.conversationId, remoteId: id,
+                    error: String(localized: "The server closed the connection each time this message was sent."),
+                )
+            }
+        } else {
+            return
+        }
+        let strikes = lock.withLock { state -> Int? in
+            let before = state.streamErrorStrikes[id] ?? 0
+            // On probation it counts if it was alone. Otherwise only a first strike does: one
+            // that was already struck gets no more from a stream it shared with others.
+            guard probing == id ? alone : (before == 0 && probing == nil) else { return nil }
+            state.streamErrorStrikes[id] = before + 1 >= Self.strikesToGiveUp ? nil : before + 1
+            return before + 1
+        }
+        guard let strikes else { return }
+        DiagLog.notice(.send, "Stream closed on a stanza of ours", .id("stanza", blamed), .value("condition", condition), .int("strikes", strikes), .bool("alone", alone))
+        if strikes >= Self.strikesToGiveUp { giveUp() }
+    }
+
+    /// Whether `id` waits for the stanza on probation to be settled.
+    func isHeldByProbation(_ id: String) -> Bool {
+        lock.withLock { state in state.probation.map { $0.id != id } ?? false }
+    }
+
+    /// Puts the first of `ids` that has a strike on probation, if none is. What else is pending
+    /// stays unsent (`isHeldByProbation`) until `endProbation`.
+    func beginProbation(among ids: [String]) {
+        let started = lock.withLock { state -> (id: String, token: Int, wait: TimeInterval)? in
+            guard state.probation == nil, let id = ids.first(where: { state.streamErrorStrikes[$0] != nil }) else { return nil }
+            state.probationToken += 1
+            state.probation = Probation(id: id, token: state.probationToken)
+            return (id, state.probationToken, state.probationTimeout)
+        }
+        guard let started else { return }
+        DiagLog.notice(.send, "Probation begins", .id("stanza", Redacted.id(started.id)))
+        DispatchQueue.global().asyncAfter(deadline: .now() + started.wait) { [weak self] in
+            self?.endProbation(token: started.token)
+        }
+    }
+
+    /// Lets the held stanzas go, once the one on probation is acknowledged or the wait is over.
+    func endProbation(token: Int? = nil, acknowledged id: String? = nil) {
+        let ended = lock.withLock { state -> Bool in
+            guard let probation = state.probation, token.map({ $0 == probation.token }) ?? true, id.map({ $0 == probation.id }) ?? true else { return false }
+            state.probation = nil
+            state.probationToken += 1
+            return true
+        }
+        guard ended else { return }
+        DiagLog.info(.send, "Probation ends", .bool("acknowledged", id != nil))
+        DispatchQueue.global().async { [weak self] in self?.sendUnclaimedPending() }
+    }
+
     private func clientStateChanged(_ state: XMPPClient.State) {
         switch state {
         case .connecting:
@@ -930,6 +1050,11 @@ public final class XMPPSession: @unchecked Sendable {
             } ?? Self.failure(for: reason)
             // Not the state a session starts in, before any login.
             if lock.withLock({ $0.connectStartedAt }) != nil { logDisconnection(reason, failure: failure) }
+            if case .streamError(let element) = reason, case .connected = self.state.value {
+                blameUnacknowledged(for: element)
+            } else {
+                lock.withLock { $0.probation = nil; $0.probationToken += 1 }
+            }
             let retryNow = lock.withLock {
                 defer { $0.retryNow = false }
                 return $0.retryNow
@@ -1083,7 +1208,8 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     private static func streamCondition(of element: Element) -> String? {
-        element.firstChild(xmlns: "urn:ietf:params:xml:ns:xmpp-streams")?.name
+        // ejabberd puts its `text` first, and it is not a condition.
+        element.children.first { $0.xmlns == "urn:ietf:params:xml:ns:xmpp-streams" && $0.name != "text" }?.name
     }
 
     private static func failure(for reason: XMPPClient.State.DisconnectionReason) -> Failure? {
@@ -1306,6 +1432,10 @@ public final class XMPPSession: @unchecked Sendable {
     /// The server has the stanza, by XEP-0198 or by `confirmByPing`: a message
     /// of ours is sent.
     func acknowledged(_ stanza: Stanza) {
+        if let id = stanza.id {
+            lock.withLock { _ = $0.streamErrorStrikes.removeValue(forKey: id) }
+            endProbation(acknowledged: id)
+        }
         if stanza.name == "message", let id = stanza.id, lock.withLock({ $0.writtenActions.remove(id) != nil }) {
             do {
                 try database.clearPendingAction(id: id)
@@ -1358,7 +1488,7 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     /// Asks the server to acknowledge what was just written, if it will.
-    private func requestAcknowledgement() {
+    func requestAcknowledgement() {
         client.modulesManager.moduleOrNil(.streamManagement)?.request()
     }
 
@@ -1666,17 +1796,31 @@ public final class XMPPSession: @unchecked Sendable {
             return lock.withLock { $0.sends.isClaimed(id) }
         }
         do {
+            // What was written at connect (presence, requests) is acknowledged before the server
+            // reaches the first of ours, so if that one makes it close the stream, it is the oldest
+            // stanza left unacknowledged (see `blameUnacknowledged`). The writes below happen
+            // on the send queues, after this request.
+            requestAcknowledgement()
+            let chats = try database.unconfirmedOutgoing(before: .distantFuture, since: .distantPast).filter { !isClaimed($0.0) }
+            var rooms: [(message: Message, room: JID)] = []
+            for (room, status) in lock.withLock({ $0.rooms }) where status.isJoined && !status.isSyncing {
+                guard let group = try database.groupChat(room) else { continue }
+                rooms += try database.pendingOutgoing(conversationId: group.conversationId).filter { !isClaimed($0) }.map { ($0, room) }
+            }
+            if lock.withLock({ !$0.streamErrorStrikes.isEmpty }) {
+                // A stanza the server closed the stream on goes first and alone.
+                let ids = chats.compactMap(\.0.remoteId) + rooms.compactMap(\.message.remoteId)
+                    + ((try? database.pendingReactions()) ?? []).map(\.id) + ((try? database.pendingActions()) ?? []).map(\.id)
+                beginProbation(among: ids)
+            }
             var resent = 0
-            for (message, peer) in try database.unconfirmedOutgoing(before: .distantFuture, since: .distantPast) where !isClaimed(message) {
+            for (message, peer) in chats {
                 resent += 1
                 transmit(message, to: peer)
             }
-            for (room, status) in lock.withLock({ $0.rooms }) where status.isJoined && !status.isSyncing {
-                guard let group = try database.groupChat(room) else { continue }
-                for message in try database.pendingOutgoing(conversationId: group.conversationId) where !isClaimed(message) {
-                    resent += 1
-                    transmit(message, to: room)
-                }
+            for (message, room) in rooms {
+                resent += 1
+                transmit(message, to: room)
             }
             DiagLog.info(.send, "Sending unclaimed pending messages", .int("count", resent))
             resendPendingReactions()
@@ -1710,7 +1854,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// Writes a reactions stanza once, asking for its acknowledgement, or
     /// pinging for it where the stream has no stream management.
     private func writeReactions(_ stanza: Martin.Message, id: String) {
-        guard isConnected, lock.withLock({ $0.writtenReactions.insert(id).inserted }) else { return }
+        guard isConnected, !isHeldByProbation(id), lock.withLock({ $0.writtenReactions.insert(id).inserted }) else { return }
         let acknowledges = streamAcknowledges
         client.context.writer.write(stanza) { [weak self] result in
             if case .failure = result { self?.lock.withLock { _ = $0.writtenReactions.remove(id) } }
@@ -1770,6 +1914,11 @@ public final class XMPPSession: @unchecked Sendable {
         let sendId = Redacted.id(id)
         guard isConnected else {
             DiagLog.info(.send, "Send waits", .id("msg", sendId), .value("reason", SendSkip.offline))
+            return
+        }
+        // Stays pending, and `endProbation` sends it.
+        guard !isHeldByProbation(id) else {
+            DiagLog.info(.send, "Send waits", .id("msg", sendId), .value("reason", SendSkip.probation))
             return
         }
         let route = route(to: peer)
@@ -1932,12 +2081,16 @@ public final class XMPPSession: @unchecked Sendable {
         case notYetConfirmed
         /// The chat gives its messages no id a reaction could name.
         case cannotReact
+        /// A correction can't become a file the way a long new message does, and a server
+        /// refuses a stanza that large.
+        case editTooLong
 
         public var errorDescription: String? {
             switch self {
             case .offline: String(localized: "You're offline.")
             case .notYetConfirmed: String(localized: "The group hasn't received this message yet.")
             case .cannotReact: String(localized: "This chat doesn't let this message be reacted to.")
+            case .editTooLong: String(localized: "This text is too long to edit a message with. Send it as a new message instead.")
             }
         }
     }
@@ -1958,8 +2111,16 @@ public final class XMPPSession: @unchecked Sendable {
     /// Offline, the correction is applied here and stays pending until the
     /// server acknowledges its stanza; a new session sends it again.
     public func edit(_ message: Message, to text: String) throws {
+        // As a new message's text is staged, so the stored body and the wire agree.
+        let text = EscapeUtils.removingForbidden(text)
         guard canEdit(message), let messageId = message.id, let original = message.remoteId, text != message.body,
               let peer = try database.conversation(id: message.conversationId)?.peer else { return }
+        // Before anything is applied: a correction the server would refuse for its size would
+        // show the new text here and leave everyone else the old one. Counted as a new message's
+        // text is, in characters.
+        // Half the server's limit in bytes as well: a short text can be large (joined emoji), and
+        // the stanza around it and the encryption of an encrypted chat add to it.
+        guard !LongText.isLong(text), text.utf8.count <= client.context.module(.streamFeatures).maxStanzaBytes / 2 else { throw MessageActionError.editTooLong }
         // One the send queue hasn't taken up goes out with the new text. The
         // status can't tell: a written message is pending until acknowledged.
         // The status is read before the lock, and fresh, as `message` may be
@@ -2008,6 +2169,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// the stanza can no longer be built, or can never be sent, it stops
     /// being pending.
     private func sendAction(id: String, of messageId: Int64, to peer: JID) {
+        guard !isHeldByProbation(id) else { return }
         // A room we left never becomes ready, so it would wait for good.
         if (try? database.groupChat(peer))?.hasLeft == true { return giveUpAction(id) }
         whenReady(route(to: peer)) { [self] in

@@ -277,7 +277,8 @@ open class SocketSessionLogic: XmppSessionLogic {
             self.connector.start(endpoint: self.serverToConnectDetails());
             return false;
         }
-        let errorName = streamErrorEl.findChild(xmlns: "urn:ietf:params:xml:ns:xmpp-streams")?.name;
+        // ejabberd puts its `text` before the condition, and it is not one.
+        let errorName = streamErrorEl.children.first(where: { $0.xmlns == "urn:ietf:params:xml:ns:xmpp-streams" && $0.name != "text" })?.name;
         let streamError = errorName == nil ? nil : StreamError(rawValue: errorName!);
         if let context = self.context {
             // how to change that into publisher?

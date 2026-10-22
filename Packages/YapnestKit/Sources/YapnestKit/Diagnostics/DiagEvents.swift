@@ -13,12 +13,12 @@ extension SocketConnectorNetwork.ErrorKind: DiagEnum {}
 
 /// Why a message wasn't handed to the stream yet.
 enum SendSkip: String, DiagEnum {
-    case offline, routeNotReady
+    case offline, routeNotReady, probation
 }
 
 /// Why a message was marked failed.
 enum SendFailure: String, DiagEnum {
-    case groupNotPrivate, encryption, tooLarge
+    case groupNotPrivate, encryption, tooLarge, serverClosedStream
 }
 
 /// Why OMEMO couldn't encrypt, without saying for whom.

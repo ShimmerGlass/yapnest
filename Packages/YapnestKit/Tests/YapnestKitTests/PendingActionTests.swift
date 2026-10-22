@@ -1,6 +1,6 @@
 import Foundation
 import GRDB
-import Martin
+@testable import Martin
 import Testing
 @testable import YapnestKit
 
@@ -63,6 +63,45 @@ struct PendingActionTests {
         session.drainSendQueue(alice)
         #expect(retractions().map(\.id) == [id, id])
         #expect(retractions().last?.firstChild(name: "retract", xmlns: NS.retraction)?.attribute("id") == "m1")
+    }
+
+    /// A correction can't become a file the way a long new message does, and the server refuses a
+    /// stanza that large, so the new text would show here and nowhere else.
+    @Test func aCorrectionTooLongForAMessageIsRefusedBeforeAnythingIsApplied() throws {
+        let tooLong = String(repeating: "a", count: LongText.threshold + 1)
+        #expect(throws: XMPPSession.MessageActionError.editTooLong) { try session.edit(message, to: tooLong) }
+        session.drainSendQueue(alice)
+        let after = try stored()
+        #expect(after.body == "hello")
+        #expect(after.actionPendingId == nil)
+        #expect(after.editedAt == nil)
+        #expect(corrections().isEmpty)
+        #expect(XMPPSession.MessageActionError.editTooLong.errorDescription == "This text is too long to edit a message with. Send it as a new message instead.")
+
+        try session.edit(message, to: String(repeating: "a", count: LongText.threshold))
+        session.drainSendQueue(alice)
+        #expect(corrections().count == 1)
+    }
+
+    /// Under the character limit, but joined emoji take far more bytes, and the server's limit is in bytes.
+    @Test func aCorrectionUnderHalfTheServersByteLimitOnlyIsAccepted() throws {
+        session.client.module(.streamFeatures).authenticatedMaxBytes = 1000
+        #expect(throws: XMPPSession.MessageActionError.editTooLong) { try session.edit(message, to: String(repeating: "a", count: 501)) }
+        #expect(try stored().body == "hello")
+        try session.edit(message, to: String(repeating: "a", count: 500))
+        #expect(try stored().body.count == 500)
+    }
+
+    @Test func aCorrectionWithAControlCharacterIsStoredWithoutIt() throws {
+        try session.edit(message, to: "he\u{1B}llo there")
+        #expect(try stored().body == "hello there")
+    }
+
+    @Test func aCorrectionTooLongForAMessageIsRefusedForAMessageNotYetSentToo() throws {
+        let unsent = try session.send("draft", to: alice)
+        let tooLong = String(repeating: "a", count: LongText.threshold + 1)
+        #expect(throws: XMPPSession.MessageActionError.editTooLong) { try session.edit(unsent, to: tooLong) }
+        #expect(try stored(unsent).body == "draft")
     }
 
     @Test func aCorrectionLostWithTheConnectionIsSentAgainWithTheCurrentBody() throws {
