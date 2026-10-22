@@ -21,9 +21,9 @@ issuer=$(tr -d '[:space:]' < keys/appstoreconnect.issuer)
 
 archives=${YAPNEST_ARCHIVES:-$HOME/Library/Caches/yapnest-archives}/$version-$build
 auth=(-allowProvisioningUpdates -authenticationKeyPath "$key" -authenticationKeyID "$key_id" -authenticationKeyIssuerID "$issuer")
-options=$(mktemp -t export).plist
-trap 'rm -f "$options"' EXIT
-cat > "$options" <<EOF
+export_options=$(mktemp -t export).plist
+trap 'rm -f "$export_options"' EXIT
+cat > "$export_options" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -41,7 +41,7 @@ for platform in ios mac; do
   echo "== $platform $version ($build)"
   xcodebuild archive -scheme Yapnest -configuration Release -destination "$destination" \
     -archivePath "$archives/$platform.xcarchive" "${auth[@]}" -quiet
-  xcodebuild -exportArchive -archivePath "$archives/$platform.xcarchive" -exportOptionsPlist "$options" \
+  xcodebuild -exportArchive -archivePath "$archives/$platform.xcarchive" -exportOptionsPlist "$export_options" \
     -exportPath "$archives/$platform-export" "${auth[@]}"
 done
 
