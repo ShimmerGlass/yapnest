@@ -193,9 +193,17 @@ struct ChatListView: View {
         }
     }
 
-    /// What contacts see of us: nothing while we're not connected.
+    /// The connection as far as the app lets on: nil while it is down only
+    /// briefly, which is treated as fine.
+    private var shownConnection: XMPPSession.State? {
+        showsConnectionProblem ? model.connection : nil
+    }
+
+    /// What contacts see of us: nothing while we're not connected. Every
+    /// launch reconnects in a moment, so until the banner would report the
+    /// connection, the footer takes it to be up, as "Joining…" waits too.
     private var ownPresence: (presence: ContactPresence?, status: String?) {
-        switch model.connection {
+        switch shownConnection ?? .connected(isSyncing: false) {
         case .connected:
             guard let ownStatus else { return (nil, nil) }
             let label = switch ownStatus.availability {
@@ -217,9 +225,9 @@ struct ChatListView: View {
     private var chats: some View {
         ChatListContent(session: session, archived: false, selection: isSplit ? selection : nil, open: { open($0, item: $1) }, onDelete: closeIfOpen, onCompose: { sheet = .compose })
             .safeAreaInset(edge: .top, spacing: 0) {
-                ConnectionBanner(state: showsConnectionProblem ? model.connection : nil)
+                ConnectionBanner(state: shownConnection)
             }
-            .animation(.default, value: showsConnectionProblem ? model.connection : nil)
+            .animation(.default, value: shownConnection)
             // The app drops its connection a few seconds after leaving, and
             // every return reconnects in a moment. A banner for that would push
             // the list down and back each time, so only a connection that stays
@@ -236,7 +244,7 @@ struct ChatListView: View {
                 case .showAfterDelay:
                     break
                 }
-                try? await Task.sleep(for: .seconds(1.5))
+                try? await Task.sleep(for: SlowStatusRule.gracePeriod)
                 guard !Task.isCancelled else { return }
                 showsConnectionProblem = true
             }

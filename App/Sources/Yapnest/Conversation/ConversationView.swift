@@ -172,7 +172,7 @@ struct ConversationView: View {
                 joinIsSlow = false
                 guard isJoining else { return }
                 do {
-                    try await Task.sleep(for: .seconds(3))
+                    try await Task.sleep(for: SlowStatusRule.gracePeriod)
                     joinIsSlow = true
                 } catch {}
             }

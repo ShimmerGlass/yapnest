@@ -29,6 +29,12 @@ public enum ChatListEmptyState: Equatable, Sendable {
     }
 }
 
+/// How long something that usually settles in a moment (a connection, a
+/// room being joined) goes unmentioned before the app says so.
+public enum SlowStatusRule {
+    public static let gracePeriod: Duration = .seconds(3)
+}
+
 /// When the chat list's offline banner appears.
 public enum ConnectionBannerRule {
     public enum Action: Equatable, Sendable {
