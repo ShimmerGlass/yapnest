@@ -438,7 +438,7 @@ private struct ChatListContent: View {
                         ContactRequestRow(session: session, contact: contact) {
                             open(.conversation(contact.jid), nil)
                         }
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(ChatRowButtonStyle.rowInsets)
                         .listRowBackground(Color.clear)
                     }
                 } header: {
@@ -450,7 +450,7 @@ private struct ChatListContent: View {
                 Section {
                     ForEach(invitations, id: \.room) { invitation in
                         GroupInvitationRow(session: session, invitation: invitation)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                            .listRowInsets(ChatRowButtonStyle.rowInsets)
                             .listRowBackground(Color.clear)
                     }
                 } header: {
@@ -471,7 +471,7 @@ private struct ChatListContent: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(ChatRowButtonStyle(isSelected: item.conversation.peer == selection))
-                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                .listRowInsets(ChatRowButtonStyle.rowInsets)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .swipeActions(edge: .leading) {
@@ -505,7 +505,7 @@ private struct ChatListContent: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(ChatRowButtonStyle(isSelected: false))
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(ChatRowButtonStyle.rowInsets)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                     }
@@ -533,6 +533,10 @@ private struct ChatListContent: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // The Mac's search bar sits right on the list, which left a selected
+        // first row's highlight touching it. As far below the bar as the
+        // highlight is from the list's sides; it still scrolls under it.
+        .modifier(MacTopMargin(ChatRowButtonStyle.rowInsets.leading - ChatRowButtonStyle.overhang))
         .background { ChatListBackdrop() }
         .sidebarSearch(text: $search, onCompose: onCompose)
         .overlay {
@@ -726,6 +730,10 @@ private struct ChatListBackdrop: View {
 /// Highlights the row while pressed, like a table cell, without a chevron,
 /// and while its chat is open beside the list.
 private struct ChatRowButtonStyle: ButtonStyle {
+    static let rowInsets = EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+    /// How far the highlight reaches past the row on either side.
+    static let overhang: CGFloat = 8
+
     var isSelected = false
 
     func makeBody(configuration: ButtonStyleConfiguration) -> some View {
@@ -737,8 +745,18 @@ private struct ChatRowButtonStyle: ButtonStyle {
                     if configuration.isPressed { Color(uiColor: .systemFill) }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 10))
-                .padding(.horizontal, -8)
+                .padding(.horizontal, -Self.overhang)
             }
+    }
+}
+
+/// Left alone on iOS, where an explicit margin would replace the list's own.
+private struct MacTopMargin: ViewModifier {
+    let margin: CGFloat
+    init(_ margin: CGFloat) { self.margin = margin }
+
+    func body(content: Content) -> some View {
+        if Platform.isMac { content.contentMargins(.top, margin, for: .scrollContent) } else { content }
     }
 }
 
