@@ -19,6 +19,9 @@ enum DevFixture: String, CaseIterable {
     /// both ways, with a tall one newest. The lazy stack can't have measured
     /// them all, so its estimate of the content height is far off and swings.
     case tallHistory = "tall-history"
+    /// A long chat whose newest few dozen messages, of mixed heights, are
+    /// unread, so it opens at the first of them rather than at the bottom.
+    case unread
     /// A short chat, Reactions, on an account whose quick reactions have been
     /// learned: 🔥 and 🎉 picked most, then 😢 (a default, picked once) and 🙏 (twice), and 👍 topping the row up.
     case learnedReactions = "learned-reactions"
@@ -52,6 +55,9 @@ enum DevFixture: String, CaseIterable {
     static let mailPeer = JID("mail@fixture.test")!
     static let historyPeer = JID("history@fixture.test")!
     static let archivePeer = JID("archive@fixture.test")!
+    static let unreadPeer = JID("unread@fixture.test")!
+    /// How many of `unread`'s newest messages are unread.
+    static let unreadCount = 40
     /// The words the newest message of `tall-history` ends with.
     static let archiveEndMarker = "End of Archive 0299."
     /// The words the tall message ends with, for finding it from a test.
@@ -69,6 +75,7 @@ enum DevFixture: String, CaseIterable {
         switch self {
         case .tallNewest: try Self.fillTallNewest(database)
         case .longHistory: try Self.fillLongHistory(database)
+        case .unread: try Self.fillUnread(database)
         case .tallHistory: try Self.fillTallHistory(database)
         case .learnedReactions: try Self.fillLearnedReactions(database)
         case .quickResponses: try Self.fillQuickResponses(database)
@@ -269,6 +276,27 @@ enum DevFixture: String, CaseIterable {
         for (offset, (outcome, direction, duration)) in calls.enumerated() {
             let at = start.addingTimeInterval(TimeInterval((count - 40 + offset * 5) * 60 + 30))
             try addCall(database, conversation, peer: historyPeer, outcome: outcome, direction: direction, duration: duration, at: at, sid: "history-call-\(offset)")
+        }
+    }
+
+    private static func fillUnread(_ database: AppDatabase) throws {
+        let conversation = try prepare(database, peer: unreadPeer, name: "Unread")
+        let count = 300
+        var random = SeededRandom(seed: 11)
+        for index in 0..<count {
+            let label = String(format: "Unread %04d", index)
+            let body = switch index % 7 {
+            case 2: "\(label): \(words(60, &random))"
+            case 5: "\(label)\n\(words(20, &random))\n\n\(words(15, &random))"
+            default: "\(label): \(words(Int(random.next() % 9) + 2, &random))"
+            }
+            let isUnread = index >= count - unreadCount
+            _ = try database.insert(Message(
+                conversationId: conversation.id!, direction: isUnread || index % 3 != 1 ? .incoming : .outgoing,
+                sender: isUnread || index % 3 != 1 ? unreadPeer : account, body: body,
+                timestamp: start.addingTimeInterval(TimeInterval(index * 60)),
+                status: isUnread || index % 3 != 1 ? nil : .displayed, isRead: !isUnread,
+            ))
         }
     }
 

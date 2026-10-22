@@ -19,6 +19,35 @@ struct ConversationOpeningTests {
         #expect(f.model.unreadDividerId == unread[0].id)
     }
 
+    /// A fixed three tries 150 ms apart kept a chat with a few dozen unread
+    /// hidden for over half a second, though the first scroll had landed.
+    @Test func theListIsShownOnceAskingAgainNoLongerMovesIt() async throws {
+        let f = try ConversationFixture()
+        try f.addMany(10, read: true)
+        try (0..<6).forEach { _ = try f.add("new \($0)") }
+        let opened = ContinuousClock.now
+        await f.start()
+        f.model.geometryChanged(geometry(distanceFromBottom: 900))
+
+        await eventually("the list was never shown") { f.model.isPositioned }
+        #expect(ContinuousClock.now - opened < .milliseconds(450))
+    }
+
+    @Test func theListStaysHiddenWhileTheOpeningScrollStillMovesIt() async throws {
+        let f = try ConversationFixture()
+        try f.addMany(10, read: true)
+        try (0..<6).forEach { _ = try f.add("new \($0)") }
+        await f.start()
+        // Rows measured around the message keep shifting where it lands.
+        // Faster than the tries, so no two of them find it in one place.
+        for step in 0..<15 {
+            f.model.geometryChanged(geometry(distanceFromBottom: 900 + CGFloat(step) * 40))
+            try await Task.sleep(for: .milliseconds(20))
+            #expect(!f.model.isPositioned)
+        }
+        await eventually("the list was never shown") { f.model.isPositioned }
+    }
+
     @Test(arguments: [false, true]) func opensAtTheBottomWhenTheDividerIsAmongTheLastFewMessages(flipped: Bool) async throws {
         let f = try ConversationFixture(isFlipped: flipped)
         try f.addMany(10, read: true)

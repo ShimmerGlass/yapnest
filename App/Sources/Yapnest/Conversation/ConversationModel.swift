@@ -246,6 +246,9 @@ final class ConversationModel {
     /// A window longer than this is cut back when the user returns to the
     /// newest messages: every change re-reads all of it.
     private static let windowLimit = 1500
+    /// How many times, 50 ms apart, the opening scroll is asked again before
+    /// the list is shown wherever it is.
+    private static let openingTries = 12
     /// Links whose previews were already asked for.
     @ObservationIgnored private var requestedLinks: Set<String> = []
     /// Display names by JID, so building a row doesn't read the database.
@@ -850,20 +853,30 @@ final class ConversationModel {
     }
 
     /// Asks again for the message to open on while the rows around it are
-    /// measured, then shows the list.
+    /// measured, then shows the list. It's shown once asking again no longer
+    /// moves it: the first scroll usually lands, and a fixed three tries kept
+    /// a chat opened at its unread messages hidden for over half a second.
+    /// Unflipped, rows measured above the message can still shift it, which
+    /// the tries keep up with, for as long as `openingTries` allows.
     private func settleOpeningScroll(at id: Int64, anchor: UnitPoint, flashing: Int64? = nil) {
         let anchor = flipped(anchor)
         isPositioned = false
         followsBottom = false
+        // With the rows, so the list's first layout already aims at it.
+        scroll.scrollTo(id: id, anchor: anchor)
         tasks["opening"] = Task { [weak self] in
-            for _ in 0..<3 {
-                try? await Task.sleep(for: .milliseconds(150))
+            var landed: CGFloat?
+            for _ in 0..<Self.openingTries {
+                try? await Task.sleep(for: .milliseconds(50))
                 guard let self, !Task.isCancelled else { return }
+                let offset = self.geometry?.contentOffset.y
+                if let offset, offset == landed { break }
+                landed = offset
                 FrameLog.event("scroll.scrollTo opening id=\(id)")
                 self.scroll.scrollTo(id: id, anchor: anchor)
             }
-            try? await Task.sleep(for: .milliseconds(150))
             guard let self else { return }
+            FrameLog.event("positioned")
             self.isPositioned = true
             if let flashing { self.flash(flashing) }
             // What the list reported while hidden was its default place at the
