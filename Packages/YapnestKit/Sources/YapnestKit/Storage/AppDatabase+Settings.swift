@@ -39,6 +39,9 @@ extension AppDatabase {
         /// and when we're typing (XEP-0085). Both on unless turned off.
         case sendsReadMarkers
         case sendsChatStates
+        /// Whether a one-to-one chat started from now on encrypts with OMEMO.
+        /// On unless turned off; chats that exist keep their own choice.
+        case encryptsNewChats
         /// Whether link previews are ever loaded: see `LinkPreviewSetting`.
         case linkPreviews
         /// Whether the GIF picker is offered. On unless turned off, because
@@ -70,6 +73,9 @@ extension AppDatabase {
         /// Set once the composer's old per-device shortcode recents are taken
         /// into `reactionRanking`: see `importEmojiRecents`.
         case emojiRecentsImported
+        /// Set when the welcome screen that asks for the privacy settings has
+        /// been answered. Not synced: each install asks once.
+        case welcomeShown
     }
 
     public func setting(_ key: SettingKey) throws -> String? {

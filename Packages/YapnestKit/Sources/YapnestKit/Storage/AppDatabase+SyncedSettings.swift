@@ -75,6 +75,7 @@ extension AppDatabase {
         .gifs: globalKey(.gifs, default: "1"),
         .sendsReadMarkers: globalKey(.sendsReadMarkers, default: "1"),
         .sendsChatStates: globalKey(.sendsChatStates, default: "1"),
+        .encryptsNewChats: globalKey(.encryptsNewChats, default: "1"),
         .sharesLastSeen: globalKey(.sharesLastSeen, default: "0"),
         .availability: globalKey(.availability),
         .statusMessage: globalKey(.statusMessage),

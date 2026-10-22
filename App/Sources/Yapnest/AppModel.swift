@@ -58,6 +58,10 @@ final class AppModel {
     /// An `xmpp:` link waiting for the chat list to act on it. Kept while
     /// signed out, so it's handled once the user has signed in.
     var pendingLink: XMPPURI?
+    /// Whether the welcome screen that asks for the privacy settings is up. Set
+    /// by the first sign-in on this install, not by a restored session, so an
+    /// update doesn't ask people who set the app up long ago.
+    var showsWelcome = false
     /// Set when a link couldn't be understood; the window says so.
     var linkProblem: String?
     /// Counts the menu bar's Find in Chat, which the open chat answers.
@@ -237,6 +241,7 @@ final class AppModel {
                     session.videoCallablePeers.send(peers)
                 }
                 DevFixture.deliverIncoming(into: session.database)
+                showsWelcome = ProcessInfo.processInfo.environment["YAPNEST_DEV_WELCOME"] == "1"
                 phase = .signedIn(session)
             } catch {
                 DiagLog.error(.app, "Fixture failed", .error(error))
@@ -275,6 +280,7 @@ final class AppModel {
                     throw error
                 }
                 SharedContainer.defaults.set(true, forKey: "keychainShared")
+                showsWelcome = await offMain { (try? session.database.setting(.welcomeShown)) == nil }
                 phase = .signedIn(session)
                 didSignIn(session)
                 applyScenePhase(to: session)
@@ -341,8 +347,17 @@ final class AppModel {
         }
     }
 
+    /// Closes the welcome screen for good, once its choices are saved.
+    func finishWelcome() async throws {
+        if let session {
+            try await offMain { try session.database.setSetting(.welcomeShown, "1") }
+        }
+        showsWelcome = false
+    }
+
     func signOut() {
         guard let session else { return }
+        showsWelcome = false
         phase = .signedOut
         try? credentials.delete()
         environment.forgetSharedState()

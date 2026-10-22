@@ -23,8 +23,10 @@ extension AppDatabase {
     /// which publishes no OMEMO devices: encrypting to it could only fail. So
     /// do the people behind a gateway we chat with or have as a contact, such
     /// as `<phone>@whatsapp.example`, whose messages it relays in the clear.
+    /// The user can also turn encryption off for chats started from now on.
     static func encryptsByDefault(_ db: Database, with peer: JID) throws -> Bool {
         guard peer.localPart != nil else { return false }
+        guard try setting(db, .encryptsNewChats) != "0" else { return false }
         guard let gateway = JID(peer.domain) else { return true }
         let known = try Conversation.filter(Column("peer") == gateway).fetchCount(db) > 0
             || Contact.filter(Column("jid") == gateway).fetchCount(db) > 0

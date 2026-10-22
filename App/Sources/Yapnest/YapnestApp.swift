@@ -29,6 +29,11 @@ struct YapnestApp: App {
                         LoginView()
                     case .signedIn(let session):
                         ChatListView(session: session, opening: delegate.model.requestedConversation)
+                            .sheet(isPresented: Binding(get: { delegate.model.showsWelcome }, set: { _ in })) {
+                                WelcomeView(session: session)
+                                    .sheetSizedForMac()
+                                    .interactiveDismissDisabled()
+                            }
                     }
                 }
             }

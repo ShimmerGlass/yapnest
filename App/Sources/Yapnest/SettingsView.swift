@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var sendsChatStates = true
     @State private var sharesLastSeen = false
     @State private var gifsEnabled = true
+    @State private var encryptsNewChats = true
     @State private var privacyError: String?
     @State private var confirmsSignOut = false
     @State private var photo: PhotosPickerItem?
@@ -141,12 +142,18 @@ struct SettingsView: View {
                 }
                 #endif
 
-                Section("Encryption") {
+                Section {
+                    Toggle("Encrypt New Chats", isOn: Binding(get: { encryptsNewChats }, set: setEncryptsNewChats))
+                        .disabled(!isLoaded)
                     NavigationLink {
                         DevicesList(session: session, peer: nil)
                     } label: {
                         Label("Encryption Keys", systemImage: "key")
                     }
+                } header: {
+                    Text("Encryption")
+                } footer: {
+                    Text("New one-to-one chats are end-to-end encrypted with OMEMO. Chats you already have keep their setting, and you can change it in each chat.")
                 }
 
                 Section {
@@ -248,6 +255,7 @@ struct SettingsView: View {
                         sendsChatStates: session.sendsChatStates,
                         sharesLastSeen: session.sharesLastSeen,
                         gifsEnabled: session.database.flag(.gifs, default: true),
+                        encryptsNewChats: session.database.flag(.encryptsNewChats, default: true),
                     )
                 }
                 savedName = saved.name
@@ -260,6 +268,7 @@ struct SettingsView: View {
                 sendsChatStates = saved.sendsChatStates
                 sharesLastSeen = saved.sharesLastSeen
                 gifsEnabled = saved.gifsEnabled
+                encryptsNewChats = saved.encryptsNewChats
                 isLoaded = true
             }
             .task(id: session.account) {
@@ -378,6 +387,10 @@ struct SettingsView: View {
 
     private func setGifsEnabled(_ on: Bool) {
         save({ [session] in try session.database.setFlag(.gifs, on) }) { gifsEnabled = on }
+    }
+
+    private func setEncryptsNewChats(_ on: Bool) {
+        save({ [session] in try session.database.setFlag(.encryptsNewChats, on) }) { encryptsNewChats = on }
     }
 
     private func save(_ write: @escaping @Sendable () throws -> Void, then done: @escaping () -> Void) {
