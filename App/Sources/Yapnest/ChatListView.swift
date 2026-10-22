@@ -751,10 +751,6 @@ private struct ChatRowButtonStyle: ButtonStyle {
                 }
             }
     }
-
-    static func highlight(_ color: Color) -> some View {
-        RoundedRectangle(cornerRadius: 10).fill(color).padding(.horizontal, -overhang)
-    }
 }
 
 /// The pressed row: the accent colour brightest at the middle and fading
@@ -774,6 +770,39 @@ private struct PressGlow: View {
                 .shadow(color: Color.accentColor.opacity(0.35), radius: 10)
         }
         .padding(.horizontal, -ChatRowButtonStyle.overhang)
+    }
+}
+
+/// The highlight itself, slid by Core Animation. Opening the chat builds its
+/// screen on the main thread during the slide, and an animation SwiftUI
+/// drives from there stuttered with it; the render server's doesn't.
+private struct SlidingHighlight: UIViewRepresentable {
+    let isSelected: Bool
+    let startOffset: CGFloat
+
+    final class Coordinator { var wasSelected = false }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = UIColor(Color.accentColor.opacity(0.18))
+        view.layer.cornerRadius = 10
+        view.layer.cornerCurve = .continuous
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        view.isHidden = !isSelected
+        defer { context.coordinator.wasSelected = isSelected }
+        guard isSelected, !context.coordinator.wasSelected, startOffset != 0 else { return }
+        let slide = CASpringAnimation(perceptualDuration: 0.25, bounce: 0.15)
+        slide.keyPath = "transform.translation.y"
+        slide.fromValue = startOffset
+        slide.toValue = 0
+        slide.duration = slide.settlingDuration
+        view.layer.add(slide, forKey: "slide")
     }
 }
 
@@ -800,22 +829,10 @@ private struct SelectionHighlight: View {
     private final class FrameBox { var frame: CGRect? }
 
     var body: some View {
-        // Always there and only shown when selected: the slide has to start
-        // in the update that selects the row, and a highlight inserted then
-        // would have drawn a frame at its destination first. A keyframe
-        // animation runs on its own clock, where an animated state change
-        // in a list row didn't move at all.
-        ChatRowButtonStyle.highlight(Color.accentColor.opacity(0.18))
-            .opacity(isSelected ? 1 : 0)
-            .keyframeAnimator(initialValue: 0, trigger: isSelected) { content, offset in
-                content.offset(y: offset)
-            } keyframes: { _ in
-                let start = startOffset()
-                KeyframeTrack {
-                    MoveKeyframe(start)
-                    SpringKeyframe(0, duration: 0.25, spring: .snappy(duration: 0.25))
-                }
-            }
+        // Computed here, in the update that selects the row: the change
+        // handler below runs after it and moves the track to this row.
+        SlidingHighlight(isSelected: isSelected, startOffset: isSelected ? startOffset() : 0)
+            .padding(.horizontal, -ChatRowButtonStyle.overhang)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
                 ownFrame.frame = frame
                 if isSelected { track.frame = frame }
