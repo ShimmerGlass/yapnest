@@ -106,13 +106,13 @@ An XMPP client for iOS 18+ and the Mac (Mac Catalyst, Mac idiom). `README.md` co
 - Installing on the user's own devices, signed with the team in `Config/Local.xcconfig`. Use a derived data folder outside the repo (`$DD` below). Never sign the Mac app in with a dev server account: it's the user's real install.
   ```sh
   # iPhone (find its id with `xcrun devicectl list devices`)
-  xcodebuild -scheme Yapnest -configuration Debug -destination "id=$PHONE" -derivedDataPath "$DD/phone" -allowProvisioningUpdates build
-  xcrun devicectl device install app --device "$PHONE" "$DD/phone/Build/Products/Debug-iphoneos/Yapnest.app"
+  xcodebuild -scheme Yapnest -configuration Release -destination "id=$PHONE" -derivedDataPath "$DD/phone" -allowProvisioningUpdates build
+  xcrun devicectl device install app --device "$PHONE" "$DD/phone/Build/Products/Release-iphoneos/Yapnest.app"
   # Mac: quit the running copy, replace it in /Applications, reopen it
   xcodebuild -scheme Yapnest -configuration Release -destination 'platform=macOS,variant=Mac Catalyst' -derivedDataPath "$DD/mac" -allowProvisioningUpdates build
   osascript -e 'quit app "Yapnest"'
   ditto "$DD/mac/Build/Products/Release-maccatalyst/Yapnest.app" /Applications/Yapnest.app && open /Applications/Yapnest.app
   ```
-  "Could not resolve package dependencies" on the iPhone build comes from a stale `$DD/phone/SourcePackages`: delete it and build again. Debug fixtures (`YAPNEST_DEV_FIXTURE`) exist only in Debug builds, so check fixtures in a Debug simulator build.
+  "Could not resolve package dependencies" on the iPhone build comes from a stale `$DD/phone/SourcePackages`: delete it and build again. Install Release on the devices: a Debug build runs unoptimized and stutters where the shipped app doesn't, so it can't be used to judge smoothness. Debug fixtures (`YAPNEST_DEV_FIXTURE`) exist only in Debug builds, so check fixtures in a Debug simulator build.
 - After changing the message list, the keyboard layout or the conversation's scrolling, run the UI tests (CONTRIBUTING.md, "UI tests"): `task ui` runs them on the iPhone 17 and on `Yapnest iOS 26`, six simulator clones at a time. Run both: the scroll view and lazy stack behave differently on iOS 26, which most phones run, and the keyboard jumps reproduce only there (an iPhone 15 Plus on the iOS 26.5 runtime; create it with `xcrun simctl create` if it's missing). They run on offline fixtures (`DevFixture.swift`, `YAPNEST_DEV_FIXTURE`) and read the frame recorder (`ScrollRecorder.swift`), which catches one-frame jumps and blank lists. A new scroll bug gets a fixture and a test there first.
 - `FuzzScrollingUITests` runs the same checks on seeded chats of every kind of content (`FuzzFixture.swift`, `YAPNEST_DEV_FIXTURE=fuzz:<seed>`). A failure names its seed; `dev/fuzz.sh <seed> [group]` opens it in the simulator. A seed that caught a bug stays in the fixed list.
