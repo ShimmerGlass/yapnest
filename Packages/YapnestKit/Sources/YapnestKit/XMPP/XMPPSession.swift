@@ -346,6 +346,9 @@ public final class XMPPSession: @unchecked Sendable {
         }
 
         registerModules(requireTLS: !credentials.disableTLS, resource: resource)
+        client.context.module(.streamFeatures).stanzaRefused = { _, bytes, limit in
+            DiagLog.error(.send, "Stanza over the server's limit", .int("bytes", bytes), .int("limit", limit))
+        }
         subscribe()
         reloadKnownRooms()
         monitorNetwork()
@@ -1904,6 +1907,13 @@ public final class XMPPSession: @unchecked Sendable {
             }
         }
         guard isConnected else { return .failure(.offline) }
+        // A server closes the stream on a stanza past its limit, which leaves everything queued
+        // behind it unacknowledged, and it would be written first again on every reconnect. Martin
+        // refuses it too, but that comes back as a dropped write, which leaves the message pending.
+        let features = client.context.module(.streamFeatures)
+        if !features.fits(outgoing) {
+            return .failure(.failed(String(localized: "This message is too large for your server."), .tooLarge))
+        }
         let acknowledged = streamAcknowledges
         client.context.writer.write(outgoing) { result in
             if case .failure = result { onDropped() }

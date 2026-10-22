@@ -505,6 +505,26 @@ Each entry gives what went wrong for users, why, and what changed.
   callbacks run after it on a queue of their own. Pinned by
   `ResponseTimeoutTests`.
 
+**A stanza past the server's size limit blocked every message after it**
+(`StreamFeaturesModule.fits`, `XmppSessionLogic.send`, `LogicPacketWriter`)
+- *Symptom:* one huge message (a crash report pasted as text) stuck as
+  pending, and nothing queued behind it was ever delivered, however often
+  the app reconnected.
+- *Cause:* Prosody closes the stream with `policy-violation` on a stanza past
+  its `c2s_stanza_size_limit` (262144 bytes), 30 seconds later when its rate
+  limit slows the read. The pending message was written first on every
+  connect, so the cycle repeated. Martin never checked a stanza's size and
+  ignored XEP-0478.
+- *Fix:* `StreamFeaturesModule` keeps the `max-bytes` of stream features
+  received after sign-in, 262144 when there is none. Before sign-in a server
+  advertises the limit for unauthenticated streams (Prosody: 10000), which
+  is ignored; a resumed SASL2 stream gets no new features, so the default
+  applies there. A stanza
+  over it is refused in `send`, before the filters so stream management never
+  counts it, with `XMPPError.stanzaTooLarge`; a request fails with it rather
+  than as a timeout. `stanzaRefused` reports a refusal. Pinned by
+  `StreamLimitTests` and `StreamLimitIntegrationTests`.
+
 ### MartinOMEMO
 
 **Logs named people publicly** (`OMEMOModule`)

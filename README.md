@@ -156,6 +156,7 @@ What Yapnest implements, and where it stops short.
 | XEP-0447 | Stateless File Sharing | Partial. Receive: the metadata of a `<file-sharing>`, in the message with the link or in an earlier message without a body (as Dino sends it). Sent in one message with the link and the XEP-0066 element, for photos and voice messages in unencrypted chats only. Sources other than the message's own link are ignored. |
 | XEP-0454 | OMEMO Media Sharing | Full. |
 | XEP-0461 | Message Replies | Full. |
+| XEP-0478 | Stream Limits Advertisement | Receive: the `max-bytes` a server advertises after sign-in is the largest stanza Yapnest sends (262144 bytes when it says none). A message over it is marked failed instead of closing the stream. |
 | XEP-0484 | Fast Authentication Streamlining Tokens | Full, where the server offers it. |
 | XEP-0486 | MUC Avatars | Shown, and set or removed by a group's owner through the room's vCard, where the server keeps one for rooms. |
 | XEP-0490 | Message Displayed Synchronization | Full. |

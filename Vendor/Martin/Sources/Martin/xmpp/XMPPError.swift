@@ -51,6 +51,18 @@ public enum XMPPError: LocalizedError, Equatable, CustomStringConvertible {
     case undefined_condition
     case unexpected_request(_ message: String? = nil)
 
+    /// What a stanza refused for being over the server's size limit fails with.
+    public static let stanzaTooLarge = XMPPError.policy_violation(stanzaTooLargeMessage);
+    private static let stanzaTooLargeMessage = "stanza too large";
+
+    /// Whether this is the failure of a stanza refused for its size, rather than of the connection.
+    public var isStanzaTooLarge: Bool {
+        if case .policy_violation(let message) = self {
+            return message == XMPPError.stanzaTooLargeMessage;
+        }
+        return false;
+    }
+
     public var errorDescription: String? {
         if let message = self.message?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
             return "\(message) (\(errorCondition.rawValue))";

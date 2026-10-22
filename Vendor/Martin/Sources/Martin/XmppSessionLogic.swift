@@ -337,6 +337,11 @@ open class SocketSessionLogic: XmppSessionLogic {
     
     open func send(stanza: Stanza, completionHandler: ((Result<Void,XMPPError>)->Void)?) {
         dispatcher.async {
+            // Before the filters, so stream management never counts or queues a stanza that isn't sent.
+            if let features = self.modulesManager.moduleOrNil(.streamFeatures), features.refuses(stanza) {
+                completionHandler?(.failure(.stanzaTooLarge));
+                return;
+            }
             let state = self.state;
             guard state == .connected() || state == .connecting else {
                 completionHandler?(.failure(.not_authorized("You are not connected to the XMPP server")));
@@ -354,6 +359,9 @@ open class SocketSessionLogic: XmppSessionLogic {
     
     private func sendingOutgoingStanza(_ stanza: Stanza) {
         dispatcher.async {
+            if let features = self.modulesManager.moduleOrNil(.streamFeatures), features.refuses(stanza) {
+                return;
+            }
             for filter in self.modulesManager.filters {
                 filter.processOutgoing(stanza: stanza);
             }

@@ -42,8 +42,13 @@ open class LogicPacketWriter: PacketWriter {
                 switch result {
                 case .success(_):
                     break;
-                case .failure(_):
-                    cancellable.cancel();
+                case .failure(let error):
+                    // Answered with an error of its own: cancelling reads as a timeout, which this isn't.
+                    if error.isStanzaTooLarge, let refusal = error.createResponse(iq) as? Iq, let handler = self.responseManager.getResponseHandler(for: refusal) {
+                        handler(refusal);
+                    } else {
+                        cancellable.cancel();
+                    }
                 }
             });
         } else {

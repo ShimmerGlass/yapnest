@@ -73,7 +73,60 @@ open class StreamFeaturesModule: XmppModuleBaseSessionStateAware, XmppModule, Re
         }
     }
     
+    /// What a server accepts when it says nothing, as Prosody's `c2s_stanza_size_limit` does.
+    public static let defaultMaxStanzaBytes = 262144;
+
+    private let limitLock = NSLock();
+    private var _authenticatedMaxBytes: Int?;
+    private var _stanzaRefused: ((String, Int, Int) -> Void)?;
+
+    /// The `max-bytes` of XEP-0478 from features received after authentication. Before it a
+    /// server advertises the limit for unauthenticated streams, which is far lower (Prosody: 10000)
+    /// and would wrongly refuse a key bundle. A resumed SASL2 stream gets no new features, so the
+    /// default applies there.
+    var authenticatedMaxBytes: Int? {
+        get { limitLock.withLock { _authenticatedMaxBytes } }
+        set { limitLock.withLock { _authenticatedMaxBytes = newValue } }
+    }
+
+    /// The most bytes the server takes in one stanza.
+    public var maxStanzaBytes: Int {
+        return authenticatedMaxBytes ?? StreamFeaturesModule.defaultMaxStanzaBytes;
+    }
+
+    /// Called with the element's name, its size and the limit when a stanza is refused for being over it.
+    public var stanzaRefused: ((String, Int, Int) -> Void)? {
+        get { limitLock.withLock { _stanzaRefused } }
+        set { limitLock.withLock { _stanzaRefused = newValue } }
+    }
+
+    /// Whether the server takes `stanza`. A server closes the stream on one past its limit, which
+    /// takes every stanza queued behind it too.
+    public func fits(_ stanza: Stanza) -> Bool {
+        return excess(of: stanza) == nil;
+    }
+
+    /// Whether `stanza` is to be refused rather than written, reported through `stanzaRefused` if so.
+    func refuses(_ stanza: Stanza) -> Bool {
+        guard let (size, limit) = excess(of: stanza) else {
+            return false;
+        }
+        stanzaRefused?(stanza.element.name, size, limit);
+        return true;
+    }
+
+    /// The size of `stanza` and the limit it is over, or nil if it fits.
+    private func excess(of stanza: Stanza) -> (size: Int, limit: Int)? {
+        let size = stanza.element.stringValue.utf8.count;
+        let limit = maxStanzaBytes;
+        return size > limit ? (size, limit) : nil;
+    }
+
     func setStreamFeatures(_ element: Element) {
+        if let auth = context?.moduleOrNil(.auth), case .authorized = auth.state {
+            let limit = element.findChild(name: "limits", xmlns: "urn:xmpp:stream-limits:0")?.findChild(name: "max-bytes")?.value.flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) };
+            authenticatedMaxBytes = limit.flatMap { $0 > 0 ? $0 : nil };
+        }
         self.streamFeatures = StreamFeatures(element: element);
         fireEvent(streamFeatures: element);
     }
@@ -81,6 +134,7 @@ open class StreamFeaturesModule: XmppModuleBaseSessionStateAware, XmppModule, Re
     public func reset(scopes: Set<ResetableScope>) {
         if scopes.contains(.stream) {
             streamFeatures = .none;
+            authenticatedMaxBytes = nil;
         }
     }
 }

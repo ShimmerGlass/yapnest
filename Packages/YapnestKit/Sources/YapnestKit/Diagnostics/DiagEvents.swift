@@ -18,7 +18,7 @@ enum SendSkip: String, DiagEnum {
 
 /// Why a message was marked failed.
 enum SendFailure: String, DiagEnum {
-    case groupNotPrivate, encryption
+    case groupNotPrivate, encryption, tooLarge
 }
 
 /// Why OMEMO couldn't encrypt, without saying for whom.
