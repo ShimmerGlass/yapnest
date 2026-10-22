@@ -745,13 +745,35 @@ private struct ChatRowButtonStyle: ButtonStyle {
                     if let selectionTrack {
                         SelectionHighlight(isSelected: isSelected, track: selectionTrack)
                     }
-                    if configuration.isPressed { Self.highlight(Color(uiColor: .systemFill)) }
+                    PressGlow()
+                        .opacity(configuration.isPressed ? 1 : 0)
+                        .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
                 }
             }
     }
 
     static func highlight(_ color: Color) -> some View {
         RoundedRectangle(cornerRadius: 10).fill(color).padding(.horizontal, -overhang)
+    }
+}
+
+/// The pressed row: the accent colour brightest at the middle and fading
+/// out to the edges, with a soft halo past them.
+private struct PressGlow: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let shape = RoundedRectangle(cornerRadius: 10)
+            shape
+                .fill(RadialGradient(
+                    colors: [Color.accentColor.opacity(0.32), Color.accentColor.opacity(0.08)],
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: proxy.size.width / 2,
+                ))
+                .overlay(shape.strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1))
+                .shadow(color: Color.accentColor.opacity(0.35), radius: 10)
+        }
+        .padding(.horizontal, -ChatRowButtonStyle.overhang)
     }
 }
 
