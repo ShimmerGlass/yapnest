@@ -20,6 +20,10 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     }
     var onAttach: ((AttachmentSource) -> Void)?
     var onGif: (() -> Void)?
+    /// The Up arrow in an empty composer (Mac); true when it started an edit.
+    var onEditLast: (() -> Bool)? {
+        didSet { textView.onEditLast = onEditLast }
+    }
     /// Pictures or files pasted or dropped on the bar, which are added to the
     /// tray rather than inserted into the text.
     var onAttachments: (([NSItemProvider]) -> Void)?
@@ -942,6 +946,9 @@ final class ComposerTextView: UITextView {
     enum SuggestionKey { case previous, next, accept, dismiss }
 
     var onReturn: (() -> Void)?
+    /// Set on the Mac, where Up in an empty field edits the last message.
+    /// Returns whether it did, as Up is otherwise left to the text.
+    var onEditLast: (() -> Bool)?
     /// Pictures or files being pasted, which aren't text for the field.
     var onPasteAttachments: (([NSItemProvider]) -> Void)?
     /// Text over `LongText.threshold`, which is a file to send, not words to type.
@@ -994,6 +1001,9 @@ final class ComposerTextView: UITextView {
             // A hardware Return picks the emoji instead of starting a line.
             commands.append(UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(sendFromKeyboard)))
         }
+        if returnSends, !capturing, onEditLast != nil, text.isEmpty, markedTextRange == nil {
+            commands.append(UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(editLastMessage)))
+        }
         commands.forEach { $0.wantsPriorityOverSystemBehavior = true }
         return commands + (super.keyCommands ?? [])
     }
@@ -1001,7 +1011,7 @@ final class ComposerTextView: UITextView {
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         // Not while composing with an input method: Return confirms that.
         let ours = [#selector(sendFromKeyboard), #selector(insertNewLine), #selector(suggestionPrevious),
-                    #selector(suggestionNext), #selector(suggestionAccept), #selector(suggestionDismiss)]
+                    #selector(suggestionNext), #selector(suggestionAccept), #selector(suggestionDismiss), #selector(editLastMessage)]
         if ours.contains(action) {
             return markedTextRange == nil
         }
@@ -1064,6 +1074,7 @@ final class ComposerTextView: UITextView {
     @objc private func sendFromKeyboard() { onReturn?() }
 
     @objc private func insertNewLine() { insertText("\n") }
+    @objc private func editLastMessage() { _ = onEditLast?() }
     @objc private func suggestionPrevious() { onSuggestionKey?(.previous) }
     @objc private func suggestionNext() { onSuggestionKey?(.next) }
     @objc private func suggestionAccept() { onSuggestionKey?(.accept) }

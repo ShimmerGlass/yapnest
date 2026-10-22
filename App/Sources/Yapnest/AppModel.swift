@@ -62,6 +62,8 @@ final class AppModel {
     var linkProblem: String?
     /// Counts the menu bar's Find in Chat, which the open chat answers.
     var chatSearchRequests = 0
+    /// Bumped by Edit Last Message in the Mac's menu; the open chat answers it.
+    var editLastRequests = 0
 
     /// How many of a chat's own sheets (settings, GIF and location pickers)
     /// are up. The menu bar's commands are off meanwhile, as SwiftUI would

@@ -148,6 +148,7 @@ struct ConversationView: View {
                 .ignoresSafeArea(.container, edges: Platform.usesChatHeader ? .top : [])
             }
             .onChange(of: model.chatSearchRequests) { search.open() }
+            .onChange(of: model.editLastRequests) { conversation.editLastMessage() }
             .blockConfirmation(isPresented: $confirmsBlock, session: session, peer: peer, name: title)
             .errorAlert("Couldn't answer", $answering.error)
             .sheet(isPresented: $showsSettings, onDismiss: {

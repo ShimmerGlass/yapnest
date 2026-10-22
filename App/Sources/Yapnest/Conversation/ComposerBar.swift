@@ -20,6 +20,7 @@ struct ComposerBar: UIViewRepresentable {
         bar.onTextChanged = { [weak model] text in model?.textChanged(text) }
         bar.onCancelReply = { [weak model] in model?.cancelReplyOrEdit() }
         bar.onAttach = { [weak picker] source in picker?.attach(from: source) }
+        bar.onEditLast = { [weak model] in model?.editLastMessage() ?? false }
         bar.onGif = { [weak model] in model?.openGifPicker() }
         bar.onAttachments = { [weak model] providers in model?.offerAttachments(providers) }
         bar.onLongText = { [weak model] text in model?.offerLongText(text) ?? false }

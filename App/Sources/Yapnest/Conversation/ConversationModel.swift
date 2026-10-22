@@ -2268,6 +2268,18 @@ final class ConversationModel {
         composer.bar?.focus()
     }
 
+    /// Starts editing the newest message of ours that can be edited, as the
+    /// Up arrow in an empty composer and the Edit Last Message command ask.
+    /// Not in a window that stops short of the newest messages: the one found
+    /// there might not be the last.
+    @discardableResult
+    func editLastMessage() -> Bool {
+        guard editingItem == nil, !isBounded,
+              let id = order.last(where: { items[$0].map(canEdit) ?? false }) else { return false }
+        startEditing(id)
+        return true
+    }
+
     func cancelReplyOrEdit() {
         if editingItem != nil {
             editingItem = nil
