@@ -208,6 +208,13 @@ final class ConversationModel {
     private var windowEnd: MessageCursor?
     /// The conversation's real end isn't loaded.
     var isBounded: Bool { windowEnd != nil }
+    /// The window was ended at the newest message when the user scrolled up
+    /// the flipped list, so messages arriving meanwhile wait below it. Flipped,
+    /// a row added at the newest end moves everything on screen by its height,
+    /// and the scroll view can't be held against that: an id scroll sent with
+    /// the row is worked out on the layout from before it, and a correction
+    /// once it's measured is undone by the scroll view on iOS 26.4 and 27.
+    @ObservationIgnored private var holdsNewest = false
     /// Moves with each `observeMessages`, so that an emission from an
     /// observation that has been replaced is ignored: it can arrive after the
     /// replacement was asked for, and carry a window nobody wants any more.
@@ -727,7 +734,9 @@ final class ConversationModel {
         let changesHeight = resizes || built.contains { row in
             previousRows[row.id].map { $0.content.item.reactions.isEmpty != row.content.item.reactions.isEmpty } ?? false
         }
-        let holdsAnchor = hasLoaded && (!wasNearBottom || bounded) && !prepended && !trimming && !jumped && !extending && !toNewest && !lastIsMine
+        // Flipped, a list on its way to the newest end gets there whatever
+        // comes in, and holding a row would stop it.
+        let holdsAnchor = hasLoaded && (!wasNearBottom || bounded) && !(isFlipped && followsBottom) && !prepended && !trimming && !jumped && !extending && !toNewest && !lastIsMine
             && (appendedBelow || changesHeight && scrollPhase == .idle)
         if holdsAnchor { keepAnchorInPlace() }
         if hasLoaded, !prepended, !trimming, !jumped, !resizes, !extending, !toNewest, !holdsAnchor {
@@ -781,6 +790,9 @@ final class ConversationModel {
             loadOlderIfNeeded()
         }
         loadNewerIfNeeded()
+        // Away from the bottom with the window open to the newest, as when
+        // newer messages loaded below a jump reached it.
+        if isAwayFromBottom { holdNewest() }
     }
 
     /// Starts a pulse for a message from the contact that landed at the
@@ -891,6 +903,8 @@ final class ConversationModel {
             // bottom; what's on screen now is what the user is looking at.
             self.markVisibleRead()
             self.loadNewerIfNeeded()
+            // Opened away from the bottom, which was reported while hidden.
+            if self.isAwayFromBottom { self.holdNewest() }
         }
     }
 
@@ -1439,13 +1453,38 @@ final class ConversationModel {
         if !away {
             isAwayFromBottom = false
             tasks.cancel("away")
+            releaseNewest()
             return
         }
         tasks["away"] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             guard let self, !Task.isCancelled, let geometry = self.geometry, Self.isAway(geometry, flipped: isFlipped) else { return }
             self.isAwayFromBottom = true
+            self.holdNewest()
         }
+    }
+
+    /// Scrolled up the flipped list, ends the window at the newest message, so
+    /// what arrives waits below it, counted on the scroll-to-end button.
+    private func holdNewest() {
+        // Not while the list is taken to the bottom, as after a send, where
+        // it reads as away until it gets there.
+        guard isFlipped, hasLoaded, isPositioned, !followsBottom, !isBounded, !pendingBottom, pendingJump == nil, !isWidening,
+              let newest = order.last.flatMap({ items[$0] })?.cursor else { return }
+        FrameLog.event("holdNewest")
+        holdsNewest = true
+        windowEnd = newest
+        observeMessages()
+    }
+
+    /// Back near the bottom, lets in what waited below, which the list then
+    /// follows down to as it does any message arriving there.
+    private func releaseNewest() {
+        guard holdsNewest else { return }
+        FrameLog.event("releaseNewest")
+        holdsNewest = false
+        windowEnd = nil
+        observeMessages()
     }
 
     static func isAway(_ geometry: ScrollGeometry, flipped: Bool) -> Bool {
@@ -1621,7 +1660,16 @@ final class ConversationModel {
         recorder?.update { $0.latestTapped() }
         #endif
         FrameLog.event("scrollToLatest bounded=\(isBounded) positioned=\(isPositioned) settling=\(jumpSettling) phase=\(scrollPhase)")
-        if isBounded { showNewest() } else { scrollToBottom(animated: true, reason: "latest", byID: true) }
+        if holdsNewest {
+            // Flipped, the newest end is the scroll view's start, which is
+            // exact whatever comes in below while the list scrolls there.
+            releaseNewest()
+            scrollToBottom(animated: true, reason: "latest")
+        } else if isBounded {
+            showNewest()
+        } else {
+            scrollToBottom(animated: true, reason: "latest", byID: true)
+        }
     }
 
     /// Replaces a bounded window with the newest messages, and lands at their
@@ -1632,6 +1680,7 @@ final class ConversationModel {
         if olderState == .complete { olderState = .idle }
         windowStart = nil
         windowEnd = nil
+        holdsNewest = false
         pendingJump = nil
         followsBottom = true
         pendingBottom = true
@@ -1815,7 +1864,7 @@ final class ConversationModel {
     private func loadNewerIfNeeded() {
         // The list's own report of being near the end only says when it changed,
         // so this looks at where it is now.
-        guard hasLoaded, isPositioned, !jumpSettling, isBounded, let geometry, Self.isNearEnd(geometry, flipped: isFlipped), !pendingBottom, tasks["newer"] == nil, tasks["older"] == nil, tasks["reveal"] == nil,
+        guard hasLoaded, isPositioned, !jumpSettling, isBounded, !holdsNewest, let geometry, Self.isNearEnd(geometry, flipped: isFlipped), !pendingBottom, tasks["newer"] == nil, tasks["older"] == nil, tasks["reveal"] == nil,
               pendingJump == nil, !isWidening, let newest = order.last.flatMap({ items[$0] })?.cursor else { return }
         let session = session, peer = peer, growth = Self.windowGrowth, generation = generation
         tasks["newer"] = Task { [weak self] in
@@ -1905,6 +1954,7 @@ final class ConversationModel {
             guard let window else { return }
             self.windowStart = window.start
             self.windowEnd = window.end
+            self.holdsNewest = false
             self.pendingJump = target
             self.isWidening = true
             self.observeMessages()

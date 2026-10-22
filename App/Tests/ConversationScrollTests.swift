@@ -64,8 +64,10 @@ struct ConversationScrollTests {
         #expect(near.model.scrollsToMissingRows == 0)
     }
 
-    @Test(arguments: [false, true]) func aMessageFromElsewhereDoesNotPullAReaderAwayFromWhatTheyAreReading(flipped: Bool) async throws {
-        let f = try await opened(distance: 3_000, flipped: flipped)
+    /// Flipped, the list holds the newest messages below instead: see
+    /// `messagesArrivingWhileScrolledUpWaitBelowTheFlippedList`.
+    @Test func aMessageFromElsewhereDoesNotPullAReaderAwayFromWhatTheyAreReading() async throws {
+        let f = try await opened(distance: 3_000, flipped: false)
         scrolledUp(f)
         let anchor = f.rowIDs[5]
 
@@ -79,6 +81,75 @@ struct ConversationScrollTests {
         #expect(f.model.scroll.messageID == anchor)
     }
 
+    /// A row added at the flipped list's newest end moves everything on
+    /// screen by its height, which the scroll view can't be held against on
+    /// iOS 27. So it waits below, counted, until the user is back down.
+    @Test func messagesArrivingWhileScrolledUpWaitBelowTheFlippedList() async throws {
+        let f = try await opened(distance: 3_000, flipped: true)
+        scrolledUp(f)
+        let shown = f.rowIDs
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+        await eventually("the newest messages were never held") { f.model.isBounded }
+        #expect(f.rowIDs == shown)
+
+        let incoming = try f.add("hello from them")
+        await eventually("the waiting message was never counted") { f.model.unreadCount == 1 }
+        #expect(f.rowIDs == shown)
+
+        f.model.geometryChanged(geometry(flipped: true, distanceFromBottom: 40))
+        f.model.awayFromBottomChanged(false)
+        await eventually("the waiting message never came in") { f.rowIDs.last == incoming.id }
+        #expect(!f.model.isBounded)
+        #expect(scrolledToNewest(f))
+    }
+
+    @Test func sendingLetsInWhatWaitedBelow() async throws {
+        let f = try await opened(distance: 3_000, flipped: true)
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+        await eventually("the newest messages were never held") { f.model.isBounded }
+        let incoming = try f.add("hello from them")
+        await eventually("the waiting message was never counted") { f.model.unreadCount == 1 }
+
+        f.model.send("hello")
+        await eventually("the message never showed") { f.model.rows.last?.message.body == "hello" }
+        #expect(f.rowIDs.contains(incoming.id!))
+        #expect(!f.model.isBounded)
+        #expect(scrolledToNewest(f))
+    }
+
+    /// Not a window replaced and a jump, as after a quote: the list scrolls
+    /// down to what waited there.
+    @Test func scrollToLatestLetsInWhatWaitedBelowAndScrollsThere() async throws {
+        let f = try await opened(distance: 3_000, flipped: true)
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+        await eventually("the newest messages were never held") { f.model.isBounded }
+        let incoming = try f.add("hello from them")
+        await eventually("the waiting message was never counted") { f.model.unreadCount == 1 }
+
+        f.model.scrollToLatest()
+        #expect(scrolledToNewest(f))
+        await eventually("the waiting message never came in") { f.rowIDs.last == incoming.id }
+        #expect(!f.model.isBounded)
+        #expect(f.model.scroll.edge == .top)
+    }
+
+    /// The Mac's list keeps its place as rows come in below.
+    @Test func theUnflippedListTakesInMessagesWhileScrolledUp() async throws {
+        let f = try await opened(distance: 3_000, flipped: false)
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!f.model.isBounded)
+        let incoming = try f.add("hello from them")
+        await eventually("the message never showed") { f.rowIDs.last == incoming.id }
+    }
+
     @Test(arguments: [false, true]) func aMessageArrivingNearTheBottomTakesTheListToIt(flipped: Bool) async throws {
         let f = try await opened(distance: 50, flipped: flipped)
         let incoming = try f.add("hello")
@@ -90,11 +161,17 @@ struct ConversationScrollTests {
         scrolledUp(f)
         f.model.send("hello")
         await eventually("the message never showed") { f.model.rows.last?.message.body == "hello" }
+        let followed = f.model.scrollRevision
 
         // The send has been followed; the next message from elsewhere is not.
+        // Flipped, the send's scroll to the start is still the last asked for.
         let incoming = try f.add("reply", at: Date().addingTimeInterval(60))
         await eventually("the reply never showed") { f.rowIDs.last == incoming.id }
-        #expect(!scrolledToNewest(f, row: incoming.id))
+        if flipped {
+            #expect(f.model.scrollRevision == followed || f.model.scroll.edge != .top)
+        } else {
+            #expect(!scrolledToNewest(f, row: incoming.id))
+        }
     }
 
     @Test(arguments: [false, true]) func onlyAMessageThatJustArrivedAtTheBottomSlidesIn(flipped: Bool) async throws {
