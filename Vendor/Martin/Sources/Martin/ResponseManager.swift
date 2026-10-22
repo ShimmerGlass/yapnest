@@ -53,6 +53,7 @@ open class ResponseManager {
     }
     
     private let queue = DispatchQueue(label: "response_manager_queue", attributes: []);
+    private let timeoutQueue = DispatchQueue(label: "response_manager_timeouts", qos: .utility);
     
     private var timer:Timer?;
     
@@ -155,12 +156,22 @@ open class ResponseManager {
     
     /// Check if any callback should be called due to timeout
     func checkTimeouts() {
-        queue.sync {
-            for (key,handler) in self.handlers {
-                if handler.checkTimeout() {
-                    self.handlers.removeValue(forKey: key);
-                    handler.callback(nil);
-                }
+        let expired: [Entry] = queue.sync {
+            let expired = self.handlers.values.filter { $0.checkTimeout() };
+            for entry in expired {
+                self.handlers.removeValue(forKey: entry.key);
+            }
+            return expired;
+        }
+        guard !expired.isEmpty else {
+            return;
+        }
+        // The timer fires on the main thread, and a callback may do slow
+        // work (a database read), so the callbacks run on a queue of their
+        // own, as answers run on the stream's.
+        timeoutQueue.async {
+            for entry in expired {
+                entry.callback(nil);
             }
         }
     }

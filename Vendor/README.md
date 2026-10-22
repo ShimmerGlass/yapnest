@@ -494,6 +494,17 @@ Each entry gives what went wrong for users, why, and what changed.
   domain and results in `XMPPDNSSrvResolver` and the JID and disco result in
   `CapabilitiesModule`, which logged them as public.
 
+**Unanswered requests failed on the main thread** (`ResponseManager.checkTimeouts`)
+- *Symptom:* the debug build crashed when a group's info request went
+  unanswered: joining it went on to read the database on the main thread.
+  The release build did the same read there, holding up the interface.
+- *Cause:* the timer that fails timed-out requests is on the main run loop,
+  and it called their callbacks there, inside the manager's lock. A
+  callback that cancelled a request would also have crashed on that lock.
+- *Fix:* the timed-out requests are taken out under the lock, and their
+  callbacks run after it on a queue of their own. Pinned by
+  `ResponseTimeoutTests`.
+
 ### MartinOMEMO
 
 **Logs named people publicly** (`OMEMOModule`)
