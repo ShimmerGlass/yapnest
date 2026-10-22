@@ -243,6 +243,37 @@ enum QuickLookPresenter {
     }
 }
 
+/// The Mac's ways with a received or sent file: opened in the app the system
+/// picks for it, Preview for a picture, or saved where the user chooses.
+/// Both work on a copy under the attachment's own name, as the stored file
+/// has a random one, which Preview would show as the title and the save
+/// panel would offer.
+@MainActor
+enum MacFileActions {
+    static func open(_ file: URL, named name: String, otherwise fallback: @escaping @MainActor @Sendable () -> Void) {
+        Task {
+            guard let copy = await named(file, name) else { return fallback() }
+            UIApplication.shared.open(copy) { opened in
+                if !opened { fallback() }
+            }
+        }
+    }
+
+    static func saveAs(_ file: URL, named name: String) {
+        Task {
+            guard let copy = await named(file, name) else { return }
+            Presenter.present(UIDocumentPickerViewController(forExporting: [copy], asCopy: true))
+        }
+    }
+
+    /// Off the main thread: a file can be a large video.
+    private static func named(_ file: URL, _ name: String) async -> URL? {
+        await Task.detached(priority: .userInitiated) {
+            try? FileManager.default.copyIntoUniqueFolder(file, named: name, under: FileManager.default.temporaryDirectory)
+        }.value
+    }
+}
+
 @MainActor
 private final class QuickLookCoordinator: NSObject, QLPreviewControllerDataSource, @preconcurrency QLPreviewControllerDelegate {
     let item: QuickLookItem

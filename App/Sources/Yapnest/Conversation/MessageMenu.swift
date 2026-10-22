@@ -29,6 +29,9 @@ struct MessageMenu: View {
         if item.attachment != nil {
             if let file = model.shareableFile(of: item) {
                 ShareLink(item: file) { Label("Share", systemImage: "square.and.arrow.up") }
+                if Platform.isMac, let name = item.attachment?.name {
+                    Button("Save As…", systemImage: "square.and.arrow.down") { MacFileActions.saveAs(file, named: name) }
+                }
             }
         } else if message.encryption != .omemoUndecryptable {
             // An undecryptable message's body is only the sender's fallback notice.

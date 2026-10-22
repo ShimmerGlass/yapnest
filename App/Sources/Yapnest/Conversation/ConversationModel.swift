@@ -2439,8 +2439,12 @@ final class ConversationModel {
         case .unavailable:
             break
         case .ready, .pendingUpload:
-            if let file = session.attachments.url(for: attachment) {
-                QuickLookPresenter.show(file, title: attachment.name, from: id)
+            guard let file = session.attachments.url(for: attachment) else { return }
+            let quickLook: @MainActor @Sendable () -> Void = { QuickLookPresenter.show(file, title: attachment.name, from: id) }
+            if Platform.isMac, attachment.isImage {
+                MacFileActions.open(file, named: attachment.name, otherwise: quickLook)
+            } else {
+                quickLook()
             }
         }
     }

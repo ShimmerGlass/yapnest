@@ -95,10 +95,12 @@ targets:
         # First, so it's where the keychain puts the account by default.
         keychain-access-groups: [$(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).shared]
         # The Mac's sandbox; iOS ignores these. Files to send come from the
-        # document picker, which grants access to what's picked.
+        # document picker, which grants access to what's picked. Save As
+        # writes where the user chooses: with read-only, the save panel
+        # refuses to show and leaves the window behind an invisible sheet.
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
-        com.apple.security.files.user-selected.read-only: true
+        com.apple.security.files.user-selected.read-write: true
         # A call's UDP sockets take STUN and TURN answers and the peer's
         # connectivity checks, which the sandbox counts as incoming: with only
         # network.client, reading them fails with EPERM and a call never connects.
