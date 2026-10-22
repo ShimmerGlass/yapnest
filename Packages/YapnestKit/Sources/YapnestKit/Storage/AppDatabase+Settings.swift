@@ -73,8 +73,10 @@ extension AppDatabase {
         /// Set once the composer's old per-device shortcode recents are taken
         /// into `reactionRanking`: see `importEmojiRecents`.
         case emojiRecentsImported
-        /// Set when the welcome screen that asks for the privacy settings has
-        /// been answered. Not synced: each install asks once.
+        /// The welcome screen that asks for the privacy settings: `pending`
+        /// from the first sign-in until it is answered (`1`), so a launch in
+        /// between asks again. Unset on an install from before it existed,
+        /// which isn't asked. Not synced: each install asks once.
         case welcomeShown
     }
 

@@ -197,16 +197,7 @@ final class AppModel {
                 // Opening the database can migrate it, so it stays on the
                 // loading screen until a background task is done.
                 Task {
-                    do {
-                        let session = try await makeSession(saved)
-                        phase = .signedIn(session)
-                        connect(session)
-                        didSignIn(session)
-                        applyScenePhase(to: session)
-                    } catch {
-                        DiagLog.error(.app, "Failed to restore account", .error(error))
-                        phase = .signedOut
-                    }
+                    await restoreSession(saved)
                     isStarting = false
                 }
                 return
@@ -219,6 +210,22 @@ final class AppModel {
     }
 
     @ObservationIgnored private var isStarting = false
+
+    /// Signs in to the saved account. A welcome the last run was closed
+    /// before answering is shown again.
+    func restoreSession(_ saved: XMPPSession.Credentials) async {
+        do {
+            let session = try await makeSession(saved)
+            showsWelcome = await offMain { (try? session.database.setting(.welcomeShown)) == "pending" }
+            phase = .signedIn(session)
+            connect(session)
+            didSignIn(session)
+            applyScenePhase(to: session)
+        } catch {
+            DiagLog.error(.app, "Failed to restore account", .error(error))
+            phase = .signedOut
+        }
+    }
 
     #if DEBUG
     /// Signs in to a fixture's account, filled from scratch on every launch.
@@ -280,7 +287,11 @@ final class AppModel {
                     throw error
                 }
                 SharedContainer.defaults.set(true, forKey: "keychainShared")
-                showsWelcome = await offMain { (try? session.database.setting(.welcomeShown)) == nil }
+                // Recorded as pending, so a launch before Continue asks again.
+                showsWelcome = await offMain {
+                    guard (try? session.database.setting(.welcomeShown)) == nil else { return false }
+                    return (try? session.database.setSetting(.welcomeShown, "pending")) != nil
+                }
                 phase = .signedIn(session)
                 didSignIn(session)
                 applyScenePhase(to: session)

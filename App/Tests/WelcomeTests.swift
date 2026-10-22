@@ -21,7 +21,7 @@ struct WelcomeTests {
         let model = fixture.model!
         try await model.signIn(fixture.credentialsToSignIn)
         let session = try #require(model.session)
-        #expect(try await offMain { try session.database.setting(.welcomeShown) } == nil)
+        #expect(try await offMain { try session.database.setting(.welcomeShown) } == "pending")
 
         try await model.finishWelcome()
 
@@ -37,5 +37,38 @@ struct WelcomeTests {
         model.signOut()
 
         #expect(!model.showsWelcome)
+    }
+
+    @Test func aLaunchBeforeContinueAsksAgain() async throws {
+        let fixture = AppModelFixture()
+        try await fixture.model.signIn(fixture.credentialsToSignIn)
+
+        fixture.relaunch()
+        #expect(!fixture.model.showsWelcome)
+        await fixture.model.restoreSession(fixture.credentialsToSignIn)
+
+        #expect(fixture.model.showsWelcome)
+    }
+
+    @Test func aLaunchAfterContinueDoesNotAsk() async throws {
+        let fixture = AppModelFixture()
+        try await fixture.model.signIn(fixture.credentialsToSignIn)
+        try await fixture.model.finishWelcome()
+
+        fixture.relaunch()
+        await fixture.model.restoreSession(fixture.credentialsToSignIn)
+
+        #expect(fixture.model.session != nil)
+        #expect(!fixture.model.showsWelcome)
+    }
+
+    @Test func anInstallFromBeforeTheWelcomeIsNotAsked() async throws {
+        let fixture = AppModelFixture()
+
+        await fixture.model.restoreSession(fixture.credentialsToSignIn)
+
+        let session = try #require(fixture.model.session)
+        #expect(try await offMain { try session.database.setting(.welcomeShown) } == nil)
+        #expect(!fixture.model.showsWelcome)
     }
 }

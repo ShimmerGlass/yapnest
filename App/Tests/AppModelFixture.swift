@@ -41,6 +41,7 @@ final class AppModelFixture {
     let credentials = FakeCredentials()
     let account = JID("me-\(UUID().uuidString.prefix(8).lowercased())@example.com")!
     private(set) var model: AppModel!
+    private var environment = AppModel.Environment()
     private(set) var connects: [XMPPSession] = []
     /// Whether a connection attempt ends with the server accepting the session.
     var accepts = true
@@ -63,7 +64,6 @@ final class AppModelFixture {
         lock = ProcessLock(url: root.appending(path: "session.lock"))
         otherProcess = ProcessLock(url: root.appending(path: "session.lock"))
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        var environment = AppModel.Environment()
         environment.credentials = credentials
         environment.sessionLock = lock
         environment.lockTimeout = lockTimeout
@@ -91,6 +91,13 @@ final class AppModelFixture {
             session.state.send(.connecting)
             session.state.send(.connected(isSyncing: false))
         }
+        model = AppModel(environment: environment)
+    }
+
+    /// A new launch of the app over the same account folder and keychain,
+    /// after the last one went away without signing out.
+    func relaunch() {
+        lock.unlock()
         model = AppModel(environment: environment)
     }
 
