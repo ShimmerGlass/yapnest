@@ -261,8 +261,12 @@ final class ConversationModel {
     #if DEBUG
     /// What the list did frame by frame, for UI tests. Nil unless asked for.
     @ObservationIgnored let recorder = ScrollRecorder.makeIfEnabled()
+    /// Scrolls aimed at a newest row the list didn't have yet, for the tests.
+    @ObservationIgnored private(set) var scrollsToMissingRows = 0
     #endif
     @ObservationIgnored private var isNearTop = false
+    /// The rows being applied bring a newest row the list follows to.
+    @ObservationIgnored private var followsWithRows = false
     /// A jump has just scrolled the list. The near-top and near-end flags the
     /// list reported before it are stale until it has landed, and growing the
     /// window on them would shift the rows around the target.
@@ -678,7 +682,15 @@ final class ConversationModel {
             // follows its bottom edge.
             keepAnchorInPlace()
         } else if lastIsMine || (wasNearBottom && !isAtBottomEdge && !bounded) {
-            scrollToBottom(animated: !reshapeOnly && !prepended && !trimming, reason: "rowsChanged.follow")
+            if isFlipped {
+                scrollToBottom(animated: !reshapeOnly && !prepended && !trimming, reason: "rowsChanged.follow")
+            } else {
+                // Unflipped the list is taken to the new row by its id, and
+                // that row only exists once the rows are replaced below. Sent
+                // ahead of it, in an animation of its own, the scroll aimed at
+                // a guess while the row slid in on another curve, and stuttered.
+                followsWithRows = true
+            }
         } else if prepended, !wasNearBottom || bounded, !isFlipped {
             // Flipped, older rows come in past the far end of the scroll
             // view and leave every offset where it is.
@@ -692,6 +704,7 @@ final class ConversationModel {
         #endif
         let previousRows = rowsByID
         let built = buildRows()
+        defer { followsWithRows = false }
         // Rows the user sees changing in place animate, and so do new ones.
         // Not older rows, a trimmed window or a jump, which move rows that
         // must stay put. Nor a bubble whose text or media changed: it resizes
@@ -727,9 +740,11 @@ final class ConversationModel {
             withAnimation(.easeOut(duration: 0.25)) {
                 if arrivingIDs != arriving { arrivingIDs = arriving }
                 replaceRows(built)
-                // Flipped, the newest row's end is the scroll view's resting
-                // point, and it grows away from it.
-                if holdsBottom, !isFlipped, let last = order.last {
+                if followsWithRows {
+                    followNewestRow()
+                } else if holdsBottom, !isFlipped, let last = order.last {
+                    // Flipped, the newest row's end is the scroll view's
+                    // resting point, and it grows away from it.
                     FrameLog.event("scroll.scrollTo holdsBottom id=\(last) bottom")
                     scrollToNewestRow(last)
                 }
@@ -738,6 +753,7 @@ final class ConversationModel {
             withoutAnimation {
                 if !arrivingIDs.isEmpty { arrivingIDs = [] }
                 replaceRows(built)
+                if followsWithRows { followNewestRow() }
             }
         }
         if !arrivingIDs.isEmpty {
@@ -1533,6 +1549,15 @@ final class ConversationModel {
         }
     }
 
+    /// Follows the list to the newest row in the transaction that puts it in
+    /// the rows, so the scroll and the row's arrival move as one.
+    private func followNewestRow() {
+        guard let last = order.last else { return }
+        FrameLog.event("scrollToBottom withRows reason=rowsChanged.follow")
+        followsBottom = !isBounded
+        scrollToNewestRow(last)
+    }
+
     private func withoutAnimation(_ body: () -> Void) {
         var transaction = Transaction()
         transaction.disablesAnimations = true
@@ -1557,6 +1582,9 @@ final class ConversationModel {
     /// reports, and the list is left without any rows reported; the row by
     /// its id brings it in.
     private func scrollToNewestRow(_ last: Int64, byID: Bool = false) {
+        #if DEBUG
+        if !isFlipped || byID, rows.last?.id != last { scrollsToMissingRows += 1 }
+        #endif
         if isFlipped, !byID {
             scroll.scrollTo(edge: .top)
         } else {

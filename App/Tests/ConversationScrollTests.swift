@@ -46,6 +46,24 @@ struct ConversationScrollTests {
         #expect(scrolledToNewest(f, row: sent.id))
     }
 
+    /// Unflipped the list is taken to the new row by its id. Sent before the
+    /// row was in the list, in an animation of its own, the scroll aimed at a
+    /// guess while the row slid in on another curve, and the Mac stuttered.
+    @Test func theListFollowsToANewRowOnlyOnceItIsInTheList() async throws {
+        let f = try await opened(distance: 3_000, flipped: false)
+        scrolledUp(f)
+        f.model.send("hello")
+        await eventually("the message never showed") { f.model.rows.last?.message.body == "hello" }
+        #expect(scrolledToNewest(f))
+
+        let near = try await opened(distance: 50, flipped: false)
+        let incoming = try near.add("hello")
+        await eventually("the list never followed") { scrolledToNewest(near, row: incoming.id) }
+
+        #expect(f.model.scrollsToMissingRows == 0)
+        #expect(near.model.scrollsToMissingRows == 0)
+    }
+
     @Test(arguments: [false, true]) func aMessageFromElsewhereDoesNotPullAReaderAwayFromWhatTheyAreReading(flipped: Bool) async throws {
         let f = try await opened(distance: 3_000, flipped: flipped)
         scrolledUp(f)
