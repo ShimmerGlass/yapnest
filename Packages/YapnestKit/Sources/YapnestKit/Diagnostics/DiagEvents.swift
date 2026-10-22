@@ -118,3 +118,40 @@ enum LivenessOutcome: String, DiagEnum {
 enum AbortCause: String, DiagEnum {
     case watchdog, noAnswer, networkChanged, insecure
 }
+
+/// The kind of an ICE candidate, which says whether a call found a direct
+/// path or only a relayed one.
+public enum CallCandidateKind: String, DiagEnum {
+    case host, srflx, prflx, relay, unknown
+
+    public init(sdpType: String?) {
+        self = sdpType.flatMap(CallCandidateKind.init(rawValue:)) ?? .unknown
+    }
+}
+
+/// Where a call is, without the reason it ended (`CallEndKind` has that).
+enum CallPhaseKind: String, DiagEnum {
+    case proposing, ringing, incoming, accepted, connecting, active, ended
+
+    init(_ phase: CallPhase) {
+        switch phase {
+        case .proposing: self = .proposing
+        case .ringing: self = .ringing
+        case .incoming: self = .incoming
+        case .accepted: self = .accepted
+        case .connecting: self = .connecting
+        case .active: self = .active
+        case .ended: self = .ended
+        }
+    }
+}
+
+/// A Jingle message of ours the peer refused.
+enum CallRefusedAction: String, DiagEnum {
+    case transportInfo, sessionTerminate
+}
+
+/// How looking for the server's relays ended.
+enum RelayDiscoveryOutcome: String, DiagEnum {
+    case found, none, unavailable, timedOut, failed
+}

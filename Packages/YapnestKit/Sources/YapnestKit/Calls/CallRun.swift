@@ -19,6 +19,9 @@ final class CallRun: @unchecked Sendable {
     private var remoteNegotiation: CallJingle.Negotiation?
     private var contents: [Jingle.Content] = []
 
+    /// The candidates seen, for the log of how a call connected.
+    let candidates = CallCandidateTally()
+
     init(sid: String) {
         self.sid = sid
     }
@@ -178,4 +181,25 @@ enum CallRunError: Error {
     case closed
     /// The media's description couldn't be turned into Jingle, or back.
     case badDescription
+}
+
+/// How many candidates of each kind each side has brought, for working out
+/// from the log whether a call connected on a direct path.
+final class CallCandidateTally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var local: [CallCandidateKind: Int] = [:]
+    private var remote: [CallCandidateKind: Int] = [:]
+
+    /// Counts a candidate and says whether it is its side's first.
+    func add(_ kind: CallCandidateKind, isLocal: Bool) -> Bool {
+        lock.withLock {
+            let wasEmpty = (isLocal ? local : remote).isEmpty
+            if isLocal { local[kind, default: 0] += 1 } else { remote[kind, default: 0] += 1 }
+            return wasEmpty
+        }
+    }
+
+    func counts(isLocal: Bool) -> [CallCandidateKind: Int] {
+        lock.withLock { isLocal ? local : remote }
+    }
 }

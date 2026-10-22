@@ -25,7 +25,7 @@ public enum CallPhase: Sendable, Equatable {
     public var isAwaitingAnswer: Bool { self == .proposing || self == .ringing }
 }
 
-public enum CallEndReason: Sendable, Equatable {
+public enum CallEndReason: String, Sendable, Equatable, CaseIterable, DiagEnum {
     /// Hung up after talking, by either side.
     case completed
     /// We declined, or the peer did.

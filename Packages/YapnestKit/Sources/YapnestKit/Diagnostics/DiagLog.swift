@@ -22,18 +22,36 @@ public enum DiagLog {
     }
 
     public static func debug(_ category: DiagCategory, _ message: StaticString, _ fields: DiagField...) {
-        log(.debug, category, message, fields)
+        debug(category, message, fields: fields)
     }
 
     public static func info(_ category: DiagCategory, _ message: StaticString, _ fields: DiagField...) {
-        log(.info, category, message, fields)
+        info(category, message, fields: fields)
     }
 
     public static func notice(_ category: DiagCategory, _ message: StaticString, _ fields: DiagField...) {
-        log(.notice, category, message, fields)
+        notice(category, message, fields: fields)
     }
 
     public static func error(_ category: DiagCategory, _ message: StaticString, _ fields: DiagField...) {
+        error(category, message, fields: fields)
+    }
+
+    /// For a line whose fields depend on what was measured, which a variadic
+    /// call can't leave out.
+    public static func debug(_ category: DiagCategory, _ message: StaticString, fields: [DiagField]) {
+        log(.debug, category, message, fields)
+    }
+
+    public static func info(_ category: DiagCategory, _ message: StaticString, fields: [DiagField]) {
+        log(.info, category, message, fields)
+    }
+
+    public static func notice(_ category: DiagCategory, _ message: StaticString, fields: [DiagField]) {
+        log(.notice, category, message, fields)
+    }
+
+    public static func error(_ category: DiagCategory, _ message: StaticString, fields: [DiagField]) {
         log(.error, category, message, fields)
     }
 

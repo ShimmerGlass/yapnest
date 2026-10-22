@@ -72,15 +72,34 @@ enum CoreAudioDevices {
 
     /// Seconds a sample takes to get through the device, as it reports it.
     static func latency(of device: CallAudioDevice, _ scope: Scope, sampleRate: Double) -> TimeInterval {
-        func frames(_ selector: AudioObjectPropertySelector) -> UInt32 {
-            var address = address(selector, scope: scope.coreAudio)
-            var value: UInt32 = 0
-            var size = UInt32(MemoryLayout<UInt32>.size)
-            _ = AudioObjectGetPropertyData(device.objectID, &address, 0, nil, &size, &value)
-            return value
-        }
         guard sampleRate > 0 else { return 0 }
-        return Double(frames(kAudioDevicePropertyLatency) + frames(kAudioDevicePropertySafetyOffset)) / sampleRate
+        let frames = property(device, kAudioDevicePropertyLatency, scope: scope.coreAudio, UInt32.self)
+            + property(device, kAudioDevicePropertySafetyOffset, scope: scope.coreAudio, UInt32.self)
+        return Double(frames) / sampleRate
+    }
+
+    /// What the hardware itself runs at, which the unit converts to and from.
+    struct Hardware {
+        var sampleRate: Double
+        var bufferFrames: Int
+    }
+
+    static func hardware(of device: CallAudioDevice) -> Hardware {
+        Hardware(
+            sampleRate: property(device, kAudioDevicePropertyNominalSampleRate, Float64.self),
+            bufferFrames: Int(property(device, kAudioDevicePropertyBufferFrameSize, UInt32.self)))
+    }
+
+    /// A number of the device's, 0 where it can't say.
+    private static func property<Value: Numeric>(
+        _ device: CallAudioDevice, _ selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal, _: Value.Type,
+    ) -> Value {
+        var address = address(selector, scope: scope)
+        var value: Value = 0
+        var size = UInt32(MemoryLayout<Value>.size)
+        _ = AudioObjectGetPropertyData(device.objectID, &address, 0, nil, &size, &value)
+        return value
     }
 
     private static func device(_ id: AudioObjectID, _ scope: Scope) -> CallAudioDevice? {

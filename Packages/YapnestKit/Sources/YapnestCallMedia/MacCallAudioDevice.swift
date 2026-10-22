@@ -2,7 +2,7 @@
 import AudioToolbox
 import CoreAudio
 import Foundation
-import os
+import YapnestKit
 @preconcurrency import WebRTC
 
 /// A call's microphone and speaker on the Mac, with the choice of both that
@@ -25,7 +25,6 @@ import os
 /// read only what is set before the unit starts, so they take no lock and
 /// allocate nothing.
 final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
-    private static let logger = Logger(subsystem: "Yapnest", category: "Calls")
     private static let fallbackSampleRate = 48_000.0
     private static let bufferDuration: TimeInterval = 0.01
 
@@ -139,7 +138,10 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         // between listing and binding) shouldn't end the call.
         guard let engine = Engine(device: self, delegate: delegate, useChoices: true)
             ?? Engine(device: self, delegate: delegate, useChoices: false)
-        else { return false }
+        else {
+            DiagLog.error(.calls, "Call audio unit could not be made", .bool("records", recording), .bool("plays", playing))
+            return false
+        }
         self.engine = engine
         inputLatencySeconds = engine.inputLatency
         outputLatencySeconds = engine.outputLatency
@@ -151,12 +153,32 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
             delegate.notifyAudioOutputParametersChange()
         }
         guard engine.start() else {
-            Self.logger.error("Call audio unit failed to start")
+            DiagLog.error(.calls, "Call audio unit failed to start", .bool("records", engine.records), .bool("plays", engine.plays))
             engine.shutDown()
             self.engine = nil
             return false
         }
+        logStarted(engine, interrupted: interrupted)
         return true
+    }
+
+    /// What the unit runs at, for working out where a call's delay is. The
+    /// devices themselves are never named.
+    private func logStarted(_ engine: Engine, interrupted: Bool) {
+        var fields: [DiagField] = [
+            .bool("rebound", interrupted), .bool("records", engine.records), .bool("plays", engine.plays),
+            .int("webrtcInputRate", Int(inputRate)), .int("webrtcOutputRate", Int(outputRate)),
+            .duration("inputLatency", engine.inputLatency), .duration("outputLatency", engine.outputLatency),
+        ]
+        if let device = engine.inputDevice {
+            let hardware = CoreAudioDevices.hardware(of: device)
+            fields += [.int("inputDeviceRate", Int(hardware.sampleRate)), .int("inputDeviceBuffer", hardware.bufferFrames)]
+        }
+        if let device = engine.outputDevice {
+            let hardware = CoreAudioDevices.hardware(of: device)
+            fields += [.int("outputDeviceRate", Int(hardware.sampleRate)), .int("outputDeviceBuffer", hardware.bufferFrames)]
+        }
+        DiagLog.info(.calls, "Call audio unit started", fields: fields)
     }
 
     /// A device came or went, a default moved, or the user chose another.
@@ -167,9 +189,9 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         let input = engine.records ? CoreAudioDevices.resolved(uid: choices.inputUID, .input)?.uid : nil
         let output = CoreAudioDevices.resolved(uid: choices.outputUID, .output)?.uid
         guard input != engine.inputUID || output != engine.outputUID else { return }
-        Self.logger.info("Call audio devices changed, rebinding")
+        DiagLog.info(.calls, "Call audio devices changed, rebinding")
         if !reconfigure(interrupted: true) {
-            Self.logger.error("Call audio could not follow the change of device")
+            DiagLog.error(.calls, "Call audio could not follow the change of device")
         }
     }
 
@@ -177,8 +199,10 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
     private final class Engine {
         let records: Bool
         let plays: Bool
-        private(set) var inputUID: String?
-        private(set) var outputUID: String?
+        private(set) var inputDevice: CallAudioDevice?
+        private(set) var outputDevice: CallAudioDevice?
+        var inputUID: String? { inputDevice?.uid }
+        var outputUID: String? { outputDevice?.uid }
         private(set) var inputLatency: TimeInterval = 0
         private(set) var outputLatency: TimeInterval = 0
 
@@ -225,12 +249,12 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
             if records {
                 guard let input = CoreAudioDevices.resolved(uid: useChoices ? choices.inputUID : nil, .input),
                     bind(unit, input, element: 1) else { return false }
-                inputUID = input.uid
+                inputDevice = input
                 inputLatency = CoreAudioDevices.latency(of: input, .input, sampleRate: device.inputRate) + MacCallAudioDevice.bufferDuration
             }
             guard let output = CoreAudioDevices.resolved(uid: useChoices ? choices.outputUID : nil, .output),
                 bind(unit, output, element: 0) else { return false }
-            outputUID = output.uid
+            outputDevice = output
             outputLatency = CoreAudioDevices.latency(of: output, .output, sampleRate: device.outputRate) + MacCallAudioDevice.bufferDuration
 
             // The unit converts between these and the hardware's format.

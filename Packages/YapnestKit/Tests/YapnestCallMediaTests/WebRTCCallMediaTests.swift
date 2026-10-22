@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import YapnestKit
 @preconcurrency import WebRTC
-@_spi(Testing) import YapnestCallMedia
+@_spi(Testing) @testable import YapnestCallMedia
 
 @Suite("WebRTC call media")
 struct WebRTCCallMediaTests {
@@ -108,6 +108,11 @@ struct WebRTCCallMediaTests {
             for _ in 0..<100 where remote.count < 5 { try? await Task.sleep(for: .milliseconds(100)) }
             #expect(remote.count >= 5)
             #expect(local.count >= 1)
+            let reading = await calleeMedia.statistics().map(CallStatsReading.init)
+            #expect(reading?.path?.local == .host)
+            #expect(reading?.roundTripTime != nil)
+            #expect(reading?.videoIn?.framesDecoded != nil)
+            #expect(reading?.videoOut != nil)
             calleeMedia.removeRenderer(remote, for: .remote)
             calleeMedia.setCameraEnabled(false)
             calleeMedia.setCameraEnabled(true)

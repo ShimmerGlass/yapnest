@@ -76,3 +76,57 @@ struct DiagnosticsInstrumentationTests {
         #expect(!text.contains("secret-domain"))
     }
 }
+
+/// What a call leaves in the log: where its time went, and nothing of who it
+/// was with or where they are.
+extension DiagnosticsInstrumentationTests {
+    @Test func aCallLogsItsPhasesCandidatesAndTimingsButNoSessionIdOrAddress() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "diag-\(UUID().uuidString)")
+        let store = DiagnosticsStore(directory: directory, process: .app, flushInterval: 60)
+        DiagLog.use(store)
+        defer { DiagLog.use(nil) }
+
+        let h = try CallSessionHarness()
+        try h.session.startCall(to: YapnestKit.JID("alice@example.org")!)
+        let sid = try #require(h.session.callState.value?.sid)
+        h.receive(h.jmi("proceed", sid: sid))
+        await eventually("the session-initiate") { !h.jingleIqs("session-initiate").isEmpty }
+        let media = try #require(h.factory.last)
+        media.emit(.candidate(CallCandidate(sdpMid: "0", sdpMLineIndex: 0, sdp: "candidate:1 1 udp 2122260223 10.0.0.2 40000 typ host generation 0 ufrag FakeU network-id 1")))
+        // One candidate comes inside the answer, which reaches the media with
+        // the description, and one as transport-info.
+        try h.receive(iq: h.sessionAccept(sid: sid).replacingOccurrences(of: "</transport>", with: """
+            <candidate component='1' foundation='2' generation='0' id='b' ip='203.0.113.9' network='0' port='4141' priority='1' protocol='udp' type='host'/></transport>
+            """))
+        try h.receive(iq: """
+            <iq from='alice@example.org/phone' to='me@example.org/phone' type='set' id='t'><jingle xmlns='urn:xmpp:jingle:1' action='transport-info' sid='\(sid)'>\
+            <content creator='initiator' name='0'><transport xmlns='urn:xmpp:jingle:transports:ice-udp:1' ufrag='Yy11' pwd='anothersecretanothersecret'>\
+            <candidate component='1' foundation='3' generation='0' id='c' ip='198.51.100.7' network='0' port='4242' priority='1' protocol='udp' type='relay'/>\
+            </transport></content></jingle></iq>
+            """)
+        await eventually("the candidate to reach the media") { media.remoteCandidates.count == 1 && media.answersSet.count == 1 }
+        media.emit(.state(.connected))
+        await eventually("the call to be active") { h.phase == .active }
+        h.session.hangUpCall()
+        await eventually("the media to close") { media.isClosed }
+
+        let text = try String(contentsOf: DiagnosticsExport.make(store: store), encoding: .utf8)
+        // Other suites' calls log into the same store while this one runs.
+        let mine = text.split(separator: "\n").filter { $0.contains("sid=\(Redacted.id(sid).hex)") }.joined(separator: "\n")
+        for line in ["Call phase", "Call local candidate", "Call remote candidate", "Call media sid", "Call media started"] {
+            #expect(mine.contains(line), "\(line)")
+        }
+        #expect(mine.contains("phase=active"))
+        #expect(mine.contains("phase=ended reason=completed"))
+        #expect(mine.contains("type=relay"))
+        #expect(mine.contains("state=connected"))
+        #expect(mine.contains("localHost=1"))
+        #expect(mine.contains("remoteHost=1"))
+        #expect(mine.contains("remoteRelay=1"))
+        #expect(mine.contains("sinceAnswered="))
+        #expect(text.contains("Call relays ready"))
+        for secret in [sid, "alice", "example.org", "10.0.0.2", "198.51.100.7", "203.0.113.9", "FakeU", "anothersecret"] {
+            #expect(!text.contains(secret), "\(secret)")
+        }
+    }
+}

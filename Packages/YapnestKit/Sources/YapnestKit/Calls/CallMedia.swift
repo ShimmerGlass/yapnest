@@ -29,7 +29,7 @@ public struct CallCandidate: Sendable, Hashable {
     }
 }
 
-public enum CallMediaState: Sendable, Hashable {
+public enum CallMediaState: String, Sendable, Hashable, CaseIterable, DiagEnum {
     case connecting
     case connected
     /// Lost for now; ICE may still recover it.

@@ -3,8 +3,6 @@ import Foundation
 @preconcurrency import Martin
 import os
 
-private let callLogger = Logger(subsystem: "Yapnest", category: "Calls")
-
 /// Audio and video calls (XEP-0353 ringing, XEP-0166 sessions). `CallMachine`
 /// decides what a call does with each message and tap; this runs what it asks
 /// for, with Martin's Jingle module for the session and `CallMedia` for the
@@ -234,17 +232,68 @@ extension XMPPSession {
     }
 
     /// One line per change of a call's phase, for working out in the field
-    /// where a call stopped. The peer is private, as it is anywhere else.
+    /// where a call stopped and where the time went. The peer is private, as
+    /// it is anywhere else.
     private func logCall(_ machine: CallMachine) {
-        callLogger.info("Call \(machine.sid, privacy: .public) \(machine.direction == .outgoing ? "outgoing" : "incoming", privacy: .public): \(String(describing: machine.phase), privacy: .public)")
+        var fields = Self.callFields(machine) + [
+            .bool("outgoing", machine.direction == .outgoing), .bool("video", machine.wantsVideo),
+            .value("phase", CallPhaseKind(machine.phase)),
+        ]
+        if case .ended(let reason) = machine.phase { fields.append(.value("reason", reason)) }
+        DiagLog.info(.calls, "Call phase", fields: fields)
+    }
+
+    /// What every line of a call carries: its id, and the time since it was
+    /// proposed and, once answered, since it was.
+    private static func callFields(_ machine: CallMachine) -> [DiagField] {
+        var fields: [DiagField] = [.id("sid", Redacted.id(machine.sid)), .duration("sinceProposed", since: machine.proposedAt)]
+        if let answeredAt = machine.answeredAt { fields.append(.duration("sinceAnswered", since: answeredAt)) }
+        return fields
+    }
+
+    /// For a line written outside the machine's own step; the id alone if the
+    /// call is gone.
+    private func callFields(sid: String) -> [DiagField] {
+        call(sid: sid).map { Self.callFields($0.machine) } ?? [.id("sid", Redacted.id(sid))]
     }
 
     /// The `typ` of a candidate (host, srflx, prflx or relay), which says
     /// whether a call could connect directly or only through the relay.
-    static func candidateType(_ candidate: CallCandidate) -> String {
+    static func candidateType(_ candidate: CallCandidate) -> CallCandidateKind {
         let parts = candidate.sdp.split(separator: " ")
-        guard let index = parts.firstIndex(of: "typ"), parts.indices.contains(index + 1) else { return "unknown" }
-        return String(parts[index + 1])
+        guard let index = parts.firstIndex(of: "typ"), parts.indices.contains(index + 1) else { return .unknown }
+        return CallCandidateKind(sdpType: String(parts[index + 1]))
+    }
+
+    private func logCandidate(_ candidate: CallCandidate, run: CallRun, isLocal: Bool) {
+        let kind = Self.candidateType(candidate)
+        let first = run.candidates.add(kind, isLocal: isLocal)
+        DiagLog.info(.calls, isLocal ? "Call local candidate" : "Call remote candidate",
+                     fields: callFields(sid: run.sid) + [.value("type", kind), .bool("first", first)])
+    }
+
+    /// The candidates that came inside the peer's offer or answer, which
+    /// reach the media with the description and not as transport-info.
+    private func logRemoteCandidates(in remote: CallJingle.Negotiation, run: CallRun) {
+        let mids = remote.contents.map(\.name)
+        for candidate in CallJingle.candidates(in: remote.contents, mids: mids) {
+            logCandidate(candidate, run: run, isLocal: false)
+        }
+    }
+
+    private func logMedia(_ state: CallMediaState, run: CallRun, sid: String) {
+        var fields = callFields(sid: sid) + [.value("state", state)]
+        if state == .connected {
+            let local = run.candidates.counts(isLocal: true)
+            let remote = run.candidates.counts(isLocal: false)
+            fields += [
+                .int("localHost", local[.host] ?? 0), .int("localSrflx", local[.srflx] ?? 0),
+                .int("localPrflx", local[.prflx] ?? 0), .int("localRelay", local[.relay] ?? 0),
+                .int("remoteHost", remote[.host] ?? 0), .int("remoteSrflx", remote[.srflx] ?? 0),
+                .int("remotePrflx", remote[.prflx] ?? 0), .int("remoteRelay", remote[.relay] ?? 0),
+            ]
+        }
+        DiagLog.info(.calls, "Call media", fields: fields)
     }
 
     /// The call `sid` names, and with a `peer`, only if that is its session's
@@ -275,10 +324,10 @@ extension XMPPSession {
         guard let run = call(sid: sid, peer: jid)?.run else { return false }
         // After the work already queued, which sets the description they belong to.
         callQueue.async {
-            run.enqueue({
+            run.enqueue({ [weak self] in
                 let media = try await run.readyMedia()
                 for candidate in CallJingle.candidates(in: contents, mids: run.mids) {
-                    callLogger.info("Call \(sid, privacy: .public) remote candidate: \(Self.candidateType(candidate), privacy: .public)")
+                    self?.logCandidate(candidate, run: run, isLocal: false)
                     try? await media.addRemoteCandidate(candidate)
                 }
             }, failed: {})
@@ -417,7 +466,7 @@ extension XMPPSession {
             applyAnswer(run: run, sid: sid)
         case .terminateSession(let device, let reason):
             jingle?.terminateSession(with: Martin.JID(device), sid: sid, reason: reason.jingle) { result in
-                if case .failure(let error) = result { Self.logRefused("session-terminate", sid: sid, error) }
+                if case .failure(let error) = result { self.logRefused(.sessionTerminate, sid: sid, error) }
             }
         case .armTimer(let seconds, let token):
             run.setTimer(Task { [weak self] in
@@ -459,12 +508,15 @@ extension XMPPSession {
             guard let self, let factory = self.callMedia else { throw CallRunError.closed }
             let servers = await self.discoverIceServers()
             let media = factory.makeMedia()
+            let startedAt = Date()
             do {
                 try await media.start(iceServers: servers, video: video)
             } catch {
                 media.close()
+                DiagLog.error(.calls, "Call media failed to start", fields: self.callFields(sid: sid) + [.duration("took", since: startedAt), .error(error)])
                 throw error
             }
+            DiagLog.info(.calls, "Call media started", fields: self.callFields(sid: sid) + [.bool("video", video), .duration("took", since: startedAt)])
             self.follow(media, run: run, sid: sid)
             return media
         }, failed: { [weak self] in self?.failCall(sid) })
@@ -477,10 +529,10 @@ extension XMPPSession {
                 guard let self else { return }
                 switch event {
                 case .candidate(let candidate):
-                    callLogger.info("Call \(sid, privacy: .public) local candidate: \(Self.candidateType(candidate), privacy: .public)")
+                    self.logCandidate(candidate, run: run, isLocal: true)
                     run.localCandidate(candidate) { self.sendLocalCandidate($0, run: run, sid: sid) }
                 case .state(let state):
-                    callLogger.info("Call \(sid, privacy: .public) media: \(String(describing: state), privacy: .public)")
+                    self.logMedia(state, run: run, sid: sid)
                     self.callStep(.media(state), sid: sid)
                 }
             }
@@ -496,12 +548,12 @@ extension XMPPSession {
         // A candidate the peer refused is one ICE never tries, which the log
         // should show when a call doesn't connect.
         jingle.transportInfo(with: Martin.JID(device), sid: sid, contents: [content]) { result in
-            if case .failure(let error) = result { Self.logRefused("transport-info", sid: sid, error) }
+            if case .failure(let error) = result { self.logRefused(.transportInfo, sid: sid, error) }
         }
     }
 
-    private static func logRefused(_ action: String, sid: String, _ error: XMPPError) {
-        callLogger.warning("Call \(sid, privacy: .public) \(action, privacy: .public) refused: \(String(describing: error.errorCondition), privacy: .public)")
+    private func logRefused(_ action: CallRefusedAction, sid: String, _ error: XMPPError) {
+        DiagLog.error(.calls, "Call message refused", fields: callFields(sid: sid) + [.value("action", action), .error(error)])
     }
 
     private func startSession(with device: String, run: CallRun, sid: String) {
@@ -521,6 +573,7 @@ extension XMPPSession {
         run.enqueue({ [weak self] in
             guard let self, let jingle = self.jingle, let remote = run.remote,
                   let offer = CallJingle.sdp(from: remote, localRole: .responder) else { throw CallRunError.badDescription }
+            self.logRemoteCandidates(in: remote, run: run)
             let media = try await run.readyMedia()
             let answer = try await media.answer(offer: offer)
             let creators = Dictionary(remote.contents.map { ($0.name, $0.creator) }, uniquingKeysWith: { first, _ in first })
@@ -534,8 +587,9 @@ extension XMPPSession {
     }
 
     private func applyAnswer(run: CallRun, sid: String) {
-        run.enqueue({
+        run.enqueue({ [weak self] in
             guard let remote = run.remote, let answer = CallJingle.sdp(from: remote, localRole: .initiator) else { throw CallRunError.badDescription }
+            self?.logRemoteCandidates(in: remote, run: run)
             try await run.readyMedia().setAnswer(answer)
         }, failed: { [weak self] in self?.failCall(sid) })
     }
@@ -546,7 +600,12 @@ extension XMPPSession {
     /// expire, and asked for when a call rings so that answering needn't wait.
     /// Without them the call still tries a direct path.
     func discoverIceServers() async -> [CallIceServer] {
-        await iceServerCache.servers { [weak self] in await self?.fetchIceServers() }
+        let start = Date()
+        let servers = await iceServerCache.servers { [weak self] in await self?.fetchIceServers() }
+        DiagLog.info(.calls, "Call relays ready", .duration("took", since: start),
+                     .int("stun", servers.count { $0.urls.contains { $0.hasPrefix("stun") } }),
+                     .int("turn", servers.count { $0.urls.contains { $0.hasPrefix("turn") } }))
+        return servers
     }
 
     /// The services with the credentials of those that need asking for them
@@ -574,18 +633,27 @@ extension XMPPSession {
     }
 
     private func fetchIceServers() async -> IceServerCache.Discovered? {
-        guard let module = client.modulesManager.moduleOrNil(ExternalServiceDiscoveryModule.IDENTIFIER), module.isAvailable else { return nil }
+        guard let module = client.modulesManager.moduleOrNil(ExternalServiceDiscoveryModule.IDENTIFIER), module.isAvailable else {
+            DiagLog.info(.calls, "Call relay discovery", .value("outcome", RelayDiscoveryOutcome.unavailable))
+            return nil
+        }
+        let start = Date()
         do {
             let services = try await withTimeout(Self.relayDiscoveryTimeout) {
                 await Self.withCredentials(try await module.discover(from: nil, type: nil), module: module)
             }
             let now = Date()
+            let servers = CallIceServer.servers(from: services.map(ExternalService.init), now: now)
+            DiagLog.info(.calls, "Call relay discovery", .value("outcome", servers.isEmpty ? RelayDiscoveryOutcome.none : .found), .duration("took", since: start), .int("services", services.count), .int("servers", servers.count))
             return IceServerCache.Discovered(
-                servers: CallIceServer.servers(from: services.map(ExternalService.init), now: now),
+                servers: servers,
                 expires: services.compactMap(\.expires).filter { $0 > now }.min(),
             )
         } catch {
-            logger.warning("Couldn't get relays for a call: \(error.localizedDescription, privacy: .private)")
+            let timedOut = error is TimeoutError
+            var fields: [DiagField] = [.value("outcome", timedOut ? RelayDiscoveryOutcome.timedOut : .failed), .duration("took", since: start)]
+            if !timedOut { fields.append(.error(error)) }
+            DiagLog.notice(.calls, "Call relay discovery", fields: fields)
             return nil
         }
     }

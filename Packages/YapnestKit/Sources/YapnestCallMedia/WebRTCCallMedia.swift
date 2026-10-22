@@ -42,6 +42,10 @@ public final class WebRTCCallMedia: CallMedia, @unchecked Sendable {
     private var closed = false
     private var hasRemoteDescription = false
     private var queuedCandidates: [RTCIceCandidate] = []
+    private var statsTask: Task<Void, Never>?
+
+    /// How often a connected call's statistics are logged.
+    private static let statsInterval: Duration = .seconds(10)
 
     init(factory: RTCPeerConnectionFactory, forceRelay: Bool, receiveOnly: Bool, syntheticCamera: Bool) {
         self.factory = factory
@@ -53,6 +57,7 @@ public final class WebRTCCallMedia: CallMedia, @unchecked Sendable {
         self.continuation = continuation
         observer = Observer(continuation: continuation)
         observer.remoteVideoTrack = { [weak self] in self?.adoptRemoteVideo($0) }
+        observer.connected = { [weak self] in self?.startStats() }
     }
 
     deinit {
@@ -74,6 +79,7 @@ public final class WebRTCCallMedia: CallMedia, @unchecked Sendable {
             }
         }
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+        observer.startedAt = Date()
         guard let connection = factory.peerConnection(
             with: configuration, constraints: constraints, delegate: observer)
         else { throw CallMediaError.negotiationFailed }
@@ -225,10 +231,44 @@ public final class WebRTCCallMedia: CallMedia, @unchecked Sendable {
         }
     }
 
+    /// The parts of a report the log reads, which are a fraction of it.
+    private static let loggedStatTypes: Set<String> = [
+        "transport", "candidate-pair", "local-candidate", "remote-candidate",
+        "inbound-rtp", "outbound-rtp", "codec", "media-playout",
+    ]
+
+    func statistics() async -> [String: CallStat]? {
+        guard let connection = lock.withLock({ self.connection }) else { return nil }
+        return await withCheckedContinuation { continuation in
+            connection.statistics { report in
+                let kept = report.statistics.filter { Self.loggedStatTypes.contains($0.value.type) }
+                continuation.resume(returning: kept.mapValues { CallStat(type: $0.type, values: $0.values) })
+            }
+        }
+    }
+
+    /// Logs the connection's statistics every few seconds from the moment it
+    /// connects until the media closes. The task holds the media only for the
+    /// moment of each reading.
+    private func startStats() {
+        lock.withLock {
+            guard !closed, statsTask == nil else { return }
+            let log = CallStatsLog()
+            statsTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: Self.statsInterval)
+                    guard !Task.isCancelled, let stats = await self?.statistics() else { return }
+                    log.record(stats)
+                }
+            }
+        }
+    }
+
     public func close() {
-        let (alreadyClosed, connection, capture) = lock.withLock {
-            let state = (closed, self.connection, self.capture)
+        let (alreadyClosed, connection, capture, stats) = lock.withLock {
+            let state = (closed, self.connection, self.capture, statsTask)
             closed = true
+            statsTask = nil
             self.connection = nil
             audioTrack = nil
             for renderer in localRenderers { localVideoTrack?.remove(renderer) }
@@ -243,6 +283,7 @@ public final class WebRTCCallMedia: CallMedia, @unchecked Sendable {
             return state
         }
         guard !alreadyClosed else { return }
+        stats?.cancel()
         capture?.stop()
         connection?.close()
         continuation.yield(.state(.closed))
@@ -296,14 +337,13 @@ public final class WebRTCCallMedia: CallMedia, @unchecked Sendable {
 /// the field that video arrived, and not only that it was negotiated. WebRTC
 /// renders on its own thread, so this takes no lock of the media's.
 private final class FirstFrameLog: NSObject, RTCVideoRenderer, @unchecked Sendable {
-    private static let logger = Logger(subsystem: "Yapnest", category: "Calls")
     private let logged = OSAllocatedUnfairLock(initialState: false)
 
     func setSize(_ size: CGSize) {}
 
     func renderFrame(_ frame: RTCVideoFrame?) {
         guard let frame, logged.withLock({ let first = !$0; $0 = true; return first }) else { return }
-        Self.logger.info("first remote video frame \(frame.width, privacy: .public)x\(frame.height, privacy: .public)")
+        DiagLog.info(.calls, "First remote video frame", .int("width", Int(frame.width)), .int("height", Int(frame.height)))
     }
 }
 
@@ -312,6 +352,9 @@ private final class Observer: NSObject, RTCPeerConnectionDelegate, @unchecked Se
     let continuation: AsyncStream<CallMediaEvent>.Continuation
     /// Set once, before the connection exists.
     nonisolated(unsafe) var remoteVideoTrack: ((RTCVideoTrack) -> Void)?
+    nonisolated(unsafe) var connected: (() -> Void)?
+    /// Set before the connection exists, to time the ICE states from.
+    nonisolated(unsafe) var startedAt = Date()
 
     init(continuation: AsyncStream<CallMediaEvent>.Continuation) {
         self.continuation = continuation
@@ -331,7 +374,33 @@ private final class Observer: NSObject, RTCPeerConnectionDelegate, @unchecked Se
         case .closed: .closed
         @unknown default: .failed
         }
+        if state == .connected { connected?() }
         continuation.yield(.state(state))
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
+        let state: CallIceConnection = switch newState {
+        case .new: .new
+        case .checking: .checking
+        case .connected: .connected
+        case .completed: .completed
+        case .failed: .failed
+        case .disconnected: .disconnected
+        case .closed: .closed
+        case .count: .unknown
+        @unknown default: .unknown
+        }
+        DiagLog.info(.calls, "Call ICE connection", .value("state", state), .duration("sinceStart", since: startedAt))
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+        let state: CallIceGathering = switch newState {
+        case .new: .new
+        case .gathering: .gathering
+        case .complete: .complete
+        @unknown default: .unknown
+        }
+        DiagLog.info(.calls, "Call ICE gathering", .value("state", state), .duration("sinceStart", since: startedAt))
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
@@ -342,8 +411,6 @@ private final class Observer: NSObject, RTCPeerConnectionDelegate, @unchecked Se
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
 }
