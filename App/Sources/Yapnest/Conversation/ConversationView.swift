@@ -293,6 +293,7 @@ struct ConversationView: View {
             if conversation.hasLoaded {
                 MessageList(model: conversation, topInset: topBarsHeight, bottomInset: bottomBarHeight)
                     .opacity(conversation.isPositioned ? 1 : 0)
+                    .modifier(MacArrival(isReady: conversation.isPositioned))
             }
             // Takes all the room above the composer even while it's alone in
             // the stack; otherwise the stack is shorter than the screen and
@@ -617,3 +618,26 @@ private struct ChatSearchBar: View {
     }
 }
 
+/// On the Mac, where the chat opens beside the list rather than pushed in,
+/// its messages rise into place once laid out, instead of popping up, while
+/// the header and the composer stay where they were. Waiting for the layout
+/// keeps the motion clear of the work of opening the chat.
+private struct MacArrival: ViewModifier {
+    let isReady: Bool
+    @State private var arrived = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        if Platform.isMac {
+            content
+                .opacity(arrived ? 1 : 0)
+                .offset(y: arrived || reduceMotion ? 0 : 8)
+                .onChange(of: isReady, initial: true) { _, ready in
+                    guard ready, !arrived else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { arrived = true }
+                }
+        } else {
+            content
+        }
+    }
+}
