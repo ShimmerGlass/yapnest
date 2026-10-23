@@ -6,11 +6,7 @@ import SwiftUI
 struct ConversationBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
 
-    private var ink: Color {
-        colorScheme == .dark
-            ? Color(red: 0xB8 / 255, green: 0x9C / 255, blue: 0xCC / 255).opacity(0.12)
-            : Color(red: 0x7A / 255, green: 0x5A / 255, blue: 0x8E / 255).opacity(0.12)
-    }
+    private var ink: Color { .circuitInk(colorScheme) }
 
     var body: some View {
         Canvas { context, size in
@@ -29,6 +25,94 @@ struct ConversationBackdrop: View {
                 }
                 y += side
             }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+extension Color {
+    /// The circuit lines' grey mauve, faint against either background.
+    static func circuitInk(_ scheme: ColorScheme, strength: Double = 1) -> Color {
+        scheme == .dark
+            ? Color(red: 0xB8 / 255, green: 0x9C / 255, blue: 0xCC / 255).opacity(0.12 * strength)
+            : Color(red: 0x7A / 255, green: 0x5A / 255, blue: 0x8E / 255).opacity(0.12 * strength)
+    }
+}
+
+/// A few circuit lines running down out of the chat list's mauve wash, and
+/// fading with it.
+struct ChatListTraces: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// A line's start across the top, and each leg's run across and down:
+    /// straight, flat or at 45 degrees. The last runs on out of sight. Lanes
+    /// are drawn beside it, this far apart.
+    private struct Trace {
+        var x: CGFloat
+        var legs: [(dx: CGFloat, dy: CGFloat)]
+        var lanes = 1
+        var gap: CGFloat = 9
+    }
+
+    /// Two fans closing in on the middle, either side of a line with a ledge,
+    /// laid out for a phone 393 points wide. Every bend comes below the title
+    /// and search field.
+    private static let traces: [Trace] = {
+        let left = [
+            Trace(x: 18, legs: [(0, 290), (84, 84), (0, 60), (-60, 60), (0, 1000)]),
+            Trace(x: 48, legs: [(0, 220), (66, 66), (0, 1000)], lanes: 2, gap: -9),
+        ]
+        let mirrored = left.map { trace in
+            var trace = trace
+            trace.x = 393 - trace.x
+            trace.legs = trace.legs.map { (-$0.dx, $0.dy) }
+            trace.gap = -trace.gap
+            return trace
+        }
+        let middle = Trace(x: 196, legs: [(0, 370), (-30, 30), (70, 0), (0, 1000)])
+        return left + mirrored + [middle]
+    }()
+
+    /// Where the birds sit, how they lean with the line under them, and
+    /// which way they face: two on the outer lines' way in, and one on the
+    /// middle line's ledge, below the first chats.
+    private static let birds: [(at: CGPoint, lean: CGFloat, faces: CGFloat)] = [
+        (CGPoint(x: 60, y: 332), .pi / 4, 1),
+        (CGPoint(x: 333, y: 332), -.pi / 4, -1),
+        (CGPoint(x: 201, y: 400), 0, 1),
+    ]
+
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            for trace in Self.traces {
+                var point = CGPoint(x: trace.x, y: 0)
+                var line = [point]
+                for leg in trace.legs {
+                    point = CGPoint(x: point.x + leg.dx, y: point.y + leg.dy)
+                    line.append(point)
+                }
+                for lane in 0..<trace.lanes {
+                    path.addLines(CircuitTile.offset(line, by: CGFloat(lane) * trace.gap))
+                }
+            }
+            for bird in Self.birds {
+                path.addPath(CircuitTile.bird, transform: CGAffineTransform(scaleX: bird.faces, y: 1)
+                    .concatenating(CGAffineTransform(rotationAngle: bird.lean))
+                    .concatenating(CGAffineTransform(translationX: bird.at.x, y: bird.at.y)))
+            }
+            let scale = size.width / 393
+            path = path.applying(CGAffineTransform(scaleX: scale, y: scale))
+            // Stronger than a chat's, as the fade takes most of it away.
+            context.stroke(path, with: .color(.circuitInk(colorScheme, strength: 1.8)), style: StrokeStyle(lineWidth: 1, lineJoin: .round))
+        }
+        .mask {
+            LinearGradient(stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black, location: 0.3),
+                .init(color: .clear, location: 0.7),
+            ], startPoint: .top, endPoint: .bottom)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -166,7 +250,7 @@ struct CircuitTile {
 
     /// The app icon's bird, sitting at the origin, drawn in straight lines:
     /// a faceted outline with its belly, face, wing and tail.
-    private static let bird: Path = {
+    static let bird: Path = {
         // In the icon's own coordinates, where the bird sits at (512, 640).
         func points(_ xy: [(CGFloat, CGFloat)]) -> [CGPoint] { xy.map { CGPoint(x: $0.0, y: $0.1) } }
         var path = Path()
@@ -215,7 +299,7 @@ struct CircuitTile {
     /// The line run parallel to the given one at a distance to its right,
     /// mitred at the corners so the lanes of a bus keep their spacing through
     /// the bends.
-    private static func offset(_ line: [CGPoint], by distance: CGFloat) -> [CGPoint] {
+    static func offset(_ line: [CGPoint], by distance: CGFloat) -> [CGPoint] {
         guard distance != 0 else { return line }
         func normal(_ a: CGPoint, _ b: CGPoint) -> CGVector {
             let dx = b.x - a.x, dy = b.y - a.y, length = (dx * dx + dy * dy).squareRoot()
