@@ -103,7 +103,8 @@ struct MessageBubble: View {
             // into shade at the bottom. Strong enough only to give the bubble
             // some depth; no shadow, which would cost every row a blur.
             shape
-                .fill((isOutgoing ? Color.accentColor : Color(.secondarySystemBackground)).gradient)
+                .fill(isOutgoing ? Color.accentColor : Color(.secondarySystemBackground))
+                .overlay { shape.fill(bubbleShading) }
                 .overlay { shape.strokeBorder(bubbleEdge, lineWidth: 1) }
         }
         .contentShape(.contextMenuPreview, UnevenRoundedRectangle(cornerRadii: Self.corners(isOutgoing: isOutgoing, layout: content.layout)))
@@ -112,9 +113,17 @@ struct MessageBubble: View {
         }
     }
 
+    /// Lighter at the top and darker at the bottom, by less on the dark
+    /// background, where the same change stands out more.
+    private var bubbleShading: LinearGradient {
+        let isDark = colorScheme == .dark
+        return LinearGradient(colors: [.white.opacity(isDark ? 0.03 : 0.08), .black.opacity(isDark ? 0.05 : 0.06)], startPoint: .top, endPoint: .bottom)
+    }
+
     private var bubbleEdge: LinearGradient {
-        let light = Color.white.opacity(isOutgoing ? 0.3 : colorScheme == .dark ? 0.12 : 0.9)
-        let shade = Color.black.opacity(isOutgoing ? 0.12 : colorScheme == .dark ? 0.3 : 0.07)
+        let isDark = colorScheme == .dark
+        let light = Color.white.opacity(isOutgoing ? (isDark ? 0.2 : 0.3) : isDark ? 0.08 : 0.9)
+        let shade = Color.black.opacity(isOutgoing ? (isDark ? 0.08 : 0.12) : isDark ? 0.18 : 0.07)
         return LinearGradient(stops: [.init(color: light, location: 0), .init(color: .clear, location: 0.45), .init(color: shade, location: 1)], startPoint: .top, endPoint: .bottom)
     }
 
