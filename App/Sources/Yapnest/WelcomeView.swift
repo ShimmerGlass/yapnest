@@ -14,6 +14,10 @@ struct WelcomeView: View {
     @State private var sendsChatStates = true
     @State private var sharesLastSeen = false
     @State private var gifsEnabled = true
+    /// What was stored when the screen opened. Only what the user changed is
+    /// written: each write is published to the other devices, and Last Seen
+    /// also sends a new presence.
+    @State private var stored: Choices?
     /// The stored values are read off the main thread; until then the switches
     /// would show defaults and snap, so they stay disabled.
     @State private var isLoaded = false
@@ -74,7 +78,7 @@ struct WelcomeView: View {
             .errorAlert("Couldn't save your choices", $error)
             .task {
                 let saved = await offMain { [session] in
-                    (
+                    Choices(
                         encryptsNewChats: session.database.flag(.encryptsNewChats, default: true),
                         sendsReadMarkers: session.sendsReadMarkers,
                         sendsChatStates: session.sendsChatStates,
@@ -87,6 +91,7 @@ struct WelcomeView: View {
                 sendsChatStates = saved.sendsChatStates
                 sharesLastSeen = saved.sharesLastSeen
                 gifsEnabled = saved.gifsEnabled
+                stored = saved
                 isLoaded = true
             }
         }
@@ -103,19 +108,30 @@ struct WelcomeView: View {
         .padding(.vertical, 2)
     }
 
+    private struct Choices: Equatable, Sendable {
+        var encryptsNewChats: Bool
+        var sendsReadMarkers: Bool
+        var sendsChatStates: Bool
+        var sharesLastSeen: Bool
+        var gifsEnabled: Bool
+    }
+
     private func save() {
-        let values = (encryptsNewChats, sendsReadMarkers, sendsChatStates, sharesLastSeen, gifsEnabled)
+        let new = Choices(encryptsNewChats: encryptsNewChats, sendsReadMarkers: sendsReadMarkers, sendsChatStates: sendsChatStates, sharesLastSeen: sharesLastSeen, gifsEnabled: gifsEnabled)
+        guard let old = stored else { return }
         isSaving = true
         Task {
             defer { isSaving = false }
             do {
                 try await offMain { [session] in
-                    try session.database.setFlag(.encryptsNewChats, values.0)
-                    try session.setSendsReadMarkers(values.1)
-                    try session.setSendsChatStates(values.2)
-                    try session.setSharesLastSeen(values.3)
-                    if Klipy.apiKey != nil { try session.database.setFlag(.gifs, values.4) }
+                    if new.encryptsNewChats != old.encryptsNewChats { try session.database.setFlag(.encryptsNewChats, new.encryptsNewChats) }
+                    if new.sendsReadMarkers != old.sendsReadMarkers { try session.setSendsReadMarkers(new.sendsReadMarkers) }
+                    if new.sendsChatStates != old.sendsChatStates { try session.setSendsChatStates(new.sendsChatStates) }
+                    if new.sharesLastSeen != old.sharesLastSeen { try session.setSharesLastSeen(new.sharesLastSeen) }
+                    if Klipy.apiKey != nil, new.gifsEnabled != old.gifsEnabled { try session.database.setFlag(.gifs, new.gifsEnabled) }
                 }
+                // Saved: if closing fails, Continue again needn't write them again.
+                stored = new
                 try await model.finishWelcome()
             } catch {
                 self.error = error.localizedDescription

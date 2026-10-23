@@ -24,13 +24,8 @@ final class ArrivingWhileScrolledUpUITests: XCTestCase {
     }
 
     func testAMessageArrivingLeavesTheListWhereItIs() throws {
-        let list = driver.app.windows.firstMatch
         driver.settle()
-        for _ in 0..<3 {
-            let from = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-            let to = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
-            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: XCUIGestureVelocity(rawValue: 600), thenHoldForDuration: 0.5)
-        }
+        driver.drag(towardsOlder: true)
         driver.waitForStillness()
         let label = try XCTUnwrap(middleMessage(), "no message on screen")
         let reading = driver.message(containing: label)
@@ -48,11 +43,7 @@ final class ArrivingWhileScrolledUpUITests: XCTestCase {
         driver.assertNotBlank("after a message arrived")
 
         // It waited below, and is there once the user scrolls back down.
-        for _ in 0..<3 {
-            let from = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
-            let to = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
-            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: XCUIGestureVelocity(rawValue: 600), thenHoldForDuration: 0.2)
-        }
+        driver.drag(towardsOlder: false, hold: 0.2)
         let arrived = driver.message(containing: "A message arriving")
         XCTAssertTrue(arrived.waitForExistence(timeout: 5), "the message that waited never came in: \(driver.recorderSummary())")
         driver.waitForStillness()

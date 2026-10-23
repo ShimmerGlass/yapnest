@@ -214,7 +214,9 @@ final class ConversationModel {
     /// and the scroll view can't be held against that: an id scroll sent with
     /// the row is worked out on the layout from before it, and a correction
     /// once it's measured is undone by the scroll view on iOS 26.4 and 27.
-    @ObservationIgnored private var holdsNewest = false
+    private var holdsNewest: Bool { heldEnd != nil && heldEnd == windowEnd }
+    /// Where `holdNewest` ended the window. Any other window replaces it.
+    @ObservationIgnored private var heldEnd: MessageCursor?
     /// Moves with each `observeMessages`, so that an emission from an
     /// observation that has been replaced is ignored: it can arrive after the
     /// replacement was asked for, and carry a window nobody wants any more.
@@ -1485,7 +1487,7 @@ final class ConversationModel {
         guard isFlipped, hasLoaded, isPositioned, !followsBottom, !isBounded, !pendingBottom, pendingJump == nil, !isWidening,
               let newest = order.last.flatMap({ items[$0] })?.cursor else { return }
         FrameLog.event("holdNewest")
-        holdsNewest = true
+        heldEnd = newest
         windowEnd = newest
         observeMessages()
     }
@@ -1495,7 +1497,7 @@ final class ConversationModel {
     private func releaseNewest() {
         guard holdsNewest else { return }
         FrameLog.event("releaseNewest")
-        holdsNewest = false
+        heldEnd = nil
         windowEnd = nil
         observeMessages()
     }
@@ -1693,7 +1695,6 @@ final class ConversationModel {
         if olderState == .complete { olderState = .idle }
         windowStart = nil
         windowEnd = nil
-        holdsNewest = false
         pendingJump = nil
         followsBottom = true
         pendingBottom = true
@@ -1967,7 +1968,6 @@ final class ConversationModel {
             guard let window else { return }
             self.windowStart = window.start
             self.windowEnd = window.end
-            self.holdsNewest = false
             self.pendingJump = target
             self.isWidening = true
             self.observeMessages()
@@ -2387,9 +2387,7 @@ final class ConversationModel {
     /// Mirrors `XMPPSession.canEdit` from what the row already holds, since
     /// the session asks the database whether the message has an attachment.
     func canEdit(_ item: ConversationItem) -> Bool {
-        let message = item.message
-        return message.direction == .outgoing && !message.isRetracted && message.encryption != .omemoUndecryptable
-            && message.id != nil && item.attachment == nil && message.callOutcome == nil
+        item.message.isEditableText && item.attachment == nil
     }
 
     private func updateComposerBanner() {

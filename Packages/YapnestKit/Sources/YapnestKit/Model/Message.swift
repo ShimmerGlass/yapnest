@@ -220,6 +220,16 @@ extension Message {
     }
 }
 
+extension Message {
+    /// One of our stored messages whose text a correction may replace, a
+    /// file aside, which only the caller can look up. A call row is ours with
+    /// no words, and its remote id is the call's session id: a correction to
+    /// it would turn the call into text.
+    public var isEditableText: Bool {
+        direction == .outgoing && !isRetracted && encryption != .omemoUndecryptable && callOutcome == nil && id != nil
+    }
+}
+
 extension QuickResponses {
     /// Notes `actionId` as chosen. False if it isn't offered or was chosen already.
     mutating func choose(_ actionId: String) -> Bool {

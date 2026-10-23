@@ -139,6 +139,18 @@ final class ConversationDriver {
         from.press(forDuration: 0.01, thenDragTo: to, withVelocity: XCUIGestureVelocity(rawValue: 5000), thenHoldForDuration: 0)
     }
 
+    /// Slow drags that stop where they end, `times` over, towards older
+    /// messages or back towards the newest.
+    func drag(towardsOlder: Bool, times: Int = 3, hold: TimeInterval = 0.5) {
+        let list = app.windows.firstMatch
+        for _ in 0..<times {
+            let top = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+            let bottom = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+            let (from, to) = towardsOlder ? (top, bottom) : (bottom, top)
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: XCUIGestureVelocity(rawValue: 600), thenHoldForDuration: hold)
+        }
+    }
+
     var scrollToLatestButton: XCUIElement { app.buttons["Scroll to latest message"] }
 
     func settle(_ seconds: TimeInterval = 1) {
