@@ -40,72 +40,156 @@ extension Color {
     }
 }
 
-/// A few circuit lines running down out of the chat list's mauve wash, and
-/// fading with it.
-struct ChatListTraces: View {
+/// A few faint branches reaching in out of the chat list's mauve wash, with a
+/// couple of wireframe birds perched on them, fading with the wash.
+struct ChatListBranches: View {
     @Environment(\.colorScheme) private var colorScheme
 
-    /// A line's start across the top, and each leg's run across and down:
-    /// straight, flat or at 45 degrees. The last runs on out of sight. Lanes
-    /// are drawn beside it, this far apart.
-    private struct Trace {
-        var x: CGFloat
-        var legs: [(dx: CGFloat, dy: CGFloat)]
-        var lanes = 1
-        var gap: CGFloat = 9
+    /// Where a bough comes in, its heading in radians (down is positive), its
+    /// length and width at the base, how much it curves per point, and the
+    /// seed its twigs grow from.
+    private struct Bough {
+        var at: CGPoint
+        var heading: CGFloat
+        var length: CGFloat
+        var width: CGFloat
+        var curl: CGFloat
+        var seed: UInt64
     }
 
-    /// Two fans closing in on the middle, either side of a line with a ledge,
-    /// laid out for a phone 393 points wide. Every bend comes below the title
-    /// and search field.
-    private static let traces: [Trace] = {
-        let left = [
-            Trace(x: 18, legs: [(0, 290), (84, 84), (0, 60), (-60, 60), (0, 1000)]),
-            Trace(x: 48, legs: [(0, 220), (66, 66), (0, 1000)], lanes: 2, gap: -9),
-        ]
-        let mirrored = left.map { trace in
-            var trace = trace
-            trace.x = 393 - trace.x
-            trace.legs = trace.legs.map { (-$0.dx, $0.dy) }
-            trace.gap = -trace.gap
-            return trace
+    /// Laid out for a phone 393 points wide: one bough in from each side,
+    /// below the title and search field, and a thinner one hanging from the
+    /// top.
+    private static let boughs = [
+        Bough(at: CGPoint(x: -12, y: 150), heading: 0.42, length: 300, width: 16, curl: -0.0016, seed: 3),
+        Bough(at: CGPoint(x: 405, y: 215), heading: .pi - 0.38, length: 250, width: 13, curl: 0.0018, seed: 8),
+        Bough(at: CGPoint(x: 300, y: -10), heading: 1.9, length: 150, width: 8, curl: -0.002, seed: 5),
+    ]
+
+    /// Which of the level spots the birds take, and which way each faces:
+    /// apart from each other and clear of the twigs.
+    private static let birds: [(perch: Int, faces: CGFloat)] = [(2, 1), (10, -1)]
+
+    private struct Tree {
+        var wood = Path()
+        var leaves = Path()
+        /// Points along the boughs and their first twigs that are near level,
+        /// with their slope.
+        var perches: [(at: CGPoint, slope: CGFloat)] = []
+    }
+
+    private static let tree: Tree = {
+        var tree = Tree()
+        for bough in boughs {
+            var random = Random(state: bough.seed &* 0x9E37_79B9_7F4A_7C15)
+            grow(&tree, from: bough.at, heading: bough.heading, length: bough.length, width: bough.width, curl: bough.curl, depth: 0, random: &random)
         }
-        let middle = Trace(x: 196, legs: [(0, 370), (-30, 30), (70, 0), (0, 1000)])
-        return left + mirrored + [middle]
+        return tree
     }()
 
-    /// Where the birds sit, how they lean with the line under them, and
-    /// which way they face: two on the outer lines' way in, and one on the
-    /// middle line's ledge, below the first chats.
-    private static let birds: [(at: CGPoint, lean: CGFloat, faces: CGFloat)] = [
-        (CGPoint(x: 60, y: 332), .pi / 4, 1),
-        (CGPoint(x: 333, y: 332), -.pi / 4, -1),
-        (CGPoint(x: 201, y: 400), 0, 1),
-    ]
+    /// Walks a branch in short steps, its heading curling steadily and
+    /// wandering a little, and draws it tapering to its tip. Twigs
+    /// leave it on alternate sides, shorter the further out they start, and
+    /// each tip ends in a leaf.
+    private static func grow(_ tree: inout Tree, from start: CGPoint, heading: CGFloat, length: CGFloat, width: CGFloat, curl: CGFloat, depth: Int, random: inout Random) {
+        let step: CGFloat = 4
+        let count = max(2, Int(length / step))
+        var points = [start], headings = [heading]
+        var heading = heading, wander: CGFloat = 0
+        for _ in 0..<count {
+            wander = (wander + (random.unit() - 0.5) * 0.02) * 0.9
+            heading += curl * step + wander
+            let last = points[points.count - 1]
+            points.append(CGPoint(x: last.x + cos(heading) * step, y: last.y + sin(heading) * step))
+            headings.append(heading)
+        }
+        func thickness(at index: Int) -> CGFloat {
+            let t = CGFloat(index) / CGFloat(count)
+            return width * (1 - t) + 0.5 * t
+        }
+        // Corners only every few steps, joined straight, so the branch comes
+        // out faceted like the bird.
+        let corner = depth == 0 ? 8 : 5
+        let corners = Array(stride(from: 0, to: count, by: corner)) + [count]
+        var left: [CGPoint] = [], right: [CGPoint] = [], middle: [CGPoint] = []
+        for index in corners {
+            let half = thickness(at: index) / 2
+            let normal = CGPoint(x: -sin(headings[index]) * half, y: cos(headings[index]) * half)
+            left.append(CGPoint(x: points[index].x + normal.x, y: points[index].y + normal.y))
+            right.append(CGPoint(x: points[index].x - normal.x, y: points[index].y - normal.y))
+            middle.append(points[index])
+        }
+        // Wide enough to show two edges: drawn as a strip of triangles.
+        // Thinner: a single line.
+        let facets = left.indices.dropLast().filter { thickness(at: corners[$0]) > 2.5 }
+        for index in facets {
+            tree.wood.addLines([right[index], left[index], left[index + 1], right[index + 1], right[index]])
+            tree.wood.addLines([left[index], right[index + 1]])
+        }
+        let thin = (facets.last.map { $0 + 1 } ?? 0)
+        if thin < middle.count - 1 {
+            tree.wood.addLines(Array(middle[thin...]))
+        }
+        if depth <= 1 {
+            for index in corners where index >= count / 4 && index < count * 3 / 4 {
+                var slope = headings[index].truncatingRemainder(dividingBy: 2 * .pi)
+                if slope > .pi / 2 { slope -= .pi } else if slope < -.pi / 2 { slope += .pi }
+                if abs(slope) < 0.5 {
+                    tree.perches.append((CGPoint(x: points[index].x, y: points[index].y - thickness(at: index) / 2), slope))
+                }
+            }
+        }
+        if depth < 3 {
+            var side: CGFloat = random.unit() < 0.5 ? 1 : -1
+            // Twigs leave from corners, where the branch already bends.
+            var index = max(1, Int(CGFloat(count) * (0.18 + random.unit() * 0.12)) / corner) * corner
+            while index < count - corner {
+                let reach = length * (1 - CGFloat(index) / CGFloat(count)) * (0.35 + random.unit() * 0.3)
+                let turn = side * (0.45 + random.unit() * 0.35)
+                if reach > 14 {
+                    grow(&tree, from: points[index], heading: headings[index] + turn, length: reach, width: max(1, thickness(at: index) * 0.5), curl: curl * (random.unit() < 0.5 ? 1.5 : -1.5), depth: depth + 1, random: &random)
+                } else {
+                    leaf(&tree, at: points[index], heading: headings[index] + side * 0.8, size: 8, random: &random)
+                }
+                side = -side
+                index += max(1, Int(CGFloat(count) * (0.16 + random.unit() * 0.14)) / corner) * corner
+            }
+        }
+        leaf(&tree, at: points[count], heading: headings[count], size: 9, random: &random)
+    }
+
+    /// A leaf as a diamond split down its vein, drawn like the birds.
+    private static func leaf(_ tree: inout Tree, at point: CGPoint, heading: CGFloat, size: CGFloat, random: inout Random) {
+        let size = size * (0.8 + random.unit() * 0.4)
+        var leaf = Path()
+        leaf.addLines([.zero, CGPoint(x: size * 0.4, y: -size * 0.3), CGPoint(x: size, y: 0), CGPoint(x: size * 0.4, y: size * 0.3), .zero, CGPoint(x: size, y: 0)])
+        tree.leaves.addPath(leaf, transform: CGAffineTransform(rotationAngle: heading)
+            .concatenating(CGAffineTransform(translationX: point.x, y: point.y)))
+    }
+
+    private struct Random {
+        var state: UInt64
+
+        mutating func unit() -> CGFloat {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return CGFloat(state >> 33) / CGFloat(1 << 31)
+        }
+    }
 
     var body: some View {
         Canvas { context, size in
-            var path = Path()
-            for trace in Self.traces {
-                var point = CGPoint(x: trace.x, y: 0)
-                var line = [point]
-                for leg in trace.legs {
-                    point = CGPoint(x: point.x + leg.dx, y: point.y + leg.dy)
-                    line.append(point)
-                }
-                for lane in 0..<trace.lanes {
-                    path.addLines(CircuitTile.offset(line, by: CGFloat(lane) * trace.gap))
-                }
-            }
+            let scale = CGAffineTransform(scaleX: size.width / 393, y: size.width / 393)
+            var lines = Self.tree.wood
+            lines.addPath(Self.tree.leaves)
             for bird in Self.birds {
-                path.addPath(CircuitTile.bird, transform: CGAffineTransform(scaleX: bird.faces, y: 1)
-                    .concatenating(CGAffineTransform(rotationAngle: bird.lean))
-                    .concatenating(CGAffineTransform(translationX: bird.at.x, y: bird.at.y)))
+                let perch = Self.tree.perches[bird.perch]
+                lines.addPath(CircuitTile.bird, transform: CGAffineTransform(scaleX: bird.faces, y: 1)
+                    .concatenating(CGAffineTransform(rotationAngle: perch.slope))
+                    .concatenating(CGAffineTransform(translationX: perch.at.x, y: perch.at.y)))
             }
-            let scale = size.width / 393
-            path = path.applying(CGAffineTransform(scaleX: scale, y: scale))
             // Stronger than a chat's, as the fade takes most of it away.
-            context.stroke(path, with: .color(.circuitInk(colorScheme, strength: 1.8)), style: StrokeStyle(lineWidth: 1, lineJoin: .round))
+            let ink = Color.circuitInk(colorScheme, strength: 1.8)
+            context.stroke(lines.applying(scale), with: .color(ink), style: StrokeStyle(lineWidth: 0.9, lineJoin: .round))
         }
         .mask {
             LinearGradient(stops: [
