@@ -314,8 +314,12 @@ final class AppModel {
                 SharedContainer.defaults.set(true, forKey: "keychainShared")
                 // Recorded as pending, so a launch before Continue asks again.
                 showsWelcome = await offMain {
-                    guard (try? session.database.setting(.welcomeShown)) == nil else { return false }
-                    return (try? session.database.setSetting(.welcomeShown, "pending")) != nil
+                    // Left pending by a run that never got as far as Continue.
+                    switch try? session.database.setting(.welcomeShown) {
+                    case "1": return false
+                    case "pending": return true
+                    default: return (try? session.database.setSetting(.welcomeShown, "pending")) != nil
+                    }
                 }
                 phase = .signedIn(session)
                 didSignIn(session)

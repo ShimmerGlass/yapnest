@@ -50,6 +50,17 @@ struct WelcomeTests {
         #expect(fixture.model.showsWelcome)
     }
 
+    @Test func signingInAgainOverAQuestionNeverAnsweredAsksAgain() async throws {
+        let fixture = AppModelFixture()
+        try await fixture.model.signIn(fixture.credentialsToSignIn)
+
+        // The restore failed, so the user signed in again without signing out.
+        fixture.relaunch()
+        try await fixture.model.signIn(fixture.credentialsToSignIn)
+
+        #expect(fixture.model.showsWelcome)
+    }
+
     @Test func aLaunchAfterContinueDoesNotAsk() async throws {
         let fixture = AppModelFixture()
         try await fixture.model.signIn(fixture.credentialsToSignIn)

@@ -73,6 +73,10 @@ struct WelcomeView: View {
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets())
             }
+            // It fills the window, which on the Mac or an iPad is wide.
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
+            .background(Color(.systemGroupedBackground))
             .navigationBarTitleDisplayMode(.inline)
             .disabled(isSaving)
             .errorAlert("Couldn't save your choices", $error)
@@ -123,15 +127,28 @@ struct WelcomeView: View {
         Task {
             defer { isSaving = false }
             do {
-                try await offMain { [session] in
-                    if new.encryptsNewChats != old.encryptsNewChats { try session.database.setFlag(.encryptsNewChats, new.encryptsNewChats) }
-                    if new.sendsReadMarkers != old.sendsReadMarkers { try session.setSendsReadMarkers(new.sendsReadMarkers) }
-                    if new.sendsChatStates != old.sendsChatStates { try session.setSendsChatStates(new.sendsChatStates) }
-                    if new.sharesLastSeen != old.sharesLastSeen { try session.setSharesLastSeen(new.sharesLastSeen) }
-                    if Klipy.apiKey != nil, new.gifsEnabled != old.gifsEnabled { try session.database.setFlag(.gifs, new.gifsEnabled) }
+                // Each is noted as stored once written, so Continue again
+                // after a failure writes only what didn't get through.
+                if new.encryptsNewChats != old.encryptsNewChats {
+                    try await offMain { [session] in try session.database.setFlag(.encryptsNewChats, new.encryptsNewChats) }
+                    stored?.encryptsNewChats = new.encryptsNewChats
                 }
-                // Saved: if closing fails, Continue again needn't write them again.
-                stored = new
+                if new.sendsReadMarkers != old.sendsReadMarkers {
+                    try await offMain { [session] in try session.setSendsReadMarkers(new.sendsReadMarkers) }
+                    stored?.sendsReadMarkers = new.sendsReadMarkers
+                }
+                if new.sendsChatStates != old.sendsChatStates {
+                    try await offMain { [session] in try session.setSendsChatStates(new.sendsChatStates) }
+                    stored?.sendsChatStates = new.sendsChatStates
+                }
+                if new.sharesLastSeen != old.sharesLastSeen {
+                    try await offMain { [session] in try session.setSharesLastSeen(new.sharesLastSeen) }
+                    stored?.sharesLastSeen = new.sharesLastSeen
+                }
+                if Klipy.apiKey != nil, new.gifsEnabled != old.gifsEnabled {
+                    try await offMain { [session] in try session.database.setFlag(.gifs, new.gifsEnabled) }
+                    stored?.gifsEnabled = new.gifsEnabled
+                }
                 try await model.finishWelcome()
             } catch {
                 self.error = error.localizedDescription

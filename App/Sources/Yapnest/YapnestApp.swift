@@ -28,12 +28,15 @@ struct YapnestApp: App {
                     case .signedOut:
                         LoginView()
                     case .signedIn(let session):
-                        ChatListView(session: session, opening: delegate.model.requestedConversation)
-                            .sheet(isPresented: Binding(get: { delegate.model.showsWelcome }, set: { _ in })) {
-                                WelcomeView(session: session)
-                                    .sheetSizedForMac()
-                                    .interactiveDismissDisabled()
-                            }
+                        // In the chat list's place, not over it: a sheet there
+                        // would keep out the list's own, such as the
+                        // confirmation for a link opened before signing in,
+                        // which waits in `pendingLink` until the list is shown.
+                        if delegate.model.showsWelcome {
+                            WelcomeView(session: session)
+                        } else {
+                            ChatListView(session: session, opening: delegate.model.requestedConversation)
+                        }
                     }
                 }
             }
