@@ -4,13 +4,15 @@ import YapnestKit
 /// The Mac's window chrome, as modifiers that do nothing on iOS so the
 /// views using them have one line per seam.
 extension View {
-    /// Who you're signed in as, with Settings, at the foot of the sidebar.
-    /// iOS has the same button in the navigation bar instead.
+    /// Who you're signed in as, with Settings, at the foot of the sidebar,
+    /// under the call bar while there is one: across the top of the window
+    /// it spanned the chat too, which has its own header there. iOS has the
+    /// same button in the navigation bar instead.
     @ViewBuilder
-    func accountFooter(name: String, seed: String, imageURL: URL?, presence: ContactPresence?, status: String?, openSettings: @escaping () -> Void) -> some View {
+    func accountFooter(name: String, seed: String, imageURL: URL?, presence: ContactPresence?, status: String?, call: some View, openSettings: @escaping () -> Void) -> some View {
         if Platform.isMac {
             safeAreaInset(edge: .bottom, spacing: 0) {
-                AccountFooter(name: name, seed: seed, imageURL: imageURL, presence: presence, status: status, openSettings: openSettings)
+                AccountFooter(name: name, seed: seed, imageURL: imageURL, presence: presence, status: status, call: call, openSettings: openSettings)
             }
         } else {
             self
@@ -259,18 +261,20 @@ extension View {
 }
 
 /// Like Mac apps that keep the account at the foot of the sidebar.
-private struct AccountFooter: View {
+private struct AccountFooter<Call: View>: View {
     let name: String
     let seed: String
     let imageURL: URL?
     let presence: ContactPresence?
     /// Our status message, or else the availability or connection.
     let status: String?
+    let call: Call
     let openSettings: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             Divider()
+            call.padding(.top, 8)
             HStack(spacing: 8) {
                 Button(action: openSettings) {
                     HStack(spacing: 8) {

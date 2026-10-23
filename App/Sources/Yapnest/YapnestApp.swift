@@ -16,9 +16,10 @@ struct YapnestApp: App {
     var body: some Scene {
         WindowGroup {
             // Stacked rather than a safe area inset: an inset leaves the
-            // navigation bar's title where it was, under the call bar.
+            // navigation bar's title where it was, under the call bar. The Mac
+            // has it in the sidebar, over the account footer.
             VStack(spacing: 0) {
-                if let session = delegate.model.session, let state = delegate.model.calls.callBar {
+                if !Platform.isMac, let session = delegate.model.session, let state = delegate.model.calls.callBar {
                     CallBar(session: session, controller: delegate.model.calls, state: state)
                 }
                 Group {

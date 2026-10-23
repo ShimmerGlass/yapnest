@@ -58,7 +58,8 @@ struct ChatListView: View {
                     // The Mac's compact title bar loses the sidebar button
                     // while the list is hidden, with no way to bring it back.
                     .toolbar(removing: Platform.isMac ? .sidebarToggle : nil)
-                    .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 440)
+                    // The Mac has the call bar at the foot of the sidebar, which needs the room.
+                    .navigationSplitViewColumnWidth(min: Platform.isMac ? 300 : 280, ideal: Platform.isMac ? 380 : 340, max: Platform.isMac ? 480 : 440)
                 } detail: {
                     NavigationStack {
                         if let selection {
@@ -222,8 +223,28 @@ struct ChatListView: View {
         }
     }
 
+    @ViewBuilder
+    private var sidebarCallBar: some View {
+        if Platform.isMac, let state = model.calls.callBar {
+            CallBar(session: session, controller: model.calls, state: state)
+        }
+    }
+
+    /// On both of the sidebar's lists, so the call bar stays in sight in
+    /// the archive.
+    private func withSidebarFooter(_ list: some View) -> some View {
+        list.accountFooter(
+            name: me?.displayName ?? session.account.shortName,
+            seed: session.account.description,
+            imageURL: session.avatars.url(for: me),
+            presence: ownPresence.presence,
+            status: ownPresence.status,
+            call: sidebarCallBar,
+        ) { sheet = .settings }
+    }
+
     private var chats: some View {
-        ChatListContent(session: session, archived: false, selection: isSplit ? selection : nil, open: { open($0, item: $1) }, onDelete: closeIfOpen, onCompose: { sheet = .compose })
+        withSidebarFooter(ChatListContent(session: session, archived: false, selection: isSplit ? selection : nil, open: { open($0, item: $1) }, onDelete: closeIfOpen, onCompose: { sheet = .compose }))
             .safeAreaInset(edge: .top, spacing: 0) {
                 ConnectionBanner(state: shownConnection)
             }
@@ -248,13 +269,6 @@ struct ChatListView: View {
                 guard !Task.isCancelled else { return }
                 showsConnectionProblem = true
             }
-            .accountFooter(
-                name: me?.displayName ?? session.account.shortName,
-                seed: session.account.description,
-                imageURL: session.avatars.url(for: me),
-                presence: ownPresence.presence,
-                status: ownPresence.status,
-            ) { sheet = .settings }
             .navigationTitle("Chats")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -298,7 +312,7 @@ struct ChatListView: View {
     }
 
     private var archive: some View {
-        ChatListContent(session: session, archived: true, selection: isSplit ? selection : nil, open: { open($0, item: $1) }, onDelete: closeIfOpen)
+        withSidebarFooter(ChatListContent(session: session, archived: true, selection: isSplit ? selection : nil, open: { open($0, item: $1) }, onDelete: closeIfOpen))
             .navigationTitle("Archived Chats")
             .navigationBarTitleDisplayMode(.inline)
     }
