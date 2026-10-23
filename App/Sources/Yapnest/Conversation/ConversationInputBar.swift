@@ -315,9 +315,8 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         close.configuration?.baseForegroundColor = .secondaryLabel
         close.accessibilityLabel = String(localized: "Cancel")
         close.preferredBehavioralStyle = .pad
-        // The row's spare width goes to the quote. Otherwise it went to the
-        // button, which on a wide Mac window put the ✕ far from the edge and
-        // squeezed the quote into a narrow column.
+        // The ✕ keeps to its icon's width. Left to the stack, it took the
+        // row's spare width and floated away from the quote.
         close.setContentHuggingPriority(.required, for: .horizontal)
         labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let row = UIStackView(arrangedSubviews: [bar, labels, close])
@@ -332,8 +331,17 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
             row.topAnchor.constraint(equalTo: replyPreview.topAnchor, constant: 10),
             row.bottomAnchor.constraint(equalTo: replyPreview.bottomAnchor, constant: -2),
             row.leadingAnchor.constraint(equalTo: replyPreview.leadingAnchor, constant: 10),
-            row.trailingAnchor.constraint(equalTo: replyPreview.trailingAnchor),
         ])
+        // On the Mac the bar can be very wide, so the quote keeps to its own
+        // width, up to a readable measure, with the ✕ right after it.
+        if Platform.isMac {
+            NSLayoutConstraint.activate([
+                row.trailingAnchor.constraint(lessThanOrEqualTo: replyPreview.trailingAnchor),
+                labels.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+            ])
+        } else {
+            row.trailingAnchor.constraint(equalTo: replyPreview.trailingAnchor).isActive = true
+        }
     }
 
     /// Nicknames to mention and `:code` emoji matches, in a row above the text.
