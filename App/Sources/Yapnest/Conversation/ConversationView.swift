@@ -278,6 +278,9 @@ struct ConversationView: View {
             ReceivedPulse(trigger: conversation.receivedPulse)
                 .ignoresSafeArea(.container, edges: .bottom)
         }
+        // Over the whole screen and the keyboard's room too, so it keeps its
+        // place when the keyboard comes up.
+        .background { ConversationBackdrop().ignoresSafeArea() }
         // While a hover bar's menu is open the pointer is in the menu's own
         // window, so the first move here after it closes says it has. The
         // rows hear of it by notification: reading state from each row would
