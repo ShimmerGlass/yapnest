@@ -20,19 +20,19 @@ struct ConversationOpeningTests {
     }
 
     /// A fixed three tries 150 ms apart kept a chat with a few dozen unread
-    /// hidden for over half a second, though the first scroll had landed.
+    /// hidden for over half a second, though the first scroll had landed,
+    /// and checks 50 ms apart still kept it hidden 150 ms after landing.
     @Test func theListIsShownOnceAskingAgainNoLongerMovesIt() async throws {
         let f = try ConversationFixture()
         try f.addMany(10, read: true)
         try (0..<6).forEach { _ = try f.add("new \($0)") }
-        let opened = ContinuousClock.now
         await f.start()
+        let landed = ContinuousClock.now
         f.model.geometryChanged(geometry(distanceFromBottom: 900))
 
         await eventually("the list was never shown") { f.model.isPositioned }
-        // The old fixed wait took 600 ms at least; this leaves a loaded
-        // machine room.
-        #expect(ContinuousClock.now - opened < .milliseconds(550))
+        // A few frames; this leaves a loaded machine some room.
+        #expect(ContinuousClock.now - landed < .milliseconds(120))
     }
 
     @Test func theListStaysHiddenWhileTheOpeningScrollStillMovesIt() async throws {
@@ -42,9 +42,9 @@ struct ConversationOpeningTests {
         await f.start()
         // Rows measured around the message keep shifting where it lands.
         // Faster than the tries, so no two of them find it in one place.
-        for step in 0..<30 {
+        for step in 0..<60 {
             f.model.geometryChanged(geometry(distanceFromBottom: 900 + CGFloat(step) * 40))
-            try await Task.sleep(for: .milliseconds(10))
+            try await Task.sleep(for: .milliseconds(5))
             #expect(!f.model.isPositioned)
         }
         await eventually("the list was never shown") { f.model.isPositioned }

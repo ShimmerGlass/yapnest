@@ -253,9 +253,14 @@ final class ConversationModel {
     /// A window longer than this is cut back when the user returns to the
     /// newest messages: every change re-reads all of it.
     private static let windowLimit = 1500
-    /// How many times, 50 ms apart, the opening scroll is asked again before
-    /// the list is shown wherever it is.
-    private static let openingTries = 12
+    /// How many times, a frame apart, the opening scroll is asked again
+    /// before the list is shown wherever it is.
+    private static let openingTries = 36
+    /// A frame: checking every 50 ms kept a list that had landed hidden for
+    /// another 150 ms, waiting out the checks.
+    private static let openingTick: Duration = .milliseconds(16)
+    /// How many checks in a row find the list still before it's shown.
+    private static let openingStillChecks = 3
     /// Links whose previews were already asked for.
     @ObservationIgnored private var requestedLinks: Set<String> = []
     /// Display names by JID, so building a row doesn't read the database.
@@ -438,6 +443,7 @@ final class ConversationModel {
                 }
                 return initial
             }.value
+            FrameLog.event("start read")
             guard !Task.isCancelled else { return }
             self?.finishStart(initial)
         }
@@ -564,11 +570,13 @@ final class ConversationModel {
                 // first frames of the push into a conversation. Render what the
                 // rows need here, so `apply` finds it all cached.
                 guard let self else { return }
+                FrameLog.event("observed items=\(items.count)")
                 let missing: [(id: Int64, key: TextKey)] = items.compactMap { item in
                     self.textKey(for: item).flatMap { key in self.textCache[item.id]?.key == key ? nil : (item.id, key) }
                 }
                 if !missing.isEmpty {
                     let rendered = await Task.detached(priority: .userInitiated) { Self.renderTexts(missing) }.value
+                    FrameLog.event("rendered texts=\(missing.count)")
                     guard generation == self.generation else { return }
                     for (id, cached) in rendered { self.textCache[id] = cached }
                 }
@@ -865,10 +873,11 @@ final class ConversationModel {
     }
 
     /// Asks again for the message to open on while the rows around it are
-    /// measured, then shows the list. It's shown once asking again twice
-    /// over no longer moves it: the first scroll usually lands, and a fixed
-    /// three tries kept a chat opened at its unread messages hidden for over
-    /// half a second.
+    /// measured, then shows the list. It's shown once asking again for a few
+    /// frames no longer moves it: a fixed three tries kept a chat opened at
+    /// its unread messages hidden for over half a second. The scroll sent with
+    /// the rows is usually lost, as it comes before the list's first layout,
+    /// and the first try is what lands.
     /// Unflipped, rows measured above the message can still shift it, which
     /// the tries keep up with, for as long as `openingTries` allows.
     private func settleOpeningScroll(at id: Int64, anchor: UnitPoint, flashing: Int64? = nil) {
@@ -881,20 +890,24 @@ final class ConversationModel {
             var landed: CGFloat?
             var still = 0
             for _ in 0..<Self.openingTries {
-                try? await Task.sleep(for: .milliseconds(50))
+                try? await Task.sleep(for: Self.openingTick)
                 guard let self, !Task.isCancelled else { return }
-                // Twice still, as rows measured just after a scroll can move
-                // the message without moving the scroll view.
+                // Still for a few frames, as rows measured just after a scroll
+                // can move the message without moving the scroll view.
                 let offset = self.geometry?.contentOffset.y
                 still = offset != nil && offset == landed ? still + 1 : 0
-                if still == 2 { break }
+                if still == Self.openingStillChecks { break }
                 landed = offset
+                // Asking again redraws the whole list, which took the frames
+                // the checks were meant to be; a list that didn't move is
+                // only watched.
+                guard still == 0 else { continue }
                 FrameLog.event("scroll.scrollTo opening id=\(id)")
                 self.scroll.scrollTo(id: id, anchor: anchor)
             }
             // Out of tries, the last scroll lands before what's on screen is
             // marked read.
-            if still < 2 { try? await Task.sleep(for: .milliseconds(50)) }
+            if still < Self.openingStillChecks { try? await Task.sleep(for: Self.openingTick) }
             guard let self else { return }
             FrameLog.event("positioned")
             self.isPositioned = true
