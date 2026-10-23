@@ -315,6 +315,11 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         close.configuration?.baseForegroundColor = .secondaryLabel
         close.accessibilityLabel = String(localized: "Cancel")
         close.preferredBehavioralStyle = .pad
+        // The row's spare width goes to the quote. Otherwise it went to the
+        // button, which on a wide Mac window put the ✕ far from the edge and
+        // squeezed the quote into a narrow column.
+        close.setContentHuggingPriority(.required, for: .horizontal)
+        labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let row = UIStackView(arrangedSubviews: [bar, labels, close])
         row.spacing = 8
         row.alignment = .center

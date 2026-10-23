@@ -63,6 +63,9 @@ final class ComposerUITests: InteractionsTestCase {
         let cancel = app.buttons["Cancel"].firstMatch
         XCTAssertTrue(cancel.waitForExistence(timeout: 5), "no reply bar to cancel")
         XCTAssertEqual(app.staticTexts.matching(identifier: "React to this one.").count, 2, "the reply bar doesn't repeat the message")
+        // The button took the row's spare width, which on a wide Mac window
+        // left the ✕ floating mid-way and squeezed the quote.
+        XCTAssertLessThan(cancel.frame.width, 60, "the reply bar's ✕ takes the row's spare width: \(cancel.frame)")
         cancel.tap()
         waitUntilGone(cancel, "the reply bar")
         XCTAssertEqual(app.staticTexts.matching(identifier: "React to this one.").count, 1, "the quote stayed after cancelling")
