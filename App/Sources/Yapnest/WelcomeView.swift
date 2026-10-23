@@ -102,7 +102,7 @@ struct WelcomeView: View {
     }
 
     private func option(_ title: LocalizedStringKey, isOn: Binding<Bool>, detail: LocalizedStringKey) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             Toggle(title, isOn: isOn)
                 .disabled(!isLoaded)
             Text(detail)
