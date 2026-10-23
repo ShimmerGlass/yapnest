@@ -301,7 +301,13 @@ private struct HeaderSqueezeProbe: Layout {
         guard let header = subviews.first else { return }
         let needed = header.sizeThatFits(.unspecified).width
         let squeezed = bounds.width + 0.5 < min(needed, room)
-        MainActor.assumeIsolated { recorder.update { $0.headerLaidOut(squeezed: squeezed) } }
+        // The header is sometimes laid out off the main thread (the
+        // navigation bar's, on iOS 26.5), where assuming it crashed the app.
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { recorder.update { $0.headerLaidOut(squeezed: squeezed) } }
+        } else {
+            Task { @MainActor [recorder] in recorder.update { $0.headerLaidOut(squeezed: squeezed) } }
+        }
         header.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
     }
 }
