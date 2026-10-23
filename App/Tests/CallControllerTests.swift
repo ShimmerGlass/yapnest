@@ -181,6 +181,32 @@ struct CallControllerTests {
         #expect(!asked)
     }
 
+    @Test func aPeerWhoIsNoLongerCallableIsNotRung() throws {
+        let fixture = try ConversationFixture()
+        let controller = CallController()
+        controller.attach(fixture.session)
+        defer { controller.detach() }
+
+        controller.startCall(to: fixture.peer)
+
+        #expect(controller.error == "This contact can't take a call right now.")
+        #expect(fixture.session.callState.value == nil)
+    }
+
+    @Test func aPeerWhoTakesOnlyAudioIsNotRungForVideo() async throws {
+        let fixture = try ConversationFixture()
+        let controller = CallController()
+        controller.cameraAccess = { true }
+        controller.attach(fixture.session)
+        defer { controller.detach() }
+        fixture.session.callablePeers.send([fixture.peer])
+
+        controller.startCall(to: fixture.peer, video: true)
+
+        try await waitUntil { controller.error != nil }
+        #expect(controller.error == "This contact can't take a video call right now.")
+    }
+
     private func waitUntil(_ condition: () -> Bool) async throws {
         for _ in 0..<100 where !condition() { try await Task.sleep(for: .milliseconds(20)) }
     }

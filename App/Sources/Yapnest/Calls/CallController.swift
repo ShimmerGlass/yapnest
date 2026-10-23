@@ -360,6 +360,15 @@ final class CallController {
     }
 
     private func begin(_ peer: JID, video: Bool) {
+        // The button stays a moment after the peer stops taking calls, so
+        // it doesn't blink when they drop out briefly; a tap then gets this
+        // rather than a call no device rings for.
+        if let session, !(video ? session.videoCallablePeers : session.callablePeers).value.contains(peer) {
+            error = video
+                ? String(localized: "This contact can't take a video call right now.")
+                : String(localized: "This contact can't take a call right now.")
+            return
+        }
         guard Self.usesCallKit else {
             do {
                 try activateAudio(video: video)
