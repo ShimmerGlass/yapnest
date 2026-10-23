@@ -937,63 +937,79 @@ private struct ChatListRow: View {
             AvatarView(name: item.title, seed: item.conversation.peer.description, imageURL: avatarURL, presence: presence, isGroup: item.groupChat != nil)
                 .frame(width: 56, height: 56)
                 .padding(.vertical, 12)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(alignment: .center, spacing: 6) {
-                    Text(item.title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    if item.conversation.isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel("Pinned")
-                    }
-                    Spacer(minLength: 6)
-                    if let date = item.lastMessage?.timestamp {
-                        TimelineView(.everyMinute) { context in
-                            Text(date.chatListFormatted(now: context.date))
-                                .font(.subheadline)
+                .accessibilitySortPriority(4)
+            HStack(alignment: .top, spacing: 6) {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(alignment: .center, spacing: 6) {
+                        Text(item.title)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if item.conversation.isPinned {
+                            Image(systemName: "pin.fill")
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
+                                .accessibilityLabel("Pinned")
                         }
                     }
+                    .accessibilitySortPriority(3)
+                    // Two lines are kept even for a one-line snippet or the
+                    // typing dots: the column is centred on the avatar, so a
+                    // shorter one moved the title down.
+                    snippet
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2, reservesSpace: true)
+                        .opacity(isTyping ? 0 : 1)
+                        .accessibilityHidden(isTyping)
+                        .overlay(alignment: .topLeading) {
+                            if isTyping { TypingDots() }
+                        }
+                        .accessibilitySortPriority(1)
                 }
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // The date and the indicators each sit in the middle of their
+                // half of the column, whatever the other half holds.
+                VStack(alignment: .trailing, spacing: 0) {
                     Group {
-                        if isTyping {
-                            TypingDots()
-                        } else {
-                            snippet
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
+                        if let date = item.lastMessage?.timestamp {
+                            TimelineView(.everyMinute) { context in
+                                Text(date.chatListFormatted(now: context.date))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    if let status = outgoingStatus {
-                        if let image = status.indicator {
+                    .frame(maxHeight: .infinity)
+                    // Read after the name, before the last words, as when it
+                    // shared the name's line.
+                    .accessibilitySortPriority(2)
+                    HStack(spacing: 6) {
+                        if let status = outgoingStatus, let image = status.indicator {
                             Image(uiImage: image)
                                 .renderingMode(.template)
                                 .foregroundStyle(status == .failed ? Color.red : .secondary)
                         }
+                        if item.notifyingUnreadCount > 0 {
+                            Text(item.notifyingUnreadCount, format: .number)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .frame(minWidth: 20, minHeight: 20)
+                                .background(Capsule().fill(Color.accentColor))
+                        } else if item.unreadCount > 0 {
+                            // Unread, but nothing that notifies: a dot, not a count.
+                            Circle()
+                                .fill(Color.accentColor)
+                                .frame(width: 10, height: 10)
+                                .accessibilityLabel("Unread")
+                        }
                     }
-                    if item.notifyingUnreadCount > 0 {
-                        Text(item.notifyingUnreadCount, format: .number)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6)
-                            .frame(minWidth: 20, minHeight: 20)
-                            .background(Capsule().fill(Color.accentColor))
-                    } else if item.unreadCount > 0 {
-                        // Unread, but nothing that notifies: a dot, not a count.
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 10, height: 10)
-                            .frame(minHeight: 20)
-                            .accessibilityLabel("Unread")
-                    }
+                    .frame(maxHeight: .infinity)
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 7)
             .padding(.bottom, 9)
         }
