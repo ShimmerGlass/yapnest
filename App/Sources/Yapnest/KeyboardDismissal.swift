@@ -20,7 +20,8 @@ extension View {
 /// Puts a tap recognizer on the window while the view is in it. The
 /// recognizer watches without taking the touch, so buttons, toggles and
 /// rows still get their tap, and it ignores taps on a text input so
-/// tapping another field moves focus instead of closing the keyboard.
+/// tapping another field moves focus instead of closing the keyboard, and
+/// taps inside an alert.
 private struct KeyboardDismissalInstaller: UIViewRepresentable {
     func makeUIView(context: Context) -> InstallerView { InstallerView() }
     func updateUIView(_ uiView: InstallerView, context: Context) {}
@@ -62,6 +63,14 @@ private struct KeyboardDismissalInstaller: UIViewRepresentable {
             while let current = view {
                 if current is UITextInput { return false }
                 view = current.superview
+            }
+            // An alert with a text field sits in this window: a tap on its
+            // buttons would put its keyboard away, and the alert moving back
+            // down under the finger loses the tap.
+            var responder: UIResponder? = touch.view
+            while let current = responder {
+                if current is UIAlertController { return false }
+                responder = current.next
             }
             return true
         }
