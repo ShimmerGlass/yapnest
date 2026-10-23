@@ -106,7 +106,7 @@ struct ScrollRecordTests {
         #expect(record.maxAway == 0)
         #expect(record.rows == 7)
         #expect(record.visible == 2)
-        #expect(record.summary == "samples=0 maxAway=0.0 prepends=0 measuredPrepends=0 maxPrependShift=0.0 rows=7 visible=2 top=0 latestTaps=0 endNudges=0")
+        #expect(record.summary == "samples=0 maxAway=0.0 prepends=0 measuredPrepends=0 maxPrependShift=0.0 rows=7 visible=2 top=0 latestTaps=0 endNudges=0 titleChanges=0 headerSqueezes=0")
     }
 
     @Test func countsTapsOnTheScrollToLatestButtonUntilReset() {
@@ -124,7 +124,7 @@ struct ScrollRecordTests {
         record.nudged()
         record.nudged()
         #expect(record.endNudges == 2)
-        #expect(record.summary.hasSuffix("endNudges=2"))
+        #expect(record.summary.contains("endNudges=2"))
         record.reset()
         #expect(record.endNudges == 0)
     }

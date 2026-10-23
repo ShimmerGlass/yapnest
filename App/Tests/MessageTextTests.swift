@@ -229,8 +229,8 @@ struct MessageTextTests {
     }
 
     @Test func fewEmojiAreDrawnLargerThanMany() {
-        #expect(runs("👍👍👍").first?.first?.font == Font.largeTitle)
-        #expect(runs("👍👍👍👍").first?.first?.font == Font.title)
+        #expect(runs("👍👍👍").first?.first?.font == MessageText.BodyFont.scaled(56, like: .largeTitle).swiftUI)
+        #expect(runs("👍👍👍👍").first?.first?.font == MessageText.BodyFont.scaled(40, like: .title1).swiftUI)
         #expect(runs("good 👍").first?.first?.font == Font.body)
     }
 
