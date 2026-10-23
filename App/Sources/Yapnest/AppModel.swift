@@ -29,7 +29,15 @@ final class AppModel {
     }
 
     private(set) var phase: Phase = .loading
-    private(set) var connection: XMPPSession.State = .disconnected(error: nil)
+    private(set) var connection: XMPPSession.State = .disconnected(error: nil) {
+        didSet { if connection != oldValue { watchCatchUp() } }
+    }
+    /// Whether loading the saved account, or catching up once connected, has
+    /// gone on past `SlowStatusRule.gracePeriod`. Both are done in a moment on
+    /// every launch, and a spinner shown for a few frames reads as a hitch.
+    private(set) var loadingIsSlow = false
+    private(set) var catchUpIsSlow = false
+    @ObservationIgnored private var catchUpWatch: Task<Void, Never>?
     /// Peers currently typing to us.
     private(set) var typing: Set<JID> = []
     /// When each typing peer last sent `composing`, for expiring stale ones.
@@ -92,6 +100,7 @@ final class AppModel {
         var disablePush: @MainActor (XMPPSession) async -> Void = { await $0.disablePush() }
         /// How long a session gets to finish what's in flight after the app leaves.
         var suspendDelay: Duration = .seconds(8)
+        var slowStatusDelay: Duration = SlowStatusRule.gracePeriod
         var typingLifetime: TimeInterval = 30
         var typingSweepInterval: Duration = .seconds(5)
         var registersForNotifications = true
@@ -169,6 +178,11 @@ final class AppModel {
         Presenter.model = self
         guard case .loading = phase, !isStarting else { return }
         isStarting = true
+        Task { [weak self, delay = environment.slowStatusDelay] in
+            try? await Task.sleep(for: delay)
+            guard let self, case .loading = phase else { return }
+            loadingIsSlow = true
+        }
         Self.moveToSharedContainer()
         Redacted.prepare()
         #if DEBUG
@@ -210,6 +224,17 @@ final class AppModel {
     }
 
     @ObservationIgnored private var isStarting = false
+
+    private func watchCatchUp() {
+        catchUpWatch?.cancel()
+        if catchUpIsSlow { catchUpIsSlow = false }
+        guard connection == .connected(isSyncing: true) else { return }
+        catchUpWatch = Task { [weak self, delay = environment.slowStatusDelay] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            self?.catchUpIsSlow = true
+        }
+    }
 
     /// Signs in to the saved account. A welcome the last run was closed
     /// before answering is shown again.

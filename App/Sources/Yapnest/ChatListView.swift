@@ -259,8 +259,9 @@ struct ChatListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Catching up is brief and routine, so it goes in the title
-                // instead of a bar that would push the list down.
-                if model.connection == .connected(isSyncing: true) {
+                // instead of a bar that would push the list down, and only
+                // once it's taking a while.
+                if model.catchUpIsSlow {
                     ToolbarItem(placement: .principal) {
                         VStack(spacing: 0) {
                             Text("Chats").font(.headline)

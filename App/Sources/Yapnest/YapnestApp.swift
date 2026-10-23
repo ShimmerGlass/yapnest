@@ -24,7 +24,7 @@ struct YapnestApp: App {
                 Group {
                     switch delegate.model.phase {
                     case .loading:
-                        ProgressView()
+                        if delegate.model.loadingIsSlow { ProgressView() } else { Color.clear }
                     case .signedOut:
                         LoginView()
                     case .signedIn(let session):

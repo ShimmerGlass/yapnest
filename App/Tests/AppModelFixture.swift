@@ -58,7 +58,7 @@ final class AppModelFixture {
     private(set) var fastTokenWipes = 0
 
     init(
-        lockTimeout: TimeInterval = 0.2, suspendDelay: Duration = .milliseconds(100),
+        lockTimeout: TimeInterval = 0.2, suspendDelay: Duration = .milliseconds(100), slowStatusDelay: Duration = .milliseconds(150),
         typingLifetime: TimeInterval = 30, disablePush: @escaping @MainActor (XMPPSession) async -> Void = { _ in },
     ) {
         lock = ProcessLock(url: root.appending(path: "session.lock"))
@@ -69,6 +69,7 @@ final class AppModelFixture {
         environment.lockTimeout = lockTimeout
         environment.accountDirectory = { [root] in AccountDirectory(url: root.appending(path: $0.description)) }
         environment.suspendDelay = suspendDelay
+        environment.slowStatusDelay = slowStatusDelay
         environment.typingLifetime = typingLifetime
         environment.typingSweepInterval = .milliseconds(50)
         environment.registersForNotifications = false
