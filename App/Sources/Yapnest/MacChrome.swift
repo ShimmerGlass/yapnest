@@ -62,11 +62,17 @@ private struct SheetIconButton: View {
 /// iOS 26 it is the system's close icon, as in iOS 26's own sheets: a long
 /// translated title between two text buttons gets cut short. The word stays
 /// as the label VoiceOver reads.
+///
+/// `iconOnMac` draws the icon on the Mac too, as New Chat asks for.
 struct SheetCancelButton: View {
+    var iconOnMac = false
     let action: () -> Void
 
     var body: some View {
-        if #available(iOS 26, *), !Platform.isMac {
+        if Platform.isMac, iconOnMac {
+            SheetIconButton(title: "Cancel", systemImage: "xmark", action: action)
+                .keyboardShortcut(.cancelAction)
+        } else if #available(iOS 26, *), !Platform.isMac {
             SheetIconButton(title: "Cancel", systemImage: "xmark", action: action)
                 .keyboardShortcut(.cancelAction)
         } else {
@@ -82,18 +88,23 @@ struct SheetCancelButton: View {
 /// which must stay that way. iOS 26 shows the system's prominent checkmark
 /// for the same reason as `SheetCancelButton`, and keeps the word for
 /// VoiceOver.
+/// `iconOnMac` is as for `SheetCancelButton`.
 struct SheetConfirmButton: View {
     let title: LocalizedStringKey
+    let iconOnMac: Bool
     let action: () -> Void
 
-    init(_ title: LocalizedStringKey, action: @escaping () -> Void) {
+    init(_ title: LocalizedStringKey, iconOnMac: Bool = false, action: @escaping () -> Void) {
         self.title = title
+        self.iconOnMac = iconOnMac
         self.action = action
     }
 
     @ViewBuilder
     var body: some View {
-        if Platform.isMac {
+        if Platform.isMac, iconOnMac {
+            SheetIconButton(title: title, systemImage: "checkmark", action: action)
+        } else if Platform.isMac {
             Button(title, action: action).foregroundStyle(.white)
         } else if #available(iOS 26, *) {
             Button(action: action) { Label(title, systemImage: "checkmark") }
