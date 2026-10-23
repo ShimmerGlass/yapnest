@@ -9,6 +9,7 @@ struct MessageBubble: View {
     /// The width the row offers, when it can't be had from the layout: a bubble
     /// hosted on its own is offered what it came to last time.
     var offeredWidth: CGFloat?
+    @Environment(\.colorScheme) private var colorScheme
 
     private var content: MessageRow.Content { row.content }
     private var message: Message { row.message }
@@ -95,14 +96,26 @@ struct MessageBubble: View {
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 6, trailing: 12))
         .foregroundStyle(foreground)
         .tint(isOutgoing ? .white : .accentColor)
-        .background(
-            UnevenRoundedRectangle(cornerRadii: Self.corners(isOutgoing: isOutgoing, layout: content.layout))
-                .fill(isOutgoing ? Color.accentColor : Color(.secondarySystemBackground)),
-        )
+        .background {
+            let shape = UnevenRoundedRectangle(cornerRadii: Self.corners(isOutgoing: isOutgoing, layout: content.layout))
+            // A faint light from above: the fill darkens a little towards the
+            // bottom, and the edge catches the light at the top and falls
+            // into shade at the bottom. Strong enough only to give the bubble
+            // some depth; no shadow, which would cost every row a blur.
+            shape
+                .fill((isOutgoing ? Color.accentColor : Color(.secondarySystemBackground)).gradient)
+                .overlay { shape.strokeBorder(bubbleEdge, lineWidth: 1) }
+        }
         .contentShape(.contextMenuPreview, UnevenRoundedRectangle(cornerRadii: Self.corners(isOutgoing: isOutgoing, layout: content.layout)))
         .onTapGesture {
             if isFailed { model.explainFailure(of: row.id) }
         }
+    }
+
+    private var bubbleEdge: LinearGradient {
+        let light = Color.white.opacity(isOutgoing ? 0.3 : colorScheme == .dark ? 0.12 : 0.9)
+        let shade = Color.black.opacity(isOutgoing ? 0.12 : colorScheme == .dark ? 0.3 : 0.07)
+        return LinearGradient(stops: [.init(color: light, location: 0), .init(color: .clear, location: 0.45), .init(color: shade, location: 1)], startPoint: .top, endPoint: .bottom)
     }
 
     private var showsMore: Bool { content.text?.isCollapsed == true }
