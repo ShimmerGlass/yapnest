@@ -91,7 +91,7 @@ struct ChatListView: View {
             switch sheet {
             case .settings:
                 SettingsView(session: session)
-                    .sheetSizedForMac()
+                    .sheetSizedForMac(width: 600, height: 760)
             case .compose:
                 NewChatView(
                     session: session,
