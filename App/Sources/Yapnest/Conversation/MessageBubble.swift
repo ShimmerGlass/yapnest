@@ -117,13 +117,13 @@ struct MessageBubble: View {
     /// background, where the same change stands out more.
     private var bubbleShading: LinearGradient {
         let isDark = colorScheme == .dark
-        return LinearGradient(colors: [.white.opacity(isDark ? 0.03 : 0.08), .black.opacity(isDark ? 0.05 : 0.06)], startPoint: .top, endPoint: .bottom)
+        return LinearGradient(colors: [.white.opacity(isDark ? 0.02 : 0.05), .black.opacity(isDark ? 0.035 : 0.04)], startPoint: .top, endPoint: .bottom)
     }
 
     private var bubbleEdge: LinearGradient {
         let isDark = colorScheme == .dark
-        let light = Color.white.opacity(isOutgoing ? (isDark ? 0.2 : 0.3) : isDark ? 0.08 : 0.9)
-        let shade = Color.black.opacity(isOutgoing ? (isDark ? 0.08 : 0.12) : isDark ? 0.18 : 0.07)
+        let light = Color.white.opacity(isOutgoing ? (isDark ? 0.14 : 0.2) : isDark ? 0.06 : 0.6)
+        let shade = Color.black.opacity(isOutgoing ? (isDark ? 0.05 : 0.08) : isDark ? 0.12 : 0.05)
         return LinearGradient(stops: [.init(color: light, location: 0), .init(color: .clear, location: 0.45), .init(color: shade, location: 1)], startPoint: .top, endPoint: .bottom)
     }
 
