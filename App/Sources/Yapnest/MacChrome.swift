@@ -59,20 +59,19 @@ private struct SheetIconButton: View {
 }
 
 /// A sheet's Cancel button. On the Mac Esc closes the sheet through it. On
-/// iOS 26 it is the system's close icon, as in iOS 26's own sheets: a long
-/// translated title between two text buttons gets cut short. The word stays
-/// as the label VoiceOver reads.
-///
-/// `iconOnMac` draws the icon on the Mac too, as New Chat asks for.
+/// iOS 26 and the Mac it is a close icon, as in iOS 26's own sheets: a long
+/// translated title between two text buttons gets cut short, and the words
+/// looked heavy beside a Mac sheet's title. The word stays as the label
+/// VoiceOver reads, and the Mac's tooltip.
 struct SheetCancelButton: View {
-    var iconOnMac = false
     let action: () -> Void
 
+    private static var iconToolbar: Bool {
+        if #available(iOS 26, *) { true } else { Platform.isMac }
+    }
+
     var body: some View {
-        if Platform.isMac, iconOnMac {
-            SheetIconButton(title: "Cancel", systemImage: "xmark", action: action)
-                .keyboardShortcut(.cancelAction)
-        } else if #available(iOS 26, *), !Platform.isMac {
+        if Self.iconToolbar {
             SheetIconButton(title: "Cancel", systemImage: "xmark", action: action)
                 .keyboardShortcut(.cancelAction)
         } else {
@@ -82,30 +81,23 @@ struct SheetCancelButton: View {
     }
 }
 
-/// A sheet's confirmation button. Catalyst draws it as a prominent button
-/// filled with the accent colour and picks black for the title, where the
-/// message bubbles correctly use white on it. iOS 18 draws plain tinted text,
-/// which must stay that way. iOS 26 shows the system's prominent checkmark
-/// for the same reason as `SheetCancelButton`, and keeps the word for
-/// VoiceOver.
-/// `iconOnMac` is as for `SheetCancelButton`.
+/// A sheet's confirmation button. iOS 18 draws plain tinted text, which must
+/// stay that way. iOS 26 shows the system's prominent checkmark and the Mac a
+/// checkmark, for the same reasons as `SheetCancelButton`, keeping the word
+/// for VoiceOver.
 struct SheetConfirmButton: View {
     let title: LocalizedStringKey
-    let iconOnMac: Bool
     let action: () -> Void
 
-    init(_ title: LocalizedStringKey, iconOnMac: Bool = false, action: @escaping () -> Void) {
+    init(_ title: LocalizedStringKey, action: @escaping () -> Void) {
         self.title = title
-        self.iconOnMac = iconOnMac
         self.action = action
     }
 
     @ViewBuilder
     var body: some View {
-        if Platform.isMac, iconOnMac {
+        if Platform.isMac {
             SheetIconButton(title: title, systemImage: "checkmark", action: action)
-        } else if Platform.isMac {
-            Button(title, action: action).foregroundStyle(.white)
         } else if #available(iOS 26, *) {
             Button(action: action) { Label(title, systemImage: "checkmark") }
                 .labelStyle(.iconOnly)

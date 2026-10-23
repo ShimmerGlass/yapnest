@@ -64,10 +64,10 @@ struct NewChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    SheetCancelButton(iconOnMac: true) { dismiss() }
+                    SheetCancelButton { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    SheetConfirmButton("Chat", iconOnMac: true, action: start).disabled(target(in: matches) == nil)
+                    SheetConfirmButton("Chat", action: start).disabled(target(in: matches) == nil)
                 }
             }
             .task {
