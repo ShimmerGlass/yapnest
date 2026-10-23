@@ -104,6 +104,73 @@ struct ConversationScrollTests {
         #expect(scrolledToNewest(f))
     }
 
+    /// The bounded window would otherwise make the last row no longer the
+    /// newest, and the quick responses under it would go, moving the list by
+    /// their height just as the hold is meant to prevent.
+    @Test func theNewestMessageKeepsItsResponsesWhileTheNewestMessagesAreHeld() async throws {
+        let f = try await opened(distance: 3_000, flipped: true)
+        #expect(f.model.rows.last?.content.showsResponses == true)
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+        await eventually("the newest messages were never held") { f.model.isBounded }
+
+        #expect(f.model.rows.last?.content.showsResponses == true)
+    }
+
+    /// The hold's new observation would throw away the page's widening, which
+    /// is then looked for again once the hold has taken effect.
+    @Test func aHoldWaitsForAnOlderPageInFlightAndThePageStillLands() async throws {
+        let f = try ConversationFixture(isFlipped: true)
+        try f.addMany(1700)
+        await f.start()
+        f.model.geometryChanged(geometry(flipped: true, distanceFromBottom: 3_000))
+        scrolledUp(f)
+        let before = f.model.rows.count
+
+        let gate = Gate()
+        f.model.olderLoadHook = { await gate.pass() }
+        f.model.nearTopChanged(true)
+        await eventually("the older load never started") { gate.entered }
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+
+        #expect(await stays(for: .milliseconds(500)) { !f.model.isBounded })
+        gate.open()
+        await eventually("the older page never landed") { f.model.rows.count > before }
+        await eventually("the newest messages were never held") { f.model.isBounded }
+        #expect(f.model.rows.count > before)
+    }
+
+    /// Back at the bottom the held end is let go, which replaces the window
+    /// while a page for the old one is still being read. The page is dropped,
+    /// and the list near the top looks for it again rather than waiting for
+    /// the next scroll.
+    @Test func anOlderPageDroppedByLettingInWhatWaitedBelowIsLoadedAgain() async throws {
+        let f = try ConversationFixture(isFlipped: true)
+        try f.addMany(1700)
+        await f.start()
+        f.model.geometryChanged(geometry(flipped: true, distanceFromBottom: 3_000))
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+        await eventually("the newest messages were never held") { f.model.isBounded }
+        let before = f.model.rows.count
+
+        let gate = Gate()
+        f.model.olderLoadHook = { await gate.pass() }
+        f.model.nearTopChanged(true)
+        await eventually("the older load never started") { gate.entered }
+        f.model.geometryChanged(geometry(flipped: true, distanceFromBottom: 40))
+        f.model.awayFromBottomChanged(false)
+        await eventually("the newest messages were never let in") { !f.model.isBounded }
+        // The new window's update comes while the page is still being read.
+        try await Task.sleep(for: .milliseconds(400))
+        gate.open()
+
+        await eventually("the older page was never loaded again") { f.model.rows.count > before }
+    }
+
     @Test func sendingLetsInWhatWaitedBelow() async throws {
         let f = try await opened(distance: 3_000, flipped: true)
         scrolledUp(f)

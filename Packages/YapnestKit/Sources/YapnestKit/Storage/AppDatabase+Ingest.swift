@@ -302,9 +302,11 @@ extension AppDatabase {
         _ db: Database, to original: inout Message, body: String, at timestamp: Date, mentionsMe: Bool,
         quickResponses: QuickResponses?, omemoDevice: Int32?, omemoTrust: OMEMODevice.Trust?, outgoing: Bool,
     ) throws -> Message? {
-        // Archive catch-ups may replay an older correction.
+        // Archive catch-ups may replay an older correction. A call row's
+        // remote id is the call's session id, which a correction can name:
+        // it would turn the call into text.
         let isAttachment = try Attachment.filter(Column("messageId") == original.id).isEmpty(db) == false
-        guard !isAttachment, timestamp >= original.editedAt ?? .distantPast else { return nil }
+        guard !isAttachment, original.callOutcome == nil, timestamp >= original.editedAt ?? .distantPast else { return nil }
         original.setBody(body)
         original.editedAt = timestamp
         original.mentionsMe = mentionsMe

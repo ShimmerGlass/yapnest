@@ -83,6 +83,20 @@ struct CorrectionTests {
         #expect(result.newMessage?.editedAt != nil)
     }
 
+    @Test func aCorrectionNamingACallsSessionIdLeavesTheCallRowAlone() throws {
+        // A call row's remote id is the call's session id, which the other
+        // side knows and could name in a correction.
+        try db.writer.write { try Contact(jid: alice, isInRoster: true).insert($0) }
+        try db.recordCall(CallRecord(peer: alice, account: me, sid: "sess1", direction: .incoming, outcome: .answered, startedAt: Date(timeIntervalSince1970: 50), duration: 10))
+
+        try ingest("<message from='alice@example.org/phone' type='chat' id='c1'><body>gotcha</body><replace xmlns='urn:xmpp:message-correct:0' id='sess1'/></message>", at: Date(timeIntervalSince1970: 200))
+
+        let call = try #require(try messages().first { $0.remoteId == "sess1" })
+        #expect(call.body == "")
+        #expect(call.callOutcome == .answered)
+        #expect(call.editedAt == nil)
+    }
+
     @Test func someoneElsesCorrectionInARoomIsNotKeptAsAMessage() throws {
         try db.joinGroupChat(room, nickname: "me")
         try ingestGroup("<message from='cake@rooms.example.org/anna' type='groupchat' id='g1'><body>hi all</body></message>")

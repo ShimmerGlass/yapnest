@@ -205,7 +205,9 @@ final class ConversationModel {
     /// message. A jump far back opens a window around its target, which is
     /// bounded like this, and scrolling down extends it until it reaches the
     /// newest. Tracked, as the scroll-to-end button shows while it's set.
-    private var windowEnd: MessageCursor?
+    private var windowEnd: MessageCursor? {
+        didSet { if windowEnd != heldEnd { heldEnd = nil } }
+    }
     /// The conversation's real end isn't loaded.
     var isBounded: Bool { windowEnd != nil }
     /// The window was ended at the newest message when the user scrolled up
@@ -1087,7 +1089,9 @@ final class ConversationModel {
                 next: index + 1 < order.count ? neighbours[index + 1] : nil,
                 hasUnreadDivider: id == unreadDividerId,
                 showsWholeBody: showingWhole.contains(id),
-                isNewest: index == order.count - 1 && !isBounded,
+                // Held, it was the newest when the user scrolled up; its
+                // quick responses going would move the list by their height.
+                isNewest: index == order.count - 1 && (!isBounded || holdsNewest),
                 epoch: inputsEpoch,
             )
             newInputs[id] = inputs
@@ -1484,7 +1488,10 @@ final class ConversationModel {
     private func holdNewest() {
         // Not while the list is taken to the bottom, as after a send, where
         // it reads as away until it gets there.
+        // Nor over a step of the window in flight, which the new observation
+        // would throw away; the next update tries again.
         guard isFlipped, hasLoaded, isPositioned, !followsBottom, !isBounded, !pendingBottom, pendingJump == nil, !isWidening,
+              tasks["older"] == nil, tasks["newer"] == nil, tasks["reveal"] == nil,
               let newest = order.last.flatMap({ items[$0] })?.cursor else { return }
         FrameLog.event("holdNewest")
         heldEnd = newest
@@ -1497,7 +1504,6 @@ final class ConversationModel {
     private func releaseNewest() {
         guard holdsNewest else { return }
         FrameLog.event("releaseNewest")
-        heldEnd = nil
         windowEnd = nil
         observeMessages()
     }
@@ -1814,9 +1820,12 @@ final class ConversationModel {
             guard let self, !Task.isCancelled else { return }
             switch step {
             case .widen where self.generation != generation || self.pendingJump != nil:
-                // The window was replaced meanwhile (a jump, a trim): this
-                // step's start belongs to the old one.
+                // The window was replaced meanwhile (a jump, a trim, the
+                // newest let in below): this step's start belongs to the old
+                // one. The replacement's update may have looked while this
+                // step was still running, so it's looked at again.
                 self.tasks.finish("older")
+                self.loadOlderIfNeeded()
             case .widen(let start):
                 FrameLog.event("older widen")
                 self.windowStart = start
@@ -2361,7 +2370,7 @@ final class ConversationModel {
         // Not over a reply being written, and not without a composer (a
         // group left, a contact blocked), where the edit would go unseen
         // until it came back in place of the draft.
-        guard editingItem == nil, replyingTo == nil, composer.bar != nil, !isBounded,
+        guard editingItem == nil, replyingTo == nil, composer.bar != nil, !isBounded || holdsNewest,
               let id = order.last(where: { items[$0].map(canEdit) ?? false }) else { return false }
         startEditing(id)
         return true

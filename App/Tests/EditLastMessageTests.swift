@@ -37,6 +37,28 @@ struct EditLastMessageTests {
         #expect(bar.text == "half typed")
     }
 
+    /// Scrolled up the flipped list, the window ends at the newest message
+    /// the user saw; the edit key still takes the newest of ours.
+    @Test func theNewestMessagesBeingHeldDoesNotStopTheEdit() async throws {
+        let f = try ConversationFixture(isFlipped: true)
+        try f.addMany(30)
+        let mine = try f.add("mine", .outgoing)
+        try f.addMany(5)
+        let bar = attach(f)
+        await f.start()
+        f.model.setOnScreen(true)
+        f.model.geometryChanged(geometry(flipped: true, distanceFromBottom: 3_000))
+        f.model.visibleChanged([f.rowIDs[6], f.rowIDs[5]])
+        f.model.anchorMeasured(id: f.rowIDs[5], frame: CGRect(x: 0, y: 100, width: 400, height: 60))
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+        await eventually("the newest messages were never held") { f.model.isBounded }
+
+        #expect(f.model.editLastMessage())
+        #expect(f.model.editingItem?.id == mine.id)
+        #expect(bar.text == "mine")
+    }
+
     @Test func aReplyBeingWrittenIsLeftAlone() async throws {
         let f = try ConversationFixture()
         try f.add("mine", .outgoing)

@@ -309,7 +309,7 @@ struct ConversationRegressionTests {
 }
 
 /// Holds whoever passes it until it's opened.
-private final class Gate: @unchecked Sendable {
+final class Gate: @unchecked Sendable {
     private let lock = NSLock()
     private var isOpen = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
