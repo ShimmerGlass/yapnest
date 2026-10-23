@@ -78,3 +78,33 @@ public struct SheetCounter: Equatable, Sendable {
     public mutating func presented() { count += 1 }
     public mutating func dismissed() { count = max(0, count - 1) }
 }
+
+/// Who is offered a call. A reconnect that can't resume the stream forgets
+/// every presence until the server sends them again, and a device that
+/// announces capabilities not fetched yet counts as unable to take calls until
+/// they arrive, so a peer drops out of the session's callable set for a moment
+/// and the Call button blinked. One that leaves stays on offer a moment longer.
+public struct CallableHold: Sendable {
+    public static let grace: Duration = .seconds(2)
+
+    private var latest: Set<JID> = []
+    private var departed: [JID: ContinuousClock.Instant] = [:]
+
+    public init() {}
+
+    public mutating func update(_ peers: Set<JID>, now: ContinuousClock.Instant) {
+        for peer in latest.subtracting(peers) where departed[peer] == nil {
+            departed[peer] = now + Self.grace
+        }
+        for peer in peers { departed[peer] = nil }
+        latest = peers
+        departed = departed.filter { $0.value > now }
+    }
+
+    public func offered(at now: ContinuousClock.Instant) -> Set<JID> {
+        latest.union(departed.filter { $0.value > now }.keys)
+    }
+
+    /// When a peer still held stops being offered.
+    public var nextExpiry: ContinuousClock.Instant? { departed.values.min() }
+}

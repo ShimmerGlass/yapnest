@@ -50,6 +50,10 @@ final class AppModel {
     private(set) var callablePeers: Set<JID> = []
     /// The callable peers with a device that takes video too.
     private(set) var videoCallablePeers: Set<JID> = []
+    @ObservationIgnored private var callableHold = CallableHold()
+    @ObservationIgnored private var videoCallableHold = CallableHold()
+    /// Runs while a peer who left is still held on offer.
+    @ObservationIgnored private var callableExpiry: Task<Void, Never>?
     /// The dot to show for `peer`: only contacts whose presence we receive have
     /// one, since for anyone else "offline" would just mean unknown.
     func presence(of peer: JID, contact: Contact?, isGroup: Bool) -> ContactPresence? {
@@ -746,11 +750,17 @@ final class AppModel {
             .store(in: &cancellables)
         session.callablePeers
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.callablePeers = $0 }
+            .sink { [weak self] in
+                self?.callableHold.update($0, now: .now)
+                self?.offerCallablePeers()
+            }
             .store(in: &cancellables)
         session.videoCallablePeers
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.videoCallablePeers = $0 }
+            .sink { [weak self] in
+                self?.videoCallableHold.update($0, now: .now)
+                self?.offerCallablePeers()
+            }
             .store(in: &cancellables)
         session.statuses
             .receive(on: DispatchQueue.main)
@@ -767,6 +777,22 @@ final class AppModel {
         return session
     }
 
+    /// Publishes who is offered a call, and comes back when a peer who left
+    /// stops being held.
+    private func offerCallablePeers() {
+        let now = ContinuousClock.now
+        let offered = callableHold.offered(at: now), videoOffered = videoCallableHold.offered(at: now)
+        if callablePeers != offered { callablePeers = offered }
+        if videoCallablePeers != videoOffered { videoCallablePeers = videoOffered }
+        callableExpiry?.cancel()
+        guard let expiry = [callableHold.nextExpiry, videoCallableHold.nextExpiry].compactMap(\.self).min() else { return }
+        callableExpiry = Task { [weak self] in
+            try? await Task.sleep(until: expiry, clock: .continuous)
+            guard !Task.isCancelled else { return }
+            self?.offerCallablePeers()
+        }
+    }
+
     private func teardown(_ session: XMPPSession) {
         calls.detach()
         session.disconnect()
@@ -776,6 +802,9 @@ final class AppModel {
         cancellables = []
         connection = .disconnected(error: nil)
         presences = [:]
+        callableExpiry?.cancel()
+        callableHold = CallableHold()
+        videoCallableHold = CallableHold()
         callablePeers = []
         videoCallablePeers = []
         statuses = [:]

@@ -71,4 +71,42 @@ private final class Token {}
         counter.dismissed()
         #expect(!counter.isPresenting)
     }
+
+    @Test func aPeerWhoDropsOutForAMomentStaysOnOffer() throws {
+        let alice = try #require(JID("alice@example.org"))
+        let start = ContinuousClock.now
+        var hold = CallableHold()
+        hold.update([alice], now: start)
+        // A reconnect that couldn't resume forgets every presence at once.
+        hold.update([], now: start + .milliseconds(10))
+        #expect(hold.offered(at: start + .milliseconds(20)) == [alice])
+        hold.update([alice], now: start + .milliseconds(300))
+        #expect(hold.offered(at: start + .seconds(10)) == [alice])
+        #expect(hold.nextExpiry == nil)
+    }
+
+    @Test func aPeerWhoLeavesStopsBeingOfferedAfterTheGrace() throws {
+        let alice = try #require(JID("alice@example.org")), bob = try #require(JID("bob@example.org"))
+        let start = ContinuousClock.now
+        var hold = CallableHold()
+        hold.update([alice, bob], now: start)
+        hold.update([bob], now: start)
+        #expect(hold.nextExpiry == start + CallableHold.grace)
+        #expect(hold.offered(at: start + CallableHold.grace - .milliseconds(1)) == [alice, bob])
+        #expect(hold.offered(at: start + CallableHold.grace) == [bob])
+        // Another change doesn't restart a departure's grace.
+        hold.update([], now: start + .seconds(1))
+        #expect(hold.offered(at: start + CallableHold.grace) == [bob])
+        hold.update([], now: start + .seconds(5))
+        #expect(hold.offered(at: start + .seconds(5)).isEmpty)
+        #expect(hold.nextExpiry == nil)
+    }
+
+    @Test func aNewPeerIsOfferedAtOnce() throws {
+        let alice = try #require(JID("alice@example.org"))
+        var hold = CallableHold()
+        let now = ContinuousClock.now
+        hold.update([alice], now: now)
+        #expect(hold.offered(at: now) == [alice])
+    }
 }
