@@ -365,6 +365,19 @@ struct ConversationView: View {
     /// iOS 26; with less, the bar moves the slot off centre to fit.
     private static let barButtonRoom: CGFloat = 88
 
+    /// Room for the three buttons at the header's trailing edge.
+    private static let macHeaderButtonsRoom: CGFloat = 112
+
+    private func macHeaderButton(_ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(title, systemImage: systemImage, action: action)
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+            .font(.title3)
+            .foregroundStyle(.secondary)
+            .pointingHandCursor()
+            .help(title)
+    }
+
     /// Click for the chat's settings, as with the header in Messages.
     private var macHeader: some View {
         Button { showsSettings = true } label: {
@@ -376,16 +389,20 @@ struct ConversationView: View {
         .accessibilityLabel("Chat Settings")
         .help(identity.title)
         .frame(maxWidth: .infinity)
+        // Kept clear of the buttons on both sides, so a long name stays
+        // centred and never runs under them.
+        .padding(.horizontal, Self.macHeaderButtonsRoom)
         .overlay(alignment: .trailing) {
-            if canCall {
-                Button("Call", systemImage: "phone") { model.calls.startCall(to: peer) }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.plain)
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                    .disabled(model.calls.isInCall)
-                    .pointingHandCursor()
-                    .help("Call")
+            HStack(spacing: 16) {
+                macHeaderButton("Search", systemImage: "magnifyingglass") { search.open() }
+                if canVideoCall {
+                    macHeaderButton("Video Call", systemImage: "video") { model.calls.startCall(to: peer, video: true) }
+                        .disabled(model.calls.isInCall)
+                }
+                if canCall {
+                    macHeaderButton("Call", systemImage: "phone") { model.calls.startCall(to: peer) }
+                        .disabled(model.calls.isInCall)
+                }
             }
         }
         .padding(.horizontal, 16)
