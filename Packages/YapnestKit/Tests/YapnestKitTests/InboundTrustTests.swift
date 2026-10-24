@@ -79,6 +79,33 @@ struct DelayTrustTests {
     }
 }
 
+/// A stream resumed after the app was away replays what the server held for
+/// it with a `<delay>` on each stanza. On a carbon that is the wrapper's, so
+/// a message sent from the Mac meanwhile would take the time the phone woke.
+struct CarbonDelayTests {
+    @Test func aReplayedCarbonKeepsTheServersStamp() async throws {
+        let database = try AppDatabase.inMemory()
+        let session = try makeSession(me, database: database)
+        let stamp = Date().addingTimeInterval(-3600)
+        session.handleTopLevel(parseStanza("""
+            <message from='me@example.org' to='me@example.org/phone'>
+              <sent xmlns='urn:xmpp:carbons:2'><forwarded xmlns='urn:xmpp:forward:0'>
+                <message from='me@example.org/mac' to='alice@example.org' type='chat' id='c1'><body>from the Mac</body></message>
+              </forwarded></sent>
+              <delay xmlns='urn:xmpp:delay' from='example.org' stamp='\(ISO8601DateFormatter().string(from: stamp))'/>
+            </message>
+            """))
+        let deadline = Date().addingTimeInterval(5)
+        var stored: YapnestKit.Message?
+        while stored == nil, Date() < deadline {
+            stored = try await database.reader.read { try YapnestKit.Message.filter(Column("body") == "from the Mac").fetchOne($0) }
+            if stored == nil { try await Task.sleep(for: .milliseconds(50)) }
+        }
+        let message = try #require(stored)
+        #expect(abs(message.timestamp.timeIntervalSince(stamp)) < 1)
+    }
+}
+
 struct ReplyFallbackTrustTests {
     // "> hi\n" is five code points.
     private let quote = "<body start='0' end='5'/>"

@@ -1267,8 +1267,12 @@ public final class XMPPSession: @unchecked Sendable {
                 return
             }
             guard carbon.name == "sent" || carbon.name == "received",
-                  let forwarded = carbon.firstChild(name: "forwarded", xmlns: "urn:xmpp:forward:0")?.firstChild(name: "message"),
-                  let inner = Stanza.from(element: forwarded) as? Martin.Message else { return }
+                  let forwarded = carbon.firstChild(name: "forwarded", xmlns: "urn:xmpp:forward:0")?.firstChild(name: "message") else { return }
+            // A resumed stream replays what the server held for it with a
+            // `<delay>` on the wrapper. Without it the message, and a call
+            // offer in it, would read as happening now.
+            forwarded.addChildren(stanza.element.filterChildren(name: "delay", xmlns: "urn:xmpp:delay"))
+            guard let inner = Stanza.from(element: forwarded) as? Martin.Message else { return }
             handle(inner, source: .carbon(sent: carbon.name == "sent"))
             return
         }
