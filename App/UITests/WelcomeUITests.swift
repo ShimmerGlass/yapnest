@@ -17,7 +17,13 @@ final class WelcomeUITests: XCTestCase {
         encrypt.switches.firstMatch.tap()
         XCTAssertNotEqual(encrypt.value as? String, before, "the switch didn't change")
 
+        // Below the switches' explanations on a phone, out of the list's
+        // drawn rows until scrolled to.
         let done = app.buttons["welcomeContinue"]
+        for _ in 0..<5 where !(done.exists && done.isHittable) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(done.isHittable, "Continue never came into view")
         XCTAssertTrue(done.isEnabled)
         done.tap()
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: encrypt)
