@@ -100,6 +100,8 @@ public final class XMPPSession: @unchecked Sendable {
     let allowsInsecureTransfers: Bool
     /// This client's XEP-0484 token, for signing in without the password.
     let fastTokens: FastTokenStore
+    /// Where `setAway`'s presences go out, one after the other.
+    let presenceQueue = DispatchQueue(label: "Yapnest.presence", qos: .userInitiated)
     /// Progress (0...1) of uploads and downloads under way, by message id.
     public let transfers = CurrentValueSubject<[Int64: Double], Never>([:])
     /// Group chats we're joining or in on this connection.
@@ -662,6 +664,8 @@ public final class XMPPSession: @unchecked Sendable {
     /// (XEP-0198), pushes for what arrives meanwhile, and `connect()` resumes
     /// it. For when the app goes to the background.
     public func suspend() {
+        // An away presence on its way out goes before the connection does.
+        presenceQueue.sync {}
         lock.withLock { $0.wantsConnection = false }
         _ = client.disconnect(true)
     }

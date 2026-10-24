@@ -364,7 +364,10 @@ extension XMPPSession {
             defer { $0.isAway = away }
             return $0.isAway != away
         }
-        if changed { sendPresence() }
+        // Called as the app leaves or returns, on the main thread, and what
+        // goes out reads the database. In order, so the last one sent says
+        // the latest.
+        if changed { presenceQueue.async { [weak self] in self?.sendPresence() } }
     }
 
     /// What we send for `availability`. Only available gives way to away:

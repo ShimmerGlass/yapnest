@@ -52,6 +52,19 @@ struct MainThreadAccessTests {
         #expect(hits == 0)
     }
 
+    /// The app says it's away as it leaves for the background and back as
+    /// it returns, on the main thread; what goes out reads the database.
+    @Test @MainActor func goingAwayAndBackIsOffTheMainThread() async throws {
+        let db = try open()
+        let session = try XMPPSession(credentials: .init(jid: JID("me@example.org")!, password: "x"), resource: "t", database: db)
+        let hits = try await count {
+            session.setAway(true)
+            session.setAway(false)
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        #expect(hits == 0)
+    }
+
     @Test func switchedOffByDefault() throws {
         let db = try open()
         #expect(!AppDatabase.trapsMainThreadAccess)
