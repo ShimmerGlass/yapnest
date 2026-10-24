@@ -473,6 +473,22 @@ Each entry gives what went wrong for users, why, and what changed.
   `LoginDuringDisconnectTests`, and by `twentyResumesInARow`, which logs in
   with no delay on every other round.
 
+**A catch-up cut off by a drop read as finished** (`XMPPClient`,
+`ResponseManager`)
+- *Symptom:* a connection that dropped while the archive query was out
+  showed as connected and synced for a moment before it read as
+  disconnected, and the resumed stream never ran the catch-up again, so what
+  the archive held was not fetched.
+- *Cause:* with the clean-up first, unbinding the session logic failed the
+  unanswered requests while `state` still read connected. Their callbacks,
+  which tell a drop from the server's answer by asking whether the client is
+  connected, took it for an answer on a live stream.
+- *Change:* the clean-up takes the unanswered requests out of the response
+  manager before it unbinds, and fails them after it publishes
+  `.disconnected`, outside the context's queue. Checked by
+  `LoginDuringDisconnectTests.aRequestTheDropLeftUnansweredFailsOnceTheClientReadsDisconnected`
+  and `SessionResilienceIntegrationTests.aDropDuringCatchUpNeverReadsConnectedAndSyncsAfterTheResume`.
+
 **Nothing to tell why a connection attempt failed**
 (`SocketConnectorNetwork.Options.diagnostics`)
 - *Symptom:* "can't connect on 4G" reports came with no way to see which

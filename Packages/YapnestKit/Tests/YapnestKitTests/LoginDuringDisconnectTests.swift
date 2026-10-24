@@ -97,4 +97,39 @@ struct LoginDuringDisconnectTests {
         #expect(seen.filter { $0 == .disconnected() }.count == 2, "states: \(seen)")
         #expect(seen == [.disconnected(), .connecting, .disconnected(), .connecting], "states: \(seen)")
     }
+
+    /// A request the drop left unanswered is failed by the clean-up. It used to be failed before the state
+    /// changed, so the session, which asks the client whether it's connected, took a catch-up query cut
+    /// off by the drop for an answer on a live stream, and reported the sync finished
+    /// (`SessionResilienceIntegrationTests.aDropDuringCatchUpNeverReadsConnectedAndSyncsAfterTheResume`).
+    @Test func aRequestTheDropLeftUnansweredFailsOnceTheClientReadsDisconnected() async throws {
+        let client = ProbeClient()
+        client.connectionConfiguration.userJid = BareJID("alice@localhost")
+        client.connectionConfiguration.connectorOptions = DrivenOptions()
+        _ = client.modulesManager.register(StreamFeaturesModule())
+        _ = client.modulesManager.register(AuthModule())
+        _ = client.modulesManager.register(ResourceBinderModule())
+        _ = client.modulesManager.register(StreamManagementModule())
+
+        client.login()
+        let connector = try #require(DrivenConnector.connectors(of: client).first)
+        connector.state = .connecting
+        await eventually("the attempt to be connecting") { client.state == .connecting }
+
+        let seen = NSLock()
+        nonisolated(unsafe) var stateWhenFailed: XMPPClient.State?
+        let iq = Iq()
+        iq.type = .get
+        iq.to = JID("localhost")
+        client.context.writer.write(iq, timeout: 30) { _ in
+            seen.withLock { stateWhenFailed = client.state }
+        }
+        // The request is sent, and so waits for an answer, rather than refused.
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(seen.withLock { stateWhenFailed } == nil)
+
+        connector.state = .disconnected()
+        await eventually("the request to fail") { seen.withLock { stateWhenFailed } != nil }
+        #expect(seen.withLock { stateWhenFailed } == .disconnected())
+    }
 }

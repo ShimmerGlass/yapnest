@@ -141,11 +141,19 @@ open class ResponseManager {
             }
         }
         timer = nil;
-        queue.sync {
-            for (id,handler) in self.handlers {
-                self.handlers.removeValue(forKey: id);
-                handler.callback(nil);
-            }
+        for callback in takeUnanswered() {
+            callback(nil);
+        }
+    }
+
+    /// Removes the requests still waiting for an answer and hands back their
+    /// callbacks, without calling them. The client fails them itself once it
+    /// reads as disconnected: called before, a callback would take the failure
+    /// for an answer on a live stream.
+    func takeUnanswered() -> [(Iq?) -> Void] {
+        return queue.sync {
+            defer { handlers.removeAll(); }
+            return handlers.values.map(\.callback);
         }
     }
     

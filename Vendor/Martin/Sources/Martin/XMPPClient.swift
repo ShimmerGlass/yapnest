@@ -221,14 +221,25 @@ open class XMPPClient: Context {
         keepaliveTimer = nil;
         let scopes: Set<ResetableScope> = clean ? [.session, .stream] : [.stream];
         self.reset(scopes: scopes);
-        dispatcher.sync {
+        let unanswered: [(Iq?) -> Void] = dispatcher.sync {
             guard sessionLogic === ended else {
-                return;
+                return [];
             }
+            // Taken out before the session logic lets go of the response
+            // manager, which would fail them while the state still reads
+            // connected, and before a new login can register its own.
+            let unanswered = responseManager.takeUnanswered();
             ended.unbind();
             sessionLogic = nil;
             // Last, so whoever sees .disconnected can log in at once.
             self.update(state: .disconnected(reason));
+            return unanswered;
+        }
+        // Failed once the state says the stream is gone, as they were before the
+        // clean-up came first: a callback that checks the connection then knows
+        // the drop, and not the server, ended its request.
+        for callback in unanswered {
+            callback(nil);
         }
         logger.debug("connection stopped......");
     }
