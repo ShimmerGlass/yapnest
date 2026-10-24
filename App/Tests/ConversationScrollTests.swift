@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import SwiftUI
 import Testing
 import YapnestKit
@@ -559,5 +560,78 @@ struct ConversationScrollTests {
         #expect(ConversationModel.blankRecovery(middle, flipped: true, reportsRows: false, nudges: 6) == nil)
         #expect(ConversationModel.blankRecovery(past, flipped: true, reportsRows: true, nudges: 0) == nil)
         #expect(ConversationModel.blankRecovery(short, flipped: true, reportsRows: false, nudges: 0) == nil)
+    }
+
+    /// Gives messages new bodies in one write, as an edit or anything else
+    /// that redraws a row would.
+    private func change(_ f: ConversationFixture, _ ids: [Int64], to body: String) throws {
+        try f.database.writer.write { db in
+            for id in ids { try Message.filter(key: id).updateAll(db, Column("body").set(to: body)) }
+        }
+    }
+
+    private func body(_ f: ConversationFixture, _ id: Int64) -> String? {
+        f.model.rows.first { $0.id == id }?.message.body
+    }
+
+    /// Flipped, a row between the newest message and what's on screen that
+    /// grows moves everything on screen, which the scroll view can't be held
+    /// against. It keeps what it was drawn with, even once scrolled into
+    /// view, where growing would move the rows above it, until the list is
+    /// back at the newest message.
+    @Test func aRowBelowTheScreenOfTheFlippedListWaitsForTheNewestEnd() async throws {
+        let f = try await opened(distance: 3_000, flipped: true)
+        await scrolledAway(f)
+        let ids = f.rowIDs
+        let (shown, below) = (ids[5], ids[20])
+        let revision = try #require(f.model.rows.first { $0.id == below }).revision
+
+        try change(f, [shown, below], to: "a photo and a card later")
+        await eventually("the row on screen never changed") { body(f, shown) == "a photo and a card later" }
+        #expect(body(f, below) != "a photo and a card later")
+        #expect(f.model.rows.first { $0.id == below }?.revision == revision)
+
+        // Scrolled down to it, and something else on screen changes.
+        f.model.visibleChanged([ids[21], below, ids[19]])
+        try change(f, [ids[19]], to: "a reaction, say")
+        await eventually("the row on screen never changed") { body(f, ids[19]) == "a reaction, say" }
+        #expect(f.model.rows.first { $0.id == below }?.revision == revision)
+
+        f.model.scrollToLatest()
+        await eventually("the held row was never let go") { body(f, below) == "a photo and a card later" }
+    }
+
+    /// A drag back down can leave the list resting a few points short of the
+    /// newest message, which doesn't count as following it.
+    @Test func rowsHeldBelowTheFlippedListAreLetGoNearTheNewest() async throws {
+        let f = try await opened(distance: 3_000, flipped: true)
+        await scrolledAway(f)
+        let ids = f.rowIDs
+        try change(f, [ids[5], ids[20]], to: "changed")
+        await eventually("the row on screen never changed") { body(f, ids[5]) == "changed" }
+        #expect(body(f, ids[20]) != "changed")
+
+        f.model.geometryChanged(geometry(flipped: true, distanceFromBottom: 5))
+        f.model.awayFromBottomChanged(false)
+        #expect(!f.model.followsBottom)
+        await eventually("the held row was never let go") { body(f, ids[20]) == "changed" }
+    }
+
+    /// Scrolled up and away from the newest message, as the list reports it.
+    private func scrolledAway(_ f: ConversationFixture) async {
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+        await eventually("the list never counted as away") { f.model.isAwayFromBottom }
+    }
+
+    /// The Mac's list keeps its place with the row on screen, so rows below change at once.
+    @Test func theUnflippedListRedrawsRowsBelowAtOnce() async throws {
+        let f = try await opened(distance: 3_000, flipped: false)
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        let ids = f.rowIDs
+        try change(f, [ids[5], ids[20]], to: "changed")
+        await eventually("the row below never changed") { body(f, ids[20]) == "changed" }
     }
 }

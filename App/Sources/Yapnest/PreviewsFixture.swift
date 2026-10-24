@@ -58,20 +58,25 @@ enum PreviewsFixture {
         _ = try add(endMarker)
     }
 
-    /// Holds the downloads until `releaseDownloads()`, if `YAPNEST_DEV_HOLD_DOWNLOADS` asks.
-    static func holdDownloads(into database: AppDatabase) {
+    /// Holds the downloads until `releaseDownloads()`, if `YAPNEST_DEV_HOLD_DOWNLOADS`
+    /// asks. `finish` is what the release does; another fixture can hold its own.
+    static func holdDownloads(into database: AppDatabase, finish: @escaping @Sendable (AppDatabase) -> Void = finishDownloads) {
         guard ProcessInfo.processInfo.environment["YAPNEST_DEV_HOLD_DOWNLOADS"] == "1" else { return }
-        held.withLock { $0 = database }
+        held.withLock { $0 = (database, finish) }
     }
 
     /// Whether downloads are being held, which is when the release button is drawn.
     static var isHolding: Bool { ProcessInfo.processInfo.environment["YAPNEST_DEV_HOLD_DOWNLOADS"] == "1" }
 
-    private static let held = OSAllocatedUnfairLock<AppDatabase?>(initialState: nil)
+    private static let held = OSAllocatedUnfairLock<(database: AppDatabase, finish: @Sendable (AppDatabase) -> Void)?>(initialState: nil)
 
     /// Finishes every held download.
     static func releaseDownloads() {
-        guard let database = held.withLock({ state -> AppDatabase? in defer { state = nil }; return state }) else { return }
+        guard let held = held.withLock({ state in defer { state = nil }; return state }) else { return }
+        held.finish(held.database)
+    }
+
+    private static func finishDownloads(_ database: AppDatabase) {
         Task.detached {
             try? await database.writer.write { db in
                 for var attachment in try Attachment.filter(Column("state") == Attachment.State.remote).fetchAll(db) {

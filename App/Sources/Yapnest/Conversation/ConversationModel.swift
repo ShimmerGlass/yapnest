@@ -312,7 +312,12 @@ final class ConversationModel {
     /// user scrolled back down to it, or the app took it there. The scroll
     /// view's own idea of the bottom moves as it measures rows, so this is
     /// what decides to go back, rather than where the offset happens to be.
-    @ObservationIgnored private(set) var followsBottom = true
+    @ObservationIgnored private(set) var followsBottom = true {
+        didSet { if followsBottom, !oldValue, !heldIDs.isEmpty { releaseHeldRowsSoon() } }
+    }
+    /// Rows below what's on screen, nearer the newest message, that are still
+    /// drawn as they were though their message changed. See `holdsRowsBelow`.
+    @ObservationIgnored private var heldIDs: Set<Int64> = []
     @ObservationIgnored private var userMoved = false
     /// Whether the list followed the bottom when the current interaction started.
     @ObservationIgnored private var followedBeforeInteraction = false
@@ -1080,6 +1085,9 @@ final class ConversationModel {
         let sameEnvironment = builtIn.map { $0.calendar == environment.calendar && $0.locale == environment.locale } ?? false
         builtIn = environment
         let neighbours = order.map { Neighbour(items[$0]!) }
+        let holds = holdsRowsBelow
+        let boundary = holds ? visibleIDs.compactMap { orderIndex[$0] }.max() : nil
+        var held: Set<Int64> = []
         for index in order.indices {
             let id = order[index]
             let item = items[id]!
@@ -1101,6 +1109,17 @@ final class ConversationModel {
                 newTexts[id] = textCache[id]
                 continue
             }
+            // Held too once it's scrolled into view, where growing would
+            // move the rows above it.
+            if holds, (boundary.map { index > $0 } ?? false) || heldIDs.contains(id), let existing = rowsByID[id] {
+                // Without its inputs, so it's built again once it's let go.
+                newInputs[id] = nil
+                held.insert(id)
+                built.append(existing)
+                byID[id] = existing
+                newTexts[id] = textCache[id]
+                continue
+            }
             let content = makeContent(inputs, texts: &newTexts)
             let row: MessageRow
             if let existing = rowsByID[id], existing.content == content {
@@ -1114,7 +1133,41 @@ final class ConversationModel {
         rowsByID = byID
         inputsByID = newInputs
         textCache = newTexts
+        heldIDs = held
         return built
+    }
+
+    /// Whether rows newer than the newest one on screen keep the content they
+    /// were drawn with when their message changes. Flipped, those rows sit
+    /// between the scroll view's resting point and what the user is reading,
+    /// so one that grows (a photo whose shape was only known once downloaded,
+    /// a link's preview card) moves everything on screen by its growth. The
+    /// scroll view can't be held against that: an id scroll sent with the
+    /// change is worked out on the lazy stack's estimates of the very rows
+    /// that changed, and overshoots on iOS 27. Letting a row go as it comes
+    /// into view moves what's above it just the same. So they wait, like new
+    /// messages (`holdsNewest`), until the list is back near the newest
+    /// message, where those come in too. Near it rather than at it: a drag can
+    /// leave the list resting a few points short, which doesn't count as
+    /// following, and the rows would wait on screen.
+    private var holdsRowsBelow: Bool {
+        isFlipped && hasLoaded && isPositioned && !followsBottom && isAwayFromBottom
+    }
+
+    /// Lets go of the held rows after the change that ended the hold, which
+    /// can come in the middle of applying rows.
+    private func releaseHeldRowsSoon() {
+        tasks["releaseHeld"] = Task { [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            tasks.finish("releaseHeld")
+            releaseHeldRows()
+        }
+    }
+
+    private func releaseHeldRows() {
+        guard !heldIDs.isEmpty else { return }
+        FrameLog.event("releaseHeldRows count=\(heldIDs.count)")
+        withoutAnimation { rebuildRows() }
     }
 
     private func makeContent(_ inputs: RowInputs, texts: inout [Int64: CachedText]) -> MessageRow.Content {
@@ -1473,6 +1526,7 @@ final class ConversationModel {
             isAwayFromBottom = false
             tasks.cancel("away")
             releaseNewest()
+            if !heldIDs.isEmpty { releaseHeldRowsSoon() }
             return
         }
         tasks["away"] = Task { [weak self] in

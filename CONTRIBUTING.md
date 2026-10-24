@@ -87,6 +87,7 @@ Two more servers have ports of their own, so all four can run together:
 - `learned-reactions`: a short chat, Reactions, on an account whose quick reactions have been learned, to see the long-press menu's row.
 - `quick-responses`: a chat, Bot, whose newest message offers suggested replies and actions (XEP-0439), and one before it with an action only.
 - `previews`: a chat, previews@fixture.test, of photos not downloaded yet, announced with their sizes and a tiny preview. `YAPNEST_DEV_HOLD_DOWNLOADS=1` keeps the downloads waiting until the test taps a hidden "Release downloads" button beside the frame recorder, to check that no row changes size when they do.
+- `late-content`: a chat, late@fixture.test, whose newest messages grow once they load: photos from an encrypted chat, which say nothing of their shape until downloaded, and links whose preview cards come late. With `YAPNEST_DEV_HOLD_DOWNLOADS=1` they wait for the same "Release downloads" button, to check that the list doesn't move when rows below what's on screen grow.
 
 The conversation's frame recorder (`ScrollRecorder.swift`) keeps what the list did on every frame: how far it strayed from the bottom while it was to stay there, how far the topmost message moved when older ones came in, how many rows were on screen. A glitch that lasts a frame is caught even though the test looks at the screen only now and then. The tests read it from an invisible element in the list's margin.
 

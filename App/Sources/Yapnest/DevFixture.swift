@@ -46,6 +46,9 @@ enum DevFixture: String, CaseIterable {
     case fuzz
     /// Photos not downloaded yet, announced with their shapes and previews; see `PreviewsFixture`.
     case previews
+    /// Newest messages that grow once the chat is open: photos that only say
+    /// their shape once downloaded, and links whose previews come late; see `LateContentFixture`.
+    case lateContent = "late-content"
     /// Realistic chats for the App Store screenshots; see `ScreenshotsFixture`.
     case screenshots
     /// Arabic and Hebrew chats beside an English one, for checking right-to-left layout; see `RTLFixture`.
@@ -87,6 +90,9 @@ enum DevFixture: String, CaseIterable {
         case .previews:
             try PreviewsFixture.fill(database)
             PreviewsFixture.holdDownloads(into: database)
+        case .lateContent:
+            try LateContentFixture.fill(database)
+            PreviewsFixture.holdDownloads(into: database, finish: LateContentFixture.release)
         case .screenshots: try ScreenshotsFixture.fill(database)
         case .rtl: try RTLFixture.fill(database)
         }
