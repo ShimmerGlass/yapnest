@@ -85,7 +85,12 @@ struct ChatListBranches: View {
 /// there, with the tile's edges wrapped, so none cross, here or where one
 /// tile meets the next. Birds then take the level spots with room above them.
 struct BranchTile {
-    static let side: CGFloat = 720
+    /// A Mac's window is wide enough for longer boughs, set further apart,
+    /// where a phone's would read as a thicket.
+    static let side: CGFloat = Platform.isMac ? 1080 : 720
+    private static let lengths: ClosedRange<CGFloat> = Platform.isMac ? 320...720 : 160...440
+    private static let spacing = Platform.isMac ? 3 : 1
+    private static let birds = Platform.isMac ? 8 : 7
     static let shared = BranchTile()
 
     let lines: Path
@@ -112,15 +117,26 @@ struct BranchTile {
         var perched: [CGPoint] = []
         // The birds' boughs first, level and bare on top, while there's
         // room for them; then the rest wherever they fit.
-        let birds = 7
-        for attempt in 0..<4000 {
+        let birds = Self.birds
+        let attempts = 4000
+        func length(forBird: Bool, attempt: Int, random: inout LowPolyTree.Random) -> CGFloat {
+            let lengths = Self.lengths
+            guard Platform.isMac else { return lengths.lowerBound + random.unit() * (lengths.upperBound - lengths.lowerBound) }
+            // A bird's bough stays short, as all its twigs hang one way. The
+            // rest are tried longest first, as long ones stop fitting once
+            // the tile fills.
+            if forBird { return 160 + random.unit() * 200 }
+            let progress = CGFloat(attempt) / CGFloat(attempts)
+            return lengths.upperBound - (lengths.upperBound - lengths.lowerBound) * progress * (0.8 + random.unit() * 0.2)
+        }
+        for attempt in 0..<attempts {
             let forBird = perched.count < birds && attempt < 2000
             let level = forBird || random.unit() < 0.6
             let tilt = forBird ? (random.unit() - 0.5) * 0.5 : level ? (random.unit() - 0.5) * 0.9 : 0.6 + random.unit() * 0.5
             let bough = LowPolyTree.Bough(
                 at: CGPoint(x: random.unit() * side, y: random.unit() * side),
                 heading: (random.unit() < 0.5 ? 0 : .pi) + (random.unit() < 0.5 ? tilt : -tilt),
-                length: 160 + random.unit() * 280,
+                length: length(forBird: forBird, attempt: attempt, random: &random),
                 width: 8 + random.unit() * 8,
                 curl: (random.unit() - 0.5) * 0.005,
                 seed: UInt64(attempt) + 1,
@@ -128,9 +144,9 @@ struct BranchTile {
                 bare: forBird
             )
             let grown = LowPolyTree([bough])
-            // A cell clear all round, so branches keep apart rather than
+            // Cells clear all round, so branches keep apart rather than
             // touching.
-            guard grown.marks.allSatisfy({ clear($0, by: 1) }) else { continue }
+            guard grown.marks.allSatisfy({ clear($0, by: Self.spacing) }) else { continue }
             let before = taken
             for mark in grown.marks {
                 let (x, y) = cell(mark)
