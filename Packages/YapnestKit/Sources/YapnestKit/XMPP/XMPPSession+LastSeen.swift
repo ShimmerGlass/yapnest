@@ -27,10 +27,19 @@ extension XMPPSession {
     /// capabilities.
     var offersLastActivity: Bool { policy.announcesPresence && sharesLastSeen }
 
+    /// Where the app can tell how long the machine has gone untouched (the
+    /// Mac), our idle time comes from there: someone working in another app
+    /// isn't idle.
+    public func setIdleSource(_ source: (@Sendable () -> TimeInterval)?) {
+        lock.withLock { $0.idleSource = source }
+    }
+
     /// Seconds since the user last used the app, or left it: nothing while
-    /// they're in it.
+    /// they're in it. From `setIdleSource` where there is one.
     func idleSeconds(now: Date = Date()) -> Int {
-        guard let since = lock.withLock({ $0.idleSince }) else { return 0 }
+        let (source, since) = lock.withLock { ($0.idleSource, $0.idleSince) }
+        if let source { return max(0, Int(source())) }
+        guard let since else { return 0 }
         return max(0, Int(now.timeIntervalSince(since)))
     }
 

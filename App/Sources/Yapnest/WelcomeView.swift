@@ -49,7 +49,7 @@ struct WelcomeView: View {
                 Section {
                     option("Send Read Receipts", isOn: $sendsReadMarkers, detail: "The people you chat with see when you've read their messages.")
                     option("Send Typing Indicator", isOn: $sendsChatStates, detail: "The people you chat with see when you're typing.")
-                    option("Activity Status", isOn: $sharesLastSeen, detail: "Your contacts see how long ago you were online, and see you as away once you leave Yapnest. You see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
+                    option("Activity Status", isOn: $sharesLastSeen, detail: "Your contacts see how long ago you were online, and see you as away once you leave Yapnest on your iPhone or iPad, or step away from your Mac. You see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
                 }
                 if Klipy.apiKey != nil {
                     Section {

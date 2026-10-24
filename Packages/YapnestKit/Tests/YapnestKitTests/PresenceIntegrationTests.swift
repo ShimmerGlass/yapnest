@@ -42,6 +42,8 @@ extension LiveServer {
                 try a.database.reader.read { try Contact.fetchOne($0, key: bob)?.seesPresence } == true
             }
 
+            // A settings sync finishing would send bob's own presence over it.
+            try await waitUntil("bob's settings to sync") { b.lock.withLock { $0.settingsSync.syncCompleted } }
             b.setShowForTesting(.dnd)
             try await waitUntil("alice to see bob busy") { a.presence(of: bob) == .busy }
 
@@ -70,20 +72,19 @@ extension LiveServer {
             b.addContact(alice)
             try await waitUntil("alice to see bob online") { a.presence(of: bob) == .online }
 
-            // The setting syncs through the account, so an earlier run may have left it on.
-            try b.setSharesLastSeen(false)
-            b.setSuspending(true)
+            try await LiveServer.setSharesLastSeen(false, on: b)
+            b.setAway(true)
             try await Task.sleep(for: .seconds(1))
             #expect(a.presence(of: bob) == .online, "not without sharing last seen")
-            try b.setSharesLastSeen(true)
-            defer { try? b.setSharesLastSeen(false) }
+            try await LiveServer.setSharesLastSeen(true, on: b)
             try await waitUntil("alice to see bob away") { a.presence(of: bob) == .away }
             b.suspend()
             try await waitUntil("bob to drop the connection") { if case .disconnected = b.state.value { true } else { false } }
 
-            b.setSuspending(false)
+            b.setAway(false)
             try await connected(b)
             try await waitUntil("alice to see bob online again") { a.presence(of: bob) == .online }
+            try await LiveServer.setSharesLastSeen(false, on: b)
         }
     }
 }

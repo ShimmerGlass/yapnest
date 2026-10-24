@@ -152,6 +152,9 @@ final class AppModel {
     @ObservationIgnored private var unreadObservation: Task<Void, Never>?
     /// Hears from the share extension when it leaves messages for us.
     @ObservationIgnored private var pendingSends: PendingSendsSignal?
+    #if targetEnvironment(macCatalyst)
+    @ObservationIgnored private var idleWatch: IdleWatch?
+    #endif
     /// Claiming notifications for new messages, and whether more came since it started.
     @ObservationIgnored private var claim: Task<Void, Never>?
     @ObservationIgnored private var claimsAgain = false
@@ -441,7 +444,7 @@ final class AppModel {
             callWatch = nil
             endBackgroundTask()
             // Before connecting, so a new session starts with what was chosen.
-            session.setSuspending(false)
+            session.setAway(false)
             connect(session)
             // Seen here: no notification for any of it.
             let database = session.database
@@ -517,7 +520,7 @@ final class AppModel {
         guard suspension == nil, callWatch == nil else { return }
         guard !holdsForCall(session) else { return }
         // Sent now, while the connection is still up to carry it.
-        session.setSuspending(true)
+        session.setAway(true)
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Suspend session") { [weak self] in
             MainActor.assumeIsolated { self?.suspend(session) }
         }
@@ -577,6 +580,9 @@ final class AppModel {
     private func didSignIn(_ session: XMPPSession) {
         observeUnread(session)
         observeShares()
+        #if targetEnvironment(macCatalyst)
+        idleWatch = IdleWatch(session: session)
+        #endif
         // The token doesn't depend on the permission, and with it, allowing
         // notifications later in Settings needs nothing else.
         guard environment.registersForNotifications else { return }
@@ -803,6 +809,10 @@ final class AppModel {
         sessionLock.unlock()
         unreadObservation?.cancel()
         pendingSends = nil
+        #if targetEnvironment(macCatalyst)
+        idleWatch?.stop()
+        idleWatch = nil
+        #endif
         cancellables = []
         connection = .disconnected(error: nil)
         presences = [:]

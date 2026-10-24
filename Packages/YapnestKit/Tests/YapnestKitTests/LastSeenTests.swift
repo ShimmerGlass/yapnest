@@ -62,6 +62,19 @@ struct LastSeenTests {
         #expect(session.idleSeconds(now: now) == 0)
     }
 
+    @Test func theMachinesIdleTimeWinsWhereThereIsOne() throws {
+        let session = try makeSession(me)
+        session.setActive(false)
+        session.setIdleSource { 42.9 }
+        #expect(session.idleSeconds() == 42)
+        // In another app but still at the machine: not idle.
+        session.setIdleSource { 0 }
+        #expect(session.idleSeconds() == 0)
+        session.setIdleSource(nil)
+        session.lock.withLock { $0.idleSince = Date().addingTimeInterval(-30) }
+        #expect(session.idleSeconds() >= 30)
+    }
+
     @Test func sessionIdlesFromWhenItLeftTheApp() throws {
         let session = try makeSession(me)
         #expect(session.idleSeconds() == 0)

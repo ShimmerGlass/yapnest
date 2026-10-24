@@ -179,11 +179,11 @@ struct ProfileTests {
         #expect(try session.database.setting(.statusMessage) == nil)
     }
 
-    @Test func suspendingShowsAvailableAsAwayOnly() {
-        #expect(XMPPSession.show(for: .available, suspending: true) == .away)
-        #expect(XMPPSession.show(for: .dnd, suspending: true) == .dnd)
-        #expect(XMPPSession.show(for: .away, suspending: true) == .away)
-        #expect(XMPPSession.show(for: .available, suspending: false) == .online)
+    @Test func beingAwayShowsAvailableAsAwayOnly() {
+        #expect(XMPPSession.show(for: .available, away: true) == .away)
+        #expect(XMPPSession.show(for: .dnd, away: true) == .dnd)
+        #expect(XMPPSession.show(for: .away, away: true) == .away)
+        #expect(XMPPSession.show(for: .available, away: false) == .online)
     }
 
     @Test func availabilityMapsToShow() {

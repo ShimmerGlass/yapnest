@@ -252,8 +252,11 @@ public final class XMPPSession: @unchecked Sendable {
         var isActive = true
         /// When the user left the app (XEP-0012's idle time); nil while in it.
         var idleSince: Date?
-        /// Whether the app is suspending, which shows us away: see `setSuspending`.
-        var isSuspending = false
+        /// Whether the user isn't there, which shows us away: see `setAway`.
+        var isAway = false
+        /// The seconds since the user last touched the machine, where the app
+        /// can tell, in place of `idleSince`.
+        var idleSource: (@Sendable () -> TimeInterval)?
         /// Whether our presence changed while disconnected. Martin sends it on
         /// a new session, but a resumed one keeps what the server last had.
         var presenceUnsent = false

@@ -109,7 +109,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Privacy")
                 } footer: {
-                    Text("Only the people you've added see these. With Activity Status on, your contacts see how long ago you were online, and see you as away once you leave Yapnest. You see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
+                    Text("Only the people you've added see these. With Activity Status on, your contacts see how long ago you were online, and see you as away once you leave Yapnest on your iPhone or iPad, or step away from your Mac. You see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
                 }
                 .disabled(!isLoaded)
 
