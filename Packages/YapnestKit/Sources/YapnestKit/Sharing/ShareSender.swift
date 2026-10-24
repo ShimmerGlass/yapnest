@@ -50,11 +50,19 @@ public struct ShareSender: Sendable {
     /// can be tried without one.
     var makeSession: (@Sendable (AppDatabase) throws -> XMPPSession)?
 
-    public init(credentials: XMPPSession.Credentials, directory: URL, resource: String, lock: ProcessLock = SharedContainer.sessionLock) {
+    /// This device's OMEMO identity, the app's, which the session needs to
+    /// decrypt; nil for the keychain's.
+    public var identityKeys: (any IdentityKeyStore)?
+
+    public init(
+        credentials: XMPPSession.Credentials, directory: URL, resource: String, lock: ProcessLock = SharedContainer.sessionLock,
+        identityKeys: (any IdentityKeyStore)? = nil,
+    ) {
         self.credentials = credentials
         self.directory = directory
         self.resource = resource
         self.lock = lock
+        self.identityKeys = identityKeys
     }
 
     /// For the signed-in account, or nil if the app hasn't been signed in.
@@ -131,7 +139,7 @@ public struct ShareSender: Sendable {
         let session: XMPPSession
         do {
             session = try makeSession?(database)
-                ?? XMPPSession(credentials: credentials, resource: resource, directory: account, database: database, mode: .share)
+                ?? XMPPSession(credentials: credentials, resource: resource, directory: account, database: database, mode: .share, identityKeys: identityKeys)
         } catch {
             return .queued(error.localizedDescription)
         }

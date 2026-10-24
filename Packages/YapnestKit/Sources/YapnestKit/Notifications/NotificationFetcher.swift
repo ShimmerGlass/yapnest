@@ -26,11 +26,19 @@ public struct NotificationFetcher: Sendable {
     public var resource: String
     public var lock: ProcessLock
 
-    public init(credentials: XMPPSession.Credentials, directory: URL, resource: String, lock: ProcessLock = SharedContainer.sessionLock) {
+    /// This device's OMEMO identity, the app's, which the session needs to
+    /// decrypt; nil for the keychain's.
+    public var identityKeys: (any IdentityKeyStore)?
+
+    public init(
+        credentials: XMPPSession.Credentials, directory: URL, resource: String, lock: ProcessLock = SharedContainer.sessionLock,
+        identityKeys: (any IdentityKeyStore)? = nil,
+    ) {
         self.credentials = credentials
         self.directory = directory
         self.resource = resource
         self.lock = lock
+        self.identityKeys = identityKeys
     }
 
     private static let logger = Logger(subsystem: "Yapnest", category: "Notifications")
@@ -109,6 +117,7 @@ public struct NotificationFetcher: Sendable {
             let database = try account.openDatabase()
             let session = try XMPPSession(
                 credentials: credentials, resource: resource, directory: account, database: database, mode: .notificationService,
+                identityKeys: identityKeys,
             )
             let caughtUp = await session.catchUpOnce(timeout: timeout)
             DiagLog.info(.notificationExtension, "Catch-up finished", .bool("completed", caughtUp), .duration("budget", timeout))

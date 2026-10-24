@@ -341,6 +341,7 @@ public final class XMPPSession: @unchecked Sendable {
         pushRelay: JID = XMPPSession.defaultPushRelay,
         fastTokens: FastTokenStore = MemoryFastTokenStore(),
         callMedia: (any CallMediaFactory)? = nil,
+        identityKeys: (any IdentityKeyStore)? = nil,
     ) throws {
         self.callMedia = callMedia
         self.account = credentials.jid
@@ -353,7 +354,7 @@ public final class XMPPSession: @unchecked Sendable {
         self.attachments = attachments
         self.allowsInsecureTransfers = credentials.disableTLS
         database.allowsInsecureLinks = credentials.disableTLS
-        self.omemo = try OMEMOEncryption(database: database, account: credentials.jid)
+        self.omemo = try OMEMOEncryption(database: database, account: credentials.jid, identityKeys: identityKeys ?? database.localIdentityKeys)
 
         client.connectionConfiguration.userJid = credentials.jid.martin
         client.connectionConfiguration.credentials = .password(password: credentials.password)

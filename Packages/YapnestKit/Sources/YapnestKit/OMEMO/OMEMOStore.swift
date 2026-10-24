@@ -3,7 +3,8 @@ import GRDB
 @preconcurrency import MartinOMEMO
 
 /// Keeps the account's OMEMO keys, sessions and peer identities in its
-/// database.
+/// database, except this device's identity key pair, which is in
+/// `identityKeys`: see `StoredIdentity`.
 ///
 /// libsignal calls these synchronously from inside its own lock, on whatever
 /// queue is encrypting or decrypting; every call is a short database
@@ -15,6 +16,7 @@ import GRDB
 final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, SignalSignedPreKeyStoreProtocol,
     SignalIdentityKeyStoreProtocol, SignalSenderKeyStoreProtocol, @unchecked Sendable {
     private let database: AppDatabase
+    private let identityKeys: any IdentityKeyStore
     private let account: String
     private let lock = NSLock()
     private var cachedKeyPair: SignalIdentityKeyPair?
@@ -22,8 +24,9 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// The clock, so tests can move it.
     private let now: @Sendable () -> Date
 
-    init(database: AppDatabase, account: JID, now: @escaping @Sendable () -> Date = { Date() }) {
+    init(database: AppDatabase, account: JID, identityKeys: (any IdentityKeyStore)? = nil, now: @escaping @Sendable () -> Date = { Date() }) {
         self.database = database
+        self.identityKeys = identityKeys ?? database.localIdentityKeys
         self.account = account.description
         self.now = now
     }
@@ -43,40 +46,81 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
 
     // MARK: Local identity
 
-    /// Creates this device's identity and device id on first use.
+    /// Finds this device's identity, or makes one: on first use, and when
+    /// the database names a device whose key isn't here, which is a backup
+    /// restored on another device, or onto this one after the keychain was
+    /// cleared. That device's sessions and prekeys are useless without its
+    /// key, so they go, and this becomes a new device; what the user decided
+    /// about contacts' devices stays. A keychain that can't be read throws
+    /// rather than start over.
     func setUpIdentityIfNeeded(context: SignalContext) throws {
-        guard keyPair() == nil else { return }
+        let registrationId = (try database.setting(.omemoRegistrationId)).flatMap { UInt32($0) }
+        if let legacy = try database.setting(.omemoIdentityKeyPair) {
+            // One that can't be moved goes all the same: a new device is made below.
+            if let registrationId, let data = Data(base64Encoded: legacy) {
+                try moveToKeychain(StoredIdentity(registrationId: registrationId, keyPair: data))
+            }
+            try eraseLegacyKey()
+        }
+        let stored = try identityKeys.load()
+        if let registrationId, let stored, stored.registrationId == registrationId {
+            use(stored)
+            return
+        }
         guard let keyPair = SignalIdentityKeyPair.generateKeyPair(context: context), let data = keyPair.keyPair else {
             throw OMEMOError.keyGenerationFailed
         }
-        let registrationId = context.generateRegistrationId()
-        guard registrationId != 0 else { throw OMEMOError.keyGenerationFailed }
-        try database.setSetting(.omemoIdentityKeyPair, data.base64EncodedString())
-        try database.setSetting(.omemoRegistrationId, String(registrationId))
+        let newId = context.generateRegistrationId()
+        guard newId != 0 else { throw OMEMOError.keyGenerationFailed }
+        let identity = StoredIdentity(registrationId: newId, keyPair: data)
+        // The key first: stopped in between, the database still names the
+        // old device, which has no key here, and this runs again.
+        try identityKeys.save(identity)
+        try database.writer.write { db in
+            if registrationId != nil {
+                try db.execute(sql: "DELETE FROM omemoSession")
+                try db.execute(sql: "DELETE FROM omemoPreKey")
+                try db.execute(sql: "DELETE FROM omemoSignedPreKey")
+            }
+            try AppDatabase.setSetting(db, .omemoRegistrationId, String(newId))
+        }
+        use(identity)
+    }
+
+    /// From a version that kept the key in the database, which it leaves
+    /// only once the keychain holds it.
+    private func moveToKeychain(_ identity: StoredIdentity) throws {
+        try identityKeys.save(identity)
+        guard try identityKeys.load() == identity else { throw OMEMOError.identityNotStored }
+    }
+
+    /// Removes the key from the database with its page zeroed, then copies
+    /// the zeroed page from the WAL over the one in the file, which still
+    /// holds the key until a checkpoint.
+    private func eraseLegacyKey() throws {
+        try database.writer.writeWithoutTransaction { db in
+            try db.execute(sql: "PRAGMA secure_delete = ON")
+            defer { try? db.execute(sql: "PRAGMA secure_delete = OFF") }
+            try AppDatabase.setSetting(db, .omemoIdentityKeyPair, nil)
+            // Readers in other processes can hold it back; the next one finishes it.
+            _ = try? db.checkpoint(.truncate)
+        }
+    }
+
+    private func use(_ identity: StoredIdentity) {
         lock.withLock {
-            cachedKeyPair = nil
-            cachedRegistrationId = nil
+            cachedKeyPair = SignalIdentityKeyPair(fromKeyPairData: identity.keyPair)
+            cachedRegistrationId = identity.registrationId
         }
     }
 
     func keyPair() -> SignalIdentityKeyPairProtocol? {
-        lock.withLock {
-            if cachedKeyPair == nil,
-               let encoded = try? database.setting(.omemoIdentityKeyPair),
-               let data = Data(base64Encoded: encoded) {
-                cachedKeyPair = SignalIdentityKeyPair(fromKeyPairData: data)
-            }
-            return cachedKeyPair
-        }
+        lock.withLock { cachedKeyPair }
     }
 
+    /// This device's id, found with its key by `setUpIdentityIfNeeded`.
     func localRegistrationId() -> UInt32 {
-        lock.withLock {
-            if cachedRegistrationId == nil {
-                cachedRegistrationId = (try? database.setting(.omemoRegistrationId)).flatMap { UInt32($0) }
-            }
-            return cachedRegistrationId ?? 0
-        }
+        lock.withLock { cachedRegistrationId ?? 0 }
     }
 
     // MARK: Sessions
@@ -365,4 +409,6 @@ extension AppDatabase {
 enum OMEMOError: Error {
     case keyGenerationFailed
     case identityChanged
+    /// The keychain took the identity but gave back something else.
+    case identityNotStored
 }

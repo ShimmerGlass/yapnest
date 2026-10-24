@@ -30,9 +30,9 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// How long to wait for device lists and bundles before giving up on a send.
     static let setupTimeout: TimeInterval = 45
 
-    init(database: AppDatabase, account: JID, now: @escaping @Sendable () -> Date = { Date() }) throws {
+    init(database: AppDatabase, account: JID, identityKeys: (any IdentityKeyStore)? = nil, now: @escaping @Sendable () -> Date = { Date() }) throws {
         self.account = account
-        store = OMEMOStore(database: database, account: account, now: now)
+        store = OMEMOStore(database: database, account: account, identityKeys: identityKeys ?? database.localIdentityKeys, now: now)
         storage = SignalStorage(sessionStore: store, preKeyStore: store, signedPreKeyStore: store, identityKeyStore: store, senderKeyStore: store)
         guard let context = SignalContext(withStorage: storage) else { throw OMEMOError.keyGenerationFailed }
         self.context = context

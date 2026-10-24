@@ -128,6 +128,7 @@ final class AppModel {
         /// What signing out clears beyond the account's own folder.
         var forgetSharedState: @MainActor () -> Void = {
             KeychainFastTokenStore.deleteAll()
+            KeychainIdentityKeyStore.deleteAll()
             ShareSuggestions.removeAll()
             DraftWriter.shared.forgetAll()
         }

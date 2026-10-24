@@ -38,9 +38,10 @@ extension LiveServer {
             let ca = try LiveServer.devCA()
             let proxy = try await FreezableProxy(to: UInt16(LiveServer.target.port))
             defer { proxy.stop() }
+            let aliceDevice = try LiveServer.keptDevice("tls-alice")
             let a = try XMPPSession(
                 credentials: .init(jid: alice, password: "password", host: "127.0.0.1", port: proxy.port, disableTLS: false),
-                resource: "tls-alice-\(UUID().uuidString.prefix(6))", database: try LiveServer.keptDevice("tls-alice"),
+                resource: "tls-alice-\(UUID().uuidString.prefix(6))", database: aliceDevice, identityKeys: testIdentityKeys(for: aliceDevice),
             )
             a.trustOnly([ca])
             let b = try LiveServer.makeSession(bob, resource: "tls-bob-\(UUID().uuidString.prefix(6))", database: try LiveServer.keptDevice("tls-bob"))

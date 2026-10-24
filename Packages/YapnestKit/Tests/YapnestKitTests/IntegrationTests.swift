@@ -235,7 +235,7 @@ extension LiveServer.IntegrationTests {
         // Answered elsewhere: not repeated on the laptop's next sign-in.
         let later = try XMPPSession(
             credentials: .init(jid: alice, password: "password", host: "127.0.0.1", port: LiveServer.target.port, disableTLS: true),
-            resource: "laptop-again", database: laptop.database,
+            resource: "laptop-again", database: laptop.database, identityKeys: testIdentityKeys(for: laptop.database),
         )
         try await connected(later)
         #expect(try !request(on: later))
@@ -253,7 +253,7 @@ extension LiveServer.IntegrationTests {
             phone.disconnect()
             phone = try XMPPSession(
                 credentials: .init(jid: alice, password: "password", host: "127.0.0.1", port: LiveServer.target.port, disableTLS: true),
-                resource: "phone-again", database: phone.database,
+                resource: "phone-again", database: phone.database, identityKeys: testIdentityKeys(for: phone.database),
             )
             try await connected(phone)
             #expect(try !request(on: phone))
@@ -353,7 +353,7 @@ extension LiveServer.IntegrationTests {
 
         let later = try XMPPSession(
             credentials: .init(jid: bob, password: "password", host: "127.0.0.1", port: LiveServer.target.port, disableTLS: true),
-            resource: "laptop-again", database: laptop.database,
+            resource: "laptop-again", database: laptop.database, identityKeys: testIdentityKeys(for: laptop.database),
         )
         try await connected(later)
         defer { later.disconnect() }

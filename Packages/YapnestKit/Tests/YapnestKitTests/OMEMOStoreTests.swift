@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Security
 @preconcurrency import MartinOMEMO
 import Testing
 @testable import YapnestKit
@@ -79,13 +80,117 @@ struct OMEMOStoreTests {
     }
 
     @Test func identityIsCreatedOnceAndPersists() throws {
-        let database = try AppDatabase.inMemory()
-        let first = try OMEMOEncryption(database: database, account: me)
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let first = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
         let id = first.deviceId
         #expect(id != 0)
-        let second = try OMEMOEncryption(database: database, account: me)
+        let second = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
         #expect(second.deviceId == id)
         #expect(second.store.keyPair()?.publicKey == first.store.keyPair()?.publicKey)
+    }
+
+    // MARK: Identity outside the database
+
+    @Test func theKeyPairIsNeverWrittenToTheDatabase() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let omemo = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(try database.setting(.omemoIdentityKeyPair) == nil)
+        let stored = try #require(try keys.load())
+        #expect(stored.registrationId == omemo.deviceId)
+        #expect(stored.keyPair == (omemo.store.keyPair() as? SignalIdentityKeyPair)?.keyPair)
+    }
+
+    /// An install from before keeps its device: the key moves out of the
+    /// database, and the same device id and key carry on.
+    @Test func aKeyInTheDatabaseMovesToTheKeychain() throws {
+        let database = try AppDatabase.inMemory()
+        let old = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        let pair = try #require((old.store.keyPair() as? SignalIdentityKeyPair)?.keyPair)
+        try database.setSetting(.omemoIdentityKeyPair, pair.base64EncodedString())
+        #expect(old.store.storeSessionRecord(Data([1]), forAddress: SignalAddress(name: bob, deviceId: 7)))
+
+        let keys = MemoryIdentityKeyStore()
+        let upgraded = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(upgraded.deviceId == old.deviceId)
+        #expect(upgraded.store.keyPair()?.publicKey == old.store.keyPair()?.publicKey)
+        #expect(try keys.load() == StoredIdentity(registrationId: old.deviceId, keyPair: pair))
+        #expect(try database.setting(.omemoIdentityKeyPair) == nil)
+        #expect(upgraded.store.sessionRecord(forAddress: SignalAddress(name: bob, deviceId: 7)) == Data([1]), "a move isn't a restore")
+    }
+
+    /// The moved key leaves no copy in the files a backup takes: its page is
+    /// zeroed, and the file's older copy of the page is overwritten.
+    @Test func aMovedKeyLeavesNoTraceInTheDatabaseFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "legacy-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appending(path: "db.sqlite")
+        let database = try AppDatabase.open(at: url)
+        let old = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        let pair = try #require((old.store.keyPair() as? SignalIdentityKeyPair)?.keyPair)
+        let encoded = pair.base64EncodedString()
+        try database.setSetting(.omemoIdentityKeyPair, encoded)
+        try database.writer.writeWithoutTransaction { try $0.checkpoint(.truncate) }
+        let files = ["", "-wal"].map { URL(filePath: url.path + $0) }
+        #expect(files.contains { (try? Data(contentsOf: $0))?.range(of: Data(encoded.utf8)) != nil }, "the key starts out on disk")
+
+        _ = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        for file in files {
+            #expect((try? Data(contentsOf: file))?.range(of: Data(encoded.utf8)) == nil, "\(file.lastPathComponent) still holds the key")
+        }
+    }
+
+    /// A key that can't be moved, with no device id beside it, is erased all the same.
+    @Test func aKeyThatCantBeMovedIsErasedAnyway() throws {
+        let database = try AppDatabase.inMemory()
+        try database.setSetting(.omemoIdentityKeyPair, Data(repeating: 7, count: 33).base64EncodedString())
+        _ = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        #expect(try database.setting(.omemoIdentityKeyPair) == nil)
+    }
+
+    /// A database restored from a backup, without the keychain that held its
+    /// key: a new device, its predecessor's sessions and prekeys gone, the
+    /// user's trust in contacts' devices kept.
+    @Test func aDatabaseWithoutItsKeyBecomesANewDevice() throws {
+        let database = try AppDatabase.inMemory()
+        let old = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        let bobsDevice = SignalAddress(name: bob, deviceId: 7)
+        #expect(old.store.storeSessionRecord(Data([1]), forAddress: bobsDevice))
+        #expect(old.store.storePreKey(Data([2]), withId: 1))
+        #expect(old.store.storeSignedPreKey(Data([3]), withId: 1))
+        #expect(old.store.save(identity: bobsDevice, publicKeyData: key(0x07)))
+
+        let restored = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        #expect(restored.deviceId != old.deviceId)
+        #expect(restored.store.keyPair()?.publicKey != old.store.keyPair()?.publicKey)
+        #expect(restored.store.sessionRecord(forAddress: bobsDevice) == nil)
+        #expect(restored.store.loadPreKey(withId: 1) == nil)
+        #expect(restored.store.loadSignedPreKey(withId: 1) == nil)
+        #expect(restored.store.isTrusted(identity: bobsDevice, publicKeyData: key(0x07)))
+    }
+
+    /// A key left in the keychain by an earlier install doesn't go with a
+    /// new database's device.
+    @Test func aStaleKeyIsReplacedForANewDatabase() throws {
+        let keys = MemoryIdentityKeyStore()
+        let earlier = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: keys)
+        let fresh = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: keys)
+        #expect(fresh.store.keyPair()?.publicKey != earlier.store.keyPair()?.publicKey)
+        #expect(try keys.load()?.registrationId == fresh.deviceId)
+    }
+
+    /// A keychain that can't be read, as before the first unlock, isn't a
+    /// missing key: nothing is wiped or replaced.
+    @Test func anUnreadableKeychainLeavesTheDeviceAlone() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let omemo = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        let bobsDevice = SignalAddress(name: bob, deviceId: 7)
+        #expect(omemo.store.storeSessionRecord(Data([1]), forAddress: bobsDevice))
+        let identity = try keys.load()
+
+        #expect(throws: KeychainError.self) { try OMEMOEncryption(database: database, account: me, identityKeys: LockedIdentityKeyStore()) }
+        #expect(try database.setting(.omemoRegistrationId) == String(omemo.deviceId))
+        #expect(omemo.store.sessionRecord(forAddress: bobsDevice) == Data([1]))
+        #expect(try keys.load() == identity)
     }
 
     @Test func fingerprintDropsTypeByte() {
@@ -163,4 +268,10 @@ struct TrustTests {
         #expect(!store.containsSessionRecord(forAddress: SignalAddress(name: bob.description, deviceId: 1)))
         #expect(store.containsSessionRecord(forAddress: SignalAddress(name: bob.description, deviceId: 2)))
     }
+}
+
+/// A keychain before the device's first unlock.
+private struct LockedIdentityKeyStore: IdentityKeyStore {
+    func load() throws -> StoredIdentity? { throw KeychainError(status: errSecInteractionNotAllowed) }
+    func save(_ identity: StoredIdentity) throws { throw KeychainError(status: errSecInteractionNotAllowed) }
 }

@@ -21,10 +21,12 @@ extension LiveServer {
             let directory = root.appending(path: "alice")
 
             // Bob is signed in and has published his keys.
+            let bobDevice = try OMEMOIntegrationTests.device("bob-share")
             let bobSession = try XMPPSession(
                 credentials: .init(jid: bob, password: "password", host: "127.0.0.1", port: LiveServer.target.port, disableTLS: true),
-                resource: "bob-share", database: try OMEMOIntegrationTests.device("bob-share"),
+                resource: "bob-share", database: bobDevice,
                 attachments: AttachmentStore(directory: root.appending(path: "bob-attachments")),
+                identityKeys: testIdentityKeys(for: bobDevice),
             )
             bobSession.connect()
             defer { bobSession.disconnect() }
@@ -37,6 +39,7 @@ extension LiveServer {
             let app = try XMPPSession(
                 credentials: credentials, resource: "alice-app", database: try AccountDirectory(url: directory).openDatabase(),
                 attachments: AccountDirectory(url: directory).attachments,
+                identityKeys: testIdentityKeys(forAccountAt: directory),
             )
             app.connect()
             while app.state.value != .connected(isSyncing: false) || !app.isEncryptionReady {
@@ -52,7 +55,10 @@ extension LiveServer {
             CGImageDestinationAddImage(output, context.makeImage()!, nil)
             CGImageDestinationFinalize(output)
 
-            let sender = ShareSender(credentials: credentials, directory: directory, resource: "alice-share", lock: ProcessLock(url: root.appending(path: "lock")))
+            let sender = ShareSender(
+                credentials: credentials, directory: directory, resource: "alice-share", lock: ProcessLock(url: root.appending(path: "lock")),
+                identityKeys: testIdentityKeys(forAccountAt: directory),
+            )
             for encrypted in [false, true] {
                 try app.database.setEncrypted(encrypted, with: bob)
                 let note = "shared \(encrypted) \(UUID().uuidString.prefix(6))"
@@ -73,14 +79,17 @@ extension LiveServer {
             defer { try? FileManager.default.removeItem(at: root) }
             let credentials = XMPPSession.Credentials(jid: alice, password: "password", host: "127.0.0.1", port: LiveServer.target.port, disableTLS: true)
             let directory = root.appending(path: "alice")
+            let bobDevice = try OMEMOIntegrationTests.device("bob-share")
             let bobSession = try XMPPSession(
                 credentials: .init(jid: bob, password: "password", host: "127.0.0.1", port: LiveServer.target.port, disableTLS: true),
-                resource: "bob-share", database: try OMEMOIntegrationTests.device("bob-share"),
+                resource: "bob-share", database: bobDevice,
                 attachments: AttachmentStore(directory: root.appending(path: "bob-attachments")),
+                identityKeys: testIdentityKeys(for: bobDevice),
             )
             let app = try XMPPSession(
                 credentials: credentials, resource: "alice-app", database: try AccountDirectory(url: directory).openDatabase(),
                 attachments: AccountDirectory(url: directory).attachments,
+                identityKeys: testIdentityKeys(forAccountAt: directory),
             )
             for session in [bobSession, app] {
                 session.connect()
@@ -99,7 +108,10 @@ extension LiveServer {
             }
             app.disconnect()
 
-            let sender = ShareSender(credentials: credentials, directory: directory, resource: "alice-share", lock: ProcessLock(url: root.appending(path: "lock")))
+            let sender = ShareSender(
+                credentials: credentials, directory: directory, resource: "alice-share", lock: ProcessLock(url: root.appending(path: "lock")),
+                identityKeys: testIdentityKeys(forAccountAt: directory),
+            )
             let text = "to the group \(UUID().uuidString.prefix(6))"
             #expect(await sender.send(ShareContent(texts: [text]), to: room, timeout: 30) == .sent)
 
@@ -118,15 +130,18 @@ extension LiveServer {
             let root = FileManager.default.temporaryDirectory.appending(path: "yapnest-share-\(UUID().uuidString)")
             defer { try? FileManager.default.removeItem(at: root) }
             let directory = root.appending(path: "alice")
+            let bobDevice = try OMEMOIntegrationTests.device("bob-share")
             let bobSession = try XMPPSession(
                 credentials: .init(jid: bob, password: "password", host: "127.0.0.1", port: LiveServer.target.port, disableTLS: true),
-                resource: "bob-share", database: try OMEMOIntegrationTests.device("bob-share"),
+                resource: "bob-share", database: bobDevice,
                 attachments: AttachmentStore(directory: root.appending(path: "bob-attachments")),
+                identityKeys: testIdentityKeys(for: bobDevice),
             )
             let app = try XMPPSession(
                 credentials: .init(jid: alice, password: "password", host: "127.0.0.1", port: LiveServer.target.port, disableTLS: true),
                 resource: "alice-app", database: try AccountDirectory(url: directory).openDatabase(),
                 attachments: AccountDirectory(url: directory).attachments,
+                identityKeys: testIdentityKeys(forAccountAt: directory),
             )
             for session in [bobSession, app] {
                 session.connect()

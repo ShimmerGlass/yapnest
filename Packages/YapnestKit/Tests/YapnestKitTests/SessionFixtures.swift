@@ -4,7 +4,8 @@ import Testing
 
 /// A session that never connects, for what runs against its database and API.
 func makeSession(_ jid: JID, database: AppDatabase? = nil) throws -> XMPPSession {
-    try XMPPSession(credentials: .init(jid: jid, password: "x"), resource: "t", database: try database ?? AppDatabase.inMemory())
+    let database = try database ?? AppDatabase.inMemory()
+    return try XMPPSession(credentials: .init(jid: jid, password: "x"), resource: "t", database: database, identityKeys: testIdentityKeys(for: database))
 }
 
 extension LiveServer {
@@ -60,8 +61,44 @@ extension LiveServer {
         callMedia: (any CallMediaFactory)? = nil,
     ) throws -> XMPPSession {
         let credentials = XMPPSession.Credentials(jid: jid, password: "password", host: "127.0.0.1", port: port, disableTLS: true)
-        guard let attachments else { return try XMPPSession(credentials: credentials, resource: resource, database: database, callMedia: callMedia) }
-        return try XMPPSession(credentials: credentials, resource: resource, database: database, attachments: attachments, callMedia: callMedia)
+        return try XMPPSession(
+            credentials: credentials, resource: resource, database: database, attachments: attachments ?? .temporary(),
+            callMedia: callMedia, identityKeys: testIdentityKeys(for: database),
+        )
+    }
+}
+
+/// Where a test device keeps its OMEMO identity, as the keychain keeps an
+/// install's: beside a database file, so a device kept across runs stays the
+/// same device rather than look like a restored backup; with the database
+/// when it's in memory.
+func testIdentityKeys(for database: AppDatabase) -> any IdentityKeyStore {
+    let path = database.writer.path
+    guard path.hasPrefix("/") else { return database.localIdentityKeys }
+    return FileIdentityKeyStore(beside: URL(filePath: path))
+}
+
+/// The same for an account's folder, for an extension's session over it.
+func testIdentityKeys(forAccountAt directory: URL) -> any IdentityKeyStore {
+    FileIdentityKeyStore(beside: AccountDirectory(url: directory).databaseURL)
+}
+
+/// An identity in a file, standing in for the keychain, which a test process
+/// can't use.
+struct FileIdentityKeyStore: IdentityKeyStore {
+    let url: URL
+
+    init(beside database: URL) {
+        url = URL(filePath: database.path + ".identity")
+    }
+
+    func load() throws -> StoredIdentity? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try JSONDecoder().decode(StoredIdentity.self, from: data)
+    }
+
+    func save(_ identity: StoredIdentity) throws {
+        try JSONEncoder().encode(identity).write(to: url, options: .atomic)
     }
 }
 

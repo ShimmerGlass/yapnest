@@ -13,8 +13,10 @@ public struct AccountDirectory: Sendable {
         self.init(url: SharedContainer.directory(for: account))
     }
 
+    public var databaseURL: URL { url.appending(path: "db.sqlite") }
+
     public func openDatabase() throws -> AppDatabase {
-        try AppDatabase.open(at: url.appending(path: "db.sqlite"))
+        try AppDatabase.open(at: databaseURL)
     }
 
     public var avatars: AvatarStore { AvatarStore(directory: url.appending(path: "avatars")) }
@@ -24,12 +26,13 @@ public struct AccountDirectory: Sendable {
 
 extension XMPPSession {
     /// A session over `directory`'s avatars and files, signed to its own
-    /// device's fast token. Callers open the database themselves when they
+    /// device's fast token, with the device's OMEMO identity from the keychain
+    /// unless given another. Callers open the database themselves when they
     /// need it as well.
     public convenience init(
         credentials: Credentials, resource: String, directory: AccountDirectory, database: AppDatabase,
         mode: Mode = .app, pushRelay: JID = XMPPSession.defaultPushRelay,
-        callMedia: (any CallMediaFactory)? = nil,
+        callMedia: (any CallMediaFactory)? = nil, identityKeys: (any IdentityKeyStore)? = nil,
     ) throws {
         try self.init(
             credentials: credentials, resource: resource, database: database,
@@ -37,6 +40,7 @@ extension XMPPSession {
             mode: mode, pushRelay: pushRelay,
             fastTokens: KeychainFastTokenStore(client: Self.userAgentId(account: credentials.jid, resource: resource)),
             callMedia: callMedia,
+            identityKeys: identityKeys ?? KeychainIdentityKeyStore(account: credentials.jid),
         )
     }
 }

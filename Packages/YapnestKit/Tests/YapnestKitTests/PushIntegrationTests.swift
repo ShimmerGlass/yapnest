@@ -24,19 +24,23 @@ extension LiveServer {
         }
 
         private func session(_ jid: JID, device: String) throws -> XMPPSession {
-            let directory = directory(device)
+            let account = AccountDirectory(url: directory(device))
+            let database = try account.openDatabase()
             return try XMPPSession(
                 credentials: credentials(jid), resource: device,
-                database: try AccountDirectory(url: directory).openDatabase(),
-                attachments: AccountDirectory(url: directory).attachments,
+                database: database,
+                attachments: account.attachments,
                 pushRelay: Self.relay,
+                identityKeys: testIdentityKeys(for: database),
             )
         }
 
+        /// The extension's, with the app's identity, as on a phone.
         private func fetcher(_ jid: JID, device: String) -> NotificationFetcher {
             NotificationFetcher(
                 credentials: credentials(jid), directory: directory(device), resource: "\(device)-push",
                 lock: ProcessLock(url: directory(device).appending(path: "session.lock")),
+                identityKeys: testIdentityKeys(forAccountAt: directory(device)),
             )
         }
 
