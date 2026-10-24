@@ -66,6 +66,18 @@ extension LiveServer {
 }
 
 extension LiveServer {
+    /// Turns sharing last seen on or off once the session's settings sync
+    /// has read the account's node, and waits for the change to be published.
+    /// The setting is the account's: written earlier, it loses to what the
+    /// sync reads, and left unpublished, a later session reads it late.
+    static func setSharesLastSeen(_ on: Bool, on session: XMPPSession) async throws {
+        try await waitUntil("\(session.account)'s settings to sync") { session.lock.withLock { $0.settingsSync.syncCompleted } }
+        try session.setSharesLastSeen(on)
+        try await waitUntil("\(session.account)'s settings to be published") {
+            session.lock.withLock { !$0.settingsSync.publishing && $0.settingsSync.scheduled == nil }
+        }
+    }
+
     /// Polls until `condition` holds, and records an issue if it doesn't in time.
     static func waitUntil(_ what: String, timeout: TimeInterval = 30, _ condition: () async throws -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)

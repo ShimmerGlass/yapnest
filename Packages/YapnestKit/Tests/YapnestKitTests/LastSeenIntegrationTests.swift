@@ -43,7 +43,7 @@ extension LiveServer {
             try await connected(b)
             defer { a.disconnect(); b.disconnect() }
             try await befriend(a, b)
-            try a.setSharesLastSeen(true)
+            try await LiveServer.setSharesLastSeen(true, on: a)
 
             // The server notes when a user says they're unavailable.
             let leaving = Presence()
@@ -59,6 +59,7 @@ extension LiveServer {
             await a.refreshLastSeen(of: bob)
             let seen = try #require(try a.database.contact(bob)?.lastSeenAt)
             #expect(abs(seen.timeIntervalSinceNow + Double(seconds)) < 30)
+            try await LiveServer.setSharesLastSeen(false, on: a)
         }
 
         @Test func notAskedWhileNotSharing() async throws {
@@ -67,8 +68,7 @@ extension LiveServer {
             try await connected(b)
             defer { a.disconnect(); b.disconnect() }
             try await befriend(a, b)
-            // The setting syncs through the account, so an earlier test may have left it on.
-            try a.setSharesLastSeen(false)
+            try await LiveServer.setSharesLastSeen(false, on: a)
             b.disconnect()
             try await waitUntil("alice to see bob offline") { a.presence(of: bob) == .offline }
 
@@ -83,14 +83,14 @@ extension LiveServer {
             defer { a.disconnect(); b.disconnect() }
             try await befriend(a, b)
             let target = fullJID(of: b)
-            try b.setSharesLastSeen(false)
+            try await LiveServer.setSharesLastSeen(false, on: b)
 
             // Off by default: the same error as for a client without the feature.
             let refused = await lastActivity(by: a, of: target)
             guard case .failure(let error) = refused else { Issue.record("Bob answered while not sharing"); return }
             #expect("\(error)".contains("feature") || "\(error)".contains("not_implemented"), "\(error)")
 
-            try b.setSharesLastSeen(true)
+            try await LiveServer.setSharesLastSeen(true, on: b)
             let answered = await lastActivity(by: a, of: target)
             #expect(try answered.get() < 5)
 
@@ -99,7 +99,7 @@ extension LiveServer {
             try await Task.sleep(for: .seconds(2))
             #expect(try await a.lastActivity(of: target) >= 1)
 
-            try b.setSharesLastSeen(false)
+            try await LiveServer.setSharesLastSeen(false, on: b)
             if case .success = await lastActivity(by: a, of: target) { Issue.record("Bob answered after stopping") }
         }
 
@@ -108,9 +108,10 @@ extension LiveServer {
             try await connected(b)
             try await connected(c)
             defer { b.disconnect(); c.disconnect() }
-            try b.setSharesLastSeen(true)
+            try await LiveServer.setSharesLastSeen(true, on: b)
 
             if case .success = await lastActivity(by: c, of: fullJID(of: b)) { Issue.record("Bob answered a stranger") }
+            try await LiveServer.setSharesLastSeen(false, on: b)
         }
     }
 }
