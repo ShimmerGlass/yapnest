@@ -67,6 +67,8 @@ extension LiveServer {
             try await connected(b)
             defer { a.disconnect(); b.disconnect() }
             try await befriend(a, b)
+            // The setting syncs through the account, so an earlier test may have left it on.
+            try a.setSharesLastSeen(false)
             b.disconnect()
             try await waitUntil("alice to see bob offline") { a.presence(of: bob) == .offline }
 
@@ -81,6 +83,7 @@ extension LiveServer {
             defer { a.disconnect(); b.disconnect() }
             try await befriend(a, b)
             let target = fullJID(of: b)
+            try b.setSharesLastSeen(false)
 
             // Off by default: the same error as for a client without the feature.
             let refused = await lastActivity(by: a, of: target)
