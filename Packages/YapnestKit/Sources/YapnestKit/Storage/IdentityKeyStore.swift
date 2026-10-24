@@ -86,3 +86,14 @@ public struct KeychainIdentityKeyStore: IdentityKeyStore {
         SecItemDelete(serviceQuery as CFDictionary)
     }
 }
+
+extension XMPPSession {
+    /// Where a session given no store keeps its identity. A database on disk
+    /// is an install's, whose identity is in the keychain: one in memory
+    /// would be lost with the process, and with it the device. A database in
+    /// memory (tests, previews) keeps its own, so every session over it is
+    /// the same device.
+    static func identityKeys(for account: JID, in database: AppDatabase) -> any IdentityKeyStore {
+        database.writer.path.hasPrefix("/") ? KeychainIdentityKeyStore(account: account) : database.localIdentityKeys
+    }
+}

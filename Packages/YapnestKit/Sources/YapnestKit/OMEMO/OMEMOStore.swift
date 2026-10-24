@@ -24,9 +24,9 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// The clock, so tests can move it.
     private let now: @Sendable () -> Date
 
-    init(database: AppDatabase, account: JID, identityKeys: (any IdentityKeyStore)? = nil, now: @escaping @Sendable () -> Date = { Date() }) {
+    init(database: AppDatabase, account: JID, identityKeys: any IdentityKeyStore, now: @escaping @Sendable () -> Date = { Date() }) {
         self.database = database
-        self.identityKeys = identityKeys ?? database.localIdentityKeys
+        self.identityKeys = identityKeys
         self.account = account.description
         self.now = now
     }

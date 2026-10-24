@@ -12,7 +12,7 @@ struct OMEMOStoreTests {
     private func key(_ byte: UInt8) -> Data { Data([0x05] + Array(repeating: byte, count: 32)) }
 
     @Test func blindTrustUntilVerification() throws {
-        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me)
+        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
         let phone = SignalAddress(name: bob, deviceId: 1)
         #expect(store.isTrusted(identity: phone, publicKeyData: key(1)), "unknown keys are trusted on first use")
         #expect(store.save(identity: phone, publicKeyData: key(1)))
@@ -28,7 +28,7 @@ struct OMEMOStoreTests {
     }
 
     @Test func aForgottenCompromisedDeviceStaysCompromisedWhenItReturns() throws {
-        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me)
+        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
         let own = SignalAddress(name: me.description, deviceId: 2)
         #expect(store.save(identity: own, publicKeyData: key(2)))
         _ = store.storeSessionRecord(Data([1]), forAddress: own)
@@ -43,7 +43,7 @@ struct OMEMOStoreTests {
     }
 
     @Test func rejectsChangedOrCompromisedKeys() throws {
-        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me)
+        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
         let phone = SignalAddress(name: bob, deviceId: 1)
         #expect(store.save(identity: phone, publicKeyData: key(1)))
         #expect(!store.isTrusted(identity: phone, publicKeyData: key(9)))
@@ -54,7 +54,7 @@ struct OMEMOStoreTests {
     }
 
     @Test func onlyTrustedActiveDevicesWithSessionsAreUsable() throws {
-        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me)
+        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
         for id: Int32 in 1...3 {
             let address = SignalAddress(name: bob, deviceId: id)
             #expect(store.save(identity: address, publicKeyData: key(UInt8(id))))
@@ -67,7 +67,7 @@ struct OMEMOStoreTests {
     }
 
     @Test func usedPreKeysSurviveUntilFlushed() throws {
-        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me)
+        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
         #expect(store.storePreKey(Data([1]), withId: 1))
         #expect(store.storePreKey(Data([2]), withId: 2))
         #expect(store.currentPreKeyId() == 2)
@@ -166,6 +166,18 @@ struct OMEMOStoreTests {
         #expect(restored.store.loadPreKey(withId: 1) == nil)
         #expect(restored.store.loadSignedPreKey(withId: 1) == nil)
         #expect(restored.store.isTrusted(identity: bobsDevice, publicKeyData: key(0x07)))
+    }
+
+    /// A session over an install's database, given no store, keeps the
+    /// identity in the keychain rather than in memory, where it would be a
+    /// new device at every launch.
+    @Test func aSessionOnDiskDefaultsToTheKeychain() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "default-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let onDisk = try AppDatabase.open(at: root.appending(path: "db.sqlite"))
+        #expect(XMPPSession.identityKeys(for: me, in: onDisk) is KeychainIdentityKeyStore)
+        let inMemory = try AppDatabase.inMemory()
+        #expect(XMPPSession.identityKeys(for: me, in: inMemory) as? MemoryIdentityKeyStore === inMemory.localIdentityKeys)
     }
 
     /// A key left in the keychain by an earlier install doesn't go with a

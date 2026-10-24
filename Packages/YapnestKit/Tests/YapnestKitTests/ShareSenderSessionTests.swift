@@ -20,7 +20,7 @@ struct ShareSenderSessionTests {
         )
         let wire = self.wire
         sender.makeSession = { database in
-            let session = try XMPPSession(credentials: .init(jid: me, password: "x"), resource: "share", database: database, mode: .share)
+            let session = try XMPPSession(credentials: .init(jid: me, password: "x"), resource: "share", database: database, mode: .share, identityKeys: testIdentityKeys(for: database))
             session.connectForTesting(wire)
             return session
         }

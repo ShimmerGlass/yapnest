@@ -18,7 +18,7 @@ struct OMEMOSignalMemoryTests {
 
     /// A context the way `OMEMOEncryption` makes one. The store backs the callbacks only.
     private func makeContext() throws -> (SignalContext, SignalStorage, OMEMOStore) {
-        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: JID("me@example.org")!)
+        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: JID("me@example.org")!, identityKeys: MemoryIdentityKeyStore())
         let storage = SignalStorage(sessionStore: store, preKeyStore: store, signedPreKeyStore: store, identityKeyStore: store, senderKeyStore: store)
         let context = try #require(SignalContext(withStorage: storage))
         return (context, storage, store)

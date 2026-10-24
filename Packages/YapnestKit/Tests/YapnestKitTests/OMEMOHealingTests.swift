@@ -26,7 +26,7 @@ struct OMEMOHealingTests {
     let bob = "bob@example.org"
 
     private func setUp() throws -> (OMEMOEncryption, BundleFetchWriter, XMPPClient) {
-        let encryption = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me)
+        let encryption = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
         let client = XMPPClient()
         client.connectionConfiguration.userJid = BareJID(me.description)
         let writer = BundleFetchWriter()

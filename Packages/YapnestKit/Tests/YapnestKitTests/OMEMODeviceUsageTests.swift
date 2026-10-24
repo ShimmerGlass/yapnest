@@ -23,7 +23,7 @@ struct OMEMODeviceUsageTests {
 
     private func store(_ database: AppDatabase? = nil) throws -> OMEMOStore {
         let clock = clock
-        return OMEMOStore(database: try database ?? AppDatabase.inMemory(), account: me, now: { clock.now })
+        return OMEMOStore(database: try database ?? AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore(), now: { clock.now })
     }
 
     /// Adds devices `ids` of `name` the way a first message does, with a session.
@@ -204,7 +204,7 @@ struct OMEMODeviceUsageTests {
 
     private func setUp() throws -> (OMEMOEncryption, XMPPClient) {
         let clock = clock
-        let encryption = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, now: { clock.now })
+        let encryption = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore(), now: { clock.now })
         let client = XMPPClient()
         client.connectionConfiguration.userJid = BareJID(me.description)
         client.writer = SilentWriter()

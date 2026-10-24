@@ -56,7 +56,7 @@ struct MainThreadAccessTests {
     /// it returns, on the main thread; what goes out reads the database.
     @Test @MainActor func goingAwayAndBackIsOffTheMainThread() async throws {
         let db = try open()
-        let session = try XMPPSession(credentials: .init(jid: JID("me@example.org")!, password: "x"), resource: "t", database: db)
+        let session = try XMPPSession(credentials: .init(jid: JID("me@example.org")!, password: "x"), resource: "t", database: db, identityKeys: testIdentityKeys(for: db))
         let hits = try await count {
             session.setAway(true)
             session.setAway(false)

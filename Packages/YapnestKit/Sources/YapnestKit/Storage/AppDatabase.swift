@@ -5,9 +5,8 @@ import os
 /// The account's database. One database per account.
 public final class AppDatabase: Sendable {
     public let writer: any DatabaseWriter
-    /// The OMEMO identity of a session given no store of its own, as in
-    /// tests: it goes with the database, so every session over one database
-    /// is the same device. The app's is in the keychain (`AccountDirectory`).
+    /// The OMEMO identity of a session over this database when it's in
+    /// memory: see `XMPPSession.identityKeys(for:in:)`.
     let localIdentityKeys = MemoryIdentityKeyStore()
 
     public init(_ writer: any DatabaseWriter) throws {

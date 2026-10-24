@@ -92,7 +92,7 @@ struct OMEMOOwnDeviceFightTests {
     let rival: Int32 = 11
 
     private func setUp(interval: TimeInterval) throws -> (OMEMOEncryption, FightServer, XMPPClient) {
-        let encryption = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me)
+        let encryption = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
         encryption.module.listPublishInterval = interval
         let client = XMPPClient()
         client.connectionConfiguration.userJid = BareJID(me.description)

@@ -73,7 +73,7 @@ struct OMEMORegistrationTests {
     let me = JID("me@example.org")!
 
     private func setUp(failingBundlePublishes: Int, retryDelays: [TimeInterval] = [0.05]) throws -> (OMEMOEncryption, ScriptedServer, XMPPClient) {
-        let encryption = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me)
+        let encryption = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
         encryption.module.registrationRetryDelays = retryDelays
         let client = XMPPClient()
         client.connectionConfiguration.userJid = BareJID(me.description)
