@@ -383,6 +383,10 @@ extension View {
                 scene.titlebar?.titleVisibility = .hidden
                 scene.titlebar?.toolbar = nil
                 scene.titlebar?.toolbarStyle = .unifiedCompact
+                // On macOS 15 the header sits under the band rather than in
+                // it (`Platform.headerInTitlebar`), and reads as one bar
+                // with it without the line between them.
+                if !Platform.headerInTitlebar { scene.titlebar?.separatorStyle = .none }
             }
         }
         #else

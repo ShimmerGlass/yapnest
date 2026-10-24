@@ -25,6 +25,14 @@ enum Platform {
     /// own header takes the top of the window, as in Messages.
     static let usesChatHeader = isMac
 
+    /// Whether the chat's header goes in the title bar's band, beside the
+    /// window buttons. macOS 15 draws that band over the window's content,
+    /// opaque and with a line under it, which cut the header in half, so
+    /// there the header starts below it.
+    static var headerInTitlebar: Bool {
+        if #available(iOS 26, *) { isMac } else { false }
+    }
+
     /// The page of the system's settings where `pane` ("Privacy_Microphone")
     /// is switched on or off. The Mac has panes of its own; elsewhere it is
     /// the app's page.

@@ -144,8 +144,8 @@ struct ConversationView: View {
                     }
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { topBarsHeight = $0 }
-                // The Mac's header takes the band at the top of the window.
-                .ignoresSafeArea(.container, edges: Platform.usesChatHeader ? .top : [])
+                // From macOS 26, the Mac's header takes the band at the top of the window.
+                .ignoresSafeArea(.container, edges: Platform.headerInTitlebar ? .top : [])
             }
             .onChange(of: model.chatSearchRequests) { search.open() }
             .onChange(of: model.editLastRequests) { conversation.editLastMessage() }
@@ -205,8 +205,8 @@ struct ConversationView: View {
     /// rides above the keyboard.
     private var messages: some View {
         layout
-        // Measured from the window's top on the Mac, as the header is.
-        .ignoresSafeArea(.container, edges: Platform.usesChatHeader ? .top : [])
+        // Measured from the window's top where the header is, from macOS 26.
+        .ignoresSafeArea(.container, edges: Platform.headerInTitlebar ? .top : [])
         .overlay(alignment: .top) {
             if Platform.flipsMessageList, #available(iOS 26, *) { TopEdgeBlur() }
         }
@@ -410,8 +410,9 @@ struct ConversationView: View {
         }
         .padding(.horizontal, 16)
         // Below the window buttons, in the title bar's band, which on the
-        // compact style passes the pointer on from 17 points down.
-        .padding(.top, 32)
+        // compact style passes the pointer on from 17 points down; under
+        // the band on macOS 15.
+        .padding(.top, Platform.headerInTitlebar ? 32 : 10)
         .padding(.bottom, 10)
         .background(.bar)
         // A Divider in an overlay draws vertically, through the middle.
