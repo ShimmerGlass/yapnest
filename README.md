@@ -178,7 +178,7 @@ development servers and the tests.
 ## License
 
 Yapnest is free software under the GNU Affero General Public License, version
-3 or later (`LICENSE`). It has to be: it is built on Martin (AGPL-3.0) and on
+3 or later (`NOTICE`, with the licence's text in `LICENSE`). It has to be: it is built on Martin (AGPL-3.0) and on
 libsignal through MartinOMEMO (GPL-3.0), and both require the whole app to be
 released under a compatible license, with its source available to everyone
 who gets the app. `Vendor/README.md` lists what we changed in our copies of

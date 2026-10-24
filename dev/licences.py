@@ -15,7 +15,7 @@ and pass /tmp/yapnest-dd/SourcePackages/checkouts.
 
 The packages come from the Package.resolved files, so a new dependency is
 picked up by running this again. The vendored libraries come from Vendor/,
-and Yapnest's own licence from LICENSE.
+and Yapnest's own licence from NOTICE, which grants it, and LICENSE.
 """
 import json
 import re
@@ -132,9 +132,11 @@ def main():
         add(id, name, "", ROOT / path, url, False, note)
 
     entries.sort(key=lambda e: e["name"].lower())
-    yapnest = (ROOT / "LICENSE").read_text()
-    (OUT / "yapnest.txt").write_text(yapnest)
-    manifest = {"yapnest": {"license": licence_name(yapnest), "file": "yapnest.txt"}, "libraries": entries}
+    notice, licence = (ROOT / "NOTICE").read_text(), (ROOT / "LICENSE").read_text()
+    (OUT / "yapnest.txt").write_text(notice + "\n" + licence)
+    # NOTICE says which versions; LICENSE is only the text of the first.
+    later = "any later version" in " ".join(notice.split())
+    manifest = {"yapnest": {"license": licence_name(licence) + ("-or-later" if later else ""), "file": "yapnest.txt"}, "libraries": entries}
     (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Wrote {len(entries)} libraries to {OUT.relative_to(ROOT)}")
 
