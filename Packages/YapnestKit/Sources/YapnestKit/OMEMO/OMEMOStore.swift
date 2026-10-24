@@ -53,19 +53,48 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// key, so they go, and this becomes a new device; what the user decided
     /// about contacts' devices stays. A keychain that can't be read throws
     /// rather than start over.
+    ///
+    /// All in one immediate transaction, whose lock the app and the
+    /// extensions take in turn: two processes making a device at once would
+    /// leave the key of one beside the device id of the other.
     func setUpIdentityIfNeeded(context: SignalContext) throws {
-        let registrationId = (try database.setting(.omemoRegistrationId)).flatMap { UInt32($0) }
-        if let legacy = try database.setting(.omemoIdentityKeyPair) {
-            // One that can't be moved goes all the same: a new device is made below.
-            if let registrationId, let data = Data(base64Encoded: legacy) {
-                try moveToKeychain(StoredIdentity(registrationId: registrationId, keyPair: data))
+        let identity = try database.writer.writeWithoutTransaction { db -> StoredIdentity in
+            try db.execute(sql: "PRAGMA secure_delete = ON")
+            defer { try? db.execute(sql: "PRAGMA secure_delete = OFF") }
+            var found: StoredIdentity?
+            var erasedLegacyKey = false
+            try db.inTransaction(.immediate) {
+                (found, erasedLegacyKey) = try findOrMakeIdentity(in: db, context: context)
+                return .commit
             }
-            try eraseLegacyKey()
+            // The key's page is zeroed in the WAL; the checkpoint copies it over
+            // the file's, which holds the key until then. Readers in other
+            // processes can hold it back, and the next checkpoint finishes it.
+            if erasedLegacyKey { _ = try? db.checkpoint(.truncate) }
+            guard let found else { throw OMEMOError.keyGenerationFailed }
+            return found
         }
-        let stored = try identityKeys.load()
-        if let registrationId, let stored, stored.registrationId == registrationId {
-            use(stored)
-            return
+        use(identity)
+    }
+
+    /// The decision, inside the transaction. Also says whether a key kept in
+    /// the database by a version from before was erased from it.
+    private func findOrMakeIdentity(in db: Database, context: SignalContext) throws -> (StoredIdentity, erasedLegacyKey: Bool) {
+        let registrationId = try AppDatabase.setting(db, .omemoRegistrationId).flatMap { UInt32($0) }
+        var erased = false
+        if let legacy = try AppDatabase.setting(db, .omemoIdentityKeyPair) {
+            // It leaves the database once the keychain holds it. One that
+            // can't be moved goes all the same: a new device is made below.
+            if let registrationId, let data = Data(base64Encoded: legacy) {
+                let moved = StoredIdentity(registrationId: registrationId, keyPair: data)
+                try identityKeys.save(moved)
+                guard try identityKeys.load() == moved else { throw OMEMOError.identityNotStored }
+            }
+            try AppDatabase.setSetting(db, .omemoIdentityKeyPair, nil)
+            erased = true
+        }
+        if let registrationId, let stored = try identityKeys.load(), stored.registrationId == registrationId {
+            return (stored, erased)
         }
         guard let keyPair = SignalIdentityKeyPair.generateKeyPair(context: context), let data = keyPair.keyPair else {
             throw OMEMOError.keyGenerationFailed
@@ -73,38 +102,16 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         let newId = context.generateRegistrationId()
         guard newId != 0 else { throw OMEMOError.keyGenerationFailed }
         let identity = StoredIdentity(registrationId: newId, keyPair: data)
-        // The key first: stopped in between, the database still names the
-        // old device, which has no key here, and this runs again.
+        // The key first: should the transaction fail after it, the database
+        // still names the old device, which has no key here, and this runs again.
         try identityKeys.save(identity)
-        try database.writer.write { db in
-            if registrationId != nil {
-                try db.execute(sql: "DELETE FROM omemoSession")
-                try db.execute(sql: "DELETE FROM omemoPreKey")
-                try db.execute(sql: "DELETE FROM omemoSignedPreKey")
-            }
-            try AppDatabase.setSetting(db, .omemoRegistrationId, String(newId))
+        if registrationId != nil {
+            try db.execute(sql: "DELETE FROM omemoSession")
+            try db.execute(sql: "DELETE FROM omemoPreKey")
+            try db.execute(sql: "DELETE FROM omemoSignedPreKey")
         }
-        use(identity)
-    }
-
-    /// From a version that kept the key in the database, which it leaves
-    /// only once the keychain holds it.
-    private func moveToKeychain(_ identity: StoredIdentity) throws {
-        try identityKeys.save(identity)
-        guard try identityKeys.load() == identity else { throw OMEMOError.identityNotStored }
-    }
-
-    /// Removes the key from the database with its page zeroed, then copies
-    /// the zeroed page from the WAL over the one in the file, which still
-    /// holds the key until a checkpoint.
-    private func eraseLegacyKey() throws {
-        try database.writer.writeWithoutTransaction { db in
-            try db.execute(sql: "PRAGMA secure_delete = ON")
-            defer { try? db.execute(sql: "PRAGMA secure_delete = OFF") }
-            try AppDatabase.setSetting(db, .omemoIdentityKeyPair, nil)
-            // Readers in other processes can hold it back; the next one finishes it.
-            _ = try? db.checkpoint(.truncate)
-        }
+        try AppDatabase.setSetting(db, .omemoRegistrationId, String(newId))
+        return (identity, erased)
     }
 
     private func use(_ identity: StoredIdentity) {

@@ -168,6 +168,25 @@ struct OMEMOStoreTests {
         #expect(restored.store.isTrusted(identity: bobsDevice, publicKeyData: key(0x07)))
     }
 
+    /// The app and an extension setting up a new database at the same moment,
+    /// each over its own connection as in two processes, end up as one
+    /// device: the key in the keychain and the id in the database match.
+    @Test func twoProcessesSettingUpAtOnceMakeOneDevice() async throws {
+        for _ in 0..<20 {
+            let root = FileManager.default.temporaryDirectory.appending(path: "race-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let url = root.appending(path: "db.sqlite")
+            let keys = MemoryIdentityKeyStore()
+            let (app, nse) = (try AppDatabase.open(at: url), try AppDatabase.open(at: url))
+            async let first = Task.detached { [me] in try OMEMOEncryption(database: app, account: me, identityKeys: keys).deviceId }.value
+            async let second = Task.detached { [me] in try OMEMOEncryption(database: nse, account: me, identityKeys: keys).deviceId }.value
+            let (a, b) = try await (first, second)
+            #expect(a == b)
+            #expect(try keys.load()?.registrationId == a)
+            #expect(try app.setting(.omemoRegistrationId) == String(a))
+        }
+    }
+
     /// A session over an install's database, given no store, keeps the
     /// identity in the keychain rather than in memory, where it would be a
     /// new device at every launch.
