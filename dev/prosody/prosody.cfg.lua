@@ -14,6 +14,9 @@ modules_enabled = {
     "sasl2"; "sasl2_bind2"; "sasl2_sm"; "sasl2_fast"; "spam_reporting";
     -- Last seen (XEP-0012) of offline users, for contacts who ask.
     "lastactivity";
+    -- The admins' ad-hoc commands (XEP-0133), which servers offer: the tests
+    -- check an ordinary user is refused them. Nobody here is an admin.
+    "admin_adhoc";
 }
 
 ssl = {

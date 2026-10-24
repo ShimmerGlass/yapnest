@@ -15,8 +15,24 @@ extension LiveServer {
         let alice = LiveServer.jid("alice")
         let bob = LiveServer.jid("bob")
 
-        private func session(_ jid: JID) throws -> XMPPSession {
-            try LiveServer.makeSession(jid, resource: "csi-\(UUID().uuidString.prefix(6))", database: try AppDatabase.inMemory())
+        private func session(_ jid: JID, port: Int? = nil) throws -> XMPPSession {
+            try LiveServer.makeSession(jid, resource: "csi-\(UUID().uuidString.prefix(6))", database: try AppDatabase.inMemory(), port: port ?? LiveServer.target.port)
+        }
+
+        /// Waits until nothing has gone either way through `proxy` for a second.
+        /// `csi_simple` lets out what it holds as soon as the client sends
+        /// anything or an answer reaches it, and a session is still at work
+        /// after its sync: joining the rooms earlier runs left in its
+        /// bookmarks, publishing a new device, fetching avatars.
+        private func quiet(_ proxy: FreezableProxy, within seconds: TimeInterval = 30) async throws {
+            let deadline = Date().addingTimeInterval(seconds)
+            var last = (proxy.clientTraffic.count, proxy.serverTraffic.count), since = Date()
+            while Date().timeIntervalSince(since) < 1 {
+                if Date() > deadline { Issue.record("the session never went quiet"); return }
+                try await Task.sleep(for: .milliseconds(100))
+                let now = (proxy.clientTraffic.count, proxy.serverTraffic.count)
+                if now != last { (last, since) = (now, Date()) }
+            }
         }
 
         private func connected(_ session: XMPPSession) async throws {
@@ -51,7 +67,9 @@ extension LiveServer {
 
         /// While connected: inactive holds the state, active releases it.
         @Test func changesWhileConnected() async throws {
-            let a = try session(alice), b = try session(bob)
+            let proxy = try await FreezableProxy(to: UInt16(LiveServer.target.port))
+            defer { proxy.stop() }
+            let a = try session(alice), b = try session(bob, port: proxy.port)
             try await connected(a)
             try await connected(b)
             defer { a.disconnect(); b.disconnect() }
@@ -60,10 +78,13 @@ extension LiveServer {
             ping(from: a)
             #expect(try await waitForArrival(heard, 1, within: 5), "an active session gets chat states at once")
 
+            try await quiet(proxy)
             b.setActive(false)
             try await Task.sleep(for: .milliseconds(500))
+            let sentBefore = proxy.clientTraffic.count
             ping(from: a)
-            #expect(try await !waitForArrival(heard, 2, within: 2), "an inactive session shouldn't")
+            #expect(try await !waitForArrival(heard, 2, within: 2),
+                    "an inactive session shouldn't, unless it sent something: \(proxy.clientTraffic.dropFirst(sentBefore).prefix(2000))")
 
             b.setActive(true)
             #expect(try await waitForArrival(heard, 2, within: 5), "going active delivers what was held")

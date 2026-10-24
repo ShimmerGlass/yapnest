@@ -30,8 +30,12 @@ extension LiveServer {
             #expect(alice.serverOffersCommands)
             #expect(commands.allSatisfy { $0.jid == "localhost" && !$0.node.isEmpty && !$0.name.isEmpty })
 
-            let ping = try #require(commands.first { $0.node == "ping" }, "commands: \(commands)")
-            let response = try await alice.execute(ping)
+            // One that takes no answer and changes nothing: ejabberd's ping, or
+            // Prosody's uptime, as Prosody 13 dropped the ping command. Not just
+            // any offered one: Snikket's create invitations.
+            let harmless = ["ping", "uptime"]
+            let command = try #require(commands.first { harmless.contains($0.node) }, "commands: \(commands)")
+            let response = try await alice.execute(command)
             #expect(response.status == .completed)
             #expect(response.notes.contains { !$0.text.isEmpty })
         }

@@ -88,20 +88,25 @@ private let me = JID("me@example.org")!
         defer { app.unlock() }
         let fetcher = fetcher()
 
-        let first = Task { await fetcher.fetch() }
+        let first = Task { (await fetcher.fetch(), Date()) }
         try? await Task.sleep(for: .milliseconds(200))
-        let started = Date()
         let second = Task { await fetcher.fetch() }
-        let third = Task { await fetcher.fetch() }
+        let third = Task { (await fetcher.fetch(), Date()) }
 
-        #expect(await first.value == .appIsRunning)
-        for outcome in [await second.value, await third.value] {
+        let (firstOutcome, firstDone) = await first.value
+        #expect(firstOutcome == .appIsRunning)
+        let (thirdOutcome, thirdDone) = await third.value
+        for outcome in [await second.value, thirdOutcome] {
             guard case .notifications = outcome else {
                 Issue.record("expected only the stored notifications, got \(outcome)")
                 continue
             }
         }
-        // Waiting in turn would take 9 seconds in all.
-        #expect(Date().timeIntervalSince(started) < 4)
+        // Waiting in turn would take 3 seconds more for each. Timed from the
+        // end of the first's wait, not from when the others arrived: that
+        // span is mostly the first's 3-second wait, which left a busy machine
+        // under a second to spare, while the two after it take about 100
+        // milliseconds.
+        #expect(thirdDone.timeIntervalSince(firstDone) < NotificationFetcher.maxLockWait)
     }
 }
