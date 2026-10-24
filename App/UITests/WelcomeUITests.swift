@@ -11,7 +11,7 @@ final class WelcomeUITests: XCTestCase {
         XCTAssertTrue(encrypt.waitForExistence(timeout: 20), "the welcome screen isn't shown")
         XCTAssertTrue(app.switches["Send Read Receipts"].exists)
         XCTAssertTrue(app.switches["Send Typing Indicator"].exists)
-        XCTAssertTrue(app.switches["Last Seen"].exists)
+        XCTAssertTrue(app.switches["Activity Status"].exists)
 
         let before = encrypt.value as? String
         encrypt.switches.firstMatch.tap()

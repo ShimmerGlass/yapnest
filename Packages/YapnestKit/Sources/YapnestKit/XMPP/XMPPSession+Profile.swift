@@ -354,12 +354,36 @@ extension XMPPSession {
         try database.setSetting(.statusMessage, Self.normalizedStatus(message))
     }
 
+    /// Shows us away while the app is suspended, and as chosen again once
+    /// it's back. The server keeps a suspended session for pushes (XEP-0198),
+    /// for days on some, and contacts would see us online all that time. Only
+    /// while sharing last seen: it tells contacts when we leave the app.
+    public func setSuspending(_ suspending: Bool) {
+        let changed = lock.withLock {
+            defer { $0.isSuspending = suspending }
+            return $0.isSuspending != suspending
+        }
+        if changed { sendPresence() }
+    }
+
+    /// What we send for `availability`. Only available gives way to away:
+    /// do not disturb says more, and would be lost.
+    static func show(for availability: Availability, suspending: Bool) -> Presence.Show {
+        suspending && availability == .available ? .away : availability.show
+    }
+
     /// Our presence, through `setPresence` so Martin adds the entity
     /// capabilities that tell the server what notifications we want. Martin
     /// keeps it and sends it again when we reconnect.
     func sendPresence() {
         // The extensions send no presence.
         guard policy.announcesPresence else { return }
-        client.module(.presence).setPresence(show: availability.show, status: Self.normalizedStatus(try? database.setting(.statusMessage)), priority: nil)
+        let connected = isConnected
+        let suspending = lock.withLock {
+            $0.presenceUnsent = !connected
+            return $0.isSuspending
+        }
+        let show = Self.show(for: availability, suspending: suspending && sharesLastSeen)
+        client.module(.presence).setPresence(show: show, status: Self.normalizedStatus(try? database.setting(.statusMessage)), priority: nil)
     }
 }

@@ -440,6 +440,8 @@ final class AppModel {
             suspension = nil
             callWatch = nil
             endBackgroundTask()
+            // Before connecting, so a new session starts with what was chosen.
+            session.setSuspending(false)
             connect(session)
             // Seen here: no notification for any of it.
             let database = session.database
@@ -514,6 +516,8 @@ final class AppModel {
     private func suspendSoon(_ session: XMPPSession) {
         guard suspension == nil, callWatch == nil else { return }
         guard !holdsForCall(session) else { return }
+        // Sent now, while the connection is still up to carry it.
+        session.setSuspending(true)
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Suspend session") { [weak self] in
             MainActor.assumeIsolated { self?.suspend(session) }
         }

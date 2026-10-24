@@ -58,5 +58,32 @@ extension LiveServer {
             b.disconnect()
             try await waitUntil("alice to see bob offline") { a.presence(of: bob) == .offline }
         }
+
+        /// The app shows bob away before suspending, and available once it's
+        /// back on the resumed stream, which Martin wouldn't send again.
+        @Test func awayWhileSuspended() async throws {
+            let a = try session(alice), b = try session(bob)
+            try await connected(a)
+            try await connected(b)
+            defer { a.disconnect(); b.disconnect() }
+            a.addContact(bob)
+            b.addContact(alice)
+            try await waitUntil("alice to see bob online") { a.presence(of: bob) == .online }
+
+            // The setting syncs through the account, so an earlier run may have left it on.
+            try b.setSharesLastSeen(false)
+            b.setSuspending(true)
+            try await Task.sleep(for: .seconds(1))
+            #expect(a.presence(of: bob) == .online, "not without sharing last seen")
+            try b.setSharesLastSeen(true)
+            defer { try? b.setSharesLastSeen(false) }
+            try await waitUntil("alice to see bob away") { a.presence(of: bob) == .away }
+            b.suspend()
+            try await waitUntil("bob to drop the connection") { if case .disconnected = b.state.value { true } else { false } }
+
+            b.setSuspending(false)
+            try await connected(b)
+            try await waitUntil("alice to see bob online again") { a.presence(of: bob) == .online }
+        }
     }
 }

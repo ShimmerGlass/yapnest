@@ -105,11 +105,11 @@ struct SettingsView: View {
                 Section {
                     Toggle("Send Read Receipts", isOn: Binding(get: { sendsReadMarkers }, set: setSendsReadMarkers))
                     Toggle("Send Typing Indicator", isOn: Binding(get: { sendsChatStates }, set: setSendsChatStates))
-                    Toggle("Last Seen", isOn: Binding(get: { sharesLastSeen }, set: setSharesLastSeen))
+                    Toggle("Activity Status", isOn: Binding(get: { sharesLastSeen }, set: setSharesLastSeen))
                 } header: {
                     Text("Privacy")
                 } footer: {
-                    Text("Only the people you've added see these. With Last Seen on, your contacts see how long ago you were online, and you see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
+                    Text("Only the people you've added see these. With Activity Status on, your contacts see how long ago you were online, and see you as away once you leave Yapnest. You see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
                 }
                 .disabled(!isLoaded)
 

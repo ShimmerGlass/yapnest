@@ -252,6 +252,11 @@ public final class XMPPSession: @unchecked Sendable {
         var isActive = true
         /// When the user left the app (XEP-0012's idle time); nil while in it.
         var idleSince: Date?
+        /// Whether the app is suspending, which shows us away: see `setSuspending`.
+        var isSuspending = false
+        /// Whether our presence changed while disconnected. Martin sends it on
+        /// a new session, but a resumed one keeps what the server last had.
+        var presenceUnsent = false
         /// When contacts' last seen was last asked for.
         var lastSeenSchedule = LastSeenSchedule()
         /// The liveness check in flight, so one runs at a time.
@@ -1098,6 +1103,7 @@ public final class XMPPSession: @unchecked Sendable {
                 clearRooms()
                 lock.withLock {
                     $0.isSyncing = true
+                    $0.presenceUnsent = false
                     $0.catchUpInterrupted = false
                     $0.interruptedRooms = []
                     // What was unacknowledged is sent again, and claims anew.
@@ -1166,6 +1172,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// and catch-up would do for it.
     func resumeWork() {
         reportClientState()
+        if lock.withLock({ $0.presenceUnsent }) { sendPresence() }
         // Rooms we were in may have dropped us while we were away.
         selfPingRooms()
         // Rooms whose join was cut off wait for answers that won't come.

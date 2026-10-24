@@ -21,8 +21,8 @@ final class LastSeenUITests: XCTestCase {
         let driver = ConversationDriver(fixture: "last-seen", context: name)
         let app = driver.app
         driver.openSettings()
-        let toggle = app.switches["Last Seen"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10), "no Last Seen setting")
+        let toggle = app.switches["Activity Status"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10), "no Activity Status setting")
         XCTAssertEqual(toggle.value as? String, "1", "the fixture shares last seen")
         toggle.switches.firstMatch.tap()
         let off = NSPredicate(format: "value == %@", "0")
