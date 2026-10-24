@@ -44,7 +44,7 @@ public final class AvatarStore: Sendable {
         guard data.count <= Self.maxSize, Self.hash(of: data) == hash.lowercased(),
               let source = CGImageSourceCreateWithData(data as CFData, nil), Self.hasAcceptableSize(source) else { return false }
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.createProtectedDirectory(at: directory)
             try data.write(to: url(for: hash), options: .atomic)
             return true
         } catch {

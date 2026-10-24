@@ -77,7 +77,7 @@ public final class DiagnosticsStore: @unchecked Sendable {
     }
 
     private func openCurrent() throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createProtectedDirectory(at: directory)
         if !FileManager.default.fileExists(atPath: currentFile.path) {
             FileManager.default.createFile(atPath: currentFile.path, contents: nil)
         }

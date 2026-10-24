@@ -150,7 +150,7 @@ public final class LinkPreviewer: Sendable {
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { return nil }
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.createProtectedDirectory(at: directory)
             try (output as Data).write(to: directory.appending(path: file), options: .atomic)
         } catch {
             return nil

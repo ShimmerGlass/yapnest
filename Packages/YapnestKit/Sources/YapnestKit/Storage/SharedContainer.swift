@@ -120,3 +120,25 @@ public final class ProcessLock: @unchecked Sendable {
         }
     }
 }
+
+/// How the account's files are protected at rest: unreadable after a restart
+/// until the first unlock, then readable while locked, which the notification
+/// and share extensions need. It's iOS's default for an app's files, set here
+/// so that nothing depends on the default, or on what a folder was given.
+public enum FileProtection {
+    public static let level = FileProtectionType.completeUntilFirstUserAuthentication
+
+    /// Gives `url` the protection, a folder's being what new files in it
+    /// take. A file system without it (a simulator) leaves the attribute off.
+    public static func apply(to url: URL) {
+        try? FileManager.default.setAttributes([.protectionKey: level], ofItemAtPath: url.path)
+    }
+}
+
+extension FileManager {
+    /// Creates `directory` if needed, with the account's file protection.
+    public func createProtectedDirectory(at directory: URL) throws {
+        try createDirectory(at: directory, withIntermediateDirectories: true)
+        FileProtection.apply(to: directory)
+    }
+}

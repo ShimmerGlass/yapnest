@@ -43,7 +43,7 @@ public final class AttachmentStore: Sendable {
     /// Stores `data` under a fresh name that keeps `name`'s extension, so
     /// viewers can tell the type.
     func save(_ data: Data, name: String) throws -> String {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createProtectedDirectory(at: directory)
         let file = Self.freshName(keeping: name)
         try data.write(to: directory.appending(path: file), options: .atomic)
         return file
@@ -63,7 +63,7 @@ public final class AttachmentStore: Sendable {
 
     /// A place to write a file as it arrives, which is not yet an attachment.
     func temporaryFile() throws -> URL {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createProtectedDirectory(at: directory)
         return directory.appending(path: Self.partialPrefix + UUID().uuidString.lowercased())
     }
 
@@ -93,7 +93,7 @@ public final class AttachmentStore: Sendable {
     /// as photos do, since they are sent on to people the user may not want to
     /// tell where they were. Other files are copied untouched.
     func importFile(at url: URL, name: String, asPhoto: Bool) async throws -> Imported {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createProtectedDirectory(at: directory)
         if asPhoto, let source = CGImageSourceCreateWithURL(url as CFURL, nil), CGImageSourceGetCount(source) == 1, let (width, height) = Self.pixelSize(of: source), width * height <= Self.maxImagePixels {
             let base = (name as NSString).deletingPathExtension
             let jpegName = (base.isEmpty ? "photo" : base) + ".jpg"

@@ -48,7 +48,7 @@ public final class AppDatabase: Sendable {
 
     /// Opens (or creates) the database file at `url`.
     public static func open(at url: URL) throws -> AppDatabase {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createProtectedDirectory(at: url.deletingLastPathComponent())
         var config = Configuration()
         config.foreignKeysEnabled = true
         // Another connection to the file (a session being torn down, later
@@ -64,7 +64,10 @@ public final class AppDatabase: Sendable {
             db.trace { _ in AppDatabase.checkNotOnMainThread() }
         }
         #endif
-        return try AppDatabase(DatabasePool(path: url.path, configuration: config))
+        let pool = try DatabasePool(path: url.path, configuration: config)
+        // Files made before their folder had it keep what they had.
+        for suffix in ["", "-wal", "-shm"] { FileProtection.apply(to: URL(filePath: url.path + suffix)) }
+        return try AppDatabase(pool)
     }
 
     private struct MainThreadCheck {
