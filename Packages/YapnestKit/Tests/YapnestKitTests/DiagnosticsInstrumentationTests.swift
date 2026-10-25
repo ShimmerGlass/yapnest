@@ -59,8 +59,56 @@ struct DiagnosticsInstrumentationTests {
             XMPPSession.logConnect(.ready(kind: .srvDirectTLS, port: 5223, family: .ipv6, duration: 0.3))
         }
         #expect(text.contains("fallbackHost=true"))
-        #expect(text.contains("kind=fallbackHost port=5222 reason=network took=1.500s triesNext=false errorKind=posix errorCode=61"))
-        #expect(text.contains("kind=srvDirectTLS port=5223 family=ipv6"))
+        #expect(text.contains("kind=fallbackHost portKind=standard reason=network took=1.500s triesNext=false errorKind=posix errorCode=61"))
+        #expect(text.contains("kind=srvDirectTLS portKind=directTLS family=ipv6"))
+    }
+
+    @Test func theExportHoldsNoAddressHostOrExactTimeAfterItsHeader() throws {
+        let uploadedBytes = 2_345_678
+        let text = try withStore { _ in
+            XMPPSession.logConnect(.resolved(candidates: 2, fallback: false, duration: 0.12))
+            XMPPSession.logConnect(.attempting(kind: .srvDirectTLS, port: 5223))
+            XMPPSession.logConnect(.failed(kind: .srvDirectTLS, port: 35222, reason: .network, error: .posix, code: 61, duration: 1.5, triesNext: true))
+            XMPPSession.logConnect(.ready(kind: .srvStartTLS, port: 5222, family: .ipv4, duration: 0.3))
+
+            let wire = FakeWire()
+            let session = try makeSession(me)
+            session.connectForTesting(wire)
+            try session.setEncrypted(false, with: alice)
+            session.enableAcknowledgementsForTesting()
+            let sent = try session.send("body canary one", to: alice)
+            session.drainSendQueue(alice)
+            session.acknowledged(try #require(wire.messages.first { $0.id == sent.remoteId }))
+            let offline = try makeSession(me)
+            _ = try offline.send("body canary two", to: alice)
+
+            // An upload talks to a real HTTP server, so its lines are written as the session does.
+            let transfer = Redacted.id("https://upload.secret-domain.example/slot/alice.png")
+            DiagLog.info(.upload, "Upload slot granted", .id("msg", transfer), .size("bytes", uploadedBytes), .duration("took", 0.4))
+            DiagLog.info(.upload, "Upload finished", .id("msg", transfer), .int("status", 201), .size("bytes", uploadedBytes), .duration("took", 2.1))
+            DiagLog.info(.receive, "Download finished", .id("file", transfer), .int("status", 200), .size("bytes", 987_654), .duration("took", 0.9))
+            DiagLog.error(.send, "Stanza over the server's limit", .size("bytes", 70_000), .int("limit", 65_536))
+            DiagLog.error(.upload, "Upload failed", .id("msg", transfer), .error(NSError(domain: NSURLErrorDomain, code: -1009, userInfo: [NSLocalizedDescriptionKey: "Could not reach https://upload.secret-domain.example/alice@secret-domain.example"])))
+        }
+        let body = try #require(text.range(of: "Exported:").map { text[$0.upperBound...].drop { $0 != "\n" }.dropFirst() })
+        let lines = body.split(separator: "\n")
+        #expect(lines.count > 8)
+        let patterns = [
+            "@", "://", "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+",
+            "[A-Za-z0-9-]+\\.[A-Za-z]{2,}",
+            "T[0-9:]{8}\\.[0-9]",
+        ]
+        for line in lines.map({ $0.replacingOccurrences(of: "Martin.XMPPError", with: "Martin_XMPPError") }) {
+            // The error domain of a server's error is a type name that looks like a host.
+            for pattern in patterns {
+                #expect(line.range(of: pattern, options: .regularExpression) == nil, "\(pattern) in \(line)")
+            }
+        }
+        #expect(text.contains("bytes=lt2e22"))
+        for exact in ["port=", "bytes=2345678", "bytes=987654", "bytes=70000"] {
+            #expect(!text.contains(exact), "\(exact)")
+        }
+        #expect(text.contains("portKind=custom"))
     }
 
     @Test func aDisconnectionIsLoggedByKindAndNeverByText() throws {

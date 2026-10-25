@@ -16,9 +16,11 @@ public final class DiagnosticsStore: @unchecked Sendable {
     private var flushScheduled = false
     private var handle: FileHandle?
     private var size = 0
+    // To the second: the milliseconds would let someone match a send to a
+    // message they received.
     private let formatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        formatter.formatOptions = [.withInternetDateTime]
         formatter.timeZone = TimeZone(identifier: "UTC")
         return formatter
     }()

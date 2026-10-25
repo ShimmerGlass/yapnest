@@ -22,6 +22,13 @@ public struct DiagField: Sendable {
         DiagField(key, String(value))
     }
 
+    /// A byte count as the power of two above it, such as `lt2e21` for a size
+    /// under 2^21 bytes. The exact size of a file or message would let someone
+    /// match a log line to one they received.
+    public static func size(_ key: StaticString, _ bytes: Int) -> DiagField {
+        DiagField(key, "lt2e\(Int.bitWidth - max(bytes, 0).leadingZeroBitCount)")
+    }
+
     public static func duration(_ key: StaticString, _ seconds: TimeInterval) -> DiagField {
         DiagField(key, String(format: "%.3fs", seconds))
     }

@@ -192,7 +192,7 @@ struct SettingsView: View {
                     .disabled(diagnostics.isExporting)
                     .accessibilityIdentifier("exportLogs")
                 } footer: {
-                    Text("Connection and sending events, the app version and the device model, for finding a problem. It holds no messages, contacts or addresses.")
+                    Text("Connection and sending events, the app version and the device model, for finding a problem. It shows when the app was used, but not who you talked to or what was said, and it holds no addresses.")
                 }
 
                 Section("Account") {

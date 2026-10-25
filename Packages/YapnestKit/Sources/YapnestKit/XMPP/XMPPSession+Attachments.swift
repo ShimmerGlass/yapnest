@@ -102,7 +102,7 @@ extension XMPPSession {
                 started = Date()
                 let slot = try await client.module(.httpFileUpload)
                     .requestUploadSlot(componentJid: service.jid, filename: slotName, size: size, contentType: contentType)
-                DiagLog.info(.upload, "Upload slot granted", .id("msg", transferId), .int("bytes", size), .duration("took", since: started))
+                DiagLog.info(.upload, "Upload slot granted", .id("msg", transferId), .size("bytes", size), .duration("took", since: started))
                 phase = .put
                 started = Date()
 
@@ -113,7 +113,7 @@ extension XMPPSession {
                 let delegate = ProgressDelegate(policy: DownloadPolicy(allowsInsecure: allowsInsecureTransfers)) { [weak self] progress in self?.setProgress(progress, for: messageId) }
                 let (_, response) = try await Self.transferSession.upload(for: request, fromFile: source, delegate: delegate)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                DiagLog.info(.upload, "Upload finished", .id("msg", transferId), .int("status", status), .int("bytes", size), .duration("took", since: started))
+                DiagLog.info(.upload, "Upload finished", .id("msg", transferId), .int("status", status), .size("bytes", size), .duration("took", since: started))
                 guard (200..<300).contains(status) else {
                     throw AttachmentError.uploadFailed(HTTPURLResponse.localizedString(forStatusCode: status))
                 }
@@ -229,7 +229,7 @@ extension XMPPSession {
                     messageId: messageId, localFile: localFile, size: Int64(data.count),
                     mimeType: mimeType, width: size?.width, height: size?.height, duration: duration,
                 )
-                DiagLog.info(.receive, "Download finished", .id("file", transferId), .int("status", http.statusCode), .int("bytes", data.count), .duration("took", since: started))
+                DiagLog.info(.receive, "Download finished", .id("file", transferId), .int("status", http.statusCode), .size("bytes", data.count), .duration("took", since: started))
             } catch {
                 // Over the limit isn't a failure; a tap can still fetch it.
                 if let size = (error as? TooLarge)?.size ?? delegate?.exceededSize {

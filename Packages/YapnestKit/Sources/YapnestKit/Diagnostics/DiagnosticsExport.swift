@@ -25,11 +25,13 @@ public enum DiagnosticsExport {
             guard let data = try? Data(contentsOf: file) else { continue }
             let text = String(decoding: data, as: UTF8.self)
             for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-                lines.append((line.prefix(24), lines.count, line))
+                lines.append((line.prefix(20), lines.count, line))
             }
         }
-        // The timestamps are fixed-width UTC, so they sort as text. A file's
-        // own lines are in order already; the order breaks ties.
+        // The timestamps are fixed-width UTC, so they sort as text. They are
+        // to the second, so the order breaks ties: a file's own lines are in
+        // order already, and the processes' lines within a second are grouped
+        // by file.
         lines.sort { ($0.stamp, $0.order) < ($1.stamp, $1.order) }
 
         var output = header(at: date) + "\n"

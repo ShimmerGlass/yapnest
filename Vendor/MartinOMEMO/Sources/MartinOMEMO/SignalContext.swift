@@ -21,6 +21,9 @@
 
 import Foundation
 import libsignal
+import os
+
+fileprivate let signalLogger = os.Logger(subsystem: "MartinOMEMO", category: "libsignal");
 
 open class SignalContext {
     
@@ -116,7 +119,7 @@ fileprivate func signalUnlock(_ userData: UnsafeMutableRawPointer?) {
 }
 
 fileprivate func signalLog(level: CInt, message: UnsafePointer<Int8>?, len: Int, userData: UnsafeMutableRawPointer?) {
-    print("SignalProtocol:", level, String(validatingUTF8: message!) as Any);
+    signalLogger.debug("level \(level, privacy: .public): \(message.flatMap { String(validatingUTF8: $0) } ?? "", privacy: .private)");
 }
 
 open class SignalSignedPreKey {

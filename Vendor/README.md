@@ -528,7 +528,8 @@ Each entry gives what went wrong for users, why, and what changed.
 - *Privacy:* Martin's own logging is otherwise unchanged, except that the
   `<feature-not-implemented>` stanza dump is private now, and so are the
   domain and results in `XMPPDNSSrvResolver` and the JID and disco result in
-  `CapabilitiesModule`, which logged them as public.
+  `CapabilitiesModule`, which logged them as public. `MucOccupant.set(presence:)`
+  no longer prints the occupant's nickname on every presence.
 
 **Unanswered requests failed on the main thread** (`ResponseManager.checkTimeouts`)
 - *Symptom:* the debug build crashed when a group's info request went
@@ -587,6 +588,13 @@ Each entry gives what went wrong for users, why, and what changed.
   failed, readable by anyone who collects a sysdiagnose.
 - *Change:* the JID and the address name in those lines are private (hashed),
   as everything that names a person or a server should be.
+- *Also:* the lines that logged a failed request's `description` as public
+  (device list, bundle, node configuration) now log only the error
+  condition, as the description holds the server's `<text>`, which can name
+  an address. Device ids are private (hashed) too. The `print` of an address
+  and error when a session couldn't be completed is a private `Logger` call.
+  `SignalContext` sends libsignal's log text to a private debug `Logger`
+  instead of `print`.
 
 **Our keys were published twice at once on a new device**
 (`isPepAvailable`, `publishDeviceBundleIfNeeded`)

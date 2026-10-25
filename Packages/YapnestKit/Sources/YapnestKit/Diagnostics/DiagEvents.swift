@@ -11,6 +11,20 @@ extension SocketConnectorNetwork.AddressFamily: DiagEnum {}
 extension SocketConnectorNetwork.FailureReason: DiagEnum {}
 extension SocketConnectorNetwork.ErrorKind: DiagEnum {}
 
+/// Which kind of port a connection used. The number itself says which server
+/// software is behind it, so only whether it is the usual one is logged.
+enum PortKind: String, DiagEnum {
+    case standard, directTLS, custom
+
+    init(_ port: Int) {
+        switch port {
+        case 5222: self = .standard
+        case 5223, 443: self = .directTLS
+        default: self = .custom
+        }
+    }
+}
+
 /// Why a message wasn't handed to the stream yet.
 enum SendSkip: String, DiagEnum {
     case offline, routeNotReady, probation

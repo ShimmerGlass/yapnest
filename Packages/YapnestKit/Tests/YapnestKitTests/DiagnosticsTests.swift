@@ -43,7 +43,27 @@ struct DiagnosticsTests {
         DiagLog.write(.notice, .push, "fetched", [.bool("ok", true), .value("phase", Phase.tls), .duration("took", 1.5)], to: store)
         store.flush()
         let line = try #require(lines(of: store.currentFile).first)
-        #expect(line.range(of: #"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z nse push notice fetched ok=true phase=tls took=1.500s$"#, options: .regularExpression) != nil)
+        #expect(line.range(of: #"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ nse push notice fetched ok=true phase=tls took=1.500s$"#, options: .regularExpression) != nil)
+    }
+
+    @Test func sizesAreBucketedToAPowerOfTwo() {
+        #expect(DiagField.size("bytes", 0).rendered == "lt2e0")
+        #expect(DiagField.size("bytes", 1).rendered == "lt2e1")
+        #expect(DiagField.size("bytes", 2_097_151).rendered == "lt2e21")
+        #expect(DiagField.size("bytes", 2_097_152).rendered == "lt2e22")
+        #expect(DiagField.size("bytes", 2_500_000).rendered == "lt2e22")
+        #expect(DiagField.size("bytes", -5).rendered == "lt2e0")
+        #expect(DiagField.size("bytes", Int.max).rendered == "lt2e63")
+        // Two sizes in a bucket can't be told apart.
+        #expect(DiagField.size("bytes", 1_234_567).rendered == DiagField.size("bytes", 1_048_576).rendered)
+    }
+
+    @Test func portsAreLoggedAsAKind() {
+        #expect(PortKind(5222) == .standard)
+        #expect(PortKind(5223) == .directTLS)
+        #expect(PortKind(443) == .directTLS)
+        #expect(PortKind(5269) == .custom)
+        #expect(PortKind(35222) == .custom)
     }
 
     @Test func exportMergesProcessesInTimeOrderWithHeader() throws {

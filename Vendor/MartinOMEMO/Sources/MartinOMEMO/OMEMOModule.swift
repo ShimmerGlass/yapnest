@@ -415,7 +415,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                       listEl.name == "list" && listEl.xmlns == OMEMOModule.XMLNS else {
                     if case .failure(let error) = result {
                         self.devicesQueue.sync { self.deviceListErrors[jid] = error.error.errorCondition };
-                        self.logger.info("No device list for \(jid.stringValue, privacy: .private(mask: .hash)): \(error.description, privacy: .public)");
+                        self.logger.info("No device list for \(jid.stringValue, privacy: .private(mask: .hash)): \(error.error.errorCondition.rawValue, privacy: .public)");
                     }
                     return;
                 }
@@ -827,11 +827,11 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             return now.timeIntervalSince(at) >= OMEMOModule.ownDeviceDropBackoff;
         };
         guard !due.isEmpty else {
-            logger.info("Own devices \(brokenIds, privacy: .public) have no bundles but came back after being dropped; leaving them be");
+            logger.info("Own devices \(brokenIds, privacy: .private(mask: .hash)) have no bundles but came back after being dropped; leaving them be");
             return;
         }
         if let wait = reserveAutomaticListPublish() {
-            logger.info("Not dropping own devices \(due, privacy: .public) for \(Int(wait.rounded(.up)), privacy: .public)s: the list was published just now");
+            logger.info("Not dropping own devices \(due, privacy: .private(mask: .hash)) for \(Int(wait.rounded(.up)), privacy: .public)s: the list was published just now");
             let schedule = ownDropsDeferred.isEmpty;
             ownDropsDeferred.formUnion(due);
             if schedule {
@@ -847,7 +847,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             return;
         }
         due.forEach { ownDevicesDropped[$0] = now };
-        logger.info("Dropping own devices \(due, privacy: .public) from the list: they have no bundles");
+        logger.info("Dropping own devices \(due, privacy: .private(mask: .hash)) from the list: they have no bundles");
         removeDevices(withIds: due, deleteBundles: false);
     }
 
@@ -934,7 +934,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         let registered = {
             self.listPublishLock.withLock { self.deviceListPublishCount += 1 };
             self.isReady = true;
-            self.logger.info("Device \(deviceId, privacy: .public) registered");
+            self.logger.info("Device \(deviceId, privacy: .private(mask: .hash)) registered");
         };
         pubsubModule.publishItem(at: jid, to: OMEMOModule.DEVICES_LIST_NODE, itemId: "current", payload: list, publishOptions: publishOptions, completionHandler: { result in
             switch result {
@@ -944,7 +944,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 completionHandler?(.success(()));
             case .failure(let pubsubError):
                 guard case .conflict = pubsubError.error else {
-                    self.logger.error("Publishing the device list failed: \(pubsubError.description, privacy: .public)");
+                    self.logger.error("Publishing the device list failed: \(pubsubError.error.errorCondition.rawValue, privacy: .public)");
                     completionHandler?(.failure(pubsubError));
                     return;
                 }
@@ -957,7 +957,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                             registered();
                             completionHandler?(.success(()));
                         case .failure(let error):
-                            self.logger.error("Publishing the device list failed again: \(error.description, privacy: .public)");
+                            self.logger.error("Publishing the device list failed again: \(error.error.errorCondition.rawValue, privacy: .public)");
                             completionHandler?(.failure(error));
                         }
                     });
@@ -981,7 +981,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             form.accessModel = .open;
             pubsubModule.configureNode(at: pepJid, node: node, with: form, completionHandler: { result in
                 if case .failure(let error) = result {
-                    self.logger.error("Opening \(node, privacy: .public) failed: \(error.description, privacy: .public)");
+                    self.logger.error("Opening \(node, privacy: .public) failed: \(error.error.errorCondition.rawValue, privacy: .public)");
                 }
             });
         });
@@ -1001,12 +1001,12 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                     case .success(_):
                         then();
                     case .failure(let error):
-                        self.logger.error("Reconfiguring \(node, privacy: .public) failed: \(error.description, privacy: .public)");
+                        self.logger.error("Reconfiguring \(node, privacy: .public) failed: \(error.error.errorCondition.rawValue, privacy: .public)");
                         failed?();
                     }
                 });
             case .failure(let error):
-                self.logger.error("Reading the configuration of \(node, privacy: .public) failed: \(error.description, privacy: .public)");
+                self.logger.error("Reading the configuration of \(node, privacy: .public) failed: \(error.error.errorCondition.rawValue, privacy: .public)");
                 failed?();
             }
         });
@@ -1142,7 +1142,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 self.publishDeviceBundle(currentBundle: items.items.first?.payload, completionHandler: { done(true) }, failure: { done(false) });
             case .failure(let pubsubError):
                 guard pubsubError.error == .item_not_found || pubsubError.error == .internal_server_error() else {
-                    self.logger.error("Reading our bundle failed: \(pubsubError.description, privacy: .public)");
+                    self.logger.error("Reading our bundle failed: \(pubsubError.error.errorCondition.rawValue, privacy: .public)");
                     done(false);
                     return;
                 }
@@ -1442,7 +1442,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 completionHandler?();
             case .failure(let pubsubError):
                 guard case .conflict = pubsubError.error else {
-                    self.logger.error("Publishing our bundle failed: \(pubsubError.description, privacy: .public)");
+                    self.logger.error("Publishing our bundle failed: \(pubsubError.error.errorCondition.rawValue, privacy: .public)");
                     failure?();
                     return;
                 }
@@ -1453,7 +1453,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                         case .success(_):
                             completionHandler?();
                         case .failure(let error):
-                            self.logger.error("Publishing our bundle failed again: \(error.description, privacy: .public)");
+                            self.logger.error("Publishing our bundle failed again: \(error.error.errorCondition.rawValue, privacy: .public)");
                             failure?();
                         }
                     });
@@ -1475,7 +1475,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             self.write(message);
             return true;
         case .failure(let error):
-            print("failed to complete session for address: \(address), error: \(error)");
+            self.logger.error("Failed to complete a session for \(address.name, privacy: .private(mask: .hash)):\(address.deviceId, privacy: .private(mask: .hash)): \(String(describing: error), privacy: .private)");
             return false;
         }
     }
@@ -1493,7 +1493,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             switch result {
             case .success(let items):
                 guard let bundle = OMEMOBundle(from: items.items.first?.payload), !bundle.preKeys.isEmpty else {
-                    self.logger.warning("Unusable bundle for \(address.name, privacy: .private(mask: .hash)):\(address.deviceId)");
+                    self.logger.warning("Unusable bundle for \(address.name, privacy: .private(mask: .hash)):\(address.deviceId, privacy: .private(mask: .hash))");
                     self.markDeviceAsFailed(for: pepJid, andDeviceId: address.deviceId);
                     return;
                 }
@@ -1502,7 +1502,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 guard let preKeyBundle = SignalPreKeyBundle(registrationId: 0, deviceId: address.deviceId, preKey: preKey, bundle: bundle),
                       let builder = SignalSessionBuilder(withAddress: address, andContext: self.signalContext),
                       builder.processPreKeyBundle(bundle: preKeyBundle) else {
-                    self.logger.warning("Couldn't start a session with \(address.name, privacy: .private(mask: .hash)):\(address.deviceId)");
+                    self.logger.warning("Couldn't start a session with \(address.name, privacy: .private(mask: .hash)):\(address.deviceId, privacy: .private(mask: .hash))");
                     self.markDeviceAsFailed(for: pepJid, andDeviceId: address.deviceId);
                     return;
                 }
@@ -1510,7 +1510,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                     _ = self.devicesFetchError[pepJid]?.removeValue(forKey: address.deviceId);
                 }
             case .failure(let pubsubError):
-                self.logger.warning("No bundle for \(address.name, privacy: .private(mask: .hash)):\(address.deviceId): \(pubsubError.description, privacy: .public)");
+                self.logger.warning("No bundle for \(address.name, privacy: .private(mask: .hash)):\(address.deviceId, privacy: .private(mask: .hash)): \(pubsubError.error.errorCondition.rawValue, privacy: .public)");
                 if let account = self.context?.userBareJid, pubsubError.error == .item_not_found, account == pepJid {
                     // One of our devices without a bundle: dropped from our
                     // list once the round of sessions is through, unless it

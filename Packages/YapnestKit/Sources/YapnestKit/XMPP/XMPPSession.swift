@@ -408,7 +408,7 @@ public final class XMPPSession: @unchecked Sendable {
 
         registerModules(requireTLS: !credentials.disableTLS, resource: resource)
         client.context.module(.streamFeatures).stanzaRefused = { _, bytes, limit in
-            DiagLog.error(.send, "Stanza over the server's limit", .int("bytes", bytes), .int("limit", limit))
+            DiagLog.error(.send, "Stanza over the server's limit", .size("bytes", bytes), .int("limit", limit))
         }
         subscribe()
         reloadKnownRooms()
@@ -990,11 +990,11 @@ public final class XMPPSession: @unchecked Sendable {
         case .resolveTimedOut(let duration):
             DiagLog.notice(.connection, "SRV lookup timed out", .duration("took", duration))
         case .attempting(let kind, let port):
-            DiagLog.info(.connection, "Trying an endpoint", .value("kind", kind), .int("port", port))
+            DiagLog.info(.connection, "Trying an endpoint", .value("kind", kind), .value("portKind", PortKind(port)))
         case .ready(let kind, let port, let family, let duration):
-            DiagLog.info(.connection, "Endpoint connected", .value("kind", kind), .int("port", port), .value("family", family), .duration("took", duration))
+            DiagLog.info(.connection, "Endpoint connected", .value("kind", kind), .value("portKind", PortKind(port)), .value("family", family), .duration("took", duration))
         case .failed(let kind, let port, let reason, let error, let code, let duration, let triesNext):
-            var fields: [DiagField] = [.value("kind", kind), .int("port", port), .value("reason", reason), .duration("took", duration), .bool("triesNext", triesNext)]
+            var fields: [DiagField] = [.value("kind", kind), .value("portKind", PortKind(port)), .value("reason", reason), .duration("took", duration), .bool("triesNext", triesNext)]
             if let error { fields += [.value("errorKind", error), .int("errorCode", code)] }
             DiagLog.log(.error, .connection, "Endpoint failed", fields)
         }
