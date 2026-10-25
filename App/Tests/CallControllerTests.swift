@@ -207,6 +207,37 @@ struct CallControllerTests {
         #expect(controller.error == "This contact can't take a video call right now.")
     }
 
+    /// How often `line` is in the exported log. The log outlives a test run
+    /// and other tests write to it, so a test compares counts.
+    private func logged(_ line: String) throws -> Int {
+        let text = try String(contentsOf: DiagnosticsExport.make(), encoding: .utf8)
+        return text.components(separatedBy: line).count - 1
+    }
+
+    @Test func aVideoCallWithoutCameraAccessLeavesAReasonInTheLog() async throws {
+        let controller = CallController()
+        controller.cameraAccess = { false }
+        let before = try logged("Call not started reason=noCameraAccess")
+
+        controller.startCall(to: peer, video: true)
+
+        try await waitUntil { controller.error != nil }
+        #expect(try logged("Call not started reason=noCameraAccess") > before)
+        #expect(try logged("Call asked for video=true camera=") > 0)
+    }
+
+    @Test func aPeerWhoIsNotCallableLeavesAReasonInTheLog() throws {
+        let fixture = try ConversationFixture()
+        let controller = CallController()
+        controller.attach(fixture.session)
+        defer { controller.detach() }
+        let before = try logged("Call not started reason=peerNotCallable video=false")
+
+        controller.startCall(to: fixture.peer)
+
+        #expect(try logged("Call not started reason=peerNotCallable video=false") > before)
+    }
+
     private func waitUntil(_ condition: () -> Bool) async throws {
         for _ in 0..<100 where !condition() { try await Task.sleep(for: .milliseconds(20)) }
     }

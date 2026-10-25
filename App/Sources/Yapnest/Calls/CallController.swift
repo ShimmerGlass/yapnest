@@ -32,10 +32,26 @@ final class CallController {
     /// bar and video calls expanded (see `startsExpanded`).
     private(set) var isExpanded = false
 
-    func minimize() { isExpanded = false }
+    func minimize() {
+        isExpanded = false
+        logCallViewIfChanged()
+    }
 
     func expand() {
         if Self.canExpand(screen: screen, usesCallKit: Self.usesCallKit) { isExpanded = true }
+        logCallViewIfChanged()
+    }
+
+    @ObservationIgnored private var loggedShowsCallView = false
+
+    /// Where CallKit isn't used, whether our own call screen is up is the
+    /// only thing between a call and a black window, so a change of it is logged.
+    private func logCallViewIfChanged() {
+        guard !Self.usesCallKit else { return }
+        let shown = Self.showsCallView(isInCall: isInCall, screen: screen, usesCallKit: false, isExpanded: isExpanded)
+        guard shown != loggedShowsCallView else { return }
+        loggedShowsCallView = shown
+        DiagLog.info(.calls, "Call screen", .bool("shown", shown), .bool("expanded", isExpanded), .bool("video", screen?.isVideo == true))
     }
 
     /// A video call is watched, so it opens on its picture. An audio call has
@@ -119,6 +135,7 @@ final class CallController {
         // A video call is watched, not touched, so the screen would dim.
         let keepAwake = Self.keepsScreenAwake(for: state)
         if UIApplication.shared.isIdleTimerDisabled != keepAwake { UIApplication.shared.isIdleTimerDisabled = keepAwake }
+        logCallViewIfChanged()
     }
 
     static func keepsScreenAwake(for state: CallState?) -> Bool {
@@ -347,9 +364,11 @@ final class CallController {
 
     /// Asks CallKit to start a call, which comes back to `perform(start:)`.
     func startCall(to peer: JID, video: Bool = false) {
+        DiagLog.info(.calls, "Call asked for", .bool("video", video), .value("camera", Self.cameraAuthorization()))
         guard video else { return begin(peer, video: false) }
         Task {
             guard await cameraAccess() else {
+                DiagLog.notice(.calls, "Call not started", .value("reason", CallStartExit.noCameraAccess))
                 error = Platform.isMac
                     ? String(localized: "Yapnest needs the camera for video calls. Turn it on in System Settings > Privacy & Security > Camera.")
                     : String(localized: "Yapnest needs the camera for video calls. Turn it on in Settings > Yapnest.")
@@ -364,16 +383,20 @@ final class CallController {
         // it doesn't blink when they drop out briefly; a tap then gets this
         // rather than a call no device rings for.
         if let session, !(video ? session.videoCallablePeers : session.callablePeers).value.contains(peer) {
+            DiagLog.notice(.calls, "Call not started", .value("reason", CallStartExit.peerNotCallable), .bool("video", video))
             error = video
                 ? String(localized: "This contact can't take a video call right now.")
                 : String(localized: "This contact can't take a call right now.")
             return
         }
         guard Self.usesCallKit else {
+            var step = CallStartExit.audioActivation
             do {
                 try activateAudio(video: video)
+                step = .sessionStart
                 try session?.startCall(to: peer, video: video)
             } catch {
+                logStartFailure(step, error)
                 self.error = error.localizedDescription
                 deactivateAudio()
             }
@@ -388,10 +411,29 @@ final class CallController {
     /// Asks if it isn't known yet. The request answers off the main thread.
     private static func hasCameraAccess() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized: true
-        case .notDetermined: await AVCaptureDevice.requestAccess(for: .video)
-        default: false
+        case .authorized: return true
+        case .notDetermined:
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            DiagLog.info(.calls, "Camera access asked", .bool("granted", granted), .value("camera", cameraAuthorization()))
+            return granted
+        default: return false
         }
+    }
+
+    static func cameraAuthorization() -> CameraAuthorization {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: .authorized
+        case .notDetermined: .notDetermined
+        case .denied: .denied
+        case .restricted: .restricted
+        @unknown default: .unknown
+        }
+    }
+
+    private func logStartFailure(_ step: CallStartExit, _ error: Error) {
+        var fields: [DiagField] = [.value("reason", step), .error(error)]
+        if step == .sessionStart { fields.append(.value("callError", CallErrorKind(error))) }
+        DiagLog.error(.calls, "Call not started", fields: fields)
     }
 
     /// Answers a video call with the camera off when there is no access, so
@@ -400,7 +442,10 @@ final class CallController {
     private func limitCameraToAccess() {
         guard session?.callState.value?.isVideo == true else { return }
         Task {
-            if !(await cameraAccess()) { session?.setCallCameraEnabled(false) }
+            if !(await cameraAccess()) {
+                DiagLog.notice(.calls, "Call camera turned off for lack of access", .value("camera", Self.cameraAuthorization()))
+                session?.setCallCameraEnabled(false)
+            }
         }
     }
 
@@ -488,6 +533,7 @@ final class CallController {
             do {
                 try await callController.request(CXTransaction(action: action))
             } catch {
+                DiagLog.error(.calls, "Call not started", .value("reason", CallStartExit.callKitRequest), .bool("startAction", action is CXStartCallAction), .error(error))
                 self.error = error.localizedDescription
                 // The end of a call CallKit has lost must still end it here.
                 if action is CXEndCallAction { session?.hangUpCall() }
@@ -498,15 +544,24 @@ final class CallController {
     // MARK: From CallKit
 
     fileprivate func perform(start action: CXStartCallAction) {
-        guard let session, let peer = JID(action.handle.value) else { return action.fail() }
+        guard let session, let peer = JID(action.handle.value) else {
+            DiagLog.error(.calls, "Call not started", .value("reason", CallStartExit.callKitStart))
+            return action.fail()
+        }
+        var step = CallStartExit.audioActivation
         do {
             try CallAudioSession.configure(video: action.isVideo)
+            step = .sessionStart
             try session.startCall(to: peer, video: action.isVideo)
         } catch {
+            logStartFailure(step, error)
             self.error = error.localizedDescription
             return action.fail()
         }
-        guard let state = session.callState.value, state.peer == peer else { return action.fail() }
+        guard let state = session.callState.value, state.peer == peer else {
+            DiagLog.error(.calls, "Call not started", .value("reason", CallStartExit.callKitStart))
+            return action.fail()
+        }
         calls[state.sid] = action.callUUID
         action.fulfill()
         let update = CXCallUpdate()
