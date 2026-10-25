@@ -99,11 +99,11 @@ struct HeldNotificationsTests {
     }
 
     private func staleTake(at seconds: TimeInterval) -> Bool {
-        box.held.takeSlow(generation: 0, now: t0.addingTimeInterval(seconds))
+        !box.held.takeSlow(generation: 0, now: t0.addingTimeInterval(seconds)).isEmpty
     }
 
     private func takeSlow(at seconds: TimeInterval) -> Bool {
-        box.held.takeSlow(generation: box.held.generation, now: t0.addingTimeInterval(seconds))
+        !box.held.takeSlow(generation: box.held.generation, now: t0.addingTimeInterval(seconds)).isEmpty
     }
 
     @Test func nothingIsOwedUntilInactiveIsSent() {
@@ -115,7 +115,7 @@ struct HeldNotificationsTests {
         #expect(send(false, at: 0) == nil)
         // Reported again while inactive: the hold began at the first.
         #expect(send(false, at: 10) == nil)
-        #expect(send(true, at: 30) == Refresh(generation: 0, readStates: true, slow: .now))
+        #expect(send(true, at: 30) == Refresh(generation: 0, readStates: true, slow: .now(.slow)))
         // The resume that follows finds nothing owed.
         #expect(send(true, at: 31) == nil)
     }
@@ -143,23 +143,34 @@ struct HeldNotificationsTests {
     @Test func aFailureIsOwedAgainAtOnce() {
         _ = send(false, at: 0)
         _ = send(true, at: 5)
-        box.held.failed(readStates: true, slow: true, generation: 0)
+        box.held.failed(.all, generation: 0)
         // A resume right after the failed return tries again, window or not.
-        #expect(send(true, at: 6) == Refresh(generation: 0, readStates: true, slow: .now))
+        #expect(send(true, at: 6) == Refresh(generation: 0, readStates: true, slow: .now(.slow)))
     }
 
     @Test func aFailureOfOnlyTheSlowPartLeavesReadStatesDone() {
         _ = send(false, at: 0)
         _ = send(true, at: 5)
-        box.held.failed(readStates: false, slow: true, generation: 0)
-        #expect(send(true, at: 6) == Refresh(generation: 0, readStates: false, slow: .now))
+        box.held.failed(.slow, generation: 0)
+        #expect(send(true, at: 6) == Refresh(generation: 0, readStates: false, slow: .now(.slow)))
+    }
+
+    @Test func onlyTheReadThatFailedIsOwedAgain() {
+        _ = send(false, at: 0)
+        _ = send(true, at: 5)
+        box.held.failed(.settings, generation: 0)
+        #expect(send(true, at: 6) == Refresh(generation: 0, readStates: false, slow: .now(.settings)))
+        box.held.failed(.bookmarks, generation: 0)
+        #expect(send(true, at: 7) == Refresh(generation: 0, readStates: false, slow: .now(.bookmarks)))
+        box.held.failed(.readStates, generation: 0)
+        #expect(send(true, at: 8) == Refresh(generation: 0, readStates: true, slow: .none))
     }
 
     @Test func aFailureFromAnEarlierSessionIsIgnored() {
         _ = send(false, at: 0)
         _ = send(true, at: 5)
         box.held.reset()
-        box.held.failed(readStates: true, slow: true, generation: 0)
+        box.held.failed(.all, generation: 0)
         #expect(send(true, at: 6) == nil)
         #expect(!staleTake(at: 100))
     }

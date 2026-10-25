@@ -27,6 +27,8 @@ public struct PubSubError: LocalizedError, CustomStringConvertible {
 
     public let error: XMPPError;
     public let pubsubErrorCondition: PubSubErrorCondition?;
+    /// The `type` the server wrote on `<error>`, which `XMPPError` doesn't keep.
+    public let errorType: String?;
     
     public var errorDescription: String? {
         if let pubsubError = pubsubErrorCondition {
@@ -44,9 +46,10 @@ public struct PubSubError: LocalizedError, CustomStringConvertible {
         }
     }
         
-    public init(error: XMPPError, pubsubErrorCondition: PubSubErrorCondition?) {
+    public init(error: XMPPError, pubsubErrorCondition: PubSubErrorCondition?, errorType: String? = nil) {
         self.error = error;
         self.pubsubErrorCondition = pubsubErrorCondition;
+        self.errorType = errorType;
     }
     
     public static func from(stanza: Stanza?) -> PubSubError {
@@ -62,10 +65,11 @@ public struct PubSubError: LocalizedError, CustomStringConvertible {
             return .undefined_condition;
         }
         
+        let type = stanza.findChild(name: "error")?.getAttribute("type");
         if let conditionName = stanza.findChild(name: "error")?.findChild(xmlns: PubSubModule.PUBSUB_ERROR_XMLNS)?.name, let condition = PubSubErrorCondition(rawValue: conditionName) {
-            return PubSubError(error: error, pubsubErrorCondition: condition);
+            return PubSubError(error: error, pubsubErrorCondition: condition, errorType: type);
         } else {
-            return PubSubError(error: error, pubsubErrorCondition: nil);
+            return PubSubError(error: error, pubsubErrorCondition: nil, errorType: type);
         }
     }
     

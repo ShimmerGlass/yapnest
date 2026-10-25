@@ -109,12 +109,12 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
     }
 
     /// An error for `request`.
-    static func error(to request: Iq, condition: String = "item-not-found") -> Iq {
+    static func error(to request: Iq, condition: String = "item-not-found", type: String = "cancel") -> Iq {
         let iq = Iq()
         iq.type = .error
         iq.id = request.id
         iq.from = request.to
-        let error = Element(name: "error", attributes: ["type": "cancel"])
+        let error = Element(name: "error", attributes: ["type": type])
         error.addChild(Element(name: condition, xmlns: "urn:ietf:params:xml:ns:xmpp-stanzas"))
         iq.addChild(error)
         return iq

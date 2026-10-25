@@ -97,6 +97,19 @@ struct RoomFailureTests {
         #expect(!session.hasScheduledRejoin(room))
     }
 
+    /// Both read as `undefined-condition`, but only the one naming no
+    /// condition says nothing, and is retried.
+    @Test func anUndefinedConditionIsNotRetriedButABareErrorIs() {
+        status(.joining)
+        session.roomPresence(joinError("undefined-condition"), room: room)
+        #expect(session.roomStatus(room)?.canRetry == false)
+
+        status(.joining)
+        session.roomPresence(parseStanza("<presence type='error' from='cake@rooms.example.org/me'><error type='cancel'/></presence>"), room: room)
+        #expect(session.roomStatus(room)?.canRetry == true)
+        session.cancelAllRejoins()
+    }
+
     private func joinError(_ condition: String) -> Martin.Presence {
         parseStanza("<presence type='error' from='cake@rooms.example.org/me'><error type='wait'><\(condition) xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></presence>")
     }

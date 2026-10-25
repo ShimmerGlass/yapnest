@@ -26,8 +26,14 @@ struct RoomRejoinTests {
     }
 
     @Test func backoffGrowsThenSettles() {
-        let delays = (0..<6).map(XMPPSession.rejoinDelay(attempt:))
+        let delays = (0..<6).map { XMPPSession.rejoinDelay(attempt: $0, jitter: 0) }
         #expect(delays == [5, 15, 60, 300, 300, 300])
+    }
+
+    @Test func backoffIsJitteredSoRoomsDontRetryInLockstep() {
+        let delays = (0..<50).map { _ in XMPPSession.rejoinDelay(attempt: 1) }
+        #expect(delays.allSatisfy { (15...18.75).contains($0) })
+        #expect(Set(delays).count > 1)
     }
 
     @Test func leavingCancelsAScheduledRejoin() throws {

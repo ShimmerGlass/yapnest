@@ -926,34 +926,45 @@ public final class XMPPSession: @unchecked Sendable {
         let generation = refresh.generation
         if refresh.readStates {
             fetchDisplayed { [weak self] succeeded in
-                guard !succeeded else { return }
-                self?.lock.withLock { $0.held.failed(readStates: true, slow: false, generation: generation) }
+                if !succeeded { self?.owe(.readStates, generation: generation) }
             }
         }
         switch refresh.slow {
         case .none: break
-        case .now: refreshSlowNodes(generation: generation)
+        case .now(let parts): refreshSlowNodes(parts, generation: generation)
         case .after(let delay):
             DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, self.isConnected else { return }
                 let due = self.lock.withLock { state in
-                    (state.isActive || !self.policy.reportsInactive) && state.held.takeSlow(generation: generation)
+                    (state.isActive || !self.policy.reportsInactive) ? state.held.takeSlow(generation: generation) : []
                 }
-                if due { self.refreshSlowNodes(generation: generation) }
+                if !due.isEmpty { self.refreshSlowNodes(due, generation: generation) }
             }
         }
     }
 
-    private func refreshSlowNodes(generation: Int) {
+    /// A read that couldn't be made is owed again at the next return to the
+    /// app, and the next catch-up reads everything anyway.
+    private func owe(_ parts: HeldNotifications.Parts, generation: Int) {
+        lock.withLock { $0.held.failed(parts, generation: generation) }
+    }
+
+    private func refreshSlowNodes(_ parts: HeldNotifications.Parts, generation: Int) {
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             async let bookmarks: Bool = withCheckedContinuation { continuation in
-                self.refreshBookmarks { continuation.resume(returning: $0) }
+                if parts.contains(.bookmarks) {
+                    self.refreshBookmarks { continuation.resume(returning: $0) }
+                } else {
+                    continuation.resume(returning: true)
+                }
             }
-            // Settings are only read again once their first sync has run.
-            let settings = self.lock.withLock({ $0.settingsSync.syncCompleted }) ? await self.runSettingsSync() : true
-            if await bookmarks && settings { return }
-            self.lock.withLock { $0.held.failed(readStates: false, slow: true, generation: generation) }
+            // Settings are only read again once their first sync has started,
+            // as it waits for the catch-up.
+            let settingsStarted = self.lock.withLock { $0.settingsSync.syncStarted }
+            let settings = parts.contains(.settings) && settingsStarted ? await self.runSettingsSync() : .done
+            if !(await bookmarks) { self.owe(.bookmarks, generation: generation) }
+            if settings.isOwed { self.owe(.settings, generation: generation) }
         }
     }
 
@@ -1272,7 +1283,14 @@ public final class XMPPSession: @unchecked Sendable {
         resumeInterruptedCatchUps()
         // A settings sync the drop cut off never reconciled or started
         // watching for changes; one that finished only has changes to send.
-        if lock.withLock({ $0.settingsSync.syncStarted && !$0.settingsSync.syncCompleted }) { syncSettings() } else { requestSettingsPublish() }
+        if lock.withLock({ $0.settingsSync.syncStarted && !$0.settingsSync.syncCompleted }) {
+            let generation = lock.withLock { $0.held.generation }
+            syncSettings { [weak self] outcome in
+                if outcome.isOwed { self?.owe(.settings, generation: generation) }
+            }
+        } else {
+            requestSettingsPublish()
+        }
     }
 
     /// Martin resets the result at the start of each session, so any
@@ -1860,9 +1878,10 @@ public final class XMPPSession: @unchecked Sendable {
     /// What the app does once it has caught up with the server: ends the sync
     /// state, refreshes what it keeps in sync, and sends what is still pending.
     private func finishCatchUpAsApp() {
-        lock.withLock {
-            $0.isSyncing = false
-            $0.held.reset()
+        let generation = lock.withLock { state in
+            state.isSyncing = false
+            state.held.reset()
+            return state.held.generation
         }
         omemo.module.mamSyncFinished(for: nil)
         state.send(.connected(isSyncing: false))
@@ -1870,10 +1889,16 @@ public final class XMPPSession: @unchecked Sendable {
         downloadMissedImages()
         refreshAvatars()
         pruneContactRequests()
-        fetchDisplayed()
-        syncBookmarks()
+        fetchDisplayed { [weak self] succeeded in
+            if !succeeded { self?.owe(.readStates, generation: generation) }
+        }
+        syncBookmarks { [weak self] succeeded in
+            if !succeeded { self?.owe(.bookmarks, generation: generation) }
+        }
         fetchNickname()
-        syncSettings()
+        syncSettings { [weak self] outcome in
+            if outcome.isOwed { self?.owe(.settings, generation: generation) }
+        }
         enablePush()
         // However long ago: a message still pending was never sent, as the
         // server never acknowledged it (XEP-0198, e.g. when stream resumption

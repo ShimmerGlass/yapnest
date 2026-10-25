@@ -141,6 +141,8 @@ public enum GroupError: Error, LocalizedError {
     case unsupported
     /// The room said no, in its own words.
     case refused(String)
+    /// The server couldn't say, for now, so it isn't known whether it can.
+    case lookupFailed(ServerError)
 
     public var errorDescription: String? {
         switch self {
@@ -152,6 +154,7 @@ public enum GroupError: Error, LocalizedError {
         case .notAllowed: String(localized: "You're not allowed to do that in this group.")
         case .unsupported: String(localized: "This group's server doesn't support that.")
         case .refused(let reason): String(localized: "The group refused it: \(reason)")
+        case .lookupFailed(let error): error.describe(String(localized: "Couldn't look up your server's group chat service"))
         case .notPrivate: String(localized: "Only private groups, where members see each other's addresses, can be encrypted.")
         }
     }
@@ -338,18 +341,37 @@ extension XMPPSession {
             sendJoin(room, nickname: nickname, hasArchive: false)
             return
         }
-        var missing: (@Sendable () -> Void)?
-        if !mayCreate {
-            missing = { [weak self] in
-                self?.updateRoom(room) {
+        refreshRoomInfo(room) { [weak self] read in
+            guard let self else { return }
+            switch read {
+            case .info(let hasArchive): sendJoin(room, nickname: nickname, hasArchive: hasArchive)
+            case .missing where !mayCreate:
+                updateRoom(room) {
                     $0?.phase = .failed(String(localized: "This group doesn't exist."))
                     $0?.canRetry = false
                 }
+            // A room that doesn't exist yet is created by joining it.
+            case .missing: sendJoin(room, nickname: nickname, hasArchive: false)
+            // An invited room has to be known to exist, so a lookup that
+            // failed leaves that open; our own room is joined as it always was,
+            // as one whose info never answers must still be enterable.
+            case .failed(let error) where !mayCreate: lookupFailed(room, error)
+            case .failed: sendJoin(room, nickname: nickname, hasArchive: false)
             }
         }
-        refreshRoomInfo(room, then: { [weak self] hasArchive in
-            self?.sendJoin(room, nickname: nickname, hasArchive: hasArchive)
-        }, missing: missing)
+    }
+
+    /// An invited room couldn't be looked up, which says nothing of whether
+    /// it exists. A passing failure is joined again later, as a failed join is,
+    /// and when we're back from a while away.
+    private func lookupFailed(_ room: JID, _ error: ServerError) {
+        logger.info("Looking up \(room, privacy: .private) failed: \(error.condition, privacy: .private)")
+        let retryable = error.isPassing
+        updateRoom(room) {
+            $0?.phase = .failed(error.describe(String(localized: "Couldn't look up the group")))
+            $0?.canRetry = retryable
+        }
+        if retryable { scheduleRejoin(room) }
     }
 
     /// Rooms a drop left joining: the answers they waited for died with the
@@ -387,10 +409,17 @@ extension XMPPSession {
         write(presence)
     }
 
+    /// What asking a room what it is came to.
+    enum RoomInfoRead: Sendable {
+        case info(hasArchive: Bool)
+        /// The room isn't there, or its server has no such thing.
+        case missing
+        /// Any other failure: a timeout says nothing of the room.
+        case failed(ServerError)
+    }
+
     /// Asks the room what it is (name, privacy, archive) and stores it.
-    /// `missing` stands in for `then` when the room can't be looked up: without
-    /// it the room is taken to be new, as joining creates it.
-    func refreshRoomInfo(_ room: JID, then: (@Sendable (_ hasArchive: Bool) -> Void)? = nil, missing: (@Sendable () -> Void)? = nil) {
+    func refreshRoomInfo(_ room: JID, _ done: (@Sendable (RoomInfoRead) -> Void)? = nil) {
         client.module(.disco).getInfo(for: Martin.JID(room.martin), completionHandler: { [weak self] result in
             guard let self else { return }
             switch result {
@@ -414,18 +443,22 @@ extension XMPPSession {
                 }
                 self.roomAvatarAnnounced(room, form: info.form)
                 self.roomInfoChanged(room, from: before)
-                then?(features.contains("urn:xmpp:mam:2"))
-            case .failure:
-                // A room that doesn't exist yet is created by joining it.
-                if let missing { missing() } else { then?(false) }
+                done?(.info(hasArchive: features.contains("urn:xmpp:mam:2")))
+            case .failure(let error):
+                let error = ServerError.classify(error)
+                done?(error.isNotFound || error.isUnsupported ? .missing : .failed(error))
             }
         })
     }
 
+    /// The room's info read again, and whether it has an archive; nil if it
+    /// couldn't be read, when nothing is known of the room.
     @discardableResult
-    func refreshedRoomInfo(_ room: JID) async -> Bool {
+    func refreshedRoomInfo(_ room: JID) async -> Bool? {
         await withCheckedContinuation { continuation in
-            refreshRoomInfo(room, then: { continuation.resume(returning: $0) }, missing: { continuation.resume(returning: false) })
+            refreshRoomInfo(room) { read in
+                if case .info(let hasArchive) = read { continuation.resume(returning: hasArchive) } else { continuation.resume(returning: nil) }
+            }
         }
     }
 
@@ -587,10 +620,12 @@ extension XMPPSession {
         statuses.contains(332)
     }
 
-    /// Seconds to wait before the `attempt`th (from 0) automatic rejoin.
-    static func rejoinDelay(attempt: Int) -> TimeInterval {
+    /// Seconds to wait before the `attempt`th (from 0) automatic rejoin, up to
+    /// a quarter longer by chance: many rooms failing in one outage would
+    /// otherwise all ask the server again at the same moment.
+    static func rejoinDelay(attempt: Int, jitter: Double = .random(in: 0...0.25)) -> TimeInterval {
         let steps: [TimeInterval] = [5, 15, 60]
-        return attempt < steps.count ? steps[attempt] : 300
+        return (attempt < steps.count ? steps[attempt] : 300) * (1 + jitter)
     }
 
     /// Joins `room` again in a while, if it's still failed by then.
@@ -653,12 +688,10 @@ extension XMPPSession {
         join(room, nickname: group.nickname)
     }
 
-    private static func errorCondition(of stanza: Stanza) -> String? {
-        stanza.firstChild(name: "error")?.children.first { $0.xmlns == "urn:ietf:params:xml:ns:xmpp-stanzas" && $0.name != "text" }?.name
-    }
-
     private func joinFailed(_ room: JID, presence: Presence, status: RoomStatus) {
-        let condition = Self.errorCondition(of: presence)
+        // A bare `<error/>` says nothing, and is retried as that always was;
+        // a room that says `undefined-condition` meant it.
+        let condition = ServerError.declaredCondition(in: presence.element)
         if condition == "conflict", !status.triedOtherNickname {
             // Someone has our nickname; try once with a variant.
             let nickname = status.nickname + "_"
@@ -1226,21 +1259,15 @@ extension XMPPSession {
     // MARK: Bookmarks
 
     /// Brings our groups and our bookmarks in line, then joins the groups.
-    func syncBookmarks() {
-        if usesLegacyBookmarks {
-            fetchLegacyBookmarks { [weak self] bookmarks in
-                guard let self else { return }
-                if let bookmarks {
-                    self.applyBookmarks(bookmarks)
-                } else {
-                    self.joinRooms()
-                }
-            }
-            return
-        }
-        fetchBookmarks { [weak self] bookmarks in
+    /// `done` says whether the list was read, or the server has none to read;
+    /// when it wasn't, the groups we have are joined meanwhile and the read is
+    /// owed again (see `owe`).
+    func syncBookmarks(then done: @escaping @Sendable (Bool) -> Void = { _ in }) {
+        readBookmarks { [weak self] list, isRead in
             guard let self else { return }
-            if let bookmarks { self.applyBookmarks(bookmarks) } else { self.joinRooms() }
+            // A server without the node has no list; ours is not emptied for it.
+            if let list { self.applyBookmarks(list) } else { self.joinRooms() }
+            done(isRead)
         }
     }
 
@@ -1250,31 +1277,28 @@ extension XMPPSession {
     /// session includes one just joined whose publish is still on its way,
     /// and it marks a group whose bookmark is gone as left without leaving
     /// the room. It also joins every room again, failed ones included.
-    /// `done` says whether the list was read. The old kind (XEP-0048) is in
-    /// PEP with +notify too, but its node holds one item with the whole list,
-    /// so the newest notification the server held is complete, and it counts
-    /// as read.
+    /// `done` says whether the list was read, or the server has none to read.
+    /// The old kind (XEP-0048) is read the same way, from its one item.
     func refreshBookmarks(then done: @escaping @Sendable (Bool) -> Void) {
-        guard !usesLegacyBookmarks else { return done(true) }
-        fetchBookmarks { [weak self] bookmarks in
-            if let bookmarks { self?.reconcileBookmarks(bookmarks) }
-            done(bookmarks != nil)
+        readBookmarks { [weak self] list, isRead in
+            if let list { self?.reconcileBookmarks(list) }
+            done(isRead)
         }
     }
 
-    /// The bookmarks node's items, or nil if the server wouldn't say.
-    func fetchBookmarks(_ done: @escaping @Sendable ([Bookmark]?) -> Void) {
-        client.module(.pubsub).retrieveItems(from: account.martin, for: NS.bookmarks) { [weak self] result in
-            switch result {
-            case .success(let items):
-                done(items.items.compactMap { Bookmark(id: $0.id, payload: $0.payload) })
-            case .failure(let error) where error.error == .item_not_found:
-                done([])
-            case .failure(let error):
-                // No bookmarks on this server, or none we could read: callers
-                // keep our own list and try again later.
-                self?.logger.info("Bookmarks unavailable: \(error.localizedDescription, privacy: .private)")
-                done(nil)
+    /// The list on the server, or nil if there is none to apply: the server
+    /// doesn't offer bookmarks, or the read failed. A node that isn't there
+    /// is an empty list, but a failure is not: applying it would leave every
+    /// group we're in as one another device had left.
+    func readBookmarks(_ done: @escaping @Sendable (_ list: [Bookmark]?, _ isRead: Bool) -> Void) {
+        let legacy = usesLegacyBookmarks
+        readNode(legacy ? NS.legacyBookmarks : NS.bookmarks, as: "Bookmarks") { read in
+            switch read {
+            case .items(let page):
+                done(legacy ? page.items.first?.payload.map(Bookmark.legacyList(in:)) ?? [] : page.items.compactMap { Bookmark(id: $0.id, payload: $0.payload) }, true)
+            case .noNode: done([], true)
+            case .unsupported: done(nil, true)
+            case .failed: done(nil, false)
             }
         }
     }
@@ -1504,8 +1528,7 @@ extension XMPPSession {
         join(room, nickname: defaultNickname, discover: false)
         let status = try await waitForRoom(room)
         if status.wasCreated { try await configurePrivateRoom(room, name: name) }
-        let hasArchive = await refreshedRoomInfo(room)
-        updateRoom(room) { $0?.hasArchive = hasArchive }
+        if let hasArchive = await refreshedRoomInfo(room) { updateRoom(room) { $0?.hasArchive = hasArchive } }
         if let group = try database.groupChat(room) { publishBookmark(group) }
         if !invitees.isEmpty { try await invite(invitees, to: room) }
         return room
@@ -1611,7 +1634,7 @@ extension XMPPSession {
     private func reportSubjectOutcome(of stanza: Martin.Message, in room: JID) {
         if stanza.type == .error {
             guard let id = stanza.id else { return }
-            let condition = Self.errorCondition(of: stanza)
+            let condition = ServerError(stanza.element)?.condition
             let error: GroupError = ["forbidden", "not-allowed"].contains(condition) ? .notAllowed : .refused(condition ?? "error")
             subjectOutcomes.send(.failed(room: room, id: id, error))
         } else if stanza.type == .groupchat, stanza.body == nil, let subject = stanza.firstChild(name: "subject"),
@@ -1678,14 +1701,29 @@ extension XMPPSession {
         if let service = lock.withLock({ $0.mucService }) { return service }
         let disco = client.module(.disco)
         let items = try await disco.items(for: Martin.JID(account.domain))
+        // In the order the server lists them, as a gateway can also call
+        // itself a group chat service, and the first listed is the server's own.
+        var passing: ServerError?
         for item in items.items {
-            guard let info = try? await disco.info(for: item.jid, node: item.node) else { continue }
+            let info: DiscoveryModule.DiscoveryInfoResult
+            do {
+                info = try await disco.info(for: item.jid, node: item.node)
+            } catch {
+                // A component that won't say what it is isn't a group chat
+                // service, unless it only failed for now: then the one we
+                // want may be that one, and "doesn't host" would be untrue.
+                let error = ServerError.classify(error)
+                if error.isPassing { passing = passing ?? error }
+                continue
+            }
             if Self.isGroupChat(identities: info.identities.map { ($0.category, $0.type) }) {
                 let service = item.jid.stringValue
                 lock.withLock { $0.mucService = service }
                 return service
             }
         }
+        // The user retries; nothing is cached, so the next try asks again.
+        if let passing { throw GroupError.lookupFailed(passing) }
         throw GroupError.noService
     }
 

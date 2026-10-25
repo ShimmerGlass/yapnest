@@ -7,13 +7,25 @@ import Foundation
 ///
 /// Read states are read again at every return. Bookmarks and settings cost a
 /// fetch each, so they are read again at most once a `slowInterval`: a return
-/// inside the window leaves them owed for when it ends.
+/// inside the window leaves them owed for when it ends. Each is owed on its
+/// own, so only the read that failed is done again.
 struct HeldNotifications: Sendable {
     static let slowInterval: TimeInterval = 60
 
+    /// The reads that can be owed.
+    struct Parts: OptionSet, Sendable {
+        let rawValue: Int
+        static let readStates = Parts(rawValue: 1)
+        static let bookmarks = Parts(rawValue: 2)
+        static let settings = Parts(rawValue: 4)
+        static let slow: Parts = [.bookmarks, .settings]
+        static let all: Parts = [.readStates, .bookmarks, .settings]
+    }
+
     enum Slow: Sendable, Equatable {
         case none
-        case now
+        /// Read these now.
+        case now(Parts)
         case after(TimeInterval)
     }
 
@@ -26,8 +38,7 @@ struct HeldNotifications: Sendable {
     /// Counts sessions, so a failure reported by an earlier one's request is ignored.
     private(set) var generation = 0
     private var inactiveSince: Date?
-    private(set) var readStatesOwed = false
-    private(set) var slowOwed = false
+    private(set) var owed: Parts = []
     private var lastSlow: Date?
 
     /// Whether we have told the server we're inactive and not active since.
@@ -42,19 +53,19 @@ struct HeldNotifications: Sendable {
         }
         if inactiveSince != nil {
             inactiveSince = nil
-            readStatesOwed = true
-            slowOwed = true
+            owed = .all
         }
-        guard readStatesOwed || slowOwed else { return nil }
-        let readStates = readStatesOwed
-        readStatesOwed = false
+        guard !owed.isEmpty else { return nil }
+        let readStates = owed.contains(.readStates)
+        owed.remove(.readStates)
         var slow = Slow.none
-        if slowOwed {
+        let due = owed.intersection(.slow)
+        if !due.isEmpty {
             let wait = lastSlow.map { Self.slowInterval - now.timeIntervalSince($0) } ?? 0
             if wait <= 0 {
-                slowOwed = false
+                owed.subtract(due)
                 lastSlow = now
-                slow = .now
+                slow = .now(due)
             } else {
                 slow = .after(wait)
             }
@@ -62,32 +73,29 @@ struct HeldNotifications: Sendable {
         return Refresh(generation: generation, readStates: readStates, slow: slow)
     }
 
-    /// The end of a wait `sent` asked for: whether the bookmarks and settings
-    /// are still owed, and due.
-    mutating func takeSlow(generation: Int, now: Date = Date()) -> Bool {
-        guard generation == self.generation, slowOwed else { return false }
-        if let lastSlow, now.timeIntervalSince(lastSlow) < Self.slowInterval { return false }
-        slowOwed = false
+    /// The end of a wait `sent` asked for: the bookmarks and settings that are
+    /// still owed, if the window is up.
+    mutating func takeSlow(generation: Int, now: Date = Date()) -> Parts {
+        let due = owed.intersection(.slow)
+        guard generation == self.generation, !due.isEmpty else { return [] }
+        if let lastSlow, now.timeIntervalSince(lastSlow) < Self.slowInterval { return [] }
+        owed.subtract(due)
         lastSlow = now
-        return true
+        return due
     }
 
-    /// A refresh that failed is owed again at the next return, at once.
-    mutating func failed(readStates: Bool, slow: Bool, generation: Int) {
+    /// A read that failed is owed again at the next return, at once.
+    mutating func failed(_ parts: Parts, generation: Int) {
         guard generation == self.generation else { return }
-        if readStates { readStatesOwed = true }
-        if slow {
-            slowOwed = true
-            lastSlow = nil
-        }
+        owed.formUnion(parts)
+        if !parts.isDisjoint(with: .slow) { lastSlow = nil }
     }
 
     /// A new session's catch-up reads everything.
     mutating func reset() {
         generation += 1
         inactiveSince = nil
-        readStatesOwed = false
-        slowOwed = false
+        owed = []
         lastSlow = nil
     }
 }

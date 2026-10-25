@@ -123,6 +123,8 @@ public struct InboundMessage: Sendable, Equatable {
     public var isError: Bool
     /// For error stanzas: what went wrong, for display.
     public var errorText: String?
+    /// What the error said, for whoever works out which send it answers.
+    public var bounce: ServerError?
 }
 
 /// What a group chat stanza needs from the room to be understood.
@@ -285,7 +287,8 @@ extension InboundMessage {
         self.nick = nick
         self.type = stanza.type?.rawValue
         self.isError = stanza.type == .error
-        self.errorText = isError ? Self.describeError(stanza) : nil
+        self.bounce = isError ? (ServerError(stanza.element) ?? ServerError(condition: "undefined-condition")) : nil
+        self.errorText = bounce.map(Self.describeError)
 
         switch source {
         case .archive(let serverId, let timestamp):
@@ -391,17 +394,22 @@ extension InboundMessage {
         return stamps.max()
     }
 
-    /// The error stanza's free text and unknown condition names are left out:
-    /// the sender of an error can be anyone able to guess a message id, and
-    /// what we store is shown to the user as the reason.
-    static func describeError(_ stanza: Martin.Message) -> String {
-        let details = stanza.firstChild(name: "error")?.children.filter { $0.xmlns == "urn:ietf:params:xml:ns:xmpp-stanzas" } ?? []
-        switch details.first(where: { $0.name != "text" })?.name {
-        case "remote-server-not-found", "remote-server-timeout": return String(localized: "Couldn't reach the recipient's server.")
-        case "service-unavailable", "item-not-found": return String(localized: "The recipient's server refused the message.")
-        case "not-acceptable", "policy-violation": return String(localized: "The server refused the message.")
-        case "forbidden", "not-allowed": return String(localized: "You're not allowed to message this contact.")
-        default: return String(localized: "The message couldn't be delivered.")
+    /// What a bounce says to the user: a sentence for the common conditions,
+    /// then the server's own words and the condition, so a failure can be
+    /// told from another. The text comes from whoever sent the error, which
+    /// is shown as it is (a line, cut short) and never as markup.
+    static func describeError(_ error: ServerError) -> String {
+        error.describe(friendlyBounce(error.condition))
+    }
+
+    static func friendlyBounce(_ condition: String) -> String {
+        switch condition {
+        case "remote-server-not-found", "remote-server-timeout": String(localized: "Couldn't reach the recipient's server.")
+        case "service-unavailable", "item-not-found": String(localized: "The recipient's server refused the message.")
+        case "not-acceptable", "policy-violation": String(localized: "The server refused the message.")
+        case "forbidden", "not-allowed": String(localized: "You're not allowed to message this contact.")
+        case "recipient-unavailable": String(localized: "The recipient isn't available.")
+        default: String(localized: "The message couldn't be delivered.")
         }
     }
 

@@ -62,6 +62,26 @@ Each entry gives what went wrong for users, why, and what changed.
   last, so the bug never showed there.
 - *Fix:* skip `<text>` when looking for the condition.
 
+**A `recipient-unavailable` error read as "undefined condition"**
+(`ErrorCondition.recipient_unavailable`)
+- *Symptom:* a message bounced because the recipient had no session showed
+  the generic failure, and the error's type and text were lost.
+- *Cause:* the condition's name was misspelt `recipiend-unavailable`, so
+  `XMPPError.parse` never matched it.
+- *Fix:* spell it as RFC 6120 does.
+
+**Error types disagreed with RFC 6120, and a pubsub error lost its type**
+(`ErrorCondition.type`, `PubSubError.errorType`)
+- *Symptom:* a server's internal error or a policy violation was written
+  with the wrong `type`, and a failed pubsub request couldn't tell an error
+  that passes (`wait`) from a final one, as `XMPPError` keeps no type.
+- *Cause:* `internal-server-error`, `gone` and `policy-violation` had other
+  types than §8.3.3 recommends, and `PubSubError.parseError` dropped the
+  attribute.
+- *Fix:* the table follows the RFC, and `PubSubError` keeps the `type` it
+  was parsed with. `XMPPError` is an enum without room for it, so it still
+  falls back on its condition's type.
+
 **Archive queries ignored the `with` filter**
 (`MessageArchiveManagementModule.queryItems(with:)`)
 - *Symptom:* asking for one contact's archive returned the whole account's.

@@ -40,7 +40,7 @@ public enum ErrorCondition: String, LocalizedError {
     case not_authorized = "not-authorized"
     case payment_required = "payment-required"
     case policy_violation = "policy-violation"
-    case recipient_unavailable = "recipiend-unavailable"
+    case recipient_unavailable = "recipient-unavailable"
     case redirect
     case registration_required = "registration-required"
     case remote_server_not_found = "remote-server-not-found"
@@ -55,6 +55,8 @@ public enum ErrorCondition: String, LocalizedError {
         return rawValue.replacingOccurrences(of: "-", with: " ");
     }
     
+    /// The type RFC 6120 §8.3.3 recommends for the condition; where it allows
+    /// more than one, the first it lists.
     public var type: String {
         switch self {
         case .bad_request:
@@ -66,9 +68,9 @@ public enum ErrorCondition: String, LocalizedError {
         case .forbidden:
             return "auth";
         case .gone:
-            return "modify";
+            return "cancel";
         case .internal_server_error:
-            return "wait";
+            return "cancel";
         case .item_not_found:
             return "cancel";
         case .jid_malformed:
@@ -82,7 +84,7 @@ public enum ErrorCondition: String, LocalizedError {
         case .payment_required:
             return "auth";
         case .policy_violation:
-            return "cancel";
+            return "modify";
         case .recipient_unavailable:
             return "wait";
         case .redirect:

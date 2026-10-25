@@ -3,6 +3,18 @@ import Foundation
 import GRDB
 @preconcurrency import Martin
 
+/// How a settings sync ended, for whoever owes it again.
+enum SettingsSyncOutcome: Sendable {
+    /// The whole node was read and applied.
+    case done
+    /// It was cut short, or the server couldn't say for now: to be done again.
+    case owed
+    /// Not to be done this session, as the node can't be made private.
+    case refused
+
+    var isOwed: Bool { self == .owed }
+}
+
 /// What our other devices did to the settings node (see `SettingsItem`).
 enum SettingsChange {
     case published(id: String, payload: Element?)
@@ -64,7 +76,7 @@ struct SettingsSyncState: @unchecked Sendable {
     var scheduled: (work: DispatchWorkItem, at: Date)?
     var observer: Task<Void, Never>?
     /// Callers of `runSettingsSync` that found one running, to tell how it ended.
-    var waiters: [@Sendable (Bool) -> Void] = []
+    var waiters: [@Sendable (SettingsSyncOutcome) -> Void] = []
 
     /// The id this device's entries carry, where not the install's.
     var deviceId: String?
@@ -142,16 +154,19 @@ extension XMPPSession {
 
     /// Brings the settings in line with the server's, once per session, after
     /// the catch-up so `archivedAt` is judged against the messages we have.
-    func syncSettings() {
+    func syncSettings(then done: @escaping @Sendable (SettingsSyncOutcome) -> Void = { _ in }) {
         guard policy.syncsAccountState else { return }
-        Task.detached(priority: .utility) { [weak self] in await self?.runSettingsSync() }
+        Task.detached(priority: .utility) { [weak self] in
+            done(await self?.runSettingsSync() ?? .done)
+        }
     }
 
-    /// Whether the sync ran to its end with the whole node read. Called while
-    /// one is running, it waits for that one's outcome.
+    /// How a settings sync ended. Called while one is running, it waits for
+    /// that one's outcome.
     @discardableResult
-    func runSettingsSync() async -> Bool {
-        guard policy.syncsAccountState, isConnected else { return false }
+    func runSettingsSync() async -> SettingsSyncOutcome {
+        guard policy.syncsAccountState else { return .refused }
+        guard isConnected else { return .owed }
         let epoch = lock.withLock { state -> Int? in
             guard !state.settingsSync.syncing else { return nil }
             state.settingsSync.syncing = true
@@ -165,17 +180,17 @@ extension XMPPSession {
                     state.settingsSync.waiters.append { continuation.resume(returning: $0) }
                     return true
                 }
-                if !queued { continuation.resume(returning: false) }
+                if !queued { continuation.resume(returning: .owed) }
             }
         }
-        var succeeded = false
+        var outcome = SettingsSyncOutcome.owed
         defer {
-            let waiters = lock.withLock { state -> [@Sendable (Bool) -> Void] in
+            let waiters = lock.withLock { state -> [@Sendable (SettingsSyncOutcome) -> Void] in
                 if state.settingsSync.epoch == epoch { state.settingsSync.syncing = false }
                 defer { state.settingsSync.waiters = [] }
                 return state.settingsSync.waiters
             }
-            for waiter in waiters { waiter(succeeded) }
+            for waiter in waiters { waiter(outcome) }
         }
         let isCurrent = { [self] in isConnected && lock.withLock { $0.settingsSync.epoch == epoch } }
 
@@ -184,13 +199,21 @@ extension XMPPSession {
             try database.seedSyncedSettingsIfNeeded(deviceId: deviceId)
         } catch {
             logger.error("Failed to prepare settings sync: \(error)")
-            return false
+            return .owed
         }
-        guard await confirmSettingsNodeIsPrivate(epoch: epoch), isCurrent() else { return false }
+        let check = await confirmSettingsNodeIsPrivate(epoch: epoch)
+        guard isCurrent() else { return .owed }
+        switch check {
+        case .isPrivate: break
+        case .refused:
+            outcome = .refused
+            return outcome
+        case .failed: return .owed
+        }
 
         lock.withLock { $0.settingsSync.liveItems = [] }
         let fetched = await fetchSettingsItems()
-        guard isCurrent() else { return false }
+        guard isCurrent() else { return .owed }
         var isWhole = false
         do {
             switch fetched {
@@ -204,7 +227,7 @@ extension XMPPSession {
             }
         } catch {
             logger.error("Failed to apply the synced settings: \(error)")
-            return false
+            return .owed
         }
         await retractExpiredSettingsItems()
         startSettingsObservation(epoch: epoch)
@@ -212,8 +235,8 @@ extension XMPPSession {
         // Even after a partial fetch: an item published over newer entries
         // is put right by the device holding them, which publishes it again.
         requestSettingsPublish()
-        succeeded = isWhole
-        return succeeded
+        outcome = isWhole ? .done : .owed
+        return outcome
     }
 
     // MARK: Fetching
@@ -233,13 +256,11 @@ extension XMPPSession {
         var cursor: String?
         for _ in 0..<Self.settingsMaxPages {
             let page: PubSubModule.RetrievedItems
-            do {
-                page = try await client.module(.pubsub).retrieveItems(from: account.martin, for: NS.settings, limit: .rsm(query))
-            } catch let error as PubSubError where error.error == .item_not_found {
-                return .complete(items)
-            } catch {
-                logger.info("Settings unavailable: \(error.localizedDescription, privacy: .private)")
-                return .incomplete(items)
+            switch await readNode(NS.settings, as: "Settings", limit: .rsm(query)) {
+            case .items(let read): page = read
+            case .noNode: return .complete(items)
+            // Nothing is decided gone from what wasn't read; the sync is owed again.
+            case .unsupported, .failed: return .incomplete(items)
             }
             let fresh = page.items.filter { seen.insert($0.id).inserted }
             items += fresh.map { ($0.id, $0.payload) }
@@ -272,45 +293,66 @@ extension XMPPSession {
     /// read back, once per session, before anything is published. A node that
     /// is open is set right once; if it stays so, nothing is synced. It is
     /// never deleted, as that would destroy every other device's settings.
-    func confirmSettingsNodeIsPrivate(epoch: Int) async -> Bool {
+    func confirmSettingsNodeIsPrivate(epoch: Int) async -> NodeCheck {
         switch lock.withLock({ $0.settingsSync.node }) {
-        case .verified: return true
-        case .refused: return false
+        case .verified: return .isPrivate
+        case .refused: return .refused
         case .unchecked: break
         }
-        let isPrivate = await checkSettingsNode()
+        let check = await checkSettingsNode()
         lock.withLock { state in
             guard state.settingsSync.epoch == epoch else { return }
-            state.settingsSync.node = isPrivate ? .verified : .refused
+            switch check {
+            case .isPrivate: state.settingsSync.node = .verified
+            case .refused: state.settingsSync.node = .refused
+            // Not known either way, so the node stays unchecked and the next
+            // sync looks again.
+            case .failed: break
+            }
         }
-        return isPrivate
+        return check
     }
 
-    private func checkSettingsNode() async -> Bool {
-        let pubsub = client.module(.pubsub)
-        do {
-            _ = try await pubsub.retrieveItems(from: account.martin, for: NS.settings, limit: .lastItems(1))
-        } catch let error as PubSubError where error.error == .item_not_found {
+    enum NodeCheck: Equatable {
+        case isPrivate
+        /// It isn't private and can't be made so, or couldn't be looked at
+        /// for a reason that won't pass.
+        case refused
+        /// The server couldn't say for now: a timeout, a dropped connection,
+        /// an error of type `wait`. This is retried at the next sync, which
+        /// the app owes again at its next return (see `finishCatchUpAsApp`).
+        case failed
+
+        init(failing error: Error) {
+            self = ServerError.classify(error).isPassing ? .failed : .refused
+        }
+    }
+
+    func checkSettingsNode() async -> NodeCheck {
+        // The configuration says whether the node can be read at all, so only
+        // a node that isn't there is dealt with before it.
+        if case .noNode = await readNode(NS.settings, as: "Settings", limit: .lastItems(1)) {
             do {
                 try await createSettingsNode()
             } catch {
                 logger.error("Couldn't create the settings node, so settings aren't synced: \(error.localizedDescription, privacy: .private)")
-                return false
+                return NodeCheck(failing: error)
             }
-        } catch {
-            // The configuration says whether it can be read at all.
-            logger.info("Couldn't look at the settings node: \(error.localizedDescription, privacy: .private)")
         }
         do {
-            if try await settingsAccessModel() == "whitelist" { return true }
+            if try await settingsAccessModel() == "whitelist" { return .isPrivate }
             logger.warning("The settings node isn't private; setting it to be")
             try await configurePEPNode(NS.settings, fields: ["pubsub#access_model": ["whitelist"]])
-            if try await settingsAccessModel() == "whitelist" { return true }
+            if try await settingsAccessModel() == "whitelist" { return .isPrivate }
             logger.error("The server keeps the settings node readable by others, so settings aren't synced")
         } catch {
-            logger.error("Couldn't check the settings node, so settings aren't synced: \(error.localizedDescription, privacy: .private)")
+            // Syncing stays off for the session when the node couldn't be
+            // looked at for good, as it would be published to without knowing
+            // who can read it. A failure that can pass is looked at again.
+            logger.error("Couldn't check the settings node: \(error.localizedDescription, privacy: .private)")
+            return NodeCheck(failing: error)
         }
-        return false
+        return .refused
     }
 
     private func settingsAccessModel() async throws -> String? {

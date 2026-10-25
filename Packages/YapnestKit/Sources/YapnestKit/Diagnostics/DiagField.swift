@@ -47,8 +47,8 @@ public struct DiagField: Sendable {
     public static func error(_ error: some Error) -> DiagField {
         let ns = error as NSError
         var text = "\(sanitized(ns.domain))/\(ns.code)"
-        if let condition = (error as? XMPPError)?.errorCondition ?? error as? ErrorCondition {
-            text += " condition=\(sanitized(condition.rawValue))"
+        if let error = ServerError(error) {
+            text += " condition=\(sanitized(error.condition))"
         }
         return DiagField("error", text)
     }

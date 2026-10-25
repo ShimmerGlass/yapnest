@@ -76,21 +76,6 @@ extension XMPPSession {
         return !features.contains(NS.bookmarks + "#compat") && !features.contains(NS.bookmarks + "#compat-pep")
     }
 
-    /// The groups in the old bookmarks, or nil if the server wouldn't say.
-    func fetchLegacyBookmarks(then done: @escaping @Sendable ([Bookmark]?) -> Void) {
-        client.module(.pubsub).retrieveItems(from: account.martin, for: NS.legacyBookmarks) { [weak self] result in
-            switch result {
-            case .success(let items):
-                done(items.items.first?.payload.map(Bookmark.legacyList(in:)) ?? [])
-            case .failure(let error) where error.error == .item_not_found:
-                done([])
-            case .failure(let error):
-                self?.logger.info("Bookmarks unavailable: \(error.localizedDescription, privacy: .private)")
-                done(nil)
-            }
-        }
-    }
-
     func publishLegacyBookmark(_ bookmark: Bookmark, for group: GroupChat) {
         let room = bookmark.jid
         updateLegacyBookmarks { storage in
@@ -120,13 +105,13 @@ extension XMPPSession {
         Self.legacyBookmarkQueue.async { [self] in
             let pubsub = client.module(.pubsub)
             let storage: Element
-            let current = waitFor { (finish: @escaping @Sendable (PubSubRetrieveItemsResult) -> Void) in
-                pubsub.retrieveItems(from: account.martin, for: NS.legacyBookmarks, completionHandler: finish)
+            let current = waitFor { (finish: @escaping @Sendable (NodeRead) -> Void) in
+                readNode(NS.legacyBookmarks, as: "Old bookmarks", finish)
             }
             switch current {
-            case .success(let items)?:
-                storage = items.items.first?.payload ?? Element(name: "storage", xmlns: NS.legacyBookmarks)
-            case .failure(let error)? where error.error == .item_not_found:
+            case .items(let page)?:
+                storage = page.items.first?.payload ?? Element(name: "storage", xmlns: NS.legacyBookmarks)
+            case .noNode?:
                 storage = Element(name: "storage", xmlns: NS.legacyBookmarks)
             default:
                 // Writing back a list we couldn't read would drop the others.

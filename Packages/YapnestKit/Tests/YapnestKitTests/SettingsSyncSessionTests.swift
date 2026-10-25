@@ -38,6 +38,10 @@ private final class SettingsServer: @unchecked Sendable {
     var pageSize: Int?
     /// Refuses reading the items.
     var failsReads = false
+    /// Answers this many requests with an error that passes, like a timeout.
+    var passingFailures = 0
+    /// Refuses every request with an error that won't pass.
+    var denied = false
     private(set) var created: [String: [String]]?
     private(set) var configured: [[String: [String]]] = []
 
@@ -61,6 +65,11 @@ private final class SettingsServer: @unchecked Sendable {
     private func respond(to iq: Iq) -> Iq? {
         lock.withLock {
             guard let pubsub = iq.firstChild(name: "pubsub") else { return nil }
+            if denied { return FakeWire.error(to: iq, condition: "forbidden", type: "auth") }
+            if passingFailures > 0 {
+                passingFailures -= 1
+                return FakeWire.error(to: iq, condition: "remote-server-timeout", type: "wait")
+            }
             if pubsub.xmlns == "http://jabber.org/protocol/pubsub#owner" {
                 if let configure = pubsub.firstChild(name: "configure") {
                     if iq.type == .get {
@@ -230,6 +239,29 @@ struct SettingsSyncSessionTests {
         #expect(server.access == "whitelist")
         let events = server.events
         #expect(try #require(events.lastIndex(of: "config-set")) < #require(events.firstIndex(of: "publish")))
+    }
+
+    @Test func aTimeoutCheckingTheNodeDoesNotSwitchTheSyncOffForTheSession() async throws {
+        let server = SettingsServer()
+        server.passingFailures = 2
+        let (session, _) = try connect(server)
+        #expect(await session.runSettingsSync() == .owed)
+        #expect(session.lock.withLock { $0.settingsSync.node } == .unchecked)
+        #expect(server.publishes.isEmpty)
+
+        // The next sync, owed at the next return, looks again.
+        #expect(await session.runSettingsSync() == .done)
+        #expect(session.lock.withLock { $0.settingsSync.node } == .verified)
+    }
+
+    @Test func aRefusalCheckingTheNodeSwitchesTheSyncOffForTheSession() async throws {
+        let server = SettingsServer()
+        server.denied = true
+        let (session, _) = try connect(server)
+        #expect(await session.runSettingsSync() == .refused)
+        #expect(session.lock.withLock { $0.settingsSync.node } == .refused)
+        // Not asked again, and not owed.
+        #expect(await session.runSettingsSync() == .refused)
     }
 
     @Test func aServerThatKeepsTheNodeOpenStopsTheSyncAndNeverDeletesIt() async throws {

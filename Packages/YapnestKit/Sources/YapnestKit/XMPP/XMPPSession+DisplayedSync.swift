@@ -87,19 +87,13 @@ extension XMPPSession {
     /// the server held our notifications back and sent only the newest.
     /// `done` says whether the states were read.
     func fetchDisplayed(then done: (@Sendable (Bool) -> Void)? = nil) {
-        client.module(.pubsub).retrieveItems(from: account.martin, for: NS.mds) { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let items):
-                self.applyFetchedDisplayed(items.items.compactMap { DisplayedState(id: $0.id, payload: $0.payload) })
-                done?(true)
-            case .failure(let error) where error.error == .item_not_found:
-                done?(true)
-            case .failure(let error):
-                // Read again at the next catch-up or return to the app.
-                self.logger.info("Read states unavailable: \(error.localizedDescription, privacy: .private)")
-                done?(false)
+        // A failure is owed again by the callers: at the next catch-up (every
+        // connect) or return to the app.
+        readNode(NS.mds, as: "Read states") { [weak self] read in
+            if case .items(let page) = read {
+                self?.applyFetchedDisplayed(page.items.compactMap { DisplayedState(id: $0.id, payload: $0.payload) })
             }
+            done?(read.isRead)
         }
     }
 

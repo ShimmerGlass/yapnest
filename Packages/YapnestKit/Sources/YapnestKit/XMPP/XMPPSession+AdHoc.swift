@@ -310,10 +310,10 @@ enum AdHocStanza {
     /// beside the general one, which Martin's decoder doesn't look at.
     static func error(from stanza: Stanza?) -> Error {
         guard let stanza else { return AdHocError.timedOut }
-        guard let error = stanza.firstChild(name: "error") else { return AdHocError.refused(reason: "undefined-condition") }
-        let text = error.firstChild(name: "text")?.value
+        guard let error = stanza.firstChild(name: "error"), let server = ServerError(error) else { return AdHocError.refused(reason: "undefined-condition") }
+        let text = server.text
         let specific = error.children.first { $0.xmlns == NS.commands }?.name
-        let general = error.children.first { $0.xmlns == "urn:ietf:params:xml:ns:xmpp-stanzas" && $0.name != "text" }?.name
+        let general = server.condition
         switch specific {
         case "bad-action": return AdHocError.badAction(text: text)
         case "malformed-action": return AdHocError.malformedAction(text: text)
@@ -327,7 +327,7 @@ enum AdHocStanza {
         case "item-not-found", "recipient-unavailable", "gone": return AdHocError.notFound(text: text)
         case "service-unavailable", "feature-not-implemented": return AdHocError.unsupported(text: text)
         case "remote-server-timeout": return AdHocError.timedOut
-        case let other: return AdHocError.refused(reason: text.flatMap { $0.isEmpty ? nil : $0 } ?? other ?? "undefined-condition")
+        case let other: return AdHocError.refused(reason: text ?? other)
         }
     }
 }

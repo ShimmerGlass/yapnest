@@ -211,15 +211,14 @@ extension XMPPSession {
     /// Takes our name from the server on connecting, as another device may
     /// have changed it.
     func fetchNickname() {
-        client.module(.pubsub).retrieveItems(from: account.martin, for: NS.nick, limit: .lastItems(1)) { [weak self] result in
+        // Our name stays as it is when the read fails, and is read again at the
+        // next catch-up, which is after every connect.
+        readNode(NS.nick, as: "Nickname", limit: .lastItems(1)) { [weak self] read in
             guard let self else { return }
-            switch result {
-            case .success(let items):
-                nicknameChanged(account, to: items.items.first.flatMap { ProfileStanza.nick(from: $0.payload) })
-            case .failure(let error) where error.error == .item_not_found:
-                nicknameChanged(account, to: nil)
-            case .failure(let error):
-                logger.info("Nickname unavailable: \(error.localizedDescription, privacy: .private)")
+            switch read {
+            case .items(let page): nicknameChanged(account, to: page.items.first.flatMap { ProfileStanza.nick(from: $0.payload) })
+            case .noNode: nicknameChanged(account, to: nil)
+            case .unsupported, .failed: break
             }
         }
     }

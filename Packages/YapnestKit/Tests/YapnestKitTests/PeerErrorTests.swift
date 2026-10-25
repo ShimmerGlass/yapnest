@@ -42,11 +42,29 @@ struct PeerErrorTests {
         #expect(after.error == nil)
     }
 
-    @Test func anErrorOnASentMessageFailsItWithoutThePeersWords() throws {
+    @Test func anErrorOnASentMessageFailsItWithTheServersWordsAndCondition() throws {
         let message = try sendMessage(status: .sent)
-        try ingestError(text: "Send money to evil.example")
+        try ingestError(text: "No such\n   user here ")
         let after = try stored(message)
         #expect(after.status == .failed)
-        #expect(after.error == String(localized: "The recipient's server refused the message."))
+        #expect(after.error == "The recipient's server refused the message: No such user here (service-unavailable)")
+    }
+
+    @Test func aBounceKeepsTheParsedError() throws {
+        let stanza = parseStanza("""
+        <message type='error' from='alice@example.org' to='me@example.org/t' id='m1'>
+        <error type='wait'><recipient-unavailable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/>
+        <text xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'>User session not found</text></error></message>
+        """) as Martin.Message
+        let inbound = try #require(InboundMessage(stanza, account: me, source: .live, now: Date()))
+        #expect(inbound.bounce == ServerError(condition: "recipient-unavailable", type: .wait, text: "User session not found"))
+        #expect(inbound.errorText == "The recipient isn't available: User session not found (recipient-unavailable)")
+    }
+
+    @Test func aBounceWithoutAConditionIsUndefined() throws {
+        let stanza = parseStanza("<message type='error' from='alice@example.org' to='me@example.org/t' id='m1'><error/></message>") as Martin.Message
+        let inbound = try #require(InboundMessage(stanza, account: me, source: .live, now: Date()))
+        #expect(inbound.bounce?.condition == "undefined-condition")
+        #expect(inbound.errorText == "The message couldn't be delivered (undefined-condition)")
     }
 }
