@@ -4,8 +4,16 @@ import Foundation
 public enum DiagnosticsExport {
     /// Flushes this process, merges all the processes' lines by time under a
     /// header, and returns the file in a fresh temporary folder. The header
-    /// holds no identifiers. `date` is the export time.
-    public static func make(at date: Date = Date(), store: DiagnosticsStore = DiagLog.store) throws -> URL {
+    /// holds no identifiers. `date` is the export time. Exports in `root`
+    /// older than `keepFor` seconds are deleted so logs don't pile up in tmp;
+    /// a newer one may still be waiting to be shared, or be written by a
+    /// concurrent call.
+    public static func make(
+        at date: Date = Date(),
+        store: DiagnosticsStore = DiagLog.store,
+        root: URL = FileManager.default.temporaryDirectory.appending(path: "YapnestDiagnostics"),
+        keepFor: TimeInterval = 60
+    ) throws -> URL {
         store.flush()
         let fm = FileManager.default
         let files = ((try? fm.contentsOfDirectory(at: store.directory, includingPropertiesForKeys: nil)) ?? [])
@@ -27,8 +35,14 @@ public enum DiagnosticsExport {
         var output = header(at: date) + "\n"
         for line in lines { output += line.text + "\n" }
 
-        let root = fm.temporaryDirectory.appending(path: "YapnestDiagnostics")
-        try? fm.removeItem(at: root)
+        let older = (try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for old in older {
+            let modified = (try? old.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, Date().timeIntervalSince(modified) > keepFor {
+                try? fm.removeItem(at: old)
+            }
+        }
         let folder = root.appending(path: UUID().uuidString)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appending(path: "Yapnest-diagnostics.txt")

@@ -166,4 +166,33 @@ struct DiagnosticsTests {
         #expect(text.contains(Redacted.id(jid, key: key).hex))
         #expect(text.contains("condition=forbidden"))
     }
+
+    @Test func concurrentExportsDoNotDeleteEachOther() async throws {
+        let store = DiagnosticsStore(directory: makeDirectory(), process: .share, flushInterval: 60)
+        DiagLog.write(.info, .send, "queued", [], to: store)
+        let root = makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let urls = try await withThrowingTaskGroup(of: URL.self) { group in
+            for _ in 0..<30 { group.addTask { try DiagnosticsExport.make(store: store, root: root) } }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+        for url in urls {
+            #expect(FileManager.default.fileExists(atPath: url.path))
+        }
+    }
+
+    @Test func exportClearsOlderExportsButNotNewOnes() throws {
+        let store = DiagnosticsStore(directory: makeDirectory(), process: .share, flushInterval: 60)
+        let root = makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let old = try DiagnosticsExport.make(store: store, root: root)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -3_600)],
+            ofItemAtPath: old.deletingLastPathComponent().path)
+        let recent = try DiagnosticsExport.make(store: store, root: root)
+        let latest = try DiagnosticsExport.make(store: store, root: root)
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+        #expect(FileManager.default.fileExists(atPath: recent.path))
+        #expect(FileManager.default.fileExists(atPath: latest.path))
+    }
 }
