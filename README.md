@@ -98,7 +98,7 @@ What Yapnest implements, and where it stops short.
 | XEP-0004 | Data Forms | Used for room configuration, publish options, the push command and password change, and to fill in and read the forms and result tables of ad-hoc commands (every field type, with required fields and JIDs checked before sending). The media element (XEP-0221) isn't shown, so a form never loads anything from the entity that sent it. |
 | XEP-0012 | Last Activity | Opt-in as Activity Status, off by default (Settings > Privacy), which also shows the user away while the iOS app is suspended, or the Mac has been idle for 10 minutes or is locked. On the Mac, the idle time answered is the Mac's own. When on, answers contacts with a presence subscription, and asks offline contacts' servers for when they were last online. |
 | XEP-0030 | Service Discovery | Full. |
-| XEP-0045 | Multi-User Chat | Partial: join, create private groups, invite members, leave, member list. Owners edit the room's configuration (name, description, members only, who sees addresses, who may invite and change the subject), make and unmake admins and owners, and destroy the room. Owners and admins remove, ban and unban members. Moderators kick occupants ranked below them, and change the subject, as participants may too where the room allows it. Declining a mediated invitation is sent to a contact who invited us, never to anyone else. |
+| XEP-0045 | Multi-User Chat | Partial: join, create private groups, invite members, leave, member list. Owners edit the room's configuration (name, description, members only, who sees addresses, who may invite and change the subject), make and unmake admins and owners, and destroy the room. Owners and admins remove, ban and unban members. Moderators kick occupants ranked below them, and change the subject, as participants may too where the room allows it. Declining a mediated invitation is sent to a contact who invited us, never to anyone else. A room's password from an invitation is used to join it. |
 | XEP-0047 | In-Band Bytestreams | The transport of Jingle file transfers (XEP-0261), in `iq` stanzas only: `message` stanzas are refused. |
 | XEP-0048 | Bookmarks | Only the PEP form (`storage:bookmarks`), read and written on servers that don't mirror XEP-0402 bookmarks to it (no `#compat`), and when a XEP-0402 publish fails or goes unanswered. |
 | XEP-0050 | Ad-Hoc Commands | Client side: lists and runs the commands of the server, of a contact's devices that advertise them, of a group, and of a group's members that offer them (bots), including ones with several stages (next, previous, complete, cancel), forms, result tables and notes. Also used to register with the push relay. |
@@ -125,7 +125,7 @@ What Yapnest implements, and where it stops short.
 | XEP-0223 | Persistent Storage of Private Data via PubSub | Used for bookmarks and read state, and for Yapnest's own settings (pins, archived chats, link preview and sound choices, GIF favorites, emoji usage and the like), in a node only the account can read, so they follow the user to their other devices. |
 | XEP-0234 | Jingle File Transfer | Receive and send file offers over in-band bytestreams, in 1:1 chats with contacts, unencrypted only. A file is sent this way only when the server's upload can't take it (no upload service, or the file is over its limit) and a device of the contact advertises it; encrypted chats and requests for a file aren't supported. A received offer is accepted at once up to 15 MB, and waits to be accepted above that. The file's SHA-256 is checked when given, and files over 1 GiB are declined. Offers end when the connection does. |
 | XEP-0245 | The /me Command | Display. |
-| XEP-0249 | Direct MUC Invitations | Full; received only from contacts. |
+| XEP-0249 | Direct MUC Invitations | Full; received only from contacts. The invitation's password is used to join the room. |
 | XEP-0261 | Jingle In-Band Bytestreams Transport Method | The only transport for file transfers: blocks of up to 8 KiB, eight in flight. SOCKS5 (XEP-0260) isn't supported. |
 | XEP-0264 | Jingle Content Thumbnails | Receive: a small `data:` image in a file's metadata is shown blurred until the file is downloaded (`cid:` and web URIs are not fetched). Sent only in unencrypted chats. |
 | XEP-0280 | Message Carbons | Full. |
@@ -137,11 +137,11 @@ What Yapnest implements, and where it stops short.
 | XEP-0333 | Chat Markers | Partial: `displayed` only, sent and read; can be turned off. |
 | XEP-0334 | Message Processing Hints | `<store/>` only. |
 | XEP-0338 | Jingle Grouping Framework | Calls: the BUNDLE group is sent and read, so a video call's audio and video share one transport. Not advertised as a feature. |
-| XEP-0352 | Client State Indication | Full. |
+| XEP-0352 | Client State Indication | Full. On the Mac the app is never suspended, so it never sends `inactive`. |
 | XEP-0353 | Jingle Message Initiation | Audio and video calls: propose (with an audio description and, for video, a video one), ringing, proceed, accept, reject, retract and finish, sent and read, including the copies from carbons and the archive, which become the call rows in a chat. Two calls proposed at the same moment between the same two people are settled by the tie-break of section 4.1 (the lower session id goes on), and a video-only propose is turned down as unsupported. Calls ring for contacts only. Ringing a phone whose app is closed isn't built yet. |
 | XEP-0357 | Push Notifications | Full, through Yapnest's relay. |
 | XEP-0359 | Unique and Stable Stanza IDs | Full. |
-| XEP-0363 | HTTP File Upload | Full. |
+| XEP-0363 | HTTP File Upload | Full. The server's own domain counts as an upload service as well as its components. A `file-too-large` answer is told to the user (or hands the file to Jingle where that works), a `retry` stamp is waited for once, and a slot or upload that fails in a way that can pass is tried again. |
 | XEP-0368 | SRV records for XMPP over TLS | Full. |
 | XEP-0372 | References | Mentions only. |
 | XEP-0377 | Spam Reporting | Full, where the server offers it. |
