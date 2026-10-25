@@ -20,5 +20,9 @@ final class AccountWarningsUITests: XCTestCase {
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: retry)
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed, "Retry didn't clear the warning")
         XCTAssertTrue(app.staticTexts["A privacy setting wasn't saved"].exists)
+        let dismiss = app.buttons.matching(identifier: "accountWarningDismiss").firstMatch
+        dismiss.tap()
+        let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.staticTexts["A privacy setting wasn't saved"])
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 10), .completed, "Dismiss didn't remove the warning")
     }
 }

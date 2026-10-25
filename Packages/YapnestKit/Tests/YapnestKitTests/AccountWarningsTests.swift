@@ -66,6 +66,33 @@ struct AccountWarningsTests {
         #expect(tries.value == 2)
     }
 
+    @Test func anErrorThatIsNotTheServersSaysWhatItIs() {
+        let warnings = AccountWarnings()
+        warnings.post("p", title: "Group", friendly: "The group couldn't be left", error: GroupError.notConnected)
+        #expect(warnings.current.first?.detail == GroupError.notConnected.localizedDescription)
+        #expect(warnings.current.first?.detail.contains("undefined-condition") == false)
+    }
+
+    @Test func aFailedRetryKeepsTheFriendlyLead() async {
+        let warnings = AccountWarnings()
+        warnings.post("p", title: "Profile not saved", friendly: "Your profile wasn't saved", error: ServerError(condition: "forbidden")) {
+            throw ServerError(condition: "forbidden", text: "Still no")
+        }
+        #expect(await warnings.retry("p") == false)
+        #expect(warnings.current.first?.detail == "Your profile wasn't saved: Still no (forbidden)")
+    }
+
+    @Test func clearingARoomRemovesOnlyItsWarnings() {
+        let room = JID("cake@rooms.example.org")!
+        let warnings = AccountWarnings()
+        warnings.post("room-history:\(room)", title: "A", detail: "a")
+        warnings.post("room-invite:\(room)", title: "B", detail: "b")
+        warnings.post("room-history:tea@rooms.example.org", title: "C", detail: "c")
+        warnings.post("push", title: "D", detail: "d")
+        warnings.clear(room: room)
+        #expect(warnings.current.map(\.key) == ["room-history:tea@rooms.example.org", "push"])
+    }
+
     @Test func aWarningWithoutRetryCannotBeRetried() async {
         let warnings = AccountWarnings()
         warnings.post("p", title: "T", detail: "d")

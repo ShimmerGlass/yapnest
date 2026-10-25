@@ -1946,6 +1946,7 @@ extension XMPPSession {
         dropDeferred(in: room)
         try? database.updateGroupChat(room) { $0.hasLeft = true }
         ShareSuggestions.remove([room])
+        warnings.clear(room: room)
     }
 
     /// Tells the room we're gone, if we're in it or may be: a join that is
