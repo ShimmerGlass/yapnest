@@ -1,3 +1,4 @@
+import AVFoundation
 import ContactsUI
 import PhotosUI
 import QuickLook
@@ -51,6 +52,17 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
     UINavigationControllerDelegate, UIDocumentPickerDelegate, @preconcurrency CNContactPickerDelegate {
     private unowned let model: ConversationModel
 
+    /// Whether there is a camera, and whether it may be used, asked for if it
+    /// isn't known yet. Tests replace them, as the real ones prompt.
+    var cameraAvailable: () -> Bool = { UIImagePickerController.isSourceTypeAvailable(.camera) }
+    var cameraAccess: () async -> Bool = {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: true
+        case .notDetermined: await AVCaptureDevice.requestAccess(for: .video)
+        default: false
+        }
+    }
+
     init(model: ConversationModel) {
         self.model = model
     }
@@ -67,15 +79,27 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
             picker.delegate = self
             Presenter.present(picker)
         case .camera:
-            guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            guard cameraAvailable() else {
                 model.prompt = .notice(title: String(localized: "No camera"), message: String(localized: "This device has no camera available."))
                 return
             }
-            let picker = UIImagePickerController()
-            picker.sourceType = .camera
-            picker.mediaTypes = [UTType.image.identifier, UTType.movie.identifier]
-            picker.delegate = self
-            Presenter.present(picker)
+            Task {
+                // Asked first, as for calls, so a refusal is explained here
+                // rather than left to the picker.
+                guard await cameraAccess() else {
+                    model.prompt = .notice(
+                        title: String(localized: "No access to the camera"),
+                        message: Platform.isMac
+                            ? String(localized: "Turn it on for Yapnest in System Settings > Privacy & Security > Camera.")
+                            : String(localized: "Turn it on for Yapnest in Settings > Yapnest."))
+                    return
+                }
+                let picker = UIImagePickerController()
+                picker.sourceType = .camera
+                picker.mediaTypes = [UTType.image.identifier, UTType.movie.identifier]
+                picker.delegate = self
+                Presenter.present(picker)
+            }
         case .file:
             let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
             picker.allowsMultipleSelection = true

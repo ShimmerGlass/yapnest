@@ -44,6 +44,20 @@ struct PendingAttachmentsTests {
         AttachmentPicker.discardCopy(a)
     }
 
+    @Test func theCameraWithoutAccessSaysSoInsteadOfOpeningBlack() async throws {
+        let f = try ConversationFixture()
+        let picker = AttachmentPicker(model: f.model)
+        picker.cameraAvailable = { true }
+        picker.cameraAccess = { false }
+        picker.attach(from: .camera)
+        for _ in 0..<100 where f.model.prompt == nil { try await Task.sleep(for: .milliseconds(10)) }
+        guard case .notice(let title, _)? = f.model.prompt else {
+            Issue.record("the missing access wasn't explained")
+            return
+        }
+        #expect(title == "No access to the camera")
+    }
+
     @Test func aChatThatCannotBeWrittenToTurnsAwayLocationsAndSaysWhy() throws {
         let f = try ConversationFixture()
         f.model.canSendAttachments = false
