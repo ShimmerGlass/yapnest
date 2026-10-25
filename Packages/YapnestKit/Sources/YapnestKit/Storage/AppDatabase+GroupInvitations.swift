@@ -3,9 +3,9 @@ import GRDB
 
 extension AppDatabase {
     /// A newer invitation to the same room replaces the older one.
-    func recordGroupInvitation(room: JID, inviter: JID, reason: String?, at date: Date = Date()) throws {
+    func recordGroupInvitation(room: JID, inviter: JID, reason: String?, password: String? = nil, at date: Date = Date()) throws {
         try writer.write { db in
-            try GroupInvitation(room: room, inviter: inviter, reason: reason, receivedAt: date).save(db)
+            try GroupInvitation(room: room, inviter: inviter, reason: reason, password: password, receivedAt: date).save(db)
         }
     }
 

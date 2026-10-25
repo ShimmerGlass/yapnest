@@ -26,6 +26,11 @@ struct GroupInvitationTests {
         #expect(invitation == GroupInvitation(room: room, inviter: alice, reason: "Join us", receivedAt: date))
     }
 
+    @Test func keepsThePasswordTheInviterSent() throws {
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, password: "s3cret")
+        #expect(try db.groupInvitation(room)?.password == "s3cret")
+    }
+
     @Test func aRepeatReplacesTheOldOne() throws {
         try db.recordGroupInvitation(room: room, inviter: alice, reason: "Join us", at: Date(timeIntervalSince1970: 1000))
         let later = Date(timeIntervalSince1970: 2000)

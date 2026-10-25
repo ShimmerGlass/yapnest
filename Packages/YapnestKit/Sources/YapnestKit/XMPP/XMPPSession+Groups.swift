@@ -85,6 +85,11 @@ public struct RoomStatus: Hashable, Sendable {
     /// The room's password, for the joins this visit may need: a retry, a
     /// nickname change, a rejoin.
     var password: String?
+    /// The room was named by someone else, so it has to be known to exist: a
+    /// lookup that failed leaves that open, and the join waits. Our own room
+    /// is joined without knowing, as one whose info never answers must still
+    /// be enterable.
+    var mustBeFound = false
     var joinedAt = Date()
 
     public var isJoined: Bool { phase == .joined }
@@ -336,12 +341,15 @@ extension XMPPSession {
 
     /// Looks the room up, then enters it. Its archive replaces the history
     /// the room would replay on join.
-    func join(_ room: JID, nickname: String, discover: Bool = true, mayCreate: Bool = true, password: String? = nil) {
+    func join(_ room: JID, nickname: String, discover: Bool = true, mayCreate: Bool = true, mustBeFound: Bool = false, password: String? = nil) {
         guard isConnected else { return }
+        // A password given when we were invited is kept with the group, for
+        // the joins of later sessions.
+        let password = password ?? (try? database.groupChat(room))??.password
         var started = false
         updateRoom(room) { status in
             if status?.phase == .joining || status?.phase == .joined { return }
-            status = RoomStatus(phase: .joining, nickname: nickname, mayCreate: mayCreate, password: password)
+            status = RoomStatus(phase: .joining, nickname: nickname, mayCreate: mayCreate, password: password, mustBeFound: mustBeFound)
             started = true
         }
         guard started else { return }
@@ -362,9 +370,8 @@ extension XMPPSession {
             // A room that doesn't exist yet is created by joining it.
             case .missing: sendJoin(room, nickname: nickname, hasArchive: false)
             // An invited room has to be known to exist, so a lookup that
-            // failed leaves that open; our own room is joined as it always was,
-            // as one whose info never answers must still be enterable.
-            case .failed(let error) where !mayCreate: lookupFailed(room, error)
+            // failed leaves that open.
+            case .failed(let error) where mustBeFound: lookupFailed(room, error)
             case .failed: sendJoin(room, nickname: nickname, hasArchive: false)
             }
         }
@@ -395,7 +402,7 @@ extension XMPPSession {
         for room in Self.stuckJoins(rooms) {
             guard let status = rooms[room] else { continue }
             updateRoom(room) { $0 = nil }
-            join(room, nickname: status.nickname, mayCreate: status.mayCreate, password: status.password)
+            join(room, nickname: status.nickname, mayCreate: status.mayCreate, mustBeFound: status.mustBeFound, password: status.password)
         }
     }
 
@@ -620,9 +627,9 @@ extension XMPPSession {
                 guard let self, Self.selfPingResult(result) == .notJoined,
                       self.roomStatus(room)?.isJoined == true, self.roomStatus(room)?.nickname == nickname else { return }
                 self.logger.info("No longer in \(room, privacy: .private); joining again")
-                let password = self.roomStatus(room)?.password
+                let status = self.roomStatus(room)
                 self.updateRoom(room) { $0 = nil }
-                self.join(room, nickname: (try? self.database.groupChat(room))??.nickname ?? nickname, mayCreate: false, password: password)
+                self.join(room, nickname: (try? self.database.groupChat(room))??.nickname ?? nickname, mayCreate: false, mustBeFound: status?.mustBeFound ?? false, password: status?.password)
             }
         }
     }
@@ -711,7 +718,7 @@ extension XMPPSession {
         logger.info("Joining \(room, privacy: .private) again")
         lock.withLock { _ = $0.rejoinTasks.removeValue(forKey: room) }
         updateRoom(room) { $0 = nil }
-        join(room, nickname: group.nickname, mayCreate: false, password: status.password)
+        join(room, nickname: group.nickname, mayCreate: false, mustBeFound: status.mustBeFound, password: status.password)
     }
 
     private func joinFailed(_ room: JID, presence: Presence, status: RoomStatus) {
@@ -792,11 +799,8 @@ extension XMPPSession {
     /// its owner. Cancelling the configuration (§10.1.3) destroys it again.
     private func roomWasRecreated(_ room: JID) {
         logger.warning("Joining \(room, privacy: .private) created it; cancelling")
-        updateRoom(room) {
-            $0?.phase = .failed(String(localized: "This group doesn't exist."))
-            $0?.canRetry = false
-        }
-        cancelRejoin(room, resettingBackoff: true)
+        // Gone for good, or every new session would create it and cancel it again.
+        groupDestroyed(room)
         let iq = Iq()
         iq.type = .set
         iq.to = Martin.JID(room.martin)
@@ -1433,7 +1437,7 @@ extension XMPPSession {
         if !invitation.isDirect, !Self.vouches(room: room, for: inviter) {
             logger.info("Holding invitation to \(room, privacy: .private) for \(inviter, privacy: .private): the room can't speak for them")
             do {
-                try database.recordGroupInvitation(room: room, inviter: inviter, reason: invitation.reason)
+                try database.recordGroupInvitation(room: room, inviter: inviter, reason: invitation.reason, password: invitation.password)
             } catch {
                 logger.error("Failed to store group invitation: \(error)")
             }
@@ -1677,9 +1681,10 @@ extension XMPPSession {
         let existing = try database.groupChat(room)
         let nickname = nickname ?? existing?.nickname ?? defaultNickname
         let group = try database.joinGroupChat(room, nickname: nickname)
+        if let password { try database.updateGroupChat(room) { $0.password = password } }
         reloadKnownRooms()
         if roomStatus(room) != nil { updateRoom(room) { $0 = nil } }
-        join(room, nickname: nickname, mayCreate: mayCreate, password: password)
+        join(room, nickname: nickname, mayCreate: mayCreate, mustBeFound: !mayCreate, password: password)
         do {
             _ = try await waitForRoom(room, timeout: timeout)
         } catch {
@@ -1687,7 +1692,10 @@ extension XMPPSession {
             if existing == nil {
                 try? deleteConversation(id: group.conversationId)
             } else {
-                try? database.updateGroupChat(room) { $0.hasLeft = existing?.hasLeft ?? false }
+                try? database.updateGroupChat(room) {
+                    $0.hasLeft = existing?.hasLeft ?? false
+                    $0.password = existing?.password
+                }
             }
             reloadKnownRooms()
             updateRoom(room) { $0 = nil }
@@ -1702,7 +1710,7 @@ extension XMPPSession {
     public func acceptGroupInvitation(_ room: JID) async throws {
         // The address came from a stranger's stanza: it must be a room already.
         guard try await isGroupChatRoom(room) else { throw GroupError.joinFailed(String(localized: "This group doesn't exist.")) }
-        try await joinGroup(room, mayCreate: false)
+        try await joinGroup(room, mayCreate: false, password: try database.groupInvitation(room)?.password)
     }
 
     /// Forgets the invitation, and tells a contact who invited us through the

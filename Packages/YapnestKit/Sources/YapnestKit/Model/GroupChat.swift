@@ -35,6 +35,9 @@ public struct GroupChat: Codable, Hashable, Sendable, FetchableRecord, Persistab
     /// The room vouches for XEP-0421 occupant ids, so they can be trusted
     /// to tell occupants apart. Elsewhere anyone could forge one.
     public var hasOccupantIds: Bool
+    /// The room's password, from the invitation that gave it. Kept here and
+    /// not in the bookmark: it is only ever sent back to the room, on joining.
+    public var password: String?
 
     public init(
         conversationId: Int64,
@@ -49,6 +52,7 @@ public struct GroupChat: Codable, Hashable, Sendable, FetchableRecord, Persistab
         lastArchiveId: String? = nil,
         notify: Notify = .always,
         hasOccupantIds: Bool = false,
+        password: String? = nil,
     ) {
         self.conversationId = conversationId
         self.jid = jid
@@ -62,6 +66,7 @@ public struct GroupChat: Codable, Hashable, Sendable, FetchableRecord, Persistab
         self.lastArchiveId = lastArchiveId
         self.notify = notify
         self.hasOccupantIds = hasOccupantIds
+        self.password = password
     }
 
     /// A private group, as Conversations calls it: the only kind OMEMO works in.

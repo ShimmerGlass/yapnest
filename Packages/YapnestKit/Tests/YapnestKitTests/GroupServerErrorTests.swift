@@ -296,11 +296,55 @@ struct RejoinCreationTests {
             Issue.record("the room should have failed")
             return
         }
-        #expect(reason == "This group doesn't exist.")
+        #expect(reason == "This group was deleted.")
         #expect(session.roomStatus(room)?.canRetry == false)
+        // Left, so the next session doesn't create it and cancel it again.
+        #expect(try database.groupChat(room)?.hasLeft == true)
         let cancel = wire.written.compactMap { $0 as? Iq }.first { $0.firstChild(name: "query", xmlns: "http://jabber.org/protocol/muc#owner") != nil }
         let form = cancel?.firstChild(name: "query")?.firstChild(name: "x", xmlns: "jabber:x:data")
         #expect(form?.getAttribute("type") == "cancel")
+    }
+
+    @Test func aRoomThatIsRejoinedAfterANewSessionStillGetsItsInvitationPassword() async throws {
+        try database.updateGroupChat(room) { $0.password = "s3cret" }
+        session.clearRooms()
+        wire.answer { iq in isQuery(iq, "http://jabber.org/protocol/disco#info") ? FakeWire.discoInfo(to: iq, category: "conference", type: "text") : nil }
+        session.joinRooms()
+
+        #expect(await eventually { !joinPresences(wire).isEmpty })
+        let join = joinPresences(wire).first?.firstChild(name: "x", xmlns: "http://jabber.org/protocol/muc")
+        #expect(join?.firstChild(name: "password")?.value == "s3cret")
+    }
+
+    @Test func acceptingAHeldInvitationJoinsWithItsPassword() async throws {
+        let inviter = YapnestKit.JID("friend@example.net")!
+        try database.recordGroupInvitation(room: room, inviter: inviter, reason: nil, password: "s3cret")
+        wire.answer { iq in isQuery(iq, "http://jabber.org/protocol/disco#info") ? FakeWire.discoInfo(to: iq, category: "conference", type: "text") : nil }
+        let session = self.session
+        let accepting = Task { try await session.acceptGroupInvitation(room) }
+
+        #expect(await eventually { !joinPresences(wire).isEmpty })
+        let join = joinPresences(wire).first?.firstChild(name: "x", xmlns: "http://jabber.org/protocol/muc")
+        #expect(join?.firstChild(name: "password")?.value == "s3cret")
+        #expect(try database.groupChat(room)?.password == "s3cret")
+        accepting.cancel()
+    }
+
+    @Test func sharingToAGroupDestroyedWhileAwayDoesNotCreateIt() async throws {
+        wire.answer { iq in isQuery(iq, "http://jabber.org/protocol/disco#info") ? FakeWire.error(to: iq) : nil }
+        let reason = await session.joinToSend(room, timeout: 2)
+
+        #expect(reason == "This group doesn't exist.")
+        #expect(joinPresences(wire).isEmpty)
+    }
+
+    @Test func sharingToAGroupWhoseLookupTimesOutStillJoinsIt() async throws {
+        wire.answer { iq in isQuery(iq, "http://jabber.org/protocol/disco#info") ? FakeWire.error(to: iq, condition: "remote-server-timeout", type: "wait") : nil }
+        let session = self.session
+        let sharing = Task { await session.joinToSend(room, timeout: 2) }
+
+        #expect(await eventually { !joinPresences(wire).isEmpty })
+        sharing.cancel()
     }
 
     @Test func aRoomWeAreAllowedToCreateStillJoinsWhenItIsNew() async throws {
@@ -324,18 +368,13 @@ struct RejoinCreationTests {
         #expect(joinPresences(wire).isEmpty)
     }
 
-    @Test func aRoomServiceThatIsRestartingIsNotAMissingGroup() async throws {
+    @Test func aRoomServiceThatIsRestartingIsNotAMissingGroupAndStillGetsTheJoin() async throws {
         wire.answer { iq in isQuery(iq, "http://jabber.org/protocol/disco#info") ? FakeWire.error(to: iq, condition: "service-unavailable") : nil }
         session.joinRooms()
 
-        #expect(await eventually { session.roomStatus(room)?.canRetry == true })
-        guard case .failed(let reason)? = session.roomStatus(room)?.phase else {
-            Issue.record("the join did not fail")
-            return
-        }
-        #expect(!reason.contains("doesn't exist"))
-        #expect(session.hasScheduledRejoin(room))
-        session.cancelAllRejoins()
+        // The room answers the join itself, with an error that is retried.
+        #expect(await eventually { !joinPresences(wire).isEmpty })
+        #expect(session.roomStatus(room)?.phase == .joining)
     }
 
     @Test func aRoomThatIsGoneIsAMissingGroup() async throws {
