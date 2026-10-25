@@ -16,20 +16,33 @@ enum ServerRetry {
         ServerError.classify(error).isPassing
     }
 
+    /// Whether the server answered with a refusal that says it did nothing: an
+    /// error of type `wait`, other than a timeout. A timeout (Martin's
+    /// `remote-server-timeout`, a `TimeoutError`) or a dropped connection says
+    /// nothing about whether the request was applied, so these are not.
+    static func isRefusal(_ error: Error) -> Bool {
+        guard let answer = ServerError(error), answer.type == .wait else { return false }
+        return answer.condition != "remote-server-timeout"
+    }
+
+    /// With `onlyRefusals`, only a refusal is retried (see `isRefusal`): for a
+    /// request that isn't safe to repeat, as the first attempt may have been
+    /// applied without our hearing of it.
+    ///
     /// `isStillWanted` is asked before each retry, and ends the run when it
     /// is false (the connection dropped, or a new session began and redoes
     /// its own work); the error that was last seen is thrown then. A
     /// cancelled task ends it too.
     static func run<T>(
         attempts: Int = ServerRetry.attempts, backoff: TimeInterval = ServerRetry.backoff,
-        isStillWanted: () -> Bool, operation: () async throws -> T,
+        onlyRefusals: Bool = false, isStillWanted: () -> Bool, operation: () async throws -> T,
     ) async throws -> T {
         var attempt = 1
         while true {
             do {
                 return try await operation()
             } catch {
-                guard attempt < attempts, isPassing(error), !(error is CancellationError) else { throw error }
+                guard attempt < attempts, (onlyRefusals ? isRefusal(error) : isPassing(error)), !(error is CancellationError) else { throw error }
                 let delay = backoff * Double(1 << (attempt - 1))
                 if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
                 guard isStillWanted() else { throw error }
@@ -46,9 +59,14 @@ extension XMPPSession {
     /// the session is no longer connected or a new connection began, as that
     /// one redoes its own work.
     ///
+    /// A request that isn't safe to repeat (a destroy, a kick, a form-based
+    /// password change) passes `onlyRefusals`: it is made again only after the
+    /// server answered with a `wait` error, never after a timeout or a dropped
+    /// connection, as the first attempt may have been applied.
+    ///
     ///     let result = try await session.retryingPassingErrors { try await session.fetchSomething() }
-    public func retryingPassingErrors<T>(_ operation: () async throws -> T) async throws -> T {
-        try await retryingPassingErrors(attempts: ServerRetry.attempts, backoff: lock.withLock { $0.retryBackoff }, operation)
+    public func retryingPassingErrors<T>(onlyRefusals: Bool = false, _ operation: () async throws -> T) async throws -> T {
+        try await retryingPassingErrors(attempts: ServerRetry.attempts, backoff: lock.withLock { $0.retryBackoff }, onlyRefusals: onlyRefusals, operation)
     }
 
     /// For a request that answers through a callback.
@@ -64,10 +82,10 @@ extension XMPPSession {
         }
     }
 
-    func retryingPassingErrors<T>(attempts: Int, backoff: TimeInterval, _ operation: () async throws -> T) async throws -> T {
+    func retryingPassingErrors<T>(attempts: Int, backoff: TimeInterval, onlyRefusals: Bool = false, _ operation: () async throws -> T) async throws -> T {
         let started = lock.withLock { $0.attempt }
         return try await ServerRetry.run(
-            attempts: attempts, backoff: backoff,
+            attempts: attempts, backoff: backoff, onlyRefusals: onlyRefusals,
             isStillWanted: { isConnected && lock.withLock { $0.attempt } == started },
             operation: operation,
         )

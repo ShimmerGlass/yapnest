@@ -215,10 +215,10 @@ struct PasswordChangeTests {
         func next() -> Int { lock.withLock { value += 1; return value } }
     }
 
-    @Test func aChangeThatTimedOutIsSentAgain() async throws {
+    @Test func aChangeTheServerAskedToWaitForIsSentAgain() async throws {
         session.lock.withLock { $0.retryBackoff = 0 }
         let sets = Calls()
-        serve(fields: plainFields()) { sets.next() == 1 ? FakeWire.error(to: $0, condition: "remote-server-timeout") : FakeWire.result(to: $0) }
+        serve(fields: plainFields()) { sets.next() == 1 ? FakeWire.error(to: $0, condition: "resource-constraint") : FakeWire.result(to: $0) }
 
         try await session.changePassword(to: "new", current: "old")
 
@@ -233,11 +233,30 @@ struct PasswordChangeTests {
 
         await #expect(throws: XMPPSession.PasswordError.outcomeUnknown) { try await session.changePassword(to: "new", current: "old") }
 
-        #expect(changes() == 3)
+        // Not sent again: the first may have been applied, and a form that asks
+        // for the old password would then be refused as a wrong one.
+        #expect(changes() == 1)
         #expect(session.lock.withLock { $0.candidatePassword } == "new")
         #expect(password(of: session) == "old")
         // A token would sign in whichever password is right, and confirm the old one.
         #expect(tokens.load() == nil)
+    }
+
+    @Test func aFormChangeThatTimedOutAfterAWaitKeepsTheCandidateInsteadOfBeingRefused() async throws {
+        session.lock.withLock { $0.retryBackoff = 0 }
+        let sets = Calls()
+        serve(fields: changeForm()) {
+            switch sets.next() {
+            case 1: FakeWire.error(to: $0, condition: "resource-constraint")
+            case 2: FakeWire.error(to: $0, condition: "remote-server-timeout")
+            default: FakeWire.error(to: $0, condition: "not-authorized")
+            }
+        }
+
+        await #expect(throws: XMPPSession.PasswordError.outcomeUnknown) { try await session.changePassword(to: "new", current: "old") }
+
+        #expect(changes() == 2)
+        #expect(session.lock.withLock { $0.candidatePassword } == "new")
     }
 
     // MARK: A candidate password at sign-in

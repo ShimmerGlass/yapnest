@@ -91,11 +91,13 @@ extension XMPPSession {
         let domain = account.domain
         let request = try await changeRequest(username: username, domain: domain, new: new, current: current)
         do {
-            // Setting the same password again does no harm, so a request that
-            // timed out, or whose connection dropped, is sent once more.
-            _ = try await retryingPassingErrors { try await client.context.writer.write(iq: request) }
+            // Not sent again after a timeout or a dropped connection: if the
+            // first was applied, a form that asks for the old password would
+            // be refused now, and the refusal taken for a wrong password. Only
+            // the server's own `wait` refusal, which says it did nothing, is.
+            _ = try await retryingPassingErrors(onlyRefusals: true) { try await client.context.writer.write(iq: request) }
         } catch {
-            if (error as? XMPPError)?.errorCondition == .remote_server_timeout {
+            if Self.outcomeIsUnknown(after: error) {
                 // It may have been applied: the sign-in after this one has to
                 // be able to find out, with a password, as a token the server
                 // kept would sign in either way and confirm the old one.
@@ -273,6 +275,12 @@ extension XMPPSession {
             throw PasswordError.formRequired
         }
         return PasswordStanza.formChange(answer, domain: domain)
+    }
+
+    static func outcomeIsUnknown(after error: Error) -> Bool {
+        // A connection that went away reads as Martin's not-authorized.
+        if case XMPPError.not_authorized(let message?) = error, message.contains("not connected") { return true }
+        return ServerError.classify(error).isPassing && !ServerRetry.isRefusal(error)
     }
 
     static func passwordError(from error: Error) -> PasswordError {
