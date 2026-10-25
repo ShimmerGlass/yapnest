@@ -288,6 +288,29 @@ struct PasswordChangeTests {
         #expect(password(of: session) == "old")
     }
 
+    @Test(arguments: [true, false])
+    func anExtensionStoresThePasswordThatWorked(candidateWorks: Bool) throws {
+        let session = try sessionWithCandidate()
+        let stored = OSAllocatedUnfairLock<XMPPSession.Credentials?>(
+            initialState: .init(jid: JID("me@example.org")!, password: "old", candidatePassword: "new"),
+        )
+        let tokensForgotten = OSAllocatedUnfairLock(initialState: false)
+        session.savesConfirmedPassword(
+            load: { stored.withLock { $0 } }, update: { new in stored.withLock { $0 = new } },
+            forgetTokens: { tokensForgotten.withLock { $0 = true } },
+        )
+
+        session.client.update(state: .connecting)
+        if candidateWorks {
+            session.client.update(state: .disconnected(.authenticationFailure(SaslError.not_authorized)))
+        }
+        session.client.update(state: .connected())
+
+        #expect(stored.withLock { $0?.password } == (candidateWorks ? "new" : "old"))
+        #expect(stored.withLock { $0?.candidatePassword } == nil)
+        #expect(tokensForgotten.withLock { $0 } == candidateWorks)
+    }
+
     @Test func otherRefusalsDontTryTheCandidate() throws {
         let session = try sessionWithCandidate()
         session.client.update(state: .connecting)

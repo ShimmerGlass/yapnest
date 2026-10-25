@@ -144,6 +144,7 @@ public struct ShareSender: Sendable {
             return .queued(error.localizedDescription)
         }
         defer { session.disconnect() }
+        session.savesConfirmedPassword(to: CredentialStore())
 
         if let reason = await session.connectToSend(timeout: deadline.timeIntervalSinceNow) {
             return .queued(reason)

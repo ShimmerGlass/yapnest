@@ -119,6 +119,7 @@ public struct NotificationFetcher: Sendable {
                 credentials: credentials, resource: resource, directory: account, database: database, mode: .notificationService,
                 identityKeys: identityKeys,
             )
+            session.savesConfirmedPassword(to: CredentialStore())
             let caughtUp = await session.catchUpOnce(timeout: timeout)
             DiagLog.info(.notificationExtension, "Catch-up finished", .bool("completed", caughtUp), .duration("budget", timeout))
             if !caughtUp {

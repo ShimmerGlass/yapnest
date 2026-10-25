@@ -417,10 +417,8 @@ final class AppModel {
     private func storeConfirmedPassword(_ password: String, wasCandidate: Bool, account: JID) async {
         do {
             try await offMain { [credentials] in
-                guard var stored = try credentials.load(), stored.jid == account else { return }
-                stored.password = password
-                stored.candidatePassword = nil
-                try credentials.update(stored)
+                guard let stored = try credentials.load(), stored.jid == account else { return }
+                try credentials.update(stored.confirming(password))
             }
         } catch {
             DiagLog.error(.app, "Storing the confirmed password failed", .error(error))

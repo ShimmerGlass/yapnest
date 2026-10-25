@@ -33,6 +33,15 @@ public final class XMPPSession: @unchecked Sendable {
             self.port = port
             self.disableTLS = disableTLS
         }
+
+        /// These credentials once a sign-in has shown `password` to be the
+        /// account's: it is kept, and the candidate dropped.
+        public func confirming(_ password: String) -> Credentials {
+            var confirmed = self
+            confirmed.password = password
+            confirmed.candidatePassword = nil
+            return confirmed
+        }
     }
 
     public enum State: Sendable, Equatable {

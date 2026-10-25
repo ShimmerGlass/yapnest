@@ -164,6 +164,29 @@ extension XMPPSession {
         lock.withLock { $0.passwordConfirmed = handler }
     }
 
+    /// `onPasswordConfirmed` for the extensions, which have no owner to tell:
+    /// the password that worked is kept in `store` and the other forgotten,
+    /// so they stop trying both on every run.
+    public func savesConfirmedPassword(to store: CredentialStore) {
+        savesConfirmedPassword(load: store.load, update: store.update, forgetTokens: KeychainFastTokenStore.deleteAll)
+    }
+
+    func savesConfirmedPassword(
+        load: @escaping @Sendable () throws -> Credentials?, update: @escaping @Sendable (Credentials) throws -> Void,
+        forgetTokens: @escaping @Sendable () -> Void,
+    ) {
+        let account = account
+        onPasswordConfirmed { password, wasCandidate in
+            do {
+                if let stored = try load(), stored.jid == account { try update(stored.confirming(password)) }
+            } catch {
+                DiagLog.error(.connection, "Storing the confirmed password failed", .error(error))
+            }
+            // The old password's tokens, in the app too.
+            if wasCandidate { forgetTokens() }
+        }
+    }
+
     /// Whether the server accepts `password` for this account, by signing in
     /// once more on a connection of its own. Nothing of the session is touched
     /// or stored: that connection has no SASL2 module, so it neither presents
