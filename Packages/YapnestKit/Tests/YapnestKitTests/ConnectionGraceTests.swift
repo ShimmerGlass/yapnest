@@ -87,6 +87,25 @@ struct ConnectionGraceTests {
         #expect(!session.livenessPending.value)
     }
 
+    @Test func aSilentStreamKeepsTheRequestWaitingForTheNextConnection() async throws {
+        session.connectForTesting(wire)
+        answerCommandList()
+        wire.holdsPings = true
+        session.verifyConnection(timeout: 0.2)
+        let result = Task { try await session.adHocCommands(at: "example.org") }
+        // Past the ping's timeout the stream is dropped, but it can still read
+        // as connected for a moment: that is not an answer.
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(requests.isEmpty)
+        #expect(session.livenessPending.value)
+        // What a new connection does, then it comes up.
+        session.livenessPending.send(false)
+        session.connectForTesting(wire)
+        let commands = try await result.value
+        #expect(commands.count == 1)
+        #expect(requests.count == 1)
+    }
+
     @Test func aRoomActionWaitsForTheRoomToBeJoined() async throws {
         session.connectForTesting(wire)
         _ = try session.database.joinGroupChat(room, nickname: "me")
