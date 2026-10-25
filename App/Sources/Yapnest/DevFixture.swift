@@ -31,6 +31,9 @@ enum DevFixture: String, CaseIterable {
     /// Small chats for the UI tests of messages' menus, the composer, the chat
     /// list and the banners; see `InteractionsFixture`.
     case interactions
+    /// The `interactions` chats with two account warnings above the list, one
+    /// with a Retry that works; see `AccountWarnings`.
+    case warnings
     /// An account whose other OMEMO devices differ in use: one used yesterday,
     /// one quiet for 120 days, one never seen sending for 200 days, one new.
     case devices
@@ -82,7 +85,7 @@ enum DevFixture: String, CaseIterable {
         case .tallHistory: try Self.fillTallHistory(database)
         case .learnedReactions: try Self.fillLearnedReactions(database)
         case .quickResponses: try Self.fillQuickResponses(database)
-        case .interactions: try InteractionsFixture.fill(database)
+        case .interactions, .warnings: try InteractionsFixture.fill(database)
         case .devices: try Self.fillDevices(database)
         case .lastSeen: try Self.fillLastSeen(database)
         case .moderation: try Self.fillModeration(database)
@@ -103,6 +106,11 @@ enum DevFixture: String, CaseIterable {
     func configure(_ session: XMPPSession) {
         if self == .screenshots { ScreenshotsFixture.configure(session) }
         if self == .rtl { RTLFixture.configure(session) }
+        if self == .warnings {
+            let warnings = session.warnings
+            warnings.post("fixture.profile", title: "Your profile wasn't saved", detail: ServerError(condition: "service-unavailable", type: .wait, text: "Try later").describe("The server didn't save your profile")) {}
+            warnings.post("fixture.privacy", title: "A privacy setting wasn't saved", detail: ServerError(condition: "forbidden", text: "Not allowed here").describe("The server refused the setting"))
+        }
         guard self == .moderation else { return }
         session.joinForFixture(Self.ownedRoom, occupants: [
             RoomOccupant(nick: "fixture", jid: Self.account, affiliation: .owner, role: "moderator"),

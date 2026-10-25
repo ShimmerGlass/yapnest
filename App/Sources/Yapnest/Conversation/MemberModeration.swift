@@ -109,8 +109,8 @@ private struct MemberModeration: ViewModifier {
                         : "They'll become an admin and no longer be able to change the group's settings or delete it.")
                 }
             }
-            .errorAlert("Couldn't change the group", $server.error)
-            .errorAlert("Couldn't add contact", $addContact.error)
+            .actionAlert("Couldn't change the group", server)
+            .actionAlert("Couldn't add contact", addContact)
     }
 
     private func title(of confirmation: Confirmation) -> LocalizedStringKey {

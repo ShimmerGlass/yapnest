@@ -89,7 +89,7 @@ private struct AddContactLinkView: View {
                     }
                 }
             }
-            .errorAlert("Couldn't add contact", $add.error)
+            .actionAlert("Couldn't add contact", add)
         }
         .presentationDetents([.medium])
         // Cancel is disabled meanwhile, but a swipe would still close the

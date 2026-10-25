@@ -53,7 +53,7 @@ struct ContactRequestRow: View {
             Button("Block", systemImage: "hand.raised", role: .destructive) { confirmsBlock = true }
         }
         .blockConfirmation(isPresented: $confirmsBlock, session: session, peer: contact.jid, name: contact.requestTitle)
-        .errorAlert("Couldn't answer", $answer.error)
+        .actionAlert("Couldn't answer", answer)
     }
 
     private func perform(_ action: @escaping @Sendable (JID) throws -> Void) {
@@ -76,7 +76,7 @@ struct AddContactButton: View {
             BusyLabel(title: "Add to Contacts", systemImage: "person.badge.plus", isBusy: add.isBusy)
         }
         .disabled(add.isBusy)
-        .errorAlert("Couldn't add contact", $add.error)
+        .actionAlert("Couldn't add contact", add)
     }
 
     private func addContact() {

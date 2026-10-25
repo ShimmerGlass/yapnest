@@ -115,6 +115,25 @@ public struct ServerError: Error, Equatable, Sendable {
         return ServerError(condition: "undefined-condition", type: .cancel)
     }
 
+    /// Whether `error` came from the server or the connection, so that what
+    /// it says is the server's to give and trying again may help. Errors of
+    /// our own, such as being offline, are not.
+    public static func isFromServer(_ error: Error) -> Bool {
+        if ServerError(error) != nil || error is TimeoutError { return true }
+        return (error as? URLError).map { classify($0).isPassing } ?? false
+    }
+
+    /// What to tell the user about a failed request: the server's reason
+    /// after a lead that says whether it will pass, or `localizedDescription`
+    /// for an error that isn't the server's. `friendly` replaces the lead.
+    public static func userMessage(for error: Error, friendly: String? = nil) -> String {
+        guard isFromServer(error) else { return error.localizedDescription }
+        let classified = classify(error)
+        if let friendly { return classified.describe(friendly) }
+        if classified.isUnsupported { return classified.describe("The server doesn't support this") }
+        return classified.describe(classified.isPassing ? "The server didn't answer in time" : "The server refused")
+    }
+
     /// Can't be fixed by trying again unchanged: `cancel`, `modify` and `auth`.
     public var isFinal: Bool {
         switch type {

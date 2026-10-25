@@ -329,8 +329,8 @@ struct ChatSettingsView: View {
             } message: {
                 Text("You'll stop seeing when each other is online, on all your devices. The chat stays, and they can still message you.")
             }
-            .errorAlert("Couldn't remove contact", $remove.error)
-            .errorAlert("Couldn't save the nickname", $rename.error)
+            .actionAlert("Couldn't remove contact", remove)
+            .actionAlert("Couldn't save the nickname", rename)
             .alert("Nickname", isPresented: $asksNickname) {
                 TextField(contact?.nickname ?? peer.shortName, text: $nicknameDraft)
                 Button("Cancel", role: .cancel) {}
@@ -341,10 +341,10 @@ struct ChatSettingsView: View {
             } message: {
                 Text("Leave it empty to go back to the name they chose.")
             }
-            .errorAlert("Couldn't unblock", $unblock.error)
-            .errorAlert("Couldn't leave group", $leave.error)
-            .errorAlert("Couldn't delete group", $destroy.error)
-            .errorAlert("Couldn't change notifications", $changeNotify.error)
+            .actionAlert("Couldn't unblock", unblock)
+            .actionAlert("Couldn't leave group", leave)
+            .actionAlert("Couldn't delete group", destroy)
+            .actionAlert("Couldn't change notifications", changeNotify)
             .errorAlert("Couldn't save the setting", $saveError)
             .task { await loadInitial() }
             .onAppear { if group == nil { commandEntities = session.commandEntities(of: peer) } }

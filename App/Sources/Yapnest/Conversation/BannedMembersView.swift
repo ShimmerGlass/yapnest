@@ -40,7 +40,7 @@ struct BannedMembersView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheetDoneButton()
         .errorAlert("Couldn't load the banned list", $loadError)
-        .errorAlert("Couldn't unban", $lifting.error)
+        .actionAlert("Couldn't unban", lifting)
         .task {
             // The room's list replaces what we have, so it is read before the
             // spinner goes.

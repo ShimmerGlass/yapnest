@@ -246,7 +246,10 @@ struct ChatListView: View {
     private var chats: some View {
         withSidebarFooter(ChatListContent(session: session, archived: false, selection: isSplit ? selection : nil, open: { open($0, item: $1) }, onDelete: closeIfOpen, onCompose: { sheet = .compose }))
             .safeAreaInset(edge: .top, spacing: 0) {
-                ConnectionBanner(state: shownConnection)
+                VStack(spacing: 0) {
+                    ConnectionBanner(state: shownConnection)
+                    AccountWarningsBanner(warnings: session.warnings)
+                }
             }
             .animation(.default, value: shownConnection)
             // The app drops its connection a few seconds after leaving, and
@@ -609,7 +612,7 @@ private struct ChatListContent: View {
                 Text("Messages are deleted from this device only.")
             }
         }
-        .errorAlert("Couldn't leave group", $leaving.error)
+        .actionAlert("Couldn't leave group", leaving)
         .overlay {
             if leaving.isBusy {
                 ProgressView()

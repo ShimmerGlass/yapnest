@@ -150,7 +150,7 @@ struct ConversationView: View {
             .onChange(of: model.chatSearchRequests) { search.open() }
             .onChange(of: model.editLastRequests) { conversation.editLastMessage() }
             .blockConfirmation(isPresented: $confirmsBlock, session: session, peer: peer, name: title)
-            .errorAlert("Couldn't answer", $answering.error)
+            .actionAlert("Couldn't answer", answering)
             .sheet(isPresented: $showsSettings, onDismiss: {
                 // The search field takes focus as it appears, which a sheet
                 // that's still leaving would swallow.
@@ -542,7 +542,7 @@ private struct ActionBar: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
         .background(.bar, ignoresSafeAreaEdges: .bottom)
-        .errorAlert(errorTitle, $server.error)
+        .actionAlert(errorTitle, server)
     }
 }
 

@@ -34,7 +34,7 @@ struct BlockConfirmation: ViewModifier {
                     Text("They won't be able to message you or see when you're online, on any of your devices.")
                 }
             }
-            .errorAlert("Couldn't block", $blocking.error)
+            .actionAlert("Couldn't block", blocking)
     }
 
     private func block(reporting reason: XMPPSession.ReportReason?) {

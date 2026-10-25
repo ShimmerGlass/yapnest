@@ -88,6 +88,8 @@ public final class XMPPSession: @unchecked Sendable {
     /// they've set one. Kept apart from `presences`, which many views read
     /// for availability alone.
     public let statuses = CurrentValueSubject<[JID: String], Never>([:])
+    /// What went wrong on this account that the user should hear of, shown above the chat list.
+    public let warnings = AccountWarnings()
     /// Contacts who are online with a device we can call (`canCall`), which
     /// becomes known when the device's capabilities arrive, after its presence.
     /// Always empty in a session without media.
@@ -191,6 +193,8 @@ public final class XMPPSession: @unchecked Sendable {
         /// How long a bounce that may pass waits before the item is sent again;
         /// doubled for each time it bounces.
         var bounceBackoff: TimeInterval = 5
+        /// The wait before `retryingPassingErrors` makes a request again; tests lower it.
+        var retryBackoff: TimeInterval = ServerRetry.backoff
         /// How many times the server closed the stream with an error while a stanza of ours,
         /// by its id, was the oldest it hadn't acknowledged. An acknowledgement clears it.
         /// Kept across reconnects: that is where the count comes from.

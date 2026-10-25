@@ -138,7 +138,7 @@ struct EditGroupView: View {
                 }
             }
             .errorAlert("Couldn't save everything", $failures)
-            .errorAlert("Couldn't use that picture", $preparingPicture.error)
+            .actionAlert("Couldn't use that picture", preparingPicture)
             .confirmationDialog("Turn off encryption?", isPresented: $confirmsEncryptionOff, titleVisibility: .visible) {
                 Button("Turn Off Encryption", role: .destructive, action: perform)
             } message: {

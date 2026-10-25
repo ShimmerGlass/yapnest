@@ -38,7 +38,7 @@ struct NewGroupView: View {
                     }
                 }
             }
-            .errorAlert("Couldn't create the group", $creation.error)
+            .actionAlert("Couldn't create the group", creation)
         }
     }
 
@@ -115,7 +115,7 @@ struct JoinGroupView: View {
                     }
                 }
             }
-            .errorAlert("Couldn't join", $joining.error)
+            .actionAlert("Couldn't join", joining)
         }
         .presentationDetents([.medium])
         // The answer opens the chat, which a user who left no longer wants.
@@ -287,7 +287,7 @@ struct InviteView: View {
                     }
                 }
             }
-            .errorAlert("Couldn't add them", $invitation.error)
+            .actionAlert("Couldn't add them", invitation)
         }
     }
 

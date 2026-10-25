@@ -59,7 +59,7 @@ struct ChangePasswordView: View {
                 }
             }
         }
-        .errorAlert("Couldn't change the password", $change.error)
+        .actionAlert("Couldn't change the password", change)
         .alert("Password changed", isPresented: $didChange) {
             Button("OK") { dismiss() }
         } message: {

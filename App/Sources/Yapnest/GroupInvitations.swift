@@ -66,7 +66,7 @@ struct GroupInvitationRow: View {
         } message: {
             Text("\(invitation.room.description) says \(inviterName) invited you. This can't be confirmed: the group is on a different server than \(inviterName)'s, and that server could name anyone as the inviter.\n\nJoining shows the group your nickname and that you're online, and adds the group to all your devices. If you're unsure, ask \(inviterName) first.")
         }
-        .errorAlert("Couldn't join", $joining.error)
+        .actionAlert("Couldn't join", joining)
         .errorAlert("Couldn't decline", $declineError)
         .task(id: invitation.inviter) {
             let inviter = invitation.inviter
