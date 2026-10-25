@@ -133,7 +133,7 @@ struct AppModelSessionTests {
         await eventually("the session lets go of the lock") { !fixture.lock.isLocked }
     }
 
-    @Test func theSamePhaseFromSwiftUIAfterUIKitChangesNothing() async throws {
+    @Test func theSamePhaseTwiceChangesNothing() async throws {
         let fixture = AppModelFixture()
         let model = fixture.model!
         let center = NotificationCenter()
@@ -145,7 +145,7 @@ struct AppModelSessionTests {
         center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
         await eventually("it connects again") { fixture.connects.count == 2 }
 
-        model.scenePhaseChanged(active: true, background: false)
+        center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
 
         #expect(await stays(for: .milliseconds(300)) { fixture.connects.count == 2 })
     }
