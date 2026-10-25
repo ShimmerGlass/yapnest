@@ -94,7 +94,7 @@ final class ExportLogsUITests: InteractionsTestCase {
     func testExportLogsOpensTheShareSheetWithoutAnError() {
         driver.openSettings()
         let row = app.buttons["exportLogs"].firstMatch
-        let footer = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "holds no messages, contacts or addresses")).firstMatch
+        let footer = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "not who you talked to or what was said")).firstMatch
         // The row can be hittable at the screen's bottom edge with its footer
         // still below, not yet in the list.
         for _ in 0..<8 where !row.exists || !row.isHittable || !footer.exists { app.swipeUp() }
