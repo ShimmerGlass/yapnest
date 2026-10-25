@@ -581,6 +581,13 @@ Each entry gives what went wrong for users, why, and what changed.
   filter for callers that must agree with the wire. Pinned by `XMLEscapingTests` and
   `ControlCharacterIntegrationTests`.
 
+**The server itself couldn't be the upload service** (`findHttpUploadComponents`)
+- *Symptom:* a server that offers HTTP File Upload on its own domain, as
+  XEP-0363 §4.1 allows, read as having none.
+- *Cause:* only the items of the domain were asked about.
+- *Fix:* the domain is asked too, and listed first. Failing to list the items
+  is only an error if the domain offers nothing either.
+
 ### MartinOMEMO
 
 **Logs named people publicly** (`OMEMOModule`)
@@ -804,6 +811,39 @@ Each entry gives what went wrong for users, why, and what changed.
   with no way for the app to leave some out.
 - *Fix:* a `forSelf` parameter, true as before. Yapnest passes false and
   names our devices itself, leaving out the ones that went quiet.
+
+**A passing fetch error read as "no OMEMO"** (`deviceListError`, `bundleError`)
+- *Symptom:* a contact's server that answered the device list request with
+  `remote-server-timeout` or another `wait` error, or a bundle request that
+  timed out, ended a send with "Turn off encryption to send without it".
+- *Cause:* the module kept only the error's condition for a failed list, and
+  nothing for a failed bundle, so the `type` that says whether the error
+  passes was gone.
+- *Fix:* `deviceListError(for:)` returns the whole `PubSubError`, and
+  `bundleError(for:)` is the same for a bundle. `forgetFetchFailures(for:)`
+  lets a retry ask again at once, as a device whose bundle failed is
+  otherwise skipped for a minute. Pinned by `OMEMOFetchErrorTests` and
+  `EncryptedSendRetryTests`.
+
+**Publish options had no `FORM_TYPE`** (`openPublishOptions`)
+- *Symptom:* the form of the options that publish our device list and
+  bundle held only `pubsub#access_model`.
+- *Fix:* it names `http://jabber.org/protocol/pubsub#publish-options`, as
+  XEP-0060 §7.1.5 asks. Pinned by `OMEMOPublishOptionsTests`.
+
+**The extensions published our keys too** (`publishesKeys`)
+- *Symptom:* the notification and share extensions registered the device on
+  every run, reading our bundle and device list and sometimes publishing,
+  within the 20 seconds they have; a publish they cut off left prekeys stored
+  and not on the server.
+- *Fix:* `publishesKeys` is on by default and switched off by the extensions'
+  sessions. Off, the module publishes neither the bundle nor the device list
+  and drops no device of ours, and registers nothing; it still reads lists and
+  bundles to encrypt. The one exception is the bundle after a prekey message:
+  the used prekey is already gone from the store and from what the app would
+  republish for, so the bundle is republished there and then
+  (`publishDeviceBundleIfNeeded(afterPreKeyUse:)`). Pinned by
+  `ExtensionOMEMOPublishTests`.
 
 **The Signal wrappers leaked libsignal objects and cached keys unsafely**
 (`SignalPreKey`, `SignalSignedPreKey`, `generatePreKeys`,

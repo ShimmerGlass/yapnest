@@ -102,6 +102,15 @@ final class OMEMOEncryption: @unchecked Sendable {
         case listWithheld(JID)
         case noTrustedDevices(JID)
         case setupFailed(JID)
+        /// The server answered a request for their device list or bundle with
+        /// an error that isn't "no such thing", or didn't answer in time.
+        case fetchFailed(JID, ServerError)
+
+        /// Whether sending again later may work, so it is retried and not shown.
+        var isPassing: Bool {
+            if case .fetchFailed(_, let error) = self { return error.isPassing }
+            return false
+        }
 
         var errorDescription: String? {
             switch self {
@@ -109,6 +118,7 @@ final class OMEMOEncryption: @unchecked Sendable {
             case .listWithheld(let peer): "\(peer)'s server doesn't let us read their encryption keys, as we aren't in their contacts. Turn off encryption to send without it."
             case .noTrustedDevices(let peer): "None of \(peer)'s devices are trusted."
             case .setupFailed(let peer): "Couldn't set up encryption with \(peer)."
+            case .fetchFailed(let peer, let error): error.describe("Couldn't get \(peer)'s encryption keys. Turn off encryption to send without it")
             }
         }
     }
@@ -129,7 +139,8 @@ final class OMEMOEncryption: @unchecked Sendable {
             done.signal()
         }
         guard done.wait(timeout: .now() + Self.setupTimeout) == .success, let fetched else {
-            return .failure(.setupFailed(recipients.first ?? account))
+            // The wait ended with no answer, which may pass.
+            return .failure(.fetchFailed(recipients.first ?? account, ServerError(condition: "remote-server-timeout", type: .wait)))
         }
 
         var usable: [SignalAddress] = []
@@ -137,11 +148,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         for recipient in recipients {
             let devices = Set(fetched.filter { $0.name == recipient.description })
             guard !devices.isEmpty else {
-                // A list kept from strangers is not a lack of OMEMO.
-                switch module.deviceListError(for: recipient.martin) {
-                case .not_authorized, .forbidden: return .failure(.listWithheld(recipient))
-                default: return .failure(.unsupported(recipient))
-                }
+                return .failure(Self.missingDevices(of: recipient, listError: module.deviceListError(for: recipient.martin), bundleError: module.bundleError(for: recipient.martin)))
             }
             let identities = Dictionary(store.identities(forName: recipient.description).map { ($0.address.deviceId, $0.status) }, uniquingKeysWith: { a, _ in a })
             let trustedAll = devices.filter { address in
@@ -153,6 +160,9 @@ final class OMEMOEncryption: @unchecked Sendable {
             let trusted = trustedAll.filter { current.contains($0.deviceId) }
             guard !trusted.isEmpty else {
                 let hasSessions = devices.contains { store.containsSessionRecord(forAddress: $0) }
+                if !hasSessions, let error = module.bundleError(for: recipient.martin) {
+                    return .failure(.fetchFailed(recipient, ServerError(error)))
+                }
                 return .failure(hasSessions ? .noTrustedDevices(recipient) : .setupFailed(recipient))
             }
             usable += trusted
@@ -160,6 +170,29 @@ final class OMEMOEncryption: @unchecked Sendable {
         }
         let own = store.ownDevicesToEncryptTo().map { SignalAddress(name: account.description, deviceId: $0) }
         return encode(stanza, for: usable + own, verified: allVerified, checking: recipients)
+    }
+
+    /// Why `recipient` has no devices to encrypt to. A list kept from
+    /// strangers is not a lack of OMEMO, and nor is a server that failed or
+    /// didn't answer: only a list that isn't there, or a server without
+    /// PEP, is.
+    static func missingDevices(of recipient: JID, listError: PubSubError?, bundleError: PubSubError?) -> EncryptError {
+        if let listError {
+            let error = ServerError(listError)
+            switch listError.error.errorCondition {
+            case .not_authorized, .forbidden: return .listWithheld(recipient)
+            case .item_not_found: return .unsupported(recipient)
+            default: return error.isUnsupported ? .unsupported(recipient) : .fetchFailed(recipient, error)
+            }
+        }
+        // Their devices were left out for failing to give a bundle a moment ago.
+        if let bundleError { return .fetchFailed(recipient, ServerError(bundleError)) }
+        return .unsupported(recipient)
+    }
+
+    /// Lets a send that failed with something passing look again at once.
+    func forgetFetchFailures(of recipients: [JID]) {
+        for recipient in recipients + [account] { module.forgetFetchFailures(for: recipient.martin) }
     }
 
     private func encode(_ stanza: Martin.Message, for addresses: [SignalAddress], verified: Bool, checking recipients: [JID]) -> Result<(Martin.Message, OMEMODevice.Trust), EncryptError> {

@@ -185,9 +185,18 @@ extension HttpFileUploadModule {
             throw XMPPError.unexpected_request("No context!")
         }
         
-        let components = try await disco.serverComponents().items.map({ $0.jid });
-        return await withTaskGroup(of: UploadComponent?.self, body: { group in
-            for componentJid in components {
+        // XEP-0363 §4.1: the server itself may be the upload service, which
+        // lists no item for it.
+        let serverJid = JID(BareJID(localPart: nil, domain: context!.userBareJid.domain));
+        var itemsError: Error?;
+        var components: [JID] = [];
+        do {
+            components = try await disco.serverComponents().items.map({ $0.jid }).filter({ $0 != serverJid });
+        } catch {
+            itemsError = error;
+        }
+        let found = await withTaskGroup(of: UploadComponent?.self, body: { group in
+            for componentJid in [serverJid] + components {
                 group.addTask {
                     guard let info = try? await disco.info(for: componentJid), info.features.contains(HttpFileUploadModule.HTTP_FILE_UPLOAD_XMLNS) else {
                         return nil;
@@ -206,8 +215,15 @@ extension HttpFileUploadModule {
                 }
             }
             
-            return result;
+            // The server's own service first, as the caller takes the first.
+            return result.filter({ $0.jid == serverJid }) + result.filter({ $0.jid != serverJid });
         });
+        // Not finding the items is not finding no service, unless the server
+        // itself offered none either.
+        if found.isEmpty, let itemsError {
+            throw itemsError;
+        }
+        return found;
     }
     
     open func requestUploadSlot(componentJid: JID, filename: String, size: Int, contentType: String?) async throws -> Slot {

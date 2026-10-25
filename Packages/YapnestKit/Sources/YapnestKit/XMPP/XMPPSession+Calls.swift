@@ -12,6 +12,13 @@ import os
 /// extensions' sessions don't register any of this, but still read the call
 /// messages of the archive into the conversation's call rows.
 extension XMPPSession {
+    /// A message that ends a call, kept until the stream can carry it.
+    struct UnsentCallMessage: Sendable {
+        var message: CallMessage
+        var sid: String
+        var since: Date
+    }
+
     struct ActiveCall {
         var machine: CallMachine
         let run: CallRun
@@ -388,7 +395,7 @@ extension XMPPSession {
         )
         if wins {
             // Theirs gives way, and is not a missed call of ours.
-            write(OutboundStanza.call(.reject(to: signal.from ?? signal.sender.description, reason: .expired, tieBreak: true), sid: signal.sid))
+            writeCall(.reject(to: signal.from ?? signal.sender.description, reason: .expired, tieBreak: true), sid: signal.sid)
         } else {
             callStep(.yieldToTieBreak, sid: current.sid)
             ring(for: signal)
@@ -426,7 +433,7 @@ extension XMPPSession {
     }
 
     private func rejectAsMissed(_ signal: CallSignal, reason: CallReason) {
-        if let device = signal.from { write(OutboundStanza.call(.reject(to: device, reason: reason), sid: signal.sid)) }
+        if let device = signal.from { writeCall(.reject(to: device, reason: reason), sid: signal.sid) }
         callQueue.async { [self] in
             record(CallRecord(peer: signal.sender, account: account, sid: signal.sid, direction: .incoming, outcome: .missed, startedAt: signal.timestamp, isVideo: signal.action.asksForVideo))
         }
@@ -455,7 +462,7 @@ extension XMPPSession {
         let sid = machine.sid
         switch effect {
         case .send(let message):
-            write(OutboundStanza.call(message, sid: sid))
+            writeCall(message, sid: sid)
         case .prepareMedia:
             prepareMedia(run: run, sid: sid, video: machine.wantsVideo)
         case .startSession(let device):
@@ -474,6 +481,12 @@ extension XMPPSession {
                 guard !Task.isCancelled else { return }
                 self?.callStep(.timer(token), sid: sid)
             })
+        case .armConnectionTimer(let seconds, let token):
+            run.setConnectionTimer(Task { [weak self] in
+                try? await Task.sleep(for: .seconds(seconds))
+                guard !Task.isCancelled else { return }
+                self?.callStep(.connectionTimer(token), sid: sid)
+            })
         case .cancelTimer:
             run.setTimer(nil)
         case .closeMedia:
@@ -481,6 +494,55 @@ extension XMPPSession {
         case .ended(let reason):
             // The call that won the tie-break is the one that gets a row.
             if reason != .tieBreak { record(machine, reason: reason) }
+        }
+    }
+
+    /// Writes a call message. One that ends a call, and that the stream was
+    /// down for or dropped, is kept for `unsentCallMessageLifetime` and sent
+    /// when the stream is back: otherwise the peer goes on ringing, and our
+    /// other devices with it, until their own timers. A proposal or an answer
+    /// is of no use late, and is dropped.
+    func writeCall(_ message: CallMessage, sid: String) {
+        let stanza = OutboundStanza.call(message, sid: sid)
+        guard message.endsACall else {
+            write(stanza)
+            return
+        }
+        guard isConnected else {
+            keepForReconnect(message, sid: sid, since: Date())
+            return
+        }
+        client.context.writer.write(stanza) { [weak self] result in
+            if case .failure = result { self?.keepForReconnect(message, sid: sid, since: Date()) }
+        }
+    }
+
+    /// How long a message that ends a call waits for the stream. Past it the
+    /// peer has timed the call out itself.
+    static let unsentCallMessageLifetime: TimeInterval = 120
+
+    private func keepForReconnect(_ message: CallMessage, sid: String, since: Date) {
+        DiagLog.notice(.calls, "Call message kept for the reconnect", fields: [.id("sid", Redacted.id(sid))])
+        lock.withLock { $0.unsentCallMessages.append(.init(message: message, sid: sid, since: since)) }
+    }
+
+    /// Sends what ending a call left unsent while the stream was down. Called
+    /// when it is back, resumed or new. What is too old is dropped.
+    func sendUnsentCallMessages(now: Date = Date()) {
+        let unsent = lock.withLock { state in
+            defer { state.unsentCallMessages = [] }
+            return state.unsentCallMessages
+        }
+        for item in unsent where now.timeIntervalSince(item.since) <= Self.unsentCallMessageLifetime {
+            DiagLog.info(.calls, "Call message sent after the reconnect", fields: [.id("sid", Redacted.id(item.sid))])
+            let stanza = OutboundStanza.call(item.message, sid: item.sid)
+            guard isConnected else {
+                keepForReconnect(item.message, sid: item.sid, since: item.since)
+                continue
+            }
+            client.context.writer.write(stanza) { [weak self] result in
+                if case .failure = result { self?.keepForReconnect(item.message, sid: item.sid, since: item.since) }
+            }
         }
     }
 

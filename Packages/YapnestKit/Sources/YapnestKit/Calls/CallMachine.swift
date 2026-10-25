@@ -48,6 +48,9 @@ public enum CallEndReason: String, Sendable, Equatable, CaseIterable, DiagEnum {
     case declinedElsewhere
     /// The media or the session failed.
     case failed
+    /// The connection to the server dropped and didn't come back in time,
+    /// before the call could be set up or answered.
+    case connectionLost
 
     var outcome: CallOutcome {
         switch self {
@@ -58,7 +61,7 @@ public enum CallEndReason: String, Sendable, Equatable, CaseIterable, DiagEnum {
         // Never recorded: the winning call is the one that gets a row.
         case .tieBreak: .cancelled
         case .busy: .busy
-        case .failed: .failed
+        case .failed, .connectionLost: .failed
         }
     }
 }
@@ -74,6 +77,10 @@ struct CallMachine: Sendable, Equatable {
     static let setupWindow: TimeInterval = 30
     /// How long ICE may take to find a path once the session is up.
     static let connectWindow: TimeInterval = 45
+    /// How long a call that is still being set up or answered waits for the
+    /// connection to the server to come back (a resumed stream does within
+    /// seconds) before it ends. Its messages can't be sent meanwhile.
+    static let reconnectWindow: TimeInterval = 20
 
     enum Input: Sendable, Equatable {
         case signal(CallSignal)
@@ -95,6 +102,13 @@ struct CallMachine: Sendable, Equatable {
         /// `.failed` is also what the media sends when it couldn't be set up or
         /// negotiated.
         case media(CallMediaState)
+        /// The connection to the server dropped. A call that is up doesn't
+        /// depend on it, as its media goes between the devices; one that is
+        /// still being set up or answered does.
+        case connectionLost
+        /// The stream is back, resumed or new.
+        case connectionRestored
+        case connectionTimer(Int)
     }
 
     enum Effect: Sendable, Equatable {
@@ -109,6 +123,9 @@ struct CallMachine: Sendable, Equatable {
         /// Replaces any timer that is running.
         case armTimer(after: TimeInterval, token: Int)
         case cancelTimer
+        /// Arms the wait for the connection, which runs beside the call's own
+        /// timer rather than replacing it.
+        case armConnectionTimer(after: TimeInterval, token: Int)
         /// Starts getting the media ready, with a camera if the call has video.
         case prepareMedia
         case closeMedia
@@ -131,6 +148,8 @@ struct CallMachine: Sendable, Equatable {
     private(set) var answeredAt: Date?
     private(set) var activeSince: Date?
     private var timerToken = 0
+    private var connectionToken = 0
+    private var isConnectionLost = false
     /// Another of our devices answered while we had too: the caller picks one.
     private var otherDeviceAnswered = false
 
@@ -216,6 +235,18 @@ struct CallMachine: Sendable, Equatable {
             return [.applyAnswer, arm(Self.connectWindow)]
         case .sessionTerminate(let device, let reason):
             return isSessionPeer(device) ? remoteEnded(reason) : []
+        case .connectionLost:
+            guard !isConnectionLost else { return [] }
+            isConnectionLost = true
+            connectionToken += 1
+            return [.armConnectionTimer(after: Self.reconnectWindow, token: connectionToken)]
+        case .connectionRestored:
+            guard isConnectionLost else { return [] }
+            isConnectionLost = false
+            connectionToken += 1
+            return []
+        case .connectionTimer(let token):
+            return token == connectionToken && isConnectionLost ? lostConnection() : []
         case .media(let state):
             switch (state, phase) {
             case (.connected, .connecting):
@@ -310,6 +341,22 @@ struct CallMachine: Sendable, Equatable {
             return end(.answeredElsewhere)
         case .accepted, .connecting:
             return fail()
+        case .active, .ended:
+            return []
+        }
+    }
+
+    /// The connection stayed away. What can't go on without it ends here;
+    /// the messages that would tell the others are sent when it is back.
+    private mutating func lostConnection() -> [Effect] {
+        switch phase {
+        case .proposing, .ringing:
+            return [.send(.retract(to: peer.description, reason: .generalError))] + end(.connectionLost)
+        case .incoming:
+            // Like a dismissed call, so that the caller's other devices go on.
+            return end(.connectionLost)
+        case .accepted, .connecting:
+            return leaveSession(.connectivityError) + end(.connectionLost)
         case .active, .ended:
             return []
         }

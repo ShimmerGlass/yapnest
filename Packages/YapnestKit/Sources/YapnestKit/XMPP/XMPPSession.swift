@@ -309,6 +309,9 @@ public final class XMPPSession: @unchecked Sendable {
         var sentDisplayed: [JID: String] = [:]
         /// The call under way, or the last one.
         var call: ActiveCall?
+        /// Messages that end a call, which couldn't be written, for when the
+        /// stream is back.
+        var unsentCallMessages: [UnsentCallMessage] = []
     }
 
     /// An archived message parsed and decrypted, waiting to be stored, and
@@ -524,6 +527,7 @@ public final class XMPPSession: @unchecked Sendable {
         ))
         // Advertises OMEMO's devicelist+notify so the server pushes contacts'
         // (and our own) device list changes to us.
+        omemo.module.publishesKeys = policy.publishesOMEMOKeys
         modules.register(omemo.module)
         // Notifies us of contacts' avatar changes (XEP-0084), with
         // vCard photos (XEP-0153) as the fallback for older clients.
@@ -1156,6 +1160,7 @@ public final class XMPPSession: @unchecked Sendable {
             cancelAllRejoins()
             iceServerCache.reset()
             failFileTransfers()
+            callStep(.connectionLost)
             let failure = lock.withLock {
                 $0.attempt += 1
                 defer { $0.pendingFailure = nil }
@@ -1198,6 +1203,8 @@ public final class XMPPSession: @unchecked Sendable {
                 $0.attempt += 1
                 return $0.attempt
             }
+            callStep(.connectionRestored)
+            runOnceConnected(attempt: attempt) { [self] in sendUnsentCallMessages() }
             if resumed {
                 self.state.send(.connected(isSyncing: lock.withLock { $0.isSyncing }))
                 // Martin publishes the state before it holds it, so in here the
@@ -2205,6 +2212,25 @@ public final class XMPPSession: @unchecked Sendable {
         }
     }
 
+    /// Encrypts, and again after a wait that doubles while a device list or
+    /// bundle can't be had for a reason that may pass, up to 3 attempts, as
+    /// `retryingPassingErrors` does for a request. Blocks the send queue,
+    /// which encrypting does anyway; stops once the connection is gone or a
+    /// new one began, as that one sends the message again.
+    private func encryptRetryingPassingErrors(_ stanza: Martin.Message, for recipients: [JID]) -> Result<(Martin.Message, OMEMODevice.Trust), OMEMOEncryption.EncryptError> {
+        let (started, backoff) = lock.withLock { ($0.attempt, $0.retryBackoff) }
+        var attempt = 1
+        while true {
+            let result = omemo.encrypt(stanza, for: recipients)
+            guard case .failure(let error) = result, error.isPassing, attempt < ServerRetry.attempts else { return result }
+            let delay = backoff * Double(1 << (attempt - 1))
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            guard isConnected, lock.withLock({ $0.attempt }) == started else { return result }
+            omemo.forgetFetchFailures(of: recipients)
+            attempt += 1
+        }
+    }
+
     /// Encrypts `stanza` for everyone in the conversation if asked, then
     /// writes it. Returns how far the recipients' devices were trusted, and
     /// whether the stream acknowledges it (XEP-0198).
@@ -2217,7 +2243,7 @@ public final class XMPPSession: @unchecked Sendable {
             if route.isGroup, (try? database.groupChat(peer))?.isPrivate != true {
                 return .failure(.failed(GroupError.notPrivate.localizedDescription, .groupNotPrivate))
             }
-            switch omemo.encrypt(stanza, for: route.recipients(excluding: account)) {
+            switch encryptRetryingPassingErrors(stanza, for: route.recipients(excluding: account)) {
             case .success(let (encrypted, devices)):
                 outgoing = encrypted
                 trust = devices

@@ -37,7 +37,7 @@ enum SendFailure: String, DiagEnum {
 
 /// Why OMEMO couldn't encrypt, without saying for whom.
 enum EncryptFailure: String, DiagEnum {
-    case unsupported, listWithheld, noTrustedDevices, setupFailed
+    case unsupported, listWithheld, noTrustedDevices, setupFailed, fetchFailed
 
     init(_ error: OMEMOEncryption.EncryptError) {
         switch error {
@@ -45,6 +45,7 @@ enum EncryptFailure: String, DiagEnum {
         case .listWithheld: self = .listWithheld
         case .noTrustedDevices: self = .noTrustedDevices
         case .setupFailed: self = .setupFailed
+        case .fetchFailed: self = .fetchFailed
         }
     }
 }

@@ -330,7 +330,7 @@ final class CallController {
 
     static func endReason(_ reason: CallEndReason) -> CXCallEndedReason {
         switch reason {
-        case .failed: .failed
+        case .failed, .connectionLost: .failed
         case .missed, .noAnswer, .busy, .dismissed: .unanswered
         case .answeredElsewhere: .answeredElsewhere
         case .declinedElsewhere: .declinedElsewhere

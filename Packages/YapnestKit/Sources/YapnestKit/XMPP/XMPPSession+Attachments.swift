@@ -27,15 +27,17 @@ extension XMPPSession {
     public enum AttachmentError: Error, LocalizedError {
         case unreadable
         case noUploadService
-        case tooLarge(max: Int)
+        /// `max` is what the server said it takes, if it did.
+        case tooLarge(max: Int?)
         case uploadFailed(String)
 
         public var errorDescription: String? {
             switch self {
             case .unreadable: String(localized: "The file couldn't be read.")
             case .noUploadService: String(localized: "Your server doesn't support sending files.")
-            case .tooLarge(let max):
+            case .tooLarge(let max?):
                 String(localized: "The file is too large. Your server accepts up to \(ByteCountFormatter.string(fromByteCount: Int64(max), countStyle: .file)).")
+            case .tooLarge(nil): String(localized: "The file is too large for your server.")
             case .uploadFailed(let reason): String(localized: "Upload failed: \(reason)")
             }
         }
@@ -72,14 +74,15 @@ extension XMPPSession {
                     throw AttachmentError.unreadable
                 }
                 phase = .service
-                let service = try await uploadService()
+                let service = try await retryingPassingErrors { try await uploadService() }
                 // Refused before it is read: a file the server can't take
                 // may be too big to hold in memory.
                 if let max = service.maxSize, file.fileSize > Int64(max) { throw AttachmentError.tooLarge(max: max) }
                 // Plain files go up from where they are stored. Encrypted ones
-                // are sealed into a file of ours, so the upload never holds
-                // the file in memory. It's in the system's temporary folder, not
-                // the attachments', whose partial files a reconnect sweeps.
+                // are sealed into a file of ours, which is uploaded from disk;
+                // sealing itself holds the file and its ciphertext in memory
+                // at once. It's in the system's temporary folder, not the
+                // attachments', whose partial files a reconnect sweeps.
                 var source = file
                 var fragment: String?
                 var temporary: URL?
@@ -98,27 +101,34 @@ extension XMPPSession {
                 // name in the URL, learns no more than its extension.
                 let contentType = fragment == nil ? attachment.mimeType ?? "application/octet-stream" : "application/octet-stream"
                 let slotName = fragment == nil ? attachment.name : AttachmentStore.freshName(keeping: attachment.name)
-                phase = .slot
-                started = Date()
-                let slot = try await client.module(.httpFileUpload)
-                    .requestUploadSlot(componentJid: service.jid, filename: slotName, size: size, contentType: contentType)
-                DiagLog.info(.upload, "Upload slot granted", .id("msg", transferId), .size("bytes", size), .duration("took", since: started))
-                phase = .put
-                started = Date()
+                // A slot and the PUT go again together while what failed may pass:
+                // a slot is only good for the file it was asked for, once.
+                let slot = try await retryingPassingErrors {
+                    phase = .slot
+                    started = Date()
+                    let slot = try await requestUploadSlot(from: service, filename: slotName, size: size, contentType: contentType)
+                    DiagLog.info(.upload, "Upload slot granted", .id("msg", transferId), .size("bytes", size), .duration("took", since: started))
+                    phase = .put
+                    started = Date()
 
-                var request = URLRequest(url: slot.putUri)
-                request.httpMethod = "PUT"
-                request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-                for (header, value) in slot.putHeaders { request.setValue(value, forHTTPHeaderField: header) }
-                let delegate = ProgressDelegate(policy: DownloadPolicy(allowsInsecure: allowsInsecureTransfers)) { [weak self] progress in self?.setProgress(progress, for: messageId) }
-                let (_, response) = try await Self.transferSession.upload(for: request, fromFile: source, delegate: delegate)
-                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                DiagLog.info(.upload, "Upload finished", .id("msg", transferId), .int("status", status), .size("bytes", size), .duration("took", since: started))
-                guard (200..<300).contains(status) else {
-                    throw AttachmentError.uploadFailed(HTTPURLResponse.localizedString(forStatusCode: status))
+                    var request = URLRequest(url: slot.putURL)
+                    request.httpMethod = "PUT"
+                    request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+                    for (header, value) in slot.putHeaders { request.setValue(value, forHTTPHeaderField: header) }
+                    let delegate = ProgressDelegate(policy: DownloadPolicy(allowsInsecure: allowsInsecureTransfers)) { [weak self] progress in self?.setProgress(progress, for: messageId) }
+                    let (_, response) = try await Self.transferSession.upload(for: request, fromFile: source, delegate: delegate)
+                    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    DiagLog.info(.upload, "Upload finished", .id("msg", transferId), .int("status", status), .size("bytes", size), .duration("took", since: started))
+                    guard (200..<300).contains(status) else {
+                        // A host that won't take this file at all may be told so by 413.
+                        if status == 413 { throw AttachmentError.tooLarge(max: service.maxSize) }
+                        let failure = ServerError.http(status: status)
+                        throw failure.isPassing ? failure : AttachmentError.uploadFailed(HTTPURLResponse.localizedString(forStatusCode: status))
+                    }
+                    return slot
                 }
 
-                let url = fragment.flatMap { FileCrypto.aesgcmURL(for: slot.getUri, fragment: $0) } ?? slot.getUri
+                let url = fragment.flatMap { FileCrypto.aesgcmURL(for: slot.getURL, fragment: $0) } ?? slot.getURL
                 phase = .store
                 guard let uploaded = try database.setUploaded(messageId: messageId, url: url.absoluteString) else { return }
                 transmit(uploaded, to: peer)
@@ -134,8 +144,42 @@ extension XMPPSession {
                     return
                 }
                 DiagLog.error(.upload, "Upload failed", .id("msg", transferId), .value("phase", phase), .error(error), .duration("took", since: started), .bool("connected", true))
-                let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                // The server's reason, whether it was the slot's or the file host's.
+                let reason = ServerError(error).map { $0.describe(String(localized: "Upload failed")) }
+                    ?? (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 try? database.markFailed(conversationId: message.conversationId, remoteId: id, error: reason)
+            }
+        }
+    }
+
+    /// Asks the upload service for a slot (XEP-0363). A file-too-large answer
+    /// becomes `tooLarge`, which hands the file to Jingle where that works. A
+    /// `retry` stamp is waited for once, up to a minute; without one, or
+    /// after, the error is the server's, for the caller to retry if it passes.
+    private func requestUploadSlot(from service: UploadService, filename: String, size: Int, contentType: String) async throws -> UploadSlot {
+        var waited = false
+        while true {
+            do {
+                return try await withCheckedThrowingContinuation { continuation in
+                    client.module(.httpFileUpload).requestUploadSlot(
+                        componentJid: service.jid, filename: filename, size: size, contentType: contentType,
+                        errorDecoder: UploadSlotParser.error(from:),
+                        completionHandler: { (result: Result<Iq, Error>) in
+                            continuation.resume(with: result.flatMap { iq in
+                                UploadSlotParser.slot(from: iq).map { .success($0) } ?? .failure(ServerError(condition: "undefined-condition"))
+                            })
+                        },
+                    )
+                }
+            } catch let refusal as UploadSlotError {
+                if refusal.isFileTooLarge { throw AttachmentError.tooLarge(max: refusal.maxFileSize ?? service.maxSize) }
+                if let retryAt = refusal.retryAt, !waited {
+                    waited = true
+                    let delay = min(max(retryAt.timeIntervalSinceNow, 0), 60)
+                    if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
+                    continue
+                }
+                throw refusal.error
             }
         }
     }

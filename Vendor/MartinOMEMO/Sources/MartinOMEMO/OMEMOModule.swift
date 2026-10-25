@@ -84,7 +84,17 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
     fileprivate var devicesFetchedAt: [BareJID: Date] = [:];
     /// Why the last fetch of a contact's device list failed, until one works.
     /// Guarded by `devicesQueue`.
-    fileprivate var deviceListErrors: [BareJID: ErrorCondition] = [:];
+    fileprivate var deviceListErrors: [BareJID: PubSubError] = [:];
+    /// Why the last fetch of a contact's bundle failed, with the error as the
+    /// server gave it so that a passing one (a `wait`, a timeout) can be told
+    /// from a final one. Cleared when a later bundle of theirs works, and by
+    /// `forgetFetchFailures`. Guarded by `devicesQueue`.
+    fileprivate var bundleErrors: [BareJID: PubSubError] = [:];
+    /// Whether this module may publish our device list and bundles. Only the
+    /// app does: the extensions use what the app stored, and a publish cut off
+    /// by their time limit would leave keys stored here and not on the server.
+    /// Set before the module is registered.
+    public var publishesKeys = true;
     /// How long a fetched device list spares the next send a round trip. A
     /// contact who isn't subscribed to us sends no notifications, so it can't
     /// be forever; a minute is long enough for a conversation's messages.
@@ -322,7 +332,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 // pre key was removed so we need to republish the bundle!
                 if !postponeSession(for: message.type == .groupchat ? message.from?.bareJid : nil, address: address) {
                     if self.storage.preKeyStore.flushDeletedPreKeys() {
-                        self.publishDeviceBundleIfNeeded(completionHandler: nil);
+                        self.publishDeviceBundleIfNeeded(completionHandler: nil, afterPreKeyUse: true);
                     }
                 }
             }
@@ -369,10 +379,36 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         encode(message: message, for: [jid], withStoreHint: withStoreHint, completionHandler: completionHandler);
     }
     
+    /// What every publish asks of its node: open to everyone. XEP-0060 §7.1.5
+    /// wants the form to say what it is, which a server may check.
+    static func openPublishOptions() -> PubSubNodeConfig {
+        let options = PubSubNodeConfig();
+        options.FORM_TYPE = "http://jabber.org/protocol/pubsub#publish-options";
+        options.accessModel = .open;
+        return options;
+    }
+
     /// Why the last attempt to read `jid`'s device list failed, if it did: a
     /// server that keeps the list from non-subscribers says not-authorized.
-    public func deviceListError(for jid: BareJID) -> ErrorCondition? {
+    /// The error is kept whole, as whether it passes depends on its type.
+    public func deviceListError(for jid: BareJID) -> PubSubError? {
         devicesQueue.sync { deviceListErrors[jid] }
+    }
+
+    /// Why `jid`'s bundle couldn't be fetched, if the last attempt failed.
+    public func bundleError(for jid: BareJID) -> PubSubError? {
+        devicesQueue.sync { bundleErrors[jid] }
+    }
+
+    /// Lets the next send try `jid`'s devices again at once: a device whose
+    /// bundle failed is otherwise skipped for `failedDeviceRetryInterval`,
+    /// which a caller that retries a passing failure must not wait for.
+    public func forgetFetchFailures(for jid: BareJID) {
+        devicesQueue.sync {
+            devicesFetchError[jid] = nil;
+            bundleErrors[jid] = nil;
+            deviceListErrors[jid] = nil;
+        }
     }
 
     /// The devices of each of `jids`, with sessions built for any we lack.
@@ -414,7 +450,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 guard case .success(let items) = result, let listEl = items.items.first?.payload,
                       listEl.name == "list" && listEl.xmlns == OMEMOModule.XMLNS else {
                     if case .failure(let error) = result {
-                        self.devicesQueue.sync { self.deviceListErrors[jid] = error.error.errorCondition };
+                        self.devicesQueue.sync { self.deviceListErrors[jid] = error };
                         self.logger.info("No device list for \(jid.stringValue, privacy: .private(mask: .hash)): \(error.error.errorCondition.rawValue, privacy: .public)");
                     }
                     return;
@@ -431,6 +467,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 // A notification's list, which has no date, is left alone.
                 let usable: [Int32] = self.devicesQueue.sync {
                     self.deviceListErrors[jid] = nil;
+                    self.bundleErrors[jid] = nil;
                     if self.devices[jid] == nil || self.devicesFetchedAt[jid] != nil {
                         self.devices[jid] = knownActiveDevices;
                         self.devicesFetchedAt[jid] = Date();
@@ -659,7 +696,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
     /// `completionHandler` runs once the list is published, or it's known it
     /// won't be: only used when removing devices, which has to tell the user.
     func publishDeviceIdIfNeeded(removeDevicesWithIds: [UInt32]? = nil, completionHandler: ((Result<Void, PubSubError>) -> Void)? = nil) {
-        guard isPepAvailable, let context = context else {
+        guard publishesKeys, isPepAvailable, let context = context else {
             completionHandler?(.failure(.undefined_condition));
             return;
         }
@@ -695,7 +732,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         
         let me = context.userBareJid == jid;
         
-        if me {
+        if me && publishesKeys {
             var changed = false;
             
             if removeDevicesWithIds != nil && listEl != nil {
@@ -799,7 +836,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             group.notify(queue: self.devicesQueue, execute: {
                 let brokenIds = self.ownBrokenDevices.filter { knownActiveDevices.contains($0) };
                 self.ownBrokenDevices.removeAll();
-                guard !brokenIds.isEmpty else {
+                guard !brokenIds.isEmpty, self.publishesKeys else {
                     return;
                 }
                 self.dropOwnDevices(brokenIds);
@@ -929,8 +966,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             completionHandler?(.failure(.undefined_condition));
             return;
         }
-        let publishOptions = PubSubNodeConfig();
-        publishOptions.accessModel = .open;
+        let publishOptions = OMEMOModule.openPublishOptions();
         let registered = {
             self.listPublishLock.withLock { self.deviceListPublishCount += 1 };
             self.isReady = true;
@@ -1015,6 +1051,9 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
     /// Publishes our bundle, then our device id, and tries again with a
     /// growing delay for as long as that hasn't worked and PEP is available.
     private func registerDevice() {
+        guard publishesKeys else {
+            return;
+        }
         publishDeviceBundleIfNeeded(completionHandler: nil, registration: true);
         scheduleRegistrationRetry();
     }
@@ -1075,7 +1114,14 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
     /// bundle. Calls made meanwhile wait for the one running, which then runs
     /// once more for them. `registration` adds the step that lists our device,
     /// once however often it is asked for.
-    func publishDeviceBundleIfNeeded(completionHandler: (()->Void)?, registration: Bool = false) {
+    func publishDeviceBundleIfNeeded(completionHandler: (()->Void)?, registration: Bool = false, afterPreKeyUse: Bool = false) {
+        // A prekey used here is gone from the store and from the list of ones
+        // to republish for, so an extension that left it published would
+        // leave others starting sessions with a key nobody holds.
+        guard publishesKeys || afterPreKeyUse else {
+            completionHandler?();
+            return;
+        }
         let start: Bool = bundlePublishLock.withLock {
             if let completionHandler {
                 bundlePublish.waiting.append(completionHandler);
@@ -1311,7 +1357,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         if let sessions = postponedSessions.removeValue(forKey: jid) {
             if !sessions.isEmpty {
                 if self.storage.preKeyStore.flushDeletedPreKeys() {
-                    self.publishDeviceBundleIfNeeded(completionHandler: nil);
+                    self.publishDeviceBundleIfNeeded(completionHandler: nil, afterPreKeyUse: true);
                 }
             }
             
@@ -1426,8 +1472,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         });
         bundleEl.addChild(Element(name: "prekeys", children: preKeysElems));
         
-        let publishOptions = PubSubNodeConfig();
-        publishOptions.accessModel = .open;
+        let publishOptions = OMEMOModule.openPublishOptions();
         
         guard let pubsubModule = context?.module(.pubsub) else {
             failure?();
@@ -1508,6 +1553,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 }
                 self.devicesQueue.sync {
                     _ = self.devicesFetchError[pepJid]?.removeValue(forKey: address.deviceId);
+                    if self.devicesFetchError[pepJid]?.isEmpty ?? true { self.bundleErrors[pepJid] = nil }
                 }
             case .failure(let pubsubError):
                 self.logger.warning("No bundle for \(address.name, privacy: .private(mask: .hash)):\(address.deviceId, privacy: .private(mask: .hash)): \(pubsubError.error.errorCondition.rawValue, privacy: .public)");
@@ -1520,6 +1566,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                         self.ownBrokenDevices.append(address.deviceId);
                     }
                 }
+                self.devicesQueue.sync { self.bundleErrors[pepJid] = pubsubError }
                 self.markDeviceAsFailed(for: pepJid, andDeviceId: address.deviceId);
             }
         });
