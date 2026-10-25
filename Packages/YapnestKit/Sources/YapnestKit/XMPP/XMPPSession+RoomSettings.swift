@@ -101,7 +101,7 @@ extension XMPPSession {
     /// removed from a group that then stays would only be a lost bookmark.
     public func destroyGroup(_ room: JID, reason: String? = nil) async throws {
         guard try joinedStatus(room).canDestroy else { throw GroupError.notAllowed }
-        _ = try await roomRequest(OutboundStanza.destroy(room, reason: reason))
+        _ = try await roomRequest(OutboundStanza.destroy(room, reason: reason), repeatable: false)
         groupDestroyed(room)
     }
 }

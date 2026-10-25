@@ -334,6 +334,15 @@ struct ModerationSessionTests {
         #expect(requests.isEmpty)
     }
 
+    @Test func aRetractionThatTimedOutIsNotSentAgain() async throws {
+        join(as: .owner)
+        let message = try await store(from: "anna", stanzaId: "s-1")
+        session.lock.withLock { $0.retryBackoff = 0 }
+        wire.answer { FakeWire.error(to: $0, condition: "remote-server-timeout") }
+        await #expect(throws: (any Error).self) { try await session.retractForEveryone(message) }
+        #expect(requests.count == 1)
+    }
+
     @Test func aRefusalLeavesTheMessage() async throws {
         join(as: .owner)
         let message = try await store(from: "anna", stanzaId: "s-1")

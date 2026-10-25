@@ -8,10 +8,13 @@ extension XMPPSession {
     /// Asks the room, and again while the answer is one that can pass. What
     /// it throws is for the user: the server's own error, which `ServerError`
     /// can tell apart, or that we're offline. The request is made anew for
-    /// each attempt, as a stanza keeps its id.
-    func roomRequest(_ iq: @autoclosure () -> Iq) async throws -> Iq {
+    /// each attempt, as a stanza keeps its id. A request that can't be
+    /// repeated (`repeatable: false`: a destroy, a kick, a retraction, which a
+    /// second attempt would fail with item-not-found once the first was
+    /// applied) is only made again after the room refused it with `wait`.
+    func roomRequest(_ iq: @autoclosure () -> Iq, repeatable: Bool = true) async throws -> Iq {
         do {
-            return try await retryingPassingErrors { try await client.context.writer.write(iq: iq()) }
+            return try await retryingPassingErrors(onlyRefusals: !repeatable) { try await client.context.writer.write(iq: iq()) }
         } catch {
             throw Self.roomRequestError(error, isConnected: isConnected)
         }
@@ -74,7 +77,7 @@ extension XMPPSession {
                   by: status.affiliation, on: occupant.affiliation, isSelf: nickname == status.nickname,
                   actorRole: status.role, targetIsPresent: true,
               ).canKick else { throw GroupError.notAllowed }
-        _ = try await roomRequest(OutboundStanza.kick(nickname: nickname, reason: reason, in: room))
+        _ = try await roomRequest(OutboundStanza.kick(nickname: nickname, reason: reason, in: room), repeatable: false)
         updateRoom(room) { status in
             _ = status?.occupants.removeValue(forKey: nickname)
         }
@@ -135,7 +138,7 @@ extension XMPPSession {
               let conversation = try database.conversation(id: message.conversationId),
               let status = roomStatus(conversation.peer), status.isJoined else { throw GroupError.notConnected }
         guard canRetractForEveryone(message, in: conversation.peer) else { throw GroupError.notAllowed }
-        _ = try await roomRequest(OutboundStanza.moderatedRetraction(of: target, in: conversation.peer))
+        _ = try await roomRequest(OutboundStanza.moderatedRetraction(of: target, in: conversation.peer), repeatable: false)
         if let attachment = try database.applyModeratedRetraction(in: conversation.peer, target: target) { attachments.remove(attachment) }
     }
 

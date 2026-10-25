@@ -622,6 +622,22 @@ struct ModerationRequestFailureTests {
         #expect(try session.database.groupChat(room)?.hasLeft == true)
     }
 
+    @Test func destroyingARoomThatTimedOutIsNotMadeAgain() async throws {
+        answer("http://jabber.org/protocol/muc#owner") { iq, _ in FakeWire.error(to: iq, condition: "remote-server-timeout", type: "wait") }
+        await #expect(throws: (any Error).self) { try await session.destroyGroup(room) }
+
+        // The first may have been applied; a second would fail as item-not-found.
+        #expect(asked.value == 1)
+        #expect(try session.database.groupChat(room)?.hasLeft == false)
+    }
+
+    @Test func aKickThatTimedOutIsNotMadeAgain() async throws {
+        answer { iq, _ in FakeWire.error(to: iq, condition: "remote-server-timeout", type: "wait") }
+        await #expect(throws: (any Error).self) { try await session.kick(nickname: "anna", in: room) }
+
+        #expect(asked.value == 1)
+    }
+
     @Test func aRoomSettingsRequestThatFailsForNowIsMadeAgain() async throws {
         answer("http://jabber.org/protocol/muc#owner") { iq, count in
             if count < 2 { return wait(iq) }
