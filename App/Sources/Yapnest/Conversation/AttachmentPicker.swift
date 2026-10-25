@@ -63,8 +63,50 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
         }
     }
 
+    /// When the camera picker opened, for how long it stayed: a picker left
+    /// black is closed with nothing taken.
+    private var cameraOpenedAt: Date?
+
     init(model: ConversationModel) {
         self.model = model
+    }
+
+    /// What the system's camera picker will find, as it says nothing itself:
+    /// the cameras there are, and which one it opens on.
+    private static func logCameraAsked(available: Bool) {
+        let types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera, .external, .continuityCamera]
+        let devices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video, position: .unspecified).devices
+        let standard = AVCaptureDevice.default(for: .video)
+        var fields: [DiagField] = [
+            .bool("available", available),
+            .value("authorization", CallController.cameraAuthorization()),
+            .int("cameras", devices.count),
+            .int("builtIn", devices.filter { $0.deviceType == .builtInWideAngleCamera }.count),
+            .int("external", devices.filter { $0.deviceType == .external }.count),
+            .int("continuity", devices.filter { $0.deviceType == .continuityCamera }.count),
+            .value("default", standard.map { cameraKind($0.deviceType) } ?? .none),
+            .bool("defaultSuspended", standard?.isSuspended ?? false),
+        ]
+        #if targetEnvironment(macCatalyst)
+        fields.append(.bool("defaultInUseElsewhere", standard?.isInUseByAnotherApplication ?? false))
+        #endif
+        DiagLog.info(.send, "Composer camera asked for", fields: fields)
+    }
+
+    private static func cameraKind(_ type: AVCaptureDevice.DeviceType) -> CameraKind {
+        switch type {
+        case .builtInWideAngleCamera: .builtIn
+        case .external: .external
+        case .continuityCamera: .continuity
+        default: .other
+        }
+    }
+
+    private func logCameraClosed(_ outcome: ComposerCameraOutcome) {
+        var fields: [DiagField] = [.value("outcome", outcome)]
+        if let cameraOpenedAt { fields.append(.duration("open", since: cameraOpenedAt)) }
+        cameraOpenedAt = nil
+        DiagLog.info(.send, "Composer camera closed", fields: fields)
     }
 
     func attach(from source: ConversationInputBar.AttachmentSource) {
@@ -79,14 +121,18 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
             picker.delegate = self
             Presenter.present(picker)
         case .camera:
-            guard cameraAvailable() else {
+            let available = cameraAvailable()
+            Self.logCameraAsked(available: available)
+            guard available else {
                 model.prompt = .notice(title: String(localized: "No camera"), message: String(localized: "This device has no camera available."))
                 return
             }
             Task {
                 // Asked first, as for calls, so a refusal is explained here
                 // rather than left to the picker.
-                guard await cameraAccess() else {
+                let allowed = await cameraAccess()
+                DiagLog.info(.send, "Composer camera access", .bool("allowed", allowed))
+                guard allowed else {
                     model.prompt = .notice(
                         title: String(localized: "No access to the camera"),
                         message: Platform.isMac
@@ -98,6 +144,7 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
                 picker.sourceType = .camera
                 picker.mediaTypes = [UTType.image.identifier, UTType.movie.identifier]
                 picker.delegate = self
+                cameraOpenedAt = Date()
                 Presenter.present(picker)
             }
         case .file:
@@ -131,6 +178,7 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
     func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
         picker.dismiss(animated: true)
         let model = model
+        logCameraClosed(info[.mediaURL] is URL ? .movie : info[.originalImage] is UIImage ? .photo : .nothing)
         if let movie = info[.mediaURL] as? URL {
             // The camera's file isn't in a folder of ours, which discarding needs.
             model.preparing {
@@ -144,6 +192,7 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
     }
 
     func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        logCameraClosed(.cancelled)
         picker.dismiss(animated: true)
     }
 

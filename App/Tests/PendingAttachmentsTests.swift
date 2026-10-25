@@ -58,6 +58,27 @@ struct PendingAttachmentsTests {
         #expect(title == "No access to the camera")
     }
 
+    /// The system's camera picker logs nothing, so a black one has to be
+    /// told apart by what was found before it opened.
+    @Test func theCameraLeavesWhatItFoundInTheLog() async throws {
+        let f = try ConversationFixture()
+        let picker = AttachmentPicker(model: f.model)
+        picker.cameraAvailable = { true }
+        picker.cameraAccess = { false }
+        let (asked, refused) = (try logged("Composer camera asked for available=true"), try logged("Composer camera access allowed=false"))
+        picker.attach(from: .camera)
+        for _ in 0..<100 where f.model.prompt == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(try logged("Composer camera asked for available=true") > asked)
+        #expect(try logged("Composer camera access allowed=false") > refused)
+    }
+
+    /// How often `line` is in the exported log. The log outlives a test run
+    /// and other tests write to it, so a test compares counts.
+    private func logged(_ line: String) throws -> Int {
+        let text = try String(contentsOf: DiagnosticsExport.make(), encoding: .utf8)
+        return text.components(separatedBy: line).count - 1
+    }
+
     @Test func aChatThatCannotBeWrittenToTurnsAwayLocationsAndSaysWhy() throws {
         let f = try ConversationFixture()
         f.model.canSendAttachments = false

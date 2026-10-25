@@ -232,3 +232,14 @@ public enum CaptureInterruptionKind: String, DiagEnum {
         }
     }
 }
+
+/// What kind of camera a device is, for telling the Mac's own camera from an
+/// iPhone used as one or a plugged-in or virtual one, which macOS lists as external.
+public enum CameraKind: String, DiagEnum {
+    case builtIn, external, continuity, other, none
+}
+
+/// How the composer's camera ended.
+public enum ComposerCameraOutcome: String, DiagEnum {
+    case photo, movie, nothing, cancelled
+}
