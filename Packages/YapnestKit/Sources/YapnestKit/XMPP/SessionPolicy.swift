@@ -9,6 +9,10 @@ extension XMPPSession {
         var enablesCarbons: Bool
         /// Tells the server when the app goes inactive (XEP-0352).
         var reportsClientState: Bool
+        /// Tells the server the app is inactive, rather than always active.
+        /// Off on the Mac, where battery matters less and a hidden window
+        /// should still get read states and bookmarks live.
+        var reportsInactive: Bool
         /// Reads the archive after connecting, rather than only writing.
         var catchesUpOnConnect: Bool
         /// Does what only the app needs after catching up: avatars, bookmarks,
@@ -35,8 +39,14 @@ extension XMPPSession {
         /// their own.
         var verifiesLiveness: Bool
 
+        #if targetEnvironment(macCatalyst)
+        private static let reportsInactiveHere = false
+        #else
+        private static let reportsInactiveHere = true
+        #endif
+
         static let app = Policy(
-            announcesPresence: true, enablesCarbons: true, reportsClientState: true,
+            announcesPresence: true, enablesCarbons: true, reportsClientState: true, reportsInactive: Self.reportsInactiveHere,
             catchesUpOnConnect: true, syncsAccountState: true, prunesContactRequests: true,
             readsRoomHistory: true, checksRoomMembership: true, sendsChatStates: true,
             registersPush: true, fetchesImages: true, donatesSuggestions: true,
@@ -46,7 +56,7 @@ extension XMPPSession {
         /// Catches up without telling anyone it's here, so the server keeps
         /// pushing to the app's session.
         static let notificationService = Policy(
-            announcesPresence: false, enablesCarbons: false, reportsClientState: false,
+            announcesPresence: false, enablesCarbons: false, reportsClientState: false, reportsInactive: false,
             catchesUpOnConnect: true, syncsAccountState: false, prunesContactRequests: false,
             readsRoomHistory: true, checksRoomMembership: false, sendsChatStates: false,
             registersPush: false, fetchesImages: false, donatesSuggestions: false,
@@ -55,7 +65,7 @@ extension XMPPSession {
 
         /// Only writes: it skips the catch-up and the history of rooms it joins.
         static let share = Policy(
-            announcesPresence: false, enablesCarbons: false, reportsClientState: false,
+            announcesPresence: false, enablesCarbons: false, reportsClientState: false, reportsInactive: false,
             catchesUpOnConnect: false, syncsAccountState: false, prunesContactRequests: false,
             readsRoomHistory: false, checksRoomMembership: false, sendsChatStates: false,
             registersPush: false, fetchesImages: false, donatesSuggestions: false,

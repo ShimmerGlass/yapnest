@@ -1238,18 +1238,66 @@ extension XMPPSession {
             }
             return
         }
-        client.module(.pubsub).retrieveItems(from: account.martin, for: NS.bookmarks) { [weak self] result in
+        fetchBookmarks { [weak self] bookmarks in
             guard let self else { return }
+            if let bookmarks { self.applyBookmarks(bookmarks) } else { self.joinRooms() }
+        }
+    }
+
+    /// Reads the bookmarks again on a live session and applies what differs
+    /// the way a notification of each would. `syncBookmarks` isn't used: it
+    /// publishes a bookmark for every group that has none, which on a live
+    /// session includes one just joined whose publish is still on its way,
+    /// and it marks a group whose bookmark is gone as left without leaving
+    /// the room. It also joins every room again, failed ones included.
+    /// `done` says whether the list was read. The old kind (XEP-0048) is in
+    /// PEP with +notify too, but its node holds one item with the whole list,
+    /// so the newest notification the server held is complete, and it counts
+    /// as read.
+    func refreshBookmarks(then done: @escaping @Sendable (Bool) -> Void) {
+        guard !usesLegacyBookmarks else { return done(true) }
+        fetchBookmarks { [weak self] bookmarks in
+            if let bookmarks { self?.reconcileBookmarks(bookmarks) }
+            done(bookmarks != nil)
+        }
+    }
+
+    /// The bookmarks node's items, or nil if the server wouldn't say.
+    func fetchBookmarks(_ done: @escaping @Sendable ([Bookmark]?) -> Void) {
+        client.module(.pubsub).retrieveItems(from: account.martin, for: NS.bookmarks) { [weak self] result in
             switch result {
             case .success(let items):
-                self.applyBookmarks(items.items.compactMap { Bookmark(id: $0.id, payload: $0.payload) })
+                done(items.items.compactMap { Bookmark(id: $0.id, payload: $0.payload) })
             case .failure(let error) where error.error == .item_not_found:
-                self.applyBookmarks([])
+                done([])
             case .failure(let error):
-                // No bookmarks on this server: our own list is all there is.
-                self.logger.info("Bookmarks unavailable: \(error.localizedDescription, privacy: .private)")
-                self.joinRooms()
+                // No bookmarks on this server, or none we could read: callers
+                // keep our own list and try again later.
+                self?.logger.info("Bookmarks unavailable: \(error.localizedDescription, privacy: .private)")
+                done(nil)
             }
+        }
+    }
+
+    /// Applies a complete list from another device as its notifications
+    /// would, touching only what differs.
+    func reconcileBookmarks(_ bookmarks: [Bookmark]) {
+        let groups = Dictionary(((try? database.groupChats()) ?? []).map { ($0.jid, $0) }, uniquingKeysWith: { a, _ in a })
+        for bookmark in bookmarks {
+            let group = groups[bookmark.jid]
+            let isIn = group.map { !$0.hasLeft } ?? false
+            if bookmark.autojoin {
+                if let group, isIn, group.isBookmarked, group.notify == bookmark.notify,
+                   bookmark.name?.isEmpty != false || group.name == bookmark.name { continue }
+            } else if !isIn {
+                // It says to leave a room we aren't in.
+                continue
+            }
+            bookmarkChanged(.published(bookmark))
+        }
+        let listed = Set(bookmarks.map(\.jid))
+        for group in groups.values where !group.hasLeft && group.isBookmarked && !listed.contains(group.jid) {
+            bookmarkChanged(.retracted(group.jid))
         }
     }
 

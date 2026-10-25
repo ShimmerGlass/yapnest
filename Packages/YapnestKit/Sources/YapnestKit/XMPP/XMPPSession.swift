@@ -116,6 +116,8 @@ public final class XMPPSession: @unchecked Sendable {
     let omemo: OMEMOEncryption
     let logger = Logger(subsystem: "Yapnest", category: "XMPPSession")
     let lock = OSAllocatedUnfairLock(initialState: Mutable())
+    /// Orders what `reportClientState` decides and writes.
+    private let clientStateLock = NSLock()
     /// Keep a snapshot's sends in the order the snapshots were built: see
     /// `publish`. One per subject, so unrelated subjects don't wait on each other.
     let roomsPublishLock = NSRecursiveLock()
@@ -254,6 +256,8 @@ public final class XMPPSession: @unchecked Sendable {
         var isActive = true
         /// When the user left the app (XEP-0012's idle time); nil while in it.
         var idleSince: Date?
+        /// What the server may be holding back while we're inactive.
+        var held = HeldNotifications()
         /// Whether the user isn't there, which shows us away: see `setAway`.
         var isAway = false
         /// The seconds since the user last touched the machine, where the app
@@ -331,7 +335,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// Jingle file offers up to this size are accepted without asking. Tests lower it.
     var autoAcceptedOfferSize = XMPPSession.autoDownloadSize
 
-    public init(
+    public convenience init(
         credentials: Credentials,
         resource: String,
         database: AppDatabase,
@@ -343,11 +347,31 @@ public final class XMPPSession: @unchecked Sendable {
         callMedia: (any CallMediaFactory)? = nil,
         identityKeys: (any IdentityKeyStore)? = nil,
     ) throws {
+        try self.init(
+            credentials: credentials, resource: resource, database: database, avatars: avatars, attachments: attachments,
+            mode: mode, policy: nil, pushRelay: pushRelay, fastTokens: fastTokens, callMedia: callMedia, identityKeys: identityKeys,
+        )
+    }
+
+    /// `policy` replaces the mode's, for a test to run as another platform.
+    init(
+        credentials: Credentials,
+        resource: String,
+        database: AppDatabase,
+        avatars: AvatarStore = .temporary(),
+        attachments: AttachmentStore = .temporary(),
+        mode: Mode = .app,
+        policy: Policy?,
+        pushRelay: JID = XMPPSession.defaultPushRelay,
+        fastTokens: FastTokenStore = MemoryFastTokenStore(),
+        callMedia: (any CallMediaFactory)? = nil,
+        identityKeys: (any IdentityKeyStore)? = nil,
+    ) throws {
         self.callMedia = callMedia
         self.account = credentials.jid
         self.database = database
         self.mode = mode
-        self.policy = mode.policy
+        self.policy = policy ?? mode.policy
         self.pushRelay = pushRelay
         self.fastTokens = fastTokens
         self.avatars = avatars
@@ -868,17 +892,69 @@ public final class XMPPSession: @unchecked Sendable {
         if active { selfPingRooms() }
     }
 
-    /// Tells the server whether the user is looking at the app. It's sent on
-    /// every connect, resumed or not: a new session starts active, which is
-    /// wrong on a Mac with another app in front, and a resumed one keeps
-    /// whatever the server last had. Not while catching up, though: an
+    /// Tells the server whether the user is looking at the app (not on the
+    /// Mac, which always says active: see `Policy.reportsInactive`). It's sent
+    /// on every connect, resumed or not: a new session starts active, which is
+    /// wrong on an iPhone that connects in the background, and a resumed one
+    /// keeps whatever the server last had. Not while catching up, though: an
     /// inactive session has its archive results held back by the server, which
     /// stalls the catch-up for a minute; the end of the sync calls this again.
+    ///
+    /// What the server holds while we're inactive is owed a refetch once we
+    /// say active: see `HeldNotifications`. The state is sent under
+    /// `clientStateLock`, so concurrent calls reach the wire in the order
+    /// they were decided in.
     private func reportClientState() {
         guard policy.reportsClientState, isConnected else { return }
-        let (active, syncing) = lock.withLock { ($0.isActive, $0.isSyncing) }
-        guard !syncing else { return }
-        _ = client.module(.csi).setState(active)
+        let refresh: HeldNotifications.Refresh? = clientStateLock.withLock {
+            let (isActive, syncing) = lock.withLock { ($0.isActive, $0.isSyncing) }
+            guard !syncing else { return nil }
+            let active = isActive || !policy.reportsInactive
+            // A server without CSI holds nothing.
+            guard client.module(.csi).setState(active) else { return nil }
+            return lock.withLock { $0.held.sent(active: active) }
+        }
+        if let refresh { refreshAfterHeldNotifications(refresh) }
+    }
+
+    /// Reads again what the server held: read states at once, bookmarks and
+    /// settings when `HeldNotifications` says. A refresh that fails is owed
+    /// again at the next return, and a return can send "active" on a stream
+    /// that turns out dead.
+    private func refreshAfterHeldNotifications(_ refresh: HeldNotifications.Refresh) {
+        guard policy.syncsAccountState else { return }
+        let generation = refresh.generation
+        if refresh.readStates {
+            fetchDisplayed { [weak self] succeeded in
+                guard !succeeded else { return }
+                self?.lock.withLock { $0.held.failed(readStates: true, slow: false, generation: generation) }
+            }
+        }
+        switch refresh.slow {
+        case .none: break
+        case .now: refreshSlowNodes(generation: generation)
+        case .after(let delay):
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.isConnected else { return }
+                let due = self.lock.withLock { state in
+                    (state.isActive || !self.policy.reportsInactive) && state.held.takeSlow(generation: generation)
+                }
+                if due { self.refreshSlowNodes(generation: generation) }
+            }
+        }
+    }
+
+    private func refreshSlowNodes(generation: Int) {
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            async let bookmarks: Bool = withCheckedContinuation { continuation in
+                self.refreshBookmarks { continuation.resume(returning: $0) }
+            }
+            // Settings are only read again once their first sync has run.
+            let settings = self.lock.withLock({ $0.settingsSync.syncCompleted }) ? await self.runSettingsSync() : true
+            if await bookmarks && settings { return }
+            self.lock.withLock { $0.held.failed(readStates: false, slow: true, generation: generation) }
+        }
     }
 
     var isConnected: Bool {
@@ -1772,7 +1848,7 @@ public final class XMPPSession: @unchecked Sendable {
         catchUpRoomArchives { [weak self] in
             guard let self, self.catchUpMayProceed(attempt: attempt) else { return }
             // What another device read needs no notification.
-            self.fetchDisplayed { [weak self] in
+            self.fetchDisplayed { [weak self] _ in
                 guard let self, self.catchUpMayProceed(attempt: attempt) else { return }
                 self.lock.withLock { $0.isSyncing = false }
                 self.state.send(.connected(isSyncing: false))
@@ -1784,7 +1860,10 @@ public final class XMPPSession: @unchecked Sendable {
     /// What the app does once it has caught up with the server: ends the sync
     /// state, refreshes what it keeps in sync, and sends what is still pending.
     private func finishCatchUpAsApp() {
-        lock.withLock { $0.isSyncing = false }
+        lock.withLock {
+            $0.isSyncing = false
+            $0.held.reset()
+        }
         omemo.module.mamSyncFinished(for: nil)
         state.send(.connected(isSyncing: false))
         reportClientState()

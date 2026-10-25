@@ -83,21 +83,43 @@ extension XMPPSession {
         }
     }
 
-    /// Catches up on what our other devices read while we were away.
-    func fetchDisplayed(then done: (@Sendable () -> Void)? = nil) {
+    /// Catches up on what our other devices read while we were away, or while
+    /// the server held our notifications back and sent only the newest.
+    /// `done` says whether the states were read.
+    func fetchDisplayed(then done: (@Sendable (Bool) -> Void)? = nil) {
         client.module(.pubsub).retrieveItems(from: account.martin, for: NS.mds) { [weak self] result in
-            defer { done?() }
             guard let self else { return }
             switch result {
             case .success(let items):
-                for item in items.items {
-                    if let state = DisplayedState(id: item.id, payload: item.payload) { self.displayedChanged(state) }
-                }
+                self.applyFetchedDisplayed(items.items.compactMap { DisplayedState(id: $0.id, payload: $0.payload) })
+                done?(true)
             case .failure(let error) where error.error == .item_not_found:
-                break
+                done?(true)
             case .failure(let error):
+                // Read again at the next catch-up or return to the app.
                 self.logger.info("Read states unavailable: \(error.localizedDescription, privacy: .private)")
+                done?(false)
             }
+        }
+    }
+
+    /// Applies the chats whose state differs from what we last knew, in one
+    /// write: this runs on every return to the app, with a state per chat.
+    /// A state whose message isn't stored yet is recorded all the same, as
+    /// `displayedChanged` does: a room's catch-up applies it when its history
+    /// has arrived.
+    func applyFetchedDisplayed(_ states: [DisplayedState]) {
+        let changed = lock.withLock { state in
+            states.filter { state.publishedDisplayed[$0.peer] != $0.stanzaId }
+        }
+        guard !changed.isEmpty else { return }
+        do {
+            lock.withLock { state in
+                for item in changed { state.publishedDisplayed[item.peer] = item.stanzaId }
+            }
+            _ = try database.applyDisplayed(changed.map { ($0.peer, $0.stanzaId) })
+        } catch {
+            logger.error("Failed to apply read states: \(error)")
         }
     }
 }

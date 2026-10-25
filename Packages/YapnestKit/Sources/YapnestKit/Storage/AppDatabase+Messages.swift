@@ -382,11 +382,24 @@ extension AppDatabase {
     /// moves forward; a message we don't have is ignored.
     @discardableResult
     public func applyDisplayed(peer: JID, stanzaId: String) throws -> Bool {
-        try writer.write { db in
-            guard let conversation = try Conversation.filter(Column("peer") == peer).fetchOne(db), let id = conversation.id,
-                  let message = try Message.filter(Column("conversationId") == id && Column("serverId") == stanzaId).fetchOne(db) else { return false }
-            try Self.markRead(db, conversationId: id, through: message.timestamp)
-            return true
+        try writer.write { try Self.applyDisplayed($0, peer: peer, stanzaId: stanzaId) }
+    }
+
+    private static func applyDisplayed(_ db: Database, peer: JID, stanzaId: String) throws -> Bool {
+        guard let conversation = try Conversation.filter(Column("peer") == peer).fetchOne(db), let id = conversation.id,
+              let message = try Message.filter(Column("conversationId") == id && Column("serverId") == stanzaId).fetchOne(db) else { return false }
+        try markRead(db, conversationId: id, through: message.timestamp)
+        return true
+    }
+
+    /// `applyDisplayed` for many chats in one transaction, so a catch-up over
+    /// every chat writes once. Returns the peers whose message we had.
+    public func applyDisplayed(_ states: [(peer: JID, stanzaId: String)]) throws -> Set<JID> {
+        guard !states.isEmpty else { return [] }
+        return try writer.write { db in
+            var applied = Set<JID>()
+            for (peer, stanzaId) in states where try Self.applyDisplayed(db, peer: peer, stanzaId: stanzaId) { applied.insert(peer) }
+            return applied
         }
     }
 }

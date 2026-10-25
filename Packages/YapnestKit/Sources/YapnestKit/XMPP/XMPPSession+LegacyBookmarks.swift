@@ -111,11 +111,7 @@ extension XMPPSession {
     /// `#compat` also sends the XEP-0402 change, which says the same.
     func legacyBookmarksChanged(_ bookmarks: [Bookmark]) {
         guard usesLegacyBookmarks else { return }
-        for bookmark in bookmarks { bookmarkChanged(.published(bookmark)) }
-        let listed = Set(bookmarks.map(\.jid))
-        for group in (try? database.groupChats()) ?? [] where group.isBookmarked && !group.hasLeft && !listed.contains(group.jid) {
-            bookmarkChanged(.retracted(group.jid))
-        }
+        reconcileBookmarks(bookmarks)
     }
 
     /// Reads the list, changes it and writes it back, keeping what we don't

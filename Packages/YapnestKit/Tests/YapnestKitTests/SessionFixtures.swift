@@ -58,12 +58,12 @@ extension LiveServer {
     /// the TLS suites use `makeTLSSession`, which trusts the local CA.
     static func makeSession(
         _ jid: JID, resource: String, database: AppDatabase, attachments: AttachmentStore? = nil, port: Int = LiveServer.target.port,
-        callMedia: (any CallMediaFactory)? = nil,
+        callMedia: (any CallMediaFactory)? = nil, policy: XMPPSession.Policy? = nil,
     ) throws -> XMPPSession {
         let credentials = XMPPSession.Credentials(jid: jid, password: "password", host: "127.0.0.1", port: port, disableTLS: true)
         return try XMPPSession(
             credentials: credentials, resource: resource, database: database, attachments: attachments ?? .temporary(),
-            callMedia: callMedia, identityKeys: testIdentityKeys(for: database),
+            policy: policy, callMedia: callMedia, identityKeys: testIdentityKeys(for: database),
         )
     }
 }

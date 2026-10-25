@@ -125,4 +125,18 @@ struct GroupInvitationSessionTests {
         session.bookmarkChanged(.published(Bookmark(jid: foreign, name: nil, autojoin: true, nick: "me")))
         #expect(try database.groupInvitation(foreign) == nil)
     }
+
+    @Test func refetchedBookmarksLeaveWhatWasRetractedAndKeepTheRest() throws {
+        let kept = YapnestKit.JID("kept@groups.example.net")!, gone = YapnestKit.JID("gone@groups.example.net")!
+        let unbookmarked = YapnestKit.JID("new@groups.example.net")!
+        for (jid, bookmarked) in [(kept, true), (gone, true), (unbookmarked, false)] {
+            _ = try database.joinGroupChat(jid, nickname: "me", isBookmarked: bookmarked)
+        }
+        session.reconcileBookmarks([Bookmark(jid: kept, name: "Renamed", autojoin: true, nick: "me")])
+        #expect(try database.groupChat(kept)?.name == "Renamed")
+        #expect(try database.groupChat(kept)?.hasLeft == false)
+        #expect(try database.groupChat(gone)?.hasLeft == true)
+        // Not bookmarked yet, perhaps because its publish is on its way: left alone, and not published here.
+        #expect(try database.groupChat(unbookmarked)?.hasLeft == false)
+    }
 }

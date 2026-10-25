@@ -63,6 +63,8 @@ struct SettingsSyncState: @unchecked Sendable {
     var publishAgain = false
     var scheduled: (work: DispatchWorkItem, at: Date)?
     var observer: Task<Void, Never>?
+    /// Callers of `runSettingsSync` that found one running, to tell how it ended.
+    var waiters: [@Sendable (Bool) -> Void] = []
 
     /// The id this device's entries carry, where not the install's.
     var deviceId: String?
@@ -145,16 +147,36 @@ extension XMPPSession {
         Task.detached(priority: .utility) { [weak self] in await self?.runSettingsSync() }
     }
 
-    func runSettingsSync() async {
-        guard policy.syncsAccountState, isConnected else { return }
+    /// Whether the sync ran to its end with the whole node read. Called while
+    /// one is running, it waits for that one's outcome.
+    @discardableResult
+    func runSettingsSync() async -> Bool {
+        guard policy.syncsAccountState, isConnected else { return false }
         let epoch = lock.withLock { state -> Int? in
             guard !state.settingsSync.syncing else { return nil }
             state.settingsSync.syncing = true
             state.settingsSync.syncStarted = true
             return state.settingsSync.epoch
         }
-        guard let epoch else { return }
-        defer { lock.withLock { if $0.settingsSync.epoch == epoch { $0.settingsSync.syncing = false } } }
+        guard let epoch else {
+            return await withCheckedContinuation { continuation in
+                let queued = lock.withLock { state -> Bool in
+                    guard state.settingsSync.syncing else { return false }
+                    state.settingsSync.waiters.append { continuation.resume(returning: $0) }
+                    return true
+                }
+                if !queued { continuation.resume(returning: false) }
+            }
+        }
+        var succeeded = false
+        defer {
+            let waiters = lock.withLock { state -> [@Sendable (Bool) -> Void] in
+                if state.settingsSync.epoch == epoch { state.settingsSync.syncing = false }
+                defer { state.settingsSync.waiters = [] }
+                return state.settingsSync.waiters
+            }
+            for waiter in waiters { waiter(succeeded) }
+        }
         let isCurrent = { [self] in isConnected && lock.withLock { $0.settingsSync.epoch == epoch } }
 
         do {
@@ -162,16 +184,18 @@ extension XMPPSession {
             try database.seedSyncedSettingsIfNeeded(deviceId: deviceId)
         } catch {
             logger.error("Failed to prepare settings sync: \(error)")
-            return
+            return false
         }
-        guard await confirmSettingsNodeIsPrivate(epoch: epoch), isCurrent() else { return }
+        guard await confirmSettingsNodeIsPrivate(epoch: epoch), isCurrent() else { return false }
 
         lock.withLock { $0.settingsSync.liveItems = [] }
         let fetched = await fetchSettingsItems()
-        guard isCurrent() else { return }
+        guard isCurrent() else { return false }
+        var isWhole = false
         do {
             switch fetched {
             case .complete(let items):
+                isWhole = true
                 let live = lock.withLock { $0.settingsSync.liveItems }
                 applySettingsResult(try database.reconcileFetched(items, keeping: live))
             case .incomplete(let items):
@@ -180,7 +204,7 @@ extension XMPPSession {
             }
         } catch {
             logger.error("Failed to apply the synced settings: \(error)")
-            return
+            return false
         }
         await retractExpiredSettingsItems()
         startSettingsObservation(epoch: epoch)
@@ -188,6 +212,8 @@ extension XMPPSession {
         // Even after a partial fetch: an item published over newer entries
         // is put right by the device holding them, which publishes it again.
         requestSettingsPublish()
+        succeeded = isWhole
+        return succeeded
     }
 
     // MARK: Fetching
