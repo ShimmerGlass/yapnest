@@ -109,6 +109,11 @@ open class ResponseManager {
         queue.async {
             self.handlers[key] = entry;
         }
+        // The timer below only sweeps every 30 seconds, which would let a
+        // request wait up to that much longer than its timeout.
+        timeoutQueue.asyncAfter(deadline: .now() + timeout + 0.05) { [weak self] in
+            self?.checkTimeouts();
+        }
         
         return CancellableEntry(responseManager: self, entry: entry);
     }

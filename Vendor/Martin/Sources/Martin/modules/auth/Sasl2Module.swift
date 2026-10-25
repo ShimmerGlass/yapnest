@@ -107,6 +107,8 @@ open class Sasl2Module: XmppModuleBase, XmppModule, Resetable {
     open private(set) var lastMechanism: String?;
     private var usesFastToken = false;
     private var outcome: Outcome?;
+    /// Whether the server enabled message carbons while binding, so that no separate request is needed.
+    open internal(set) var carbonsEnabledInline = false;
 
     public override init() {
     }
@@ -116,6 +118,7 @@ open class Sasl2Module: XmppModuleBase, XmppModule, Resetable {
             mechanism = nil;
             usesFastToken = false;
             outcome = nil;
+            carbonsEnabledInline = false;
             if state != .notAuthorized {
                 state = .notAuthorized;
             }
@@ -289,6 +292,7 @@ open class Sasl2Module: XmppModuleBase, XmppModule, Resetable {
             outcome.smEnabled = stanza.findChild(name: "bound", xmlns: Sasl2Module.BIND_XMLNS)?.findChild(name: "enabled", xmlns: StreamManagementModule.SM_XMLNS);
         }
         outcome.smResumed = stanza.findChild(name: "resumed", xmlns: StreamManagementModule.SM_XMLNS);
+        carbonsEnabledInline = stanza.findChild(name: "bound", xmlns: Sasl2Module.BIND_XMLNS)?.findChild(name: "enabled", xmlns: MessageCarbonsModule.MC_XMLNS) != nil;
         self.outcome = outcome;
         if let resumed = outcome.smResumed {
             // Now, not when the session logic gets to it: the server's

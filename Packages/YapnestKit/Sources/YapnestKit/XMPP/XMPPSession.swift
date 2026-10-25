@@ -275,6 +275,8 @@ public final class XMPPSession: @unchecked Sendable {
         var mucService: String?
         /// A new session waits for account discovery before catching up.
         var awaitsAccountDiscovery = false
+        /// The last push enable failed, so a resumed stream tries it again.
+        var pushEnableFailed = false
         /// The archive version our server speaks, from account discovery.
         var archiveVersion: MessageArchiveManagementModule.Version?
         /// The last read message we know our devices agree on, by chat (XEP-0490).
@@ -359,6 +361,8 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// How long a ping that stands in for an acknowledgement may take.
     static let confirmationTimeout: TimeInterval = 30
+    /// How many pings are sent, one after another, for the server to confirm a stanza without stream management.
+    static let confirmationPings = 2
 
     /// How far back the first archive sync goes.
     static let initialSyncWindow: TimeInterval = 7 * 24 * 3600
@@ -668,6 +672,7 @@ public final class XMPPSession: @unchecked Sendable {
         client.module(.disco).$accountDiscoResult
             .sink { [weak self] result in self?.accountDiscovered(result) }
             .store(in: &cancellables)
+        client.module(.disco).accountDiscoveryFailed = { [weak self] error in self?.accountDiscoveryFailed(error) }
 
         client.module(.streamManagement).ackedStanzas
             .sink { [weak self] stanza in self?.acknowledged(stanza) }
@@ -1254,6 +1259,7 @@ public final class XMPPSession: @unchecked Sendable {
                     $0.uploadService = nil
                     $0.mucService = nil
                     $0.publishedDisplayed = [:]
+                    $0.pushEnableFailed = false
                     $0.settingsSync.startSession()
                     $0.repeatedContactRequests = []
                     $0.prunesContactRequests = policy.prunesContactRequests
@@ -1266,7 +1272,7 @@ public final class XMPPSession: @unchecked Sendable {
                 flushArchive()
                 lock.withLock { $0.failedArchiveQueries = [] }
                 self.state.send(.connected(isSyncing: true))
-                if policy.enablesCarbons { client.module(.messageCarbons).enable() }
+                if policy.enablesCarbons { enableCarbons() }
                 // The archive module only knows which MAM version the server
                 // speaks once account discovery returns, which Martin starts
                 // itself. Asking again would make OMEMO publish its bundle
@@ -1277,6 +1283,29 @@ public final class XMPPSession: @unchecked Sendable {
                 }
                 runOnceConnected(attempt: attempt) { [self] in fetchRoster(attempt: attempt) }
             }
+        }
+    }
+
+    /// Bind 2 enables carbons while signing in, when the server takes that
+    /// inline; then a second request would only repeat it.
+    func enableCarbons() {
+        if client.modulesManager.moduleOrNil(Sasl2Module.IDENTIFIER)?.carbonsEnabledInline == true { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await retryingPassingErrors { try await requestCarbons() }
+                warnings.clear("carbons")
+            } catch {
+                warnings.post("carbons", title: String(localized: "Other devices' messages may not show"), friendly: String(localized: "The server wouldn't copy your other devices' messages here"), error: error) { [weak self] in
+                    try await self?.requestCarbons()
+                }
+            }
+        }
+    }
+
+    private func requestCarbons() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            client.module(.messageCarbons).enable { continuation.resume(with: $0.map { _ in () }.mapError { $0 }) }
         }
     }
 
@@ -1294,17 +1323,19 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     /// Runs `work` off Martin's state callback, once the client reads as
-    /// connected, unless the connection changed meanwhile.
-    private func runOnceConnected(attempt: Int, tries: Int = 200, _ work: @escaping @Sendable () -> Void) {
+    /// connected, unless the connection changed meanwhile. It waits for as
+    /// long as that connection lasts, since `work` is what ends the sync or
+    /// resumes the session: after `tries` quick looks, a slower one each time.
+    func runOnceConnected(attempt: Int, tries: Int = 200, _ work: @escaping @Sendable () -> Void) {
         DispatchQueue.global().async { [weak self] in
             guard let self else { return }
             switch Self.connectedStep(isConnected: isConnected, startedOn: attempt, now: lock.withLock { $0.attempt }) {
             case .run: work()
             case .abandon: break
             case .wait:
-                guard tries > 0 else { return }
-                DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(10)) { [weak self] in
-                    self?.runOnceConnected(attempt: attempt, tries: tries - 1, work)
+                let wait: DispatchTimeInterval = tries > 0 ? .milliseconds(10) : .milliseconds(250)
+                DispatchQueue.global().asyncAfter(deadline: .now() + wait) { [weak self] in
+                    self?.runOnceConnected(attempt: attempt, tries: max(tries - 1, 0), work)
                 }
             }
         }
@@ -1328,6 +1359,7 @@ public final class XMPPSession: @unchecked Sendable {
         // An extension sends nothing it didn't write itself.
         if policy.resendsPending { sendUnclaimedPending() }
         resumeInterruptedCatchUps()
+        if lock.withLock({ $0.pushEnableFailed }) { enablePush() }
         // A settings sync the drop cut off never reconciled or started
         // watching for changes; one that finished only has changes to send.
         if lock.withLock({ $0.settingsSync.syncStarted && !$0.settingsSync.syncCompleted }) {
@@ -1344,9 +1376,14 @@ public final class XMPPSession: @unchecked Sendable {
     /// identities in it are this session's.
     private func accountDiscovered(_ result: DiscoveryModule.DiscoveryInfoResult) {
         guard !result.identities.isEmpty || !result.features.isEmpty else { return }
+        warnings.clear("discovery")
         // Read here rather than from the archive module, which learns it
         // from the same result in its own time and forgets it on resets.
         let version = MessageArchiveManagementModule.Version.values.first { result.features.contains($0.rawValue) }
+        startSync(archiveVersion: version)
+    }
+
+    private func startSync(archiveVersion version: MessageArchiveManagementModule.Version?) {
         let start = lock.withLock { state in
             state.archiveVersion = version
             defer { state.awaitsAccountDiscovery = false }
@@ -1360,6 +1397,42 @@ public final class XMPPSession: @unchecked Sendable {
                 state.send(.connected(isSyncing: false))
                 reportClientState()
             }
+        }
+    }
+
+    /// Martin's discovery got an error, or no answer, and asks nothing again
+    /// itself: the session would stay syncing for good, with nothing sent,
+    /// no push and no settings. It asks again while the error can pass, and
+    /// then goes on without knowing the server's features, as a server that
+    /// has none of them, rather than not at all.
+    private func accountDiscoveryFailed(_ error: Error) {
+        let attempt = lock.withLock { state -> Int? in state.awaitsAccountDiscovery ? state.attempt : nil }
+        guard let attempt else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            var failure = error
+            if ServerError.classify(error).isPassing {
+                do {
+                    try await retryingPassingErrors { try await discoverAccountFeatures() }
+                    // The answer reaches `accountDiscovered` through its subscription.
+                    return
+                } catch {
+                    failure = error
+                }
+            }
+            guard isConnected, lock.withLock({ $0.attempt == attempt && $0.awaitsAccountDiscovery }) else { return }
+            if ServerError.classify(failure).isFinal {
+                warnings.post("discovery", title: String(localized: "Server features unknown"), friendly: String(localized: "The server didn't say what it supports"), error: failure) { [weak self] in
+                    try await self?.discoverAccountFeatures()
+                }
+            }
+            startSync(archiveVersion: nil)
+        }
+    }
+
+    private func discoverAccountFeatures() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            client.module(.disco).discoverAccountFeatures { continuation.resume(with: $0.map { _ in () }.mapError { $0 }) }
         }
     }
 
@@ -1634,15 +1707,24 @@ public final class XMPPSession: @unchecked Sendable {
     /// reply, an error from a server that doesn't know the ping too, shows it
     /// has read `stanza`. With no reply the stanza stays unacknowledged, as
     /// on a stream with management: a new session sends it again.
-    private func confirmByPing(_ stanza: Stanza) {
+    private func confirmByPing(_ stanza: Stanza, attempt: Int = 1) {
         let started = Date()
         client.module(.ping).ping(Martin.JID(account.martin), timeout: Self.confirmationTimeout) { [weak self] result in
+            guard let self else { return }
             if case .failure(.remote_server_timeout) = result {
                 DiagLog.notice(.send, "Ping for confirmation timed out", .duration("waited", since: started))
+                // A later ping's reply shows the server read this stanza too. With
+                // none either, the stream is probably dead: checking it drops it,
+                // and the session that follows sends the message again.
+                if attempt < Self.confirmationPings {
+                    confirmByPing(stanza, attempt: attempt + 1)
+                } else {
+                    verifyConnection()
+                }
                 return
             }
             DiagLog.info(.send, "Ping confirmed", .duration("took", since: started))
-            self?.acknowledged(stanza)
+            acknowledged(stanza)
         }
     }
 
@@ -1653,6 +1735,7 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Asks the server to acknowledge what was just written, if it will.
     func requestAcknowledgement() {
+        guard streamAcknowledges else { return }
         client.modulesManager.moduleOrNil(.streamManagement)?.request()
     }
 
@@ -1822,7 +1905,42 @@ public final class XMPPSession: @unchecked Sendable {
         let after = try? database.setting(.lastArchiveId)
         if after == nil, policy.syncsAccountState { markChatRestorePending() }
         let start = after == nil ? Date().addingTimeInterval(-accountSyncWindow) : nil
-        fetchArchivePage(after: after, start: start, attempt: lock.withLock { $0.attempt })
+        let attempt = lock.withLock { $0.attempt }
+        fetchArchivePage(after: after, start: start, attempt: attempt) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                if error is ArchivePageInterrupted { return }
+                self.archiveReadFailed(error)
+            }
+            self.finishCatchUp(attempt: attempt)
+        }
+    }
+
+    /// What a page's `done` is told when the connection changed under it, which
+    /// leaves the catch-up to `resumeInterruptedCatchUps` or the newer connection.
+    private struct ArchivePageInterrupted: Error {}
+
+    /// The sync ended with a page unread, and the cursor stayed before it, so
+    /// the next session reads it again. Until then there may be a gap.
+    private func archiveReadFailed(_ error: Error) {
+        warnings.post("archive", title: String(localized: "Some messages may be missing"), friendly: String(localized: "Your messages couldn't all be loaded from the server"), error: error) { [weak self] in
+            try await self?.rereadArchive()
+        }
+    }
+
+    /// Reads the archive again from the cursor, for the warning's Retry.
+    private func rereadArchive() async throws {
+        // The connection going away reads as the timeout it is, which can pass.
+        let dropped = ServerError(condition: "remote-server-timeout", type: .wait)
+        guard isConnected else { throw dropped }
+        let after = try? database.setting(.lastArchiveId)
+        let start = after == nil ? Date().addingTimeInterval(-accountSyncWindow) : nil
+        let attempt = lock.withLock { $0.attempt }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            fetchArchivePage(after: after, start: start, attempt: attempt) { error in
+                if let error { continuation.resume(throwing: error is ArchivePageInterrupted ? dropped : error) } else { continuation.resume() }
+            }
+        }
     }
 
     /// What a catch-up's answer should do, by the connection it began on.
@@ -1868,35 +1986,44 @@ public final class XMPPSession: @unchecked Sendable {
         resumeInterruptedRoomCatchUps()
     }
 
-    private func fetchArchivePage(after: String?, start: Date?, attempt: Int) {
+    /// Reads the archive from `after` to its end, a page at a time, and tells
+    /// `done` how it ended: nil, or the error that stopped it.
+    private func fetchArchivePage(after: String?, start: Date?, attempt: Int, failures: Int = 0, done: @escaping @Sendable (Error?) -> Void) {
         let version = lock.withLock { $0.archiveVersion }
         let queryId = UUID().uuidString
         client.module(.mam).queryItems(version: version, start: start, queryId: queryId, rsm: RSM.Query(after: after, max: 100)) { [weak self] result in
             guard let self else { return }
             let stored = self.flushArchive(query: queryId)
-            guard self.catchUpMayProceed(attempt: attempt) else { return }
+            guard self.catchUpMayProceed(attempt: attempt) else { return done(ArchivePageInterrupted()) }
             switch result {
             case .success where !stored:
                 // Going on would move the cursor past the page that was lost.
-                self.finishCatchUp(attempt: attempt)
+                done(nil)
             case .success(let page):
                 // Results for this page were delivered before the query's answer.
                 if let last = page.rsm?.last {
                     try? self.database.setSetting(.lastArchiveId, last)
                 }
                 if page.complete || page.rsm?.last == nil {
-                    self.finishCatchUp(attempt: attempt)
+                    done(nil)
                 } else {
-                    self.fetchArchivePage(after: page.rsm?.last, start: nil, attempt: attempt)
+                    self.fetchArchivePage(after: page.rsm?.last, start: nil, attempt: attempt, done: done)
                 }
             case .failure(.item_not_found) where after != nil:
                 // Our cursor expired from the archive; fall back to a time window.
                 try? self.database.setSetting(.lastArchiveId, nil)
                 if self.policy.syncsAccountState { self.markChatRestorePending() }
-                self.fetchArchivePage(after: nil, start: Date().addingTimeInterval(-accountSyncWindow), attempt: attempt)
+                self.fetchArchivePage(after: nil, start: Date().addingTimeInterval(-accountSyncWindow), attempt: attempt, done: done)
             case .failure(let error):
+                // The cursor stays where it was, so the page is read again, now or next session.
                 self.logger.error("Archive sync failed: \(error)")
-                self.finishCatchUp(attempt: attempt)
+                guard failures + 1 < ServerRetry.attempts, ServerRetry.isPassing(error) else { return done(error) }
+                let wait = self.lock.withLock { $0.retryBackoff } * Double(1 << failures)
+                DispatchQueue.global().asyncAfter(deadline: .now() + wait) { [weak self] in
+                    guard let self else { return }
+                    guard self.catchUpMayProceed(attempt: attempt) else { return done(ArchivePageInterrupted()) }
+                    self.fetchArchivePage(after: after, start: start, attempt: attempt, failures: failures + 1, done: done)
+                }
             }
         }
     }

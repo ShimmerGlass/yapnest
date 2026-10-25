@@ -63,6 +63,9 @@ struct SettingsSyncState: @unchecked Sendable {
     /// Set once the server didn't answer `max_items=max`: the node then has
     /// an explicit limit, and publishes don't ask for it again.
     var explicitMaxItems = false
+    /// Items the server refused for good, by what they held when it did: not
+    /// published again this session unless they change or the user retries.
+    var refusedItems: [String: String] = [:]
     var syncing = false
     var syncStarted = false
     /// Whether this session's sync ran to its end. One cut off by the stream
@@ -89,6 +92,7 @@ struct SettingsSyncState: @unchecked Sendable {
         epoch += 1
         node = .unchecked
         explicitMaxItems = false
+        refusedItems = [:]
         syncing = false
         syncStarted = false
         syncCompleted = false
@@ -439,8 +443,13 @@ extension XMPPSession {
         lock.withLock { state in
             guard state.settingsSync.epoch == epoch, state.settingsSync.observer == nil else { return }
             state.settingsSync.observer = Task.detached(priority: .utility) { [weak self, database] in
+                // With the newest version of each, so that an item changed again while
+                // it is still marked (one the server refused) is published again.
                 let observation = ValueObservation.tracking { db in
-                    try String.fetchAll(db, sql: "SELECT item FROM syncedItemDirty")
+                    try Row.fetchAll(db, sql: """
+                        SELECT d.item AS item, COALESCE((SELECT MAX(e.version) FROM syncedEntry e WHERE e.item = d.item), '') AS version
+                        FROM syncedItemDirty d
+                        """).map { $0["item"] as String }
                 }
                 do {
                     for try await dirty in observation.values(in: database.reader, bufferingPolicy: .bufferingNewest(1)) {
@@ -516,6 +525,7 @@ extension XMPPSession {
         }
         for item in items {
             guard isConnected, lock.withLock({ $0.settingsSync.epoch == epoch && $0.settingsSync.node == .verified }) else { return }
+            guard lock.withLock({ $0.settingsSync.refusedItems[item.id] != item.content }) else { continue }
             do {
                 try await publishSettingsItem(item.id, item.element)
                 try database.markPublished(item)
@@ -523,14 +533,37 @@ extension XMPPSession {
                 // Still dirty, so the next change or connection tries again;
                 // one item the server refuses mustn't hold back the rest.
                 logger.info("Couldn't publish \(item.id, privacy: .private): \(error.localizedDescription, privacy: .private)")
+                // One that is refused for good would otherwise be tried at every
+                // connect and never shown. It waits until it changes.
+                if ServerError.isFromServer(error), ServerError.classify(error).isFinal {
+                    lock.withLock { $0.settingsSync.refusedItems[item.id] = item.content }
+                    warnSettingsRefused(error)
+                }
             }
+        }
+    }
+
+    private func warnSettingsRefused(_ error: Error) {
+        warnings.post("settings", title: String(localized: "Settings not synced"), friendly: String(localized: "The server wouldn't take a setting"), error: error) { [weak self] in
+            try await self?.retryRefusedSettings()
+        }
+    }
+
+    /// For the warning's Retry: publishes the items the server refused, once more.
+    private func retryRefusedSettings() async throws {
+        guard isConnected else { throw ServerError(condition: "remote-server-timeout", type: .wait) }
+        let refused = lock.withLock { Set($0.settingsSync.refusedItems.keys) }
+        for item in try database.pendingSyncItems() where refused.contains(item.id) {
+            try await publishSettingsItem(item.id, item.element)
+            try database.markPublished(item)
+            lock.withLock { _ = $0.settingsSync.refusedItems.removeValue(forKey: item.id) }
         }
     }
 
     private func publishSettingsItem(_ id: String, _ payload: Element) async throws {
         let (explicit, timeout) = lock.withLock { ($0.settingsSync.explicitMaxItems, $0.settingsSync.publishTimeout) }
         if explicit {
-            try await publishPEP(
+            try await publishPEPKeepingErrors(
                 node: NS.settings, itemId: id, payload: payload, accessModel: "whitelist",
                 config: Self.settingsNodeFields(maxItems: Self.settingsExplicitMaxItems),
             )
@@ -545,15 +578,29 @@ extension XMPPSession {
             // Openfire never answers a publish asking for `max`, or fails it
             // when the node has a limit of its own. Any other failure leaves
             // the item for a later try, as capping the node of a server that
-            // takes `max` would cost it its history for good.
+            // takes `max` would cost it its history for good. A slow answer
+            // is that of a server that takes it too, so the node's own
+            // configuration says whether it holds a limit.
+            if error is TimeoutError, !(await settingsNodeHasLimit()) { throw error }
             logger.info("Publishing settings with max_items=max failed; giving the node a limit")
             let fields = Self.settingsNodeFields(maxItems: Self.settingsExplicitMaxItems)
             try await configurePEPNode(NS.settings, fields: fields)
             lock.withLock { $0.settingsSync.explicitMaxItems = true }
-            try await publishPEP(node: NS.settings, itemId: id, payload: payload, accessModel: "whitelist", config: fields)
-        } catch let error as PubSubError {
-            throw ProfileError.refused(reason: error.localizedDescription)
+            try await publishPEPKeepingErrors(node: NS.settings, itemId: id, payload: payload, accessModel: "whitelist", config: fields)
         }
+    }
+
+    /// Whether the node is set to keep a number of items rather than `max`.
+    /// False when the configuration can't be read: nothing says it is capped.
+    private func settingsNodeHasLimit() async -> Bool {
+        let hasLimit = try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
+            client.module(.pubsub).retrieveNodeConfiguration(from: nil, node: NS.settings) { (result: Result<PubSubNodeConfig, PubSubError>) in
+                continuation.resume(with: result.map { config in
+                    if case .value? = config.maxItems { true } else { false }
+                })
+            }
+        }
+        return hasLimit ?? false
     }
 
     /// Whether a publish asking for `max_items=max` failed the way a server

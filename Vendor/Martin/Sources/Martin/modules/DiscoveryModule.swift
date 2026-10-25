@@ -60,6 +60,9 @@ open class DiscoveryModule: XmppModuleBase, AbstractIQModule, Resetable {
     @Published
     public private(set) var accountDiscoResult: DiscoveryInfoResult = .empty();
     
+    /// Called when the account discovery a session starts with fails, which `accountDiscoResult` can't tell from one still under way.
+    public var accountDiscoveryFailed: ((XMPPError) -> Void)?;
+    
     public init(identity: Identity = Identity(category: "client", type: "pc", name: SoftwareVersionModule.DEFAULT_NAME_VAL)) {
         self.identity = identity;
         super.init();
@@ -116,6 +119,15 @@ open class DiscoveryModule: XmppModuleBase, AbstractIQModule, Resetable {
                 completionHandler?(result);
             });
         }
+    }
+    
+    /// The account discovery a new or resumed session starts with: `accountDiscoveryFailed` hears of its failure.
+    open func discoverAccountFeaturesOnBind() {
+        discoverAccountFeatures(completionHandler: { [weak self] result in
+            if case .failure(let error) = result {
+                self?.accountDiscoveryFailed?(error);
+            }
+        });
     }
     
     /**

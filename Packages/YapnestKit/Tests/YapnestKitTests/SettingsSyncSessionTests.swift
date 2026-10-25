@@ -23,6 +23,8 @@ private final class SettingsServer: @unchecked Sendable {
     var keepsAccess = false
     /// Never answers a publish that asks for `max_items=max`, like Openfire.
     var silentOnMax = false
+    /// The `max_items` the node reports when its configuration is read.
+    var reportedMaxItems: String?
     /// Fails a publish that asks for `max_items=max`, as Openfire does on a node with a limit.
     var failsOnMax = false
     /// The condition that failure carries.
@@ -74,7 +76,7 @@ private final class SettingsServer: @unchecked Sendable {
                 if let configure = pubsub.firstChild(name: "configure") {
                     if iq.type == .get {
                         log.append("config-get")
-                        let form = XMPPSession.dataForm(type: "form", formType: "http://jabber.org/protocol/pubsub#node_config", fields: ["pubsub#access_model": [access]])
+                        let form = XMPPSession.dataForm(type: "form", formType: "http://jabber.org/protocol/pubsub#node_config", fields: ["pubsub#access_model": [access]].merging(reportedMaxItems.map { ["pubsub#max_items": [$0]] } ?? [:]) { a, _ in a })
                         return FakeWire.result(to: iq, Element(name: "pubsub", xmlns: pubsub.xmlns, children: [Element(name: "configure", children: [form])]))
                     }
                     let fields = Self.fields(of: configure.firstChild(name: "x"))
@@ -283,6 +285,7 @@ struct SettingsSyncSessionTests {
     @Test func aPublishTheServerNeverAnswersIsRepeatedWithAnExplicitLimit() async throws {
         let server = SettingsServer()
         server.silentOnMax = true
+        server.reportedMaxItems = "10"
         let (session, _) = try connect(server, timeout: 0.1)
         try db.setSetting(.statusMessage, "busy")
         await session.runSettingsSync()
@@ -295,6 +298,20 @@ struct SettingsSyncSessionTests {
         try db.setSetting(.statusMessage, "busier")
         await eventually("three publishes") { server.publishes.count >= 3 }
         #expect(server.publishes.last?.options["pubsub#max_items"] == nil)
+    }
+
+    @Test func aSlowPublishOnAServerThatTakesMaxDoesNotCapTheNode() async throws {
+        let server = SettingsServer()
+        server.silentOnMax = true
+        server.reportedMaxItems = "max"
+        let (session, _) = try connect(server, timeout: 0.1)
+        try db.setSetting(.statusMessage, "busy")
+        await session.runSettingsSync()
+        await eventually("a publish") { !server.publishes.isEmpty }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(server.configured.isEmpty)
+        #expect(session.lock.withLock { !$0.settingsSync.explicitMaxItems })
+        #expect(try db.pendingSyncItems().map(\.id) == ["global"])
     }
 
     @Test func aPublishTheServerFailsForTheLimitIsRepeatedWithAnExplicitOne() async throws {
@@ -346,6 +363,37 @@ struct SettingsSyncSessionTests {
         await eventually("the global item to be published") { server.publishes.contains { $0.id == "global" } }
         await eventually("the global item to be done with") { (try? db.pendingSyncItems().map(\.id)) == ["chat:a@example.org"] }
         #expect(try db.pendingSyncItems().map(\.id) == ["chat:a@example.org"])
+    }
+
+    @Test func anItemTheServerRefusesForGoodIsShownAndNotTriedAgainUntilItChanges() async throws {
+        let server = SettingsServer()
+        server.refusedIds = ["global"]
+        let (session, _) = try connect(server)
+        try db.setSetting(.statusMessage, "busy")
+        await session.runSettingsSync()
+        await eventually("a warning") { session.warnings.current.map(\.key) == ["settings"] }
+        let tried = server.publishes.count
+
+        session.requestSettingsPublish()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(server.publishes.count == tried)
+
+        try db.setSetting(.statusMessage, "busier")
+        await eventually("another try") { server.publishes.count > tried }
+    }
+
+    @Test func theWarningsRetryPublishesARefusedItemAgain() async throws {
+        let server = SettingsServer()
+        server.refusedIds = ["global"]
+        let (session, _) = try connect(server)
+        try db.setSetting(.statusMessage, "busy")
+        await session.runSettingsSync()
+        await eventually("a warning") { session.warnings.current.map(\.key) == ["settings"] }
+
+        server.refusedIds = []
+        #expect(await session.warnings.retry("settings"))
+        #expect(try db.pendingSyncItems().isEmpty)
+        #expect(session.warnings.current.isEmpty)
     }
 
     // MARK: Fetching

@@ -243,4 +243,60 @@ struct PushSessionTests {
         #expect(pushStanzas("disable").isEmpty)
         #expect(try database.setting(.pushStaleNodes) == nil)
     }
+
+    // MARK: Failed enables
+
+    /// The relay hands out a node; our server answers the enable from `answer`, called with how many came before.
+    private func serveEnable(_ answer: @escaping @Sendable (Int, Iq) -> Iq) {
+        let enables = OSAllocatedCounter()
+        wire.answer { iq in
+            if iq.firstChild(name: "command", xmlns: NS.commands) != nil {
+                let field = Element(name: "field", attributes: ["var": "node"])
+                field.addChild(Element(name: "value", cdata: "n"))
+                let form = Element(name: "x", xmlns: NS.dataForms)
+                form.addChild(field)
+                let command = Element(name: "command", xmlns: NS.commands)
+                command.addChild(form)
+                return FakeWire.result(to: iq, command)
+            }
+            if iq.firstChild(name: "enable", xmlns: NS.push) != nil { return answer(enables.next(), iq) }
+            return FakeWire.result(to: iq)
+        }
+    }
+
+    @Test func anEnableThatFailsForAReasonThatPassesIsTriedAgain() async throws {
+        session.lock.withLock { $0.retryBackoff = 0 }
+        connect()
+        serveEnable { n, iq in n == 0 ? FakeWire.error(to: iq, condition: "internal-server-error", type: "wait") : FakeWire.result(to: iq) }
+        session.setPushToken(Data([0x02]), sandbox: true)
+        #expect(await eventually { (try? database.setting(.pushNode)) == "n" })
+        #expect(pushStanzas("enable").count == 2)
+        #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func anEnableTheServerRefusesForGoodIsShownAndNotRepeated() async throws {
+        session.lock.withLock { $0.retryBackoff = 0 }
+        connect()
+        serveEnable { _, iq in FakeWire.error(to: iq, condition: "forbidden", type: "auth") }
+        session.setPushToken(Data([0x02]), sandbox: true)
+        #expect(await eventually { session.warnings.current.map(\.key) == ["push"] })
+        #expect(pushStanzas("enable").count == 1)
+
+        serveEnable { _, iq in FakeWire.result(to: iq) }
+        #expect(await session.warnings.retry("push"))
+        #expect(try database.setting(.pushNode) == "n")
+    }
+
+    @Test func aResumedStreamTriesAgainAnEnableThatKeptFailing() async throws {
+        session.lock.withLock { $0.retryBackoff = 0 }
+        connect()
+        serveEnable { _, iq in FakeWire.error(to: iq, condition: "internal-server-error", type: "wait") }
+        session.setPushToken(Data([0x02]), sandbox: true)
+        #expect(await eventually { pushStanzas("enable").count == ServerRetry.attempts + 1 })
+        #expect(await eventually { session.lock.withLock { $0.pushEnableFailed } })
+
+        serveEnable { _, iq in FakeWire.result(to: iq) }
+        session.resumeWork()
+        #expect(await eventually { (try? database.setting(.pushNode)) == "n" })
+    }
 }

@@ -72,7 +72,8 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         return _ackEnabled;
     }
     
-    fileprivate var lastRequestTimestamp = Date();
+    fileprivate var lastRequestTimestamp = Date.distantPast;
+    fileprivate var deferredRequest = false;
     fileprivate var lastSentH = UInt32(0);
     
     /// Is stream resumption enabled?
@@ -280,9 +281,23 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         }
     }
 
-    /// Send ACK request to server
+    /// Send ACK request to server. Not on a stream that doesn't count stanzas, where the server would
+    /// answer `unexpected-request`. A second request within a second waits for the first one's second
+    /// instead of being sent at once, or lost.
     open func request() {
-        guard lastRequestTimestamp.timeIntervalSinceNow < 1 else {
+        guard ackEnabled else {
+            return;
+        }
+        let wait = 1 + lastRequestTimestamp.timeIntervalSinceNow;
+        guard wait <= 0 else {
+            queue.sync {
+                guard !deferredRequest else { return }
+                deferredRequest = true;
+                DispatchQueue.global().asyncAfter(deadline: .now() + wait) { [weak self] in
+                    self?.queue.sync { self?.deferredRequest = false }
+                    self?.request();
+                }
+            }
             return;
         }
         
@@ -301,6 +316,7 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         _resumptionLocation = nil;
         queue.sync {
             enableWritten = false;
+            lastRequestTimestamp = Date.distantPast;
             ackH.reset();
         }
         outgoingQueue.clear();
