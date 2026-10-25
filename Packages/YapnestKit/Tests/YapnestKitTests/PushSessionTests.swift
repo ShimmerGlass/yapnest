@@ -1,5 +1,6 @@
 import Foundation
-import Martin
+@preconcurrency import Martin
+@testable import Martin
 import Testing
 @testable import YapnestKit
 
@@ -287,6 +288,32 @@ struct PushSessionTests {
         #expect(try database.setting(.pushNode) == "n")
     }
 
+    @Test func aRetryOfTheWarningWhileOfflineIsNotASuccess() async throws {
+        session.lock.withLock { $0.retryBackoff = 0 }
+        connect()
+        serveEnable { _, iq in FakeWire.error(to: iq, condition: "forbidden", type: "auth") }
+        session.setPushToken(Data([0x02]), sandbox: true)
+        #expect(await eventually { session.warnings.current.map(\.key) == ["push"] })
+
+        session.client.update(state: .disconnected())
+        #expect(await session.warnings.retry("push") == false)
+        #expect(session.warnings.current.map(\.key) == ["push"])
+        #expect(session.lock.withLock { $0.pushEnableFailed })
+    }
+
+    @Test func aRetryOfTheWarningWithNoTokenIsNotASuccess() async throws {
+        session.lock.withLock { $0.retryBackoff = 0 }
+        connect()
+        serveEnable { _, iq in FakeWire.error(to: iq, condition: "forbidden", type: "auth") }
+        session.setPushToken(Data([0x02]), sandbox: true)
+        #expect(await eventually { session.warnings.current.map(\.key) == ["push"] })
+
+        try database.setSetting(.pushToken, nil)
+        #expect(await session.warnings.retry("push") == false)
+        #expect(session.warnings.current.map(\.key) == ["push"])
+        #expect(session.lock.withLock { $0.pushEnableFailed })
+    }
+
     @Test func aResumedStreamTriesAgainAnEnableThatKeptFailing() async throws {
         session.lock.withLock { $0.retryBackoff = 0 }
         connect()
@@ -294,6 +321,8 @@ struct PushSessionTests {
         session.setPushToken(Data([0x02]), sandbox: true)
         #expect(await eventually { pushStanzas("enable").count == ServerRetry.attempts + 1 })
         #expect(await eventually { session.lock.withLock { $0.pushEnableFailed } })
+        // Shown once the tries ran out, though the error was one that passes.
+        #expect(await eventually { session.warnings.current.map(\.key) == ["push"] })
 
         serveEnable { _, iq in FakeWire.result(to: iq) }
         session.resumeWork()
