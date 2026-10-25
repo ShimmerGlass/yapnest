@@ -194,9 +194,12 @@ open class RosterModule: XmppModuleBaseSessionStateAware, AbstractIQModule {
                         return self.processRosterItem(item, context: context);
                     }));
                     
-                    // Asked for changes since a version, an answer without items
-                    // says nothing changed; only a full roster tells what is gone.
-                    let removed = sentVersion != nil && newJids.isEmpty ? [] : oldJids.filter({ !newJids.contains($0) });
+                    // RFC 6121 section 2.6.3 says nothing changed with a result
+                    // without a query. A query with a new version and no items is
+                    // the full, empty roster; one with the version we sent is how
+                    // some servers say nothing changed, and tells nothing is gone.
+                    let unchanged = sentVersion != nil && newJids.isEmpty && query.getAttribute("ver") == sentVersion;
+                    let removed = unchanged ? [] : oldJids.filter({ !newJids.contains($0) });
                     for jid in removed {
                         if let item = self.rosterManager.deleteItem(for: context, jid: jid) {
                             self.eventsSender.send(.removed(jid));

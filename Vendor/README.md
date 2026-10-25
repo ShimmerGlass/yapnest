@@ -592,8 +592,10 @@ Each entry gives what went wrong for users, why, and what changed.
   was made from the module's state callback, out of the app's reach.
 - *Fix:* the stored version (or an empty one, to be given a version) is always
   sent, which servers without versioning ignore (RFC 6121 section 2.6); an
-  answer without items to a versioned request no longer removes the contacts
-  we hold. `requestsRosterOnConnect` turns the automatic request off, so
+  answer with no items to a versioned request removes the contacts we hold
+  only if its `ver` isn't the one we sent, as the version then says it is the
+  full, empty roster (RFC 6121 section 2.6.3 signals no change with a result
+  without a query; some servers send the old version back instead). `requestsRosterOnConnect` turns the automatic request off, so
   Yapnest asks itself, retries and shows the failure. Pinned by
   `RosterVersionTests`.
 
