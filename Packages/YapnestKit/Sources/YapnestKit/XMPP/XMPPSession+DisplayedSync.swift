@@ -62,14 +62,24 @@ extension XMPPSession {
         // Reading while messages arrive marks the same one again and again.
         let isNew = lock.withLock { $0.publishedDisplayed.updateValue(stanzaId, forKey: peer) != stanzaId }
         guard isNew else { return }
-        let options = Self.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options", fields: Self.settingsNodeFields(maxItems: "max"))
-        client.module(.pubsub).publishItem(
-            at: nil, to: NS.mds, itemId: peer.description, payload: state.element,
-            publishOptions: options, errorDecoder: PubSubError.from(stanza:),
-        ) { [weak self] (result: Result<Iq, PubSubError>) in
-            guard case .failure(let error) = result, let self else { return }
-            self.lock.withLock { _ = $0.publishedDisplayed.removeValue(forKey: peer) }
-            self.logger.info("Couldn't publish read state for \(peer, privacy: .private): \(error.localizedDescription, privacy: .private)")
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                // A node another client made with other options refuses the
+                // publish; this one reconfigures it and goes again.
+                try await publishPEPKeepingErrors(
+                    node: NS.mds, itemId: peer.description, payload: state.element, accessModel: "whitelist",
+                    config: Self.settingsNodeFields(maxItems: "max"),
+                )
+                warnings.clear("readState")
+            } catch {
+                lock.withLock { _ = $0.publishedDisplayed.removeValue(forKey: peer) }
+                logger.info("Couldn't publish read state for \(peer, privacy: .private): \(error.localizedDescription, privacy: .private)")
+                // The next read of a chat tries again, so only a refusal for good is shown.
+                if ServerError.isFromServer(error), ServerError.classify(error).isFinal {
+                    warnings.post("readState", title: String(localized: "Read state not synced"), friendly: String(localized: "The server wouldn't take the read state"), error: error)
+                }
+            }
         }
     }
 

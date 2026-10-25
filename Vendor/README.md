@@ -581,6 +581,47 @@ Each entry gives what went wrong for users, why, and what changed.
   filter for callers that must agree with the wire. Pinned by `XMLEscapingTests` and
   `ControlCharacterIntegrationTests`.
 
+**A failed account discovery left the session syncing for good** (`DiscoveryModule.accountDiscoveryFailed`)
+- *Symptom:* when the server answered the discovery of the account's
+  features with an error, or the request got no answer, the session stayed
+  "syncing" for good: nothing pending was sent, and push, settings and read
+  states were never set up.
+- *Cause:* Martin starts the discovery itself when the session is bound,
+  with no completion handler, and a failure only left the result empty.
+- *Fix:* `discoverAccountFeaturesOnBind()` is what the session start calls,
+  and it tells `accountDiscoveryFailed` when the request fails. Yapnest asks
+  again while the error can pass and then goes on without the features.
+  Pinned by `AccountDiscoveryFailureTests`.
+
+**A request timed out up to 30 seconds late** (`ResponseManager.registerResponseHandler`)
+- *Symptom:* a request given a 5 or 10 second timeout failed after 5 to 35
+  (sign-out waiting on push, the Openfire fallback for the settings node, a
+  message confirmed by ping).
+- *Cause:* expired requests were only swept by a timer that fires every 30
+  seconds.
+- *Fix:* each request also schedules a sweep for its own deadline. Pinned by
+  `ResponseDeadlineTests`.
+
+**Acknowledgement requests were sent without stream management, and never throttled** (`StreamManagementModule.request`)
+- *Symptom:* a stream that never negotiated stream management was sent
+  `<r/>`, which ejabberd answers with `unexpected-request` (a stricter
+  server may close the stream), and every call wrote one however close
+  together.
+- *Cause:* `request()` had no check for stream management being enabled,
+  and its throttle compared against `timeIntervalSinceNow < 1`, which is
+  always true for a past date.
+- *Fix:* nothing is sent unless stream management is enabled, and a request
+  within a second of the last waits for the second to pass, once, rather
+  than going out at once or being lost. Pinned by `AcknowledgementRequestTests`.
+
+**Carbons were enabled a second time after Bind 2** (`Sasl2Module.carbonsEnabledInline`)
+- *Symptom:* on a server that takes carbons inline in Bind 2, the session
+  sent a second `<enable/>`, and could not tell whether the inline one
+  worked.
+- *Cause:* nothing recorded the server's `<enabled xmlns='urn:xmpp:carbons:2'/>`
+  in the `<success>` of the sign-in.
+- *Fix:* the module keeps whether it was there. Pinned by `CarbonsEnableTests`.
+
 ### MartinOMEMO
 
 **Logs named people publicly** (`OMEMOModule`)

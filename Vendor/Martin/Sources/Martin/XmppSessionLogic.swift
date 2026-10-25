@@ -399,7 +399,7 @@ open class SocketSessionLogic: XmppSessionLogic {
         self.logger.debug("\(self.userJid) - session binded and established");
         if let discoveryModule = modulesManager.moduleOrNil(.disco) {
             discoveryModule.discoverServerFeatures(completionHandler: nil);
-            discoveryModule.discoverAccountFeatures(completionHandler: nil);
+            discoveryModule.discoverAccountFeaturesOnBind();
         }
         
         if let streamManagementModule = modulesManager.moduleOrNil(.streamManagement) {

@@ -33,6 +33,11 @@ extension XMPPSession {
             return
         }
         disableStalePushNodes()
+        requestPushEnable(token: token, environment: environment, done: pushEnableFinished)
+    }
+
+    /// One try at enabling push: the relay's node, then our server's enable.
+    private func requestPushEnable(token: String, environment: String, done: @escaping @Sendable (Result<Void, Error>) -> Void) {
         let relay = pushRelay
         let iq = Iq()
         iq.type = .set
@@ -55,13 +60,56 @@ extension XMPPSession {
                 .filterChildren(name: "field", xmlns: nil).first { $0.getAttribute("var") == "node" }?.firstChild(name: "value")?.value
             guard let node, !node.isEmpty else {
                 self.logger.error("The push relay \(relay, privacy: .private) didn't register us: \(String(describing: result), privacy: .private)")
+                // An error is the relay's own to give; an answer without a node is final.
+                if case .failure(let error) = result { done(.failure(error)) } else { done(.failure(ServerError(condition: "undefined-condition", type: .cancel))) }
                 return
             }
-            self.enablePush(relay: relay, node: node)
+            self.enablePush(relay: relay, node: node, done: done)
         }
     }
 
-    private func enablePush(relay: JID, node: String) {
+    /// An enable that failed may pass: it is tried again a few times, and
+    /// again when a resumed stream returns (`resumeWork`), as one stream can
+    /// last days. What stays failing is shown.
+    private func pushEnableFinished(_ result: Result<Void, Error>) {
+        switch result {
+        case .success:
+            lock.withLock { $0.pushEnableFailed = false }
+            warnings.clear("push")
+        case .failure(let error):
+            lock.withLock { $0.pushEnableFailed = true }
+            guard ServerError.classify(error).isPassing else { return postPushWarning(error) }
+            Task { [weak self] in
+                guard let self else { return }
+                let backoff = lock.withLock { $0.retryBackoff }
+                if backoff > 0 { try? await Task.sleep(for: .seconds(backoff)) }
+                guard isConnected else { return }
+                do {
+                    try await retryingPassingErrors { try await attemptPushEnable() }
+                    pushEnableFinished(.success(()))
+                } catch {
+                    if ServerError.classify(error).isFinal { postPushWarning(error) }
+                }
+            }
+        }
+    }
+
+    private func postPushWarning(_ error: Error) {
+        warnings.post("push", title: String(localized: "Notifications are off"), friendly: String(localized: "The server couldn't turn on notifications"), error: error) { [weak self] in
+            try await self?.attemptPushEnable()
+        }
+    }
+
+    /// For the retries and the warning's Retry: a try that throws what failed.
+    private func attemptPushEnable() async throws {
+        guard isConnected, let token = try? database.setting(.pushToken), let environment = try? database.setting(.pushEnvironment) else { return }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            requestPushEnable(token: token, environment: environment) { continuation.resume(with: $0) }
+        }
+        lock.withLock { $0.pushEnableFailed = false }
+    }
+
+    private func enablePush(relay: JID, node: String, done: @escaping @Sendable (Result<Void, Error>) -> Void) {
         // Spelled out: a bare trailing closure picks the overload that reports
         // only that the stanza was written, and not the server's answer.
         client.context.writer.write(Self.pushIq("enable", relay: relay, node: node), completionHandler: { [weak self] result in
@@ -83,6 +131,7 @@ extension XMPPSession {
                 // The older ones were asked for when this enable began.
                 if let staleNow { self.disableStalePushNodes([staleNow]) }
                 self.logger.info("Push enabled through \(relay, privacy: .private)")
+                done(.success(()))
             case .failure(let error):
                 // An enable nobody answered may still have gone through, so
                 // the node is kept to be disabled later (never the one in use).
@@ -90,6 +139,7 @@ extension XMPPSession {
                     self.addStalePushNode(StalePushNode(relay: relay.description, node: node))
                 }
                 self.logger.error("Our server didn't enable push: \(error)")
+                done(.failure(error))
             }
         })
     }
