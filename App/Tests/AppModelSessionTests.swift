@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Testing
 import YapnestKit
 @testable import Yapnest
@@ -114,6 +115,39 @@ struct AppModelSessionTests {
         model.scenePhaseChanged(active: false, background: true)
 
         await eventually("the session lets go of the lock") { !fixture.lock.isLocked }
+    }
+
+    @Test func leavingTheAppAsUIKitPostsItSuspendsTheSession() async throws {
+        // SwiftUI's scene phase can come after iOS suspended the app, which
+        // kills one holding the lock; UIKit's notification comes before.
+        let fixture = AppModelFixture()
+        let model = fixture.model!
+        let center = NotificationCenter()
+        model.followLifecycle(of: center)
+        try await model.signIn(fixture.credentialsToSignIn)
+        #expect(fixture.lock.isLocked)
+
+        center.post(name: UIApplication.willResignActiveNotification, object: nil)
+        center.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+
+        await eventually("the session lets go of the lock") { !fixture.lock.isLocked }
+    }
+
+    @Test func theSamePhaseFromSwiftUIAfterUIKitChangesNothing() async throws {
+        let fixture = AppModelFixture()
+        let model = fixture.model!
+        let center = NotificationCenter()
+        model.followLifecycle(of: center)
+        try await model.signIn(fixture.credentialsToSignIn)
+        center.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        await eventually("the session lets go of the lock") { !fixture.lock.isLocked }
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        await eventually("it connects again") { fixture.connects.count == 2 }
+
+        model.scenePhaseChanged(active: true, background: false)
+
+        #expect(await stays(for: .milliseconds(300)) { fixture.connects.count == 2 })
     }
 
     @Test func aSignInThatFinishesInTheBackgroundSuspendsTheSession() async throws {

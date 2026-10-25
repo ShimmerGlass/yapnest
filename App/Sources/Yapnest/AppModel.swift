@@ -465,6 +465,8 @@ final class AppModel {
     /// The Mac never suspends apps, so there the session stays connected,
     /// and the app notifies for what arrives while another app is in front.
     func scenePhaseChanged(active: Bool, background: Bool) {
+        // UIKit's notifications and SwiftUI's scene phase both say it.
+        guard active != isActive || background != isBackground else { return }
         isActive = active
         isBackground = background
         DiagLog.info(.app, "Scene phase changed", .bool("active", active), .bool("background", background))
@@ -489,6 +491,28 @@ final class AppModel {
         }
         session.setActive(active)
     }
+
+    /// Follows the app's lifecycle as UIKit posts it. SwiftUI's scene phase
+    /// can reach `onChange` only after the app was suspended, and then the
+    /// session still held the process lock and the database, which iOS kills
+    /// a suspended app for (0xdead10cc). UIKit posts these before it lets the
+    /// app go, so the background task that lets go of them starts in time.
+    func followLifecycle(of center: NotificationCenter = .default) {
+        let phases: [(Notification.Name, active: Bool, background: Bool)] = [
+            (UIApplication.didBecomeActiveNotification, true, false),
+            (UIApplication.willResignActiveNotification, false, false),
+            (UIApplication.didEnterBackgroundNotification, false, true),
+            (UIApplication.willEnterForegroundNotification, false, false),
+        ]
+        lifecycleObservers = phases.map { name, active, background in
+            center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+                // Posted on the main thread, and handled before it returns.
+                MainActor.assumeIsolated { self?.scenePhaseChanged(active: active, background: background) }
+            }
+        }
+    }
+
+    @ObservationIgnored private var lifecycleObservers: [any NSObjectProtocol] = []
 
     /// A session that appears while the app is away missed the transition
     /// `scenePhaseChanged` acts on. Left connected, it would hold the process
