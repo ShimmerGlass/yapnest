@@ -293,6 +293,32 @@ struct ServerBounceTests {
         #expect(after.status == .pending)
     }
 
+    @Test func aPassingBounceInAnExtensionSendsNoneOfTheAppsPendingMessages() throws {
+        let database = try AppDatabase.inMemory()
+        let share = try XMPPSession(credentials: .init(jid: me, password: "x"), resource: "share", database: database, mode: .share)
+        let wire = FakeWire()
+        share.connectForTesting(wire)
+        share.enableAcknowledgementsForTesting()
+        share.lock.withLock { $0.bounceBackoff = 0 }
+        try share.setEncrypted(false, with: alice)
+        let conversation = try #require(try database.conversation(with: alice).id)
+        let theApps = try database.insert(Message(conversationId: conversation, direction: .outgoing, sender: me, body: "from the app", status: .pending, remoteId: "app1"))
+        let sent = try share.send("shared", to: alice)
+        share.drainSendQueue(alice)
+        let stanza = try #require(wire.messages.first { $0.id == sent.remoteId })
+        let count = wire.messages.count
+
+        let bounced: Martin.Message = parseStanza("""
+        <message type='error' from='alice@example.org' to='me@example.org/share' id='\(try #require(stanza.id))'>
+        <error type='wait'><policy-violation xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></message>
+        """)
+        share.handle(bounced, source: .live)
+        share.drainSendQueue(alice)
+
+        #expect(wire.messages.count == count)
+        #expect(!wire.messages.contains { $0.id == theApps.remoteId })
+    }
+
     // MARK: Superseded
 
     @Test func aBounceOfAnOlderEditLeavesTheNewerOneBe() throws {

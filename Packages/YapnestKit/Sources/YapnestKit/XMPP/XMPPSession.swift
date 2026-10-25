@@ -2647,8 +2647,10 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Sends what bounced again, after a wait that doubles each time. Nothing
     /// waits for a second chance to pass otherwise: a session that comes back
-    /// sends it by itself.
+    /// sends it by itself. An extension sends nothing it didn't write itself,
+    /// so it leaves the bounced item pending for the app.
     private func resendAfterBounce(passes: Int) {
+        guard policy.resendsPending else { return }
         let delay = lock.withLock { $0.bounceBackoff } * Double(1 << min(max(passes - 1, 0), 10))
         let resend: @Sendable () -> Void = { [weak self] in
             guard let self, isConnected else { return }
