@@ -11,6 +11,7 @@ final class CallRun: @unchecked Sendable {
     private var tail: Task<Void, Never>?
     private var preparationWaiters: [CheckedContinuation<Void, Never>] = []
     private var timer: Task<Void, Never>?
+    private var connectionTimer: Task<Void, Never>?
     private var closed = false
     private var muted = false
     private var cameraOn = true
@@ -145,6 +146,14 @@ final class CallRun: @unchecked Sendable {
         old?.cancel()
     }
 
+    func setConnectionTimer(_ task: Task<Void, Never>?) {
+        let old = lock.withLock {
+            defer { connectionTimer = task }
+            return connectionTimer
+        }
+        old?.cancel()
+    }
+
     /// A local candidate waits until the session that carries it is sent.
     func localCandidate(_ candidate: CallCandidate, send: (CallCandidate) -> Void) {
         let open = lock.withLock {
@@ -164,11 +173,12 @@ final class CallRun: @unchecked Sendable {
     }
 
     func close() {
-        let (media, timer, tail, prepared) = lock.withLock {
+        let (media, timer, connectionTimer, tail, prepared) = lock.withLock {
             closed = true
-            return (self.media, self.timer, self.tail, self.prepared)
+            return (self.media, self.timer, self.connectionTimer, self.tail, self.prepared)
         }
         timer?.cancel()
+        connectionTimer?.cancel()
         tail?.cancel()
         prepared?.cancel()
         media?.close()

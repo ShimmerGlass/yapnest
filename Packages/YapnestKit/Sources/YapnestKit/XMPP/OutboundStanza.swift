@@ -330,6 +330,15 @@ enum CallMessage: Sendable, Equatable {
     case reject(to: String, reason: CallReason, tieBreak: Bool = false)
     case finish(to: String, reason: CallReason)
 
+    /// Whether it tells the peer a call is over, which is still worth sending
+    /// late. A proposal or an answer isn't.
+    var endsACall: Bool {
+        switch self {
+        case .retract, .reject, .finish: true
+        case .propose, .ringing, .proceed, .accept: false
+        }
+    }
+
     var elementName: String {
         switch self {
         case .propose: "propose"

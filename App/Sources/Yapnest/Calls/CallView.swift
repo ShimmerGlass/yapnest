@@ -335,6 +335,7 @@ struct CallStatus: View {
         case .noAnswer: "No answer"
         case .busy: "Busy"
         case .failed: "Call failed"
+        case .connectionLost: "Connection lost"
         case .completed, .cancelled, .missed, .answeredElsewhere, .dismissed, .tieBreak: "Call ended"
         }
     }

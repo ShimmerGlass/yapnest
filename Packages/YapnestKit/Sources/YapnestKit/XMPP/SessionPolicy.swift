@@ -26,6 +26,10 @@ extension XMPPSession {
         var checksRoomMembership: Bool
         /// Tells contacts when we're typing and the like.
         var sendsChatStates: Bool
+        /// Publishes our OMEMO device list and bundle, and replenishes prekeys.
+        /// Only the app does: the others use the keys it stored, and a publish
+        /// their time limit cut off would leave keys stored and not published.
+        var publishesOMEMOKeys: Bool
         /// Registers with the push relay.
         var registersPush: Bool
         /// Fetches received images unasked.
@@ -49,7 +53,7 @@ extension XMPPSession {
             announcesPresence: true, enablesCarbons: true, reportsClientState: true, reportsInactive: Self.reportsInactiveHere,
             catchesUpOnConnect: true, syncsAccountState: true, prunesContactRequests: true,
             readsRoomHistory: true, checksRoomMembership: true, sendsChatStates: true,
-            registersPush: true, fetchesImages: true, donatesSuggestions: true,
+            publishesOMEMOKeys: true, registersPush: true, fetchesImages: true, donatesSuggestions: true,
             resendsPending: true, verifiesLiveness: true,
         )
 
@@ -59,7 +63,7 @@ extension XMPPSession {
             announcesPresence: false, enablesCarbons: false, reportsClientState: false, reportsInactive: false,
             catchesUpOnConnect: true, syncsAccountState: false, prunesContactRequests: false,
             readsRoomHistory: true, checksRoomMembership: false, sendsChatStates: false,
-            registersPush: false, fetchesImages: false, donatesSuggestions: false,
+            publishesOMEMOKeys: false, registersPush: false, fetchesImages: false, donatesSuggestions: false,
             resendsPending: false, verifiesLiveness: false,
         )
 
@@ -68,7 +72,7 @@ extension XMPPSession {
             announcesPresence: false, enablesCarbons: false, reportsClientState: false, reportsInactive: false,
             catchesUpOnConnect: false, syncsAccountState: false, prunesContactRequests: false,
             readsRoomHistory: false, checksRoomMembership: false, sendsChatStates: false,
-            registersPush: false, fetchesImages: false, donatesSuggestions: false,
+            publishesOMEMOKeys: false, registersPush: false, fetchesImages: false, donatesSuggestions: false,
             resendsPending: false, verifiesLiveness: false,
         )
     }
