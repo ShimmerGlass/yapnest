@@ -123,13 +123,15 @@ extension AppDatabase {
         }
     }
 
-    /// When the newest message with `peer` was sent, to ask a room without
-    /// an archive for what came after.
-    func lastMessageDate(in peer: JID) throws -> Date? {
+    /// When the newest message from someone else in `peer` was sent, to ask a
+    /// room without an archive for what came after. Our own don't count: one
+    /// written offline carries the time it was written, and would skip what
+    /// the room held for us meanwhile.
+    func lastIncomingMessageDate(in peer: JID) throws -> Date? {
         try reader.read { db in
             try Date.fetchOne(db, sql: """
                 SELECT MAX(message.timestamp) FROM message JOIN conversation ON conversation.id = message.conversationId
-                WHERE conversation.peer = ?
+                WHERE conversation.peer = ? AND message.direction = 'incoming'
                 """, arguments: [peer])
         }
     }

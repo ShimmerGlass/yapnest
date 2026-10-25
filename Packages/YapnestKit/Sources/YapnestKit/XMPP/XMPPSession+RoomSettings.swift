@@ -60,7 +60,7 @@ extension XMPPSession {
         // failure would otherwise write over fields we couldn't read.
         var kept: [Element] = []
         do {
-            let current = try await client.context.writer.write(iq: OutboundStanza.vCardRequest(of: room))
+            let current = try await roomRequest(OutboundStanza.vCardRequest(of: room))
             kept = current.firstChild(name: "vCard", xmlns: NS.vcardTemp)?.children ?? []
         } catch let error as XMPPError where error.errorCondition == .item_not_found {
         } catch let error as XMPPError {
@@ -77,7 +77,7 @@ extension XMPPSession {
             card.addChild(photo)
         }
         do {
-            _ = try await client.context.writer.write(iq: OutboundStanza.vCard(card, of: room))
+            _ = try await roomRequest(OutboundStanza.vCard(card, of: room))
         } catch let error as XMPPError {
             throw Self.groupError(error)
         }
@@ -101,7 +101,7 @@ extension XMPPSession {
     /// removed from a group that then stays would only be a lost bookmark.
     public func destroyGroup(_ room: JID, reason: String? = nil) async throws {
         guard try joinedStatus(room).canDestroy else { throw GroupError.notAllowed }
-        _ = try await client.context.writer.write(iq: OutboundStanza.destroy(room, reason: reason))
+        _ = try await roomRequest(OutboundStanza.destroy(room, reason: reason))
         groupDestroyed(room)
     }
 }

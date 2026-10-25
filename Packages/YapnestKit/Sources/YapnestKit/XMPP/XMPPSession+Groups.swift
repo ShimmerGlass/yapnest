@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 @preconcurrency import Martin
+import os
 
 public enum RoomAffiliation: String, Sendable, Hashable {
     case owner, admin, member, none, outcast
@@ -81,6 +82,9 @@ public struct RoomStatus: Hashable, Sendable {
     /// Joining may create the room if it doesn't exist. Not when the user was
     /// invited: an address anyone can send us must not make a room.
     var mayCreate = true
+    /// The room's password, for the joins this visit may need: a retry, a
+    /// nickname change, a rejoin.
+    var password: String?
     var joinedAt = Date()
 
     public var isJoined: Bool { phase == .joined }
@@ -143,6 +147,8 @@ public enum GroupError: Error, LocalizedError {
     case refused(String)
     /// The server couldn't say, for now, so it isn't known whether it can.
     case lookupFailed(ServerError)
+    /// What the group's archive sent couldn't be saved on this device.
+    case notStored
 
     public var errorDescription: String? {
         switch self {
@@ -155,6 +161,7 @@ public enum GroupError: Error, LocalizedError {
         case .unsupported: String(localized: "This group's server doesn't support that.")
         case .refused(let reason): String(localized: "The group refused it: \(reason)")
         case .lookupFailed(let error): error.describe(String(localized: "Couldn't look up your server's group chat service"))
+        case .notStored: String(localized: "Couldn't save the group's history on this device.")
         case .notPrivate: String(localized: "Only private groups, where members see each other's addresses, can be encrypted.")
         }
     }
@@ -315,24 +322,26 @@ extension XMPPSession {
 
     // MARK: Joining
 
-    /// Rejoins every group we're in, after a new session's catch-up.
+    /// Rejoins every group we're in, after a new session's catch-up. Not to
+    /// create them: one destroyed while we were away, whose notice we never
+    /// got, would come back empty and locked.
     func joinRooms() {
         let groups = (try? database.groupChats()) ?? []
         let rooms = Set(groups.map(\.jid))
         lock.withLock { $0.knownRooms = rooms }
         for group in groups where !group.hasLeft {
-            join(group.jid, nickname: group.nickname)
+            join(group.jid, nickname: group.nickname, mayCreate: false)
         }
     }
 
     /// Looks the room up, then enters it. Its archive replaces the history
     /// the room would replay on join.
-    func join(_ room: JID, nickname: String, discover: Bool = true, mayCreate: Bool = true) {
+    func join(_ room: JID, nickname: String, discover: Bool = true, mayCreate: Bool = true, password: String? = nil) {
         guard isConnected else { return }
         var started = false
         updateRoom(room) { status in
             if status?.phase == .joining || status?.phase == .joined { return }
-            status = RoomStatus(phase: .joining, nickname: nickname, mayCreate: mayCreate)
+            status = RoomStatus(phase: .joining, nickname: nickname, mayCreate: mayCreate, password: password)
             started = true
         }
         guard started else { return }
@@ -366,7 +375,7 @@ extension XMPPSession {
     /// and when we're back from a while away.
     private func lookupFailed(_ room: JID, _ error: ServerError) {
         logger.info("Looking up \(room, privacy: .private) failed: \(error.condition, privacy: .private)")
-        let retryable = error.isPassing
+        let retryable = error.isPassing || error.condition == "service-unavailable"
         updateRoom(room) {
             $0?.phase = .failed(error.describe(String(localized: "Couldn't look up the group")))
             $0?.canRetry = retryable
@@ -386,7 +395,7 @@ extension XMPPSession {
         for room in Self.stuckJoins(rooms) {
             guard let status = rooms[room] else { continue }
             updateRoom(room) { $0 = nil }
-            join(room, nickname: status.nickname, mayCreate: status.mayCreate)
+            join(room, nickname: status.nickname, mayCreate: status.mayCreate, password: status.password)
         }
     }
 
@@ -395,11 +404,12 @@ extension XMPPSession {
         let presence = Presence()
         presence.to = room.martin.with(resource: nickname)
         let x = Element(name: "x", xmlns: NS.muc)
+        if let password = roomStatus(room)?.password { x.addChild(Element(name: "password", cdata: password)) }
         let history = Element(name: "history")
         if hasArchive || !policy.readsRoomHistory {
             // Rooms with an archive are read through it; the share extension only writes.
             history.setAttribute("maxstanzas", value: "0")
-        } else if let last = try? database.lastMessageDate(in: room) {
+        } else if let last = try? database.lastIncomingMessageDate(in: room) {
             history.setAttribute("since", value: ISO8601DateFormatter().string(from: last))
         } else {
             history.setAttribute("maxstanzas", value: "50")
@@ -412,7 +422,7 @@ extension XMPPSession {
     /// What asking a room what it is came to.
     enum RoomInfoRead: Sendable {
         case info(hasArchive: Bool)
-        /// The room isn't there, or its server has no such thing.
+        /// The room isn't there.
         case missing
         /// Any other failure: a timeout says nothing of the room.
         case failed(ServerError)
@@ -445,8 +455,10 @@ extension XMPPSession {
                 self.roomInfoChanged(room, from: before)
                 done?(.info(hasArchive: features.contains("urn:xmpp:mam:2")))
             case .failure(let error):
+                // A component that is down or restarting answers service-unavailable
+                // too, so only a room that isn't there (or is gone) is missing.
                 let error = ServerError.classify(error)
-                done?(error.isNotFound || error.isUnsupported ? .missing : .failed(error))
+                done?(error.isNotFound || error.condition == "gone" ? .missing : .failed(error))
             }
         })
     }
@@ -508,7 +520,11 @@ extension XMPPSession {
                 groupDestroyed(room)
                 return
             }
-            if isSelf, !statuses.contains(303) {
+            // Servers have left out the status that says it is about us. Nicknames
+            // are unique in a room, so a removal under ours is ours; a plain
+            // leave isn't, as another device of ours may be the one leaving.
+            let isRemovalOfUs = nick == status.nickname && !statuses.isDisjoint(with: Self.removalStatuses)
+            if isSelf || isRemovalOfUs, !statuses.contains(303) {
                 removedFromRoom(room, presence: presence, statuses: statuses)
                 return
             }
@@ -525,6 +541,11 @@ extension XMPPSession {
                     if isSelf { status?.nickname = newNick }
                 }
             }
+            return
+        }
+
+        if isSelf, statuses.contains(201), !status.mayCreate {
+            roomWasRecreated(room)
             return
         }
 
@@ -599,8 +620,9 @@ extension XMPPSession {
                 guard let self, Self.selfPingResult(result) == .notJoined,
                       self.roomStatus(room)?.isJoined == true, self.roomStatus(room)?.nickname == nickname else { return }
                 self.logger.info("No longer in \(room, privacy: .private); joining again")
+                let password = self.roomStatus(room)?.password
                 self.updateRoom(room) { $0 = nil }
-                self.join(room, nickname: (try? self.database.groupChat(room))??.nickname ?? nickname)
+                self.join(room, nickname: (try? self.database.groupChat(room))??.nickname ?? nickname, mayCreate: false, password: password)
             }
         }
     }
@@ -614,10 +636,14 @@ extension XMPPSession {
         return ["remote-server-timeout", "remote-server-not-found", "internal-server-error", "resource-constraint"].contains(condition)
     }
 
-    /// Only a restart of the room's service (332) is temporary. A kick (307)
-    /// is a moderator's decision, so coming straight back would be rude.
+    /// The statuses that say an occupant was taken out of the room (XEP-0045 §8).
+    static let removalStatuses: Set<Int> = [301, 307, 321, 322, 332, 333]
+
+    /// Only a restart of the room's service (332) or a technical failure
+    /// on the way to it (333) is temporary. A kick (307) is a moderator's
+    /// decision, so coming straight back would be rude.
     static func isRetryable(removalStatuses statuses: Set<Int>) -> Bool {
-        statuses.contains(332)
+        !statuses.isDisjoint(with: [332, 333])
     }
 
     /// Seconds to wait before the `attempt`th (from 0) automatic rejoin, up to
@@ -685,7 +711,7 @@ extension XMPPSession {
         logger.info("Joining \(room, privacy: .private) again")
         lock.withLock { _ = $0.rejoinTasks.removeValue(forKey: room) }
         updateRoom(room) { $0 = nil }
-        join(room, nickname: group.nickname)
+        join(room, nickname: group.nickname, mayCreate: false, password: status.password)
     }
 
     private func joinFailed(_ room: JID, presence: Presence, status: RoomStatus) {
@@ -743,6 +769,8 @@ extension XMPPSession {
             String(localized: "You were removed from this group for now.")
         } else if statuses.contains(332) {
             String(localized: "The group's server is restarting.")
+        } else if statuses.contains(333) {
+            String(localized: "The connection to the group was lost.")
         } else {
             String(localized: "You're no longer in this group.")
         }
@@ -757,6 +785,34 @@ extension XMPPSession {
             try? database.updateGroupChat(room) { $0.hasLeft = true }
             retractBookmark(room)
         }
+    }
+
+    /// A join that wasn't meant to create the room did: it was destroyed while
+    /// we were away, and a room made now would stay locked, empty, with us as
+    /// its owner. Cancelling the configuration (§10.1.3) destroys it again.
+    private func roomWasRecreated(_ room: JID) {
+        logger.warning("Joining \(room, privacy: .private) created it; cancelling")
+        updateRoom(room) {
+            $0?.phase = .failed(String(localized: "This group doesn't exist."))
+            $0?.canRetry = false
+        }
+        cancelRejoin(room, resettingBackoff: true)
+        let iq = Iq()
+        iq.type = .set
+        iq.to = Martin.JID(room.martin)
+        let query = Element(name: "query", xmlns: NS.mucOwner)
+        let cancel = Element(name: "x", xmlns: NS.dataForms)
+        cancel.setAttribute("type", value: "cancel")
+        query.addChild(cancel)
+        iq.addChild(query)
+        client.context.writer.write(iq, completionHandler: { [weak self] result in
+            // The room is gone from our side either way; one that stays is
+            // an empty locked room under a name nobody has, and nothing for
+            // the user to act on.
+            if case .failure(let error) = result {
+                self?.logger.warning("Couldn't cancel the room \(room, privacy: .private) a join created: \(ServerError.classify(error).condition, privacy: .private)")
+            }
+        })
     }
 
     /// The room is gone for good, whether the room said so or we asked for
@@ -813,18 +869,65 @@ extension XMPPSession {
 
     /// Members not present right now still need to read what we encrypt.
     /// Not every room lets members see the list; occupants' addresses still
-    /// count when it doesn't.
+    /// count when it doesn't. `done` runs once every list has been asked for,
+    /// whether or not they came: the room is usable meanwhile, and the user
+    /// is warned that encrypted messages may miss members.
     func fetchMembers(_ room: JID, lists: [RoomAffiliation], then done: (@Sendable () -> Void)? = nil) {
-        let pending = DispatchGroup()
-        defer { if let done { pending.notify(queue: .global(), execute: done) } }
-        for affiliation in lists {
-            pending.enter()
-            client.context.writer.write(OutboundStanza.affiliationList(affiliation, of: room)) { [weak self] result in
-                defer { pending.leave() }
-                guard case .success(let response) = result else { return }
-                self?.listReceived(affiliation, in: room, response)
+        Task { [weak self] in
+            await self?.fetchMembersWarning(room, lists: lists)
+            done?()
+        }
+    }
+
+    private func fetchMembersWarning(_ room: JID, lists: [RoomAffiliation]) async {
+        let attempt = lock.withLock { $0.attempt }
+        let key = "room-members:\(room)"
+        let members = lists.filter(Self.memberLists.contains)
+        // The ban list is only for the admins' screen, which asks for it again
+        // and shows what goes wrong.
+        let others = lists.filter { !Self.memberLists.contains($0) }
+        if !others.isEmpty { try? await requestLists(others, of: room) }
+        guard !members.isEmpty else { return }
+        do {
+            try await requestLists(members, of: room)
+            warnings.clear(key)
+        } catch {
+            // A dropped connection is redone by the next session.
+            guard isConnected, lock.withLock({ $0.attempt }) == attempt else { return }
+            let reason = ServerError.classify(error)
+            logger.warning("Couldn't list the members of \(room, privacy: .private): \(reason.condition, privacy: .private)")
+            // A room that doesn't show its list to members forbids it: that is
+            // the room's setting, and the occupants' addresses stand in.
+            guard reason.condition != "forbidden" else { return }
+            warnings.post(
+                key, title: String(localized: "Encrypted messages may not reach all members"),
+                friendly: String(localized: "A group's members couldn't be listed, so encrypted messages may not reach all of them"), error: error,
+            ) { [weak self] in
+                try await self?.requestLists(members, of: room)
             }
         }
+    }
+
+    /// Asks for each list, all of them even when one fails, and throws the
+    /// first failure.
+    private func requestLists(_ lists: [RoomAffiliation], of room: JID) async throws {
+        let failure = await withTaskGroup(of: Error?.self) { group in
+            for affiliation in lists {
+                group.addTask { [self] in
+                    do {
+                        let response = try await retryingPassingErrors { try await client.context.writer.write(iq: OutboundStanza.affiliationList(affiliation, of: room)) }
+                        listReceived(affiliation, in: room, response)
+                        return nil
+                    } catch {
+                        return error
+                    }
+                }
+            }
+            var first: Error?
+            for await error in group { first = first ?? error }
+            return first
+        }
+        if let failure { throw failure }
     }
 
     func listReceived(_ affiliation: RoomAffiliation, in room: JID, _ response: Iq) {
@@ -895,26 +998,131 @@ extension XMPPSession {
             let stored = self.flushArchive(query: queryId)
             guard self.roomCatchUpMayProceed(room, visit) else { return }
             switch result {
-            case .success where !stored:
-                // Going on would move the cursor past the page that was lost.
-                self.finishRoomCatchUp(room, visit, reachedEnd: false)
-            case .success(let page):
-                if let last = page.rsm?.last {
-                    try? self.database.updateGroupChat(room) { $0.lastArchiveId = last }
-                }
-                if onePage || page.complete || page.rsm?.last == nil {
-                    self.finishRoomCatchUp(room, visit, reachedEnd: true)
-                } else {
-                    self.fetchRoomArchivePage(room, rsm: RSM.Query(after: page.rsm?.last, max: 100), visit)
-                }
-            case .failure(.item_not_found):
-                try? self.database.updateGroupChat(room) { $0.lastArchiveId = nil }
-                self.fetchRoomArchivePage(room, rsm: RSM.Query(lastItems: 50), visit, onePage: true)
-            case .failure(let error):
-                self.logger.error("Archive sync of \(room, privacy: .private) failed: \(error)")
-                self.finishRoomCatchUp(room, visit, reachedEnd: false)
+            case .success(let page): self.roomArchivePageRead(room, page, stored: stored, visit, onePage: onePage)
+            case .failure(let error): self.roomArchivePageFailed(room, rsm: rsm, error, visit, onePage: onePage)
             }
         }
+    }
+
+    private func roomArchivePageRead(
+        _ room: JID, _ page: MessageArchiveManagementModule.QueryResult, stored: Bool, _ visit: RoomCatchUp, onePage: Bool,
+    ) {
+        guard stored else {
+            // Going on would move the cursor past the page that was lost.
+            finishRoomCatchUp(room, visit, reachedEnd: false)
+            return
+        }
+        if let last = page.rsm?.last {
+            try? database.updateGroupChat(room) { $0.lastArchiveId = last }
+        }
+        if onePage || page.complete || page.rsm?.last == nil {
+            finishRoomCatchUp(room, visit, reachedEnd: true)
+        } else {
+            fetchRoomArchivePage(room, rsm: RSM.Query(after: page.rsm?.last, max: 100), visit)
+        }
+    }
+
+    /// A page that failed is asked for again while the error can pass. One
+    /// that doesn't ends the catch-up with the cursor where the last page left
+    /// it, so what the room sends live doesn't move it past the gap, and the
+    /// user is told that messages may be missing.
+    private func roomArchivePageFailed(_ room: JID, rsm: RSM.Query, _ error: XMPPError, _ visit: RoomCatchUp, onePage: Bool) {
+        // An archive that no longer knows our cursor is read from its newest
+        // page. Not when it was the newest page that failed: asking for it
+        // again would never end.
+        if case .item_not_found = error, hasArchiveCursor(room) {
+            try? database.updateGroupChat(room) { $0.lastArchiveId = nil }
+            fetchRoomArchivePage(room, rsm: RSM.Query(lastItems: 50), visit, onePage: true)
+            return
+        }
+        guard ServerRetry.isPassing(error) else {
+            archiveGaveUp(room, error, visit)
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            // The failure that brought us here is the first attempt.
+            var first: Error? = error
+            do {
+                let read = try await retryingPassingErrors {
+                    if let earlier = first {
+                        first = nil
+                        throw earlier
+                    }
+                    return try await queryRoomArchive(room, rsm)
+                }
+                guard roomCatchUpMayProceed(room, visit) else { return }
+                roomArchivePageRead(room, read.page, stored: read.stored, visit, onePage: onePage)
+            } catch {
+                guard roomCatchUpMayProceed(room, visit) else { return }
+                archiveGaveUp(room, error, visit)
+            }
+        }
+    }
+
+    private func archiveGaveUp(_ room: JID, _ error: Error, _ visit: RoomCatchUp) {
+        logger.error("Archive sync of \(room, privacy: .private) failed: \(error)")
+        warnOfMissingHistory(room, error)
+        finishRoomCatchUp(room, visit, reachedEnd: false)
+    }
+
+    private func hasArchiveCursor(_ room: JID) -> Bool {
+        ((try? database.groupChat(room)) ?? nil)?.lastArchiveId != nil
+    }
+
+    /// A page of a room's archive, and whether what it carried was stored.
+    private struct ArchivePage: @unchecked Sendable {
+        var page: MessageArchiveManagementModule.QueryResult
+        var stored: Bool
+    }
+
+    private func queryRoomArchive(_ room: JID, _ rsm: RSM.Query) async throws -> ArchivePage {
+        let queryId = UUID().uuidString
+        return try await withCheckedThrowingContinuation { continuation in
+            client.module(.mam).queryItems(version: .MAM2, componentJid: Martin.JID(room.martin), queryId: queryId, rsm: rsm) { [weak self] result in
+                let stored = self?.flushArchive(query: queryId) ?? true
+                switch result {
+                case .success(let page): continuation.resume(returning: ArchivePage(page: page, stored: stored))
+                case .failure(let error): continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func warnOfMissingHistory(_ room: JID, _ error: Error) {
+        warnings.post(
+            "room-history:\(room)", title: String(localized: "Some messages may be missing"),
+            friendly: String(localized: "A group's earlier messages couldn't be fetched"), error: error,
+        ) { [weak self] in
+            try await self?.readRoomArchiveAgain(room)
+        }
+    }
+
+    /// Reads on from the cursor to the end of the room's archive, for the
+    /// warning's Retry, and clears the warning once it has.
+    private func readRoomArchiveAgain(_ room: JID) async throws {
+        guard isConnected, roomStatus(room)?.isJoined == true, let group = try database.groupChat(room) else { throw GroupError.notConnected }
+        omemo.module.mamSyncStarted(for: room.martin)
+        defer { omemo.module.mamSyncFinished(for: room.martin) }
+        var rsm = group.lastArchiveId.map { RSM.Query(after: $0, max: 100) } ?? RSM.Query(lastItems: 50)
+        var onePage = group.lastArchiveId == nil
+        while true {
+            let page: MessageArchiveManagementModule.QueryResult
+            do {
+                let read = try await retryingPassingErrors { try await queryRoomArchive(room, rsm) }
+                guard read.stored else { throw GroupError.notStored }
+                page = read.page
+            } catch XMPPError.item_not_found where hasArchiveCursor(room) {
+                try database.updateGroupChat(room) { $0.lastArchiveId = nil }
+                rsm = RSM.Query(lastItems: 50)
+                onePage = true
+                continue
+            }
+            if let last = page.rsm?.last { try database.updateGroupChat(room) { $0.lastArchiveId = last } }
+            if onePage || page.complete || page.rsm?.last == nil { break }
+            rsm = RSM.Query(after: page.rsm?.last, max: 100)
+        }
+        updateRoom(room) { $0?.catchUpReachedEnd = true }
     }
 
     /// For the notification extension: what arrived in our groups since we
@@ -1171,6 +1379,8 @@ extension XMPPSession {
         /// Sent by the inviter (XEP-0249), rather than relayed by the room.
         let isDirect: Bool
         var reason: String?
+        /// The room's password, which the inviter sent along (XEP-0249, XEP-0045 §7.8).
+        var password: String?
     }
 
     /// What `stanza` invites us to, or nil if it isn't a usable invitation.
@@ -1181,14 +1391,19 @@ extension XMPPSession {
         if let direct = stanza.firstChild(name: "x", xmlns: NS.conference) {
             guard let room = direct.getAttribute("jid").flatMap(JID.init(_:)), room.localPart != nil,
                   let inviter = stanza.from.flatMap({ JID($0) }) else { return nil }
-            return Invitation(room: room, inviter: inviter, isDirect: true)
+            return Invitation(room: room, inviter: inviter, isDirect: true, password: Self.nonEmpty(direct.getAttribute("password")))
         }
         guard let invite = stanza.firstChild(name: "x", xmlns: NS.mucUser)?.firstChild(name: "invite"),
               let from = stanza.from, from.resource == nil,
               let room = JID(from), room.localPart != nil,
               let inviter = invite.getAttribute("from").flatMap(JID.init(_:)) else { return nil }
         let reason = invite.firstChild(name: "reason")?.value.flatMap { $0.isEmpty ? nil : $0 }
-        return Invitation(room: room, inviter: inviter, isDirect: false, reason: reason)
+        let password = stanza.firstChild(name: "x", xmlns: NS.mucUser)?.firstChild(name: "password")?.value
+        return Invitation(room: room, inviter: inviter, isDirect: false, reason: reason, password: Self.nonEmpty(password))
+    }
+
+    private static func nonEmpty(_ text: String?) -> String? {
+        text.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// Joins groups our contacts invite us to, unless a room relayed the
@@ -1234,7 +1449,7 @@ extension XMPPSession {
                     logger.info("Ignoring invitation to \(room, privacy: .private), which isn't a group chat")
                     return
                 }
-                try await joinGroup(room, mayCreate: false)
+                try await joinGroup(room, mayCreate: false, password: invitation.password)
             } catch {
                 logger.warning("Couldn't accept invitation to \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
             }
@@ -1370,7 +1585,7 @@ extension XMPPSession {
             if group == nil || group?.hasLeft == true {
                 guard let joined = try? joinBookmarked(bookmark, existing: group) else { return }
                 reloadKnownRooms()
-                join(joined.jid, nickname: joined.nickname)
+                join(joined.jid, nickname: joined.nickname, mayCreate: false)
             }
             applyBookmarkFields(bookmark)
         case .published(let bookmark):
@@ -1447,7 +1662,13 @@ extension XMPPSession {
     /// Joins the group at `room`, which must let us in, and adds it to our
     /// bookmarks. Throws if the room refuses.
     /// `mayCreate` is false for a room we were invited to, which has to exist.
-    public func joinGroup(_ room: JID, nickname: String? = nil, mayCreate: Bool = true) async throws {
+    public func joinGroup(_ room: JID, nickname: String? = nil, mayCreate: Bool = true, password: String? = nil) async throws {
+        try await joinGroup(room, nickname: nickname, mayCreate: mayCreate, password: password, timeout: Self.joinTimeout)
+    }
+
+    static let joinTimeout: TimeInterval = 30
+
+    func joinGroup(_ room: JID, nickname: String?, mayCreate: Bool, password: String?, timeout: TimeInterval) async throws {
         guard isConnected else { throw GroupError.notConnected }
         if let status = roomStatus(room), status.isJoined {
             try database.removeGroupInvitation(room)
@@ -1458,10 +1679,11 @@ extension XMPPSession {
         let group = try database.joinGroupChat(room, nickname: nickname)
         reloadKnownRooms()
         if roomStatus(room) != nil { updateRoom(room) { $0 = nil } }
-        join(room, nickname: nickname, mayCreate: mayCreate)
+        join(room, nickname: nickname, mayCreate: mayCreate, password: password)
         do {
-            _ = try await waitForRoom(room)
+            _ = try await waitForRoom(room, timeout: timeout)
         } catch {
+            withdrawJoin(room)
             if existing == nil {
                 try? deleteConversation(id: group.conversationId)
             } else {
@@ -1517,6 +1739,11 @@ extension XMPPSession {
 
     /// Creates a private group (members only, members see each other's
     /// addresses, archived), as OMEMO needs, and invites `invitees`.
+    ///
+    /// A failure before the group is set up leaves nothing of it behind, here
+    /// or on the server, so trying again makes one group. Once it is set up
+    /// it exists: a failure to invite is reported as a warning with Retry
+    /// instead, as an error would make the user create it twice.
     public func createGroup(name: String, inviting invitees: [JID]) async throws -> JID {
         guard isConnected else { throw GroupError.notConnected }
         let service = try await mucService()
@@ -1524,38 +1751,79 @@ extension XMPPSession {
         let local = String((0..<12).map { _ in alphabet.randomElement()! })
         guard let room = JID("\(local)@\(service)") else { throw GroupError.noService }
 
-        try database.joinGroupChat(room, nickname: defaultNickname, name: name)
+        let group = try database.joinGroupChat(room, nickname: defaultNickname, name: name)
         reloadKnownRooms()
         join(room, nickname: defaultNickname, discover: false)
-        let status = try await waitForRoom(room)
-        if status.wasCreated { try await configurePrivateRoom(room, name: name) }
+        do {
+            let status = try await waitForRoom(room)
+            if status.wasCreated {
+                do {
+                    try await configurePrivateRoom(room, name: name)
+                } catch {
+                    // The room stays locked until it is configured, and nobody
+                    // else can enter. It is ours and empty, so it goes.
+                    await destroyUnfinishedRoom(room)
+                    throw error
+                }
+            }
+        } catch {
+            withdrawJoin(room)
+            try? deleteConversation(id: group.conversationId)
+            reloadKnownRooms()
+            updateRoom(room) { $0 = nil }
+            throw error
+        }
         if let hasArchive = await refreshedRoomInfo(room) { updateRoom(room) { $0?.hasArchive = hasArchive } }
         if let group = try database.groupChat(room) { publishBookmark(group) }
-        if !invitees.isEmpty { try await invite(invitees, to: room) }
+        if !invitees.isEmpty {
+            do {
+                try await invite(invitees, to: room)
+            } catch {
+                warnOfUnsentInvitations(invitees, to: room, error)
+            }
+        }
         return room
+    }
+
+    private func destroyUnfinishedRoom(_ room: JID) async {
+        do {
+            _ = try await client.context.writer.write(iq: OutboundStanza.destroy(room, reason: nil))
+        } catch {
+            // The creation fails with the error that led here, which the user
+            // sees. A room we couldn't remove is an empty locked one under a
+            // name nobody has, and trying again makes a new one.
+            logger.warning("Couldn't destroy the unfinished room \(room, privacy: .private): \(ServerError.classify(error).condition, privacy: .private)")
+        }
+    }
+
+    private func warnOfUnsentInvitations(_ invitees: [JID], to room: JID, _ error: Error) {
+        let lead = String(localized: "The group was created, but inviting to it failed")
+        let detail = ServerError.isFromServer(error) ? ServerError.classify(error).describe(lead) : "\(lead): \(error.localizedDescription)"
+        warnings.post("room-invite:\(room)", title: String(localized: "Invitations not sent"), detail: detail) { [weak self] in
+            try await self?.invite(invitees, to: room)
+        }
     }
 
     /// Adds `invitees` to the group. Owners and admins make them members and
     /// invite them directly; others ask the room to invite them.
     public func invite(_ invitees: [JID], to room: JID) async throws {
+        try await invite(invitees, to: room, grace: Self.inviteGrace)
+    }
+
+    /// How long a room has to bounce a mediated invitation before it counts as accepted.
+    static let inviteGrace: TimeInterval = 3
+
+    func invite(_ invitees: [JID], to room: JID, grace: TimeInterval) async throws {
         if try joinedStatus(room).isOwnerOrAdmin {
             // One request each: Prosody only applies the first item of a request.
             for invitee in invitees {
-                _ = try await client.context.writer.write(iq: OutboundStanza.affiliation(.member, of: invitee, in: room))
+                _ = try await roomRequest(OutboundStanza.affiliation(.member, of: invitee, in: room))
             }
             updateRoom(room) { status in
                 for invitee in invitees { status?.setAffiliation(.member, of: invitee) }
             }
         } else {
-            let message = Martin.Message()
-            message.to = Martin.JID(room.martin)
-            message.id = OutboundStanza.newId()
-            let x = Element(name: "x", xmlns: NS.mucUser)
-            for invitee in invitees {
-                x.addChild(Element(name: "invite", attributes: ["to": invitee.description]))
-            }
-            message.addChild(x)
-            write(message)
+            try await askRoomToInvite(invitees, to: room, grace: grace)
         }
         // For the relayed branch this is a direct invitation too: the relayed
         // one names us only on the room's word, which clients like ours trust
@@ -1563,6 +1831,60 @@ extension XMPPSession {
         // room lets them in.
         for invitee in invitees { write(OutboundStanza.invitation(to: invitee, room: room)) }
     }
+
+    /// Sends the room's own kind of invitation, and returns once it has taken
+    /// it. A room answers no invitation it accepts, so that is when it has
+    /// had the stream's acknowledgement and `grace` after it without bouncing
+    /// the message with an error (forbidden, say, if invitations are off).
+    private func askRoomToInvite(_ invitees: [JID], to room: JID, grace: TimeInterval) async throws {
+        let message = Martin.Message()
+        message.to = Martin.JID(room.martin)
+        let id = OutboundStanza.newId()
+        message.id = id
+        let x = Element(name: "x", xmlns: NS.mucUser)
+        for invitee in invitees {
+            x.addChild(Element(name: "invite", attributes: ["to": invitee.description]))
+        }
+        message.addChild(x)
+
+        let (bounces, bounced) = AsyncStream.makeStream(of: ServerError.self)
+        expectBounce(
+            of: id, key: .message(id), peer: room,
+            release: {},
+            // The router doesn't pass on what a bounce that may pass said.
+            repend: { bounced.yield(ServerError(condition: "remote-server-timeout", type: .wait)) },
+            fail: { bounced.yield($0) },
+        )
+        let (acknowledgements, acknowledged) = AsyncStream.makeStream(of: Void.self)
+        let subscription = client.module(.streamManagement).ackedStanzas
+            .filter { $0.id == id }
+            .sink { _ in acknowledged.yield() }
+        defer {
+            subscription.cancel()
+            acknowledged.finish()
+            bounced.finish()
+        }
+        guard writeAwaitingHandOver(message) else { throw GroupError.notConnected }
+        if client.modulesManager.moduleOrNil(.streamManagement)?.ackEnabled == true {
+            requestAcknowledgement()
+            // No acknowledgement in time means a slow server, not a refusal.
+            try? await withTimeout(Self.inviteAcknowledgementTimeout) {
+                for await _ in acknowledgements { return }
+            }
+        } else {
+            // Without stream management the reply to a ping, which is answered
+            // after what came before it, stands in.
+            await withCheckedContinuation { continuation in
+                client.module(.ping).ping(Martin.JID(account.martin), timeout: Self.inviteAcknowledgementTimeout) { _ in continuation.resume() }
+            }
+        }
+        // A bounce that came meanwhile is waiting in the stream.
+        let refusal = try? await withTimeout(grace) { await bounces.first { _ in true } }
+        guard isConnected else { throw GroupError.notConnected }
+        if let refusal { throw refusal }
+    }
+
+    static let inviteAcknowledgementTimeout: TimeInterval = 10
 
     /// Changes which of the group's messages notify, on all our devices.
     public func setNotify(_ notify: GroupChat.Notify, in room: JID) throws {
@@ -1598,8 +1920,8 @@ extension XMPPSession {
                 switch result {
                 case .success:
                     continuation.resume()
-                // There was no bookmark to remove.
-                case .failure(let error) where error.error == .item_not_found:
+                // There was no bookmark to remove, or the server keeps none.
+                case .failure(let error) where Self.hasNoBookmarkToRemove(error):
                     continuation.resume()
                 case .failure(let error):
                     self?.logger.warning("Couldn't remove bookmark for \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
@@ -1610,13 +1932,15 @@ extension XMPPSession {
         try? database.updateGroupChat(room) { $0.isBookmarked = false }
     }
 
-    func leaveRoom(_ room: JID) {
-        if let status = roomStatus(room), status.isJoined {
-            let presence = Presence()
-            presence.type = .unavailable
-            presence.to = room.martin.with(resource: status.nickname)
-            write(presence)
+    private static func hasNoBookmarkToRemove(_ error: PubSubError) -> Bool {
+        switch NodeRead(error) {
+        case .noNode, .unsupported: true
+        case .items, .failed: false
         }
+    }
+
+    func leaveRoom(_ room: JID) {
+        withdrawJoin(room)
         cancelRejoin(room, resettingBackoff: true)
         updateRoom(room) { $0 = nil }
         dropDeferred(in: room)
@@ -1624,20 +1948,29 @@ extension XMPPSession {
         ShareSuggestions.remove([room])
     }
 
+    /// Tells the room we're gone, if we're in it or may be: a join that is
+    /// still waiting can be accepted after we gave up on it, which would leave
+    /// us in the room as an occupant nothing reads from.
+    private func withdrawJoin(_ room: JID) {
+        guard let status = roomStatus(room), status.isJoined || status.phase == .joining else { return }
+        let presence = Presence()
+        presence.type = .unavailable
+        presence.to = room.martin.with(resource: status.nickname)
+        write(presence)
+    }
+
     /// What a room answered to a subject change.
     enum SubjectOutcome: Sendable {
         /// Its echo of a change, from the occupant who made it.
         case changed(room: JID, subject: String)
-        case failed(room: JID, id: String, GroupError)
+        case failed(room: JID, id: String, ServerError)
     }
 
     /// Tells a waiting `setSubject` how the room answered.
     private func reportSubjectOutcome(of stanza: Martin.Message, in room: JID) {
         if stanza.type == .error {
             guard let id = stanza.id else { return }
-            let condition = ServerError(stanza.element)?.condition
-            let error: GroupError = ["forbidden", "not-allowed"].contains(condition) ? .notAllowed : .refused(condition ?? "error")
-            subjectOutcomes.send(.failed(room: room, id: id, error))
+            subjectOutcomes.send(.failed(room: room, id: id, ServerError.bounce(of: stanza)))
         } else if stanza.type == .groupchat, stanza.body == nil, let subject = stanza.firstChild(name: "subject"),
                   stanza.from?.resource == roomStatus(room)?.nickname {
             subjectOutcomes.send(.changed(room: room, subject: subject.value ?? ""))
@@ -1649,6 +1982,14 @@ extension XMPPSession {
     /// participants if it lets them (`RoomStatus.canChangeSubject`).
     public func setSubject(_ subject: String, in room: JID) async throws {
         _ = try joinedStatus(room)
+        do {
+            try await retryingPassingErrors { try await sendSubject(subject, in: room) }
+        } catch let error as ServerError where ["forbidden", "not-allowed"].contains(error.condition) {
+            throw GroupError.notAllowed
+        }
+    }
+
+    private func sendSubject(_ subject: String, in room: JID) async throws {
         let message = Martin.Message()
         message.to = Martin.JID(room.martin)
         message.type = .groupchat
@@ -1662,7 +2003,7 @@ extension XMPPSession {
             subscription.cancel()
             continuation.finish()
         }
-        write(message)
+        guard writeAwaitingHandOver(message) else { throw GroupError.notConnected }
         do {
             try await withTimeout(Self.subjectTimeout) {
                 for await outcome in outcomes {
@@ -1751,11 +2092,11 @@ extension XMPPSession {
 
     /// The configuration form the room offers its owner.
     func ownerForm(of room: JID) async throws -> Element? {
-        let response = try await client.context.writer.write(iq: OutboundStanza.configurationRequest(of: room))
+        let response = try await roomRequest(OutboundStanza.configurationRequest(of: room))
         return response.firstChild(name: "query", xmlns: NS.mucOwner)?.firstChild(name: "x", xmlns: NS.dataForms)
     }
 
     func submitOwnerForm(_ fields: [String: [String]], to room: JID) async throws {
-        _ = try await client.context.writer.write(iq: OutboundStanza.configuration(fields, of: room))
+        _ = try await roomRequest(OutboundStanza.configuration(fields, of: room))
     }
 }
