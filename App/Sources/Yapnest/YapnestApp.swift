@@ -5,7 +5,6 @@ import YapnestKit
 @main
 struct YapnestApp: App {
     @UIApplicationDelegateAdaptor private var delegate: AppDelegate
-    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         #if DEBUG
@@ -60,9 +59,6 @@ struct YapnestApp: App {
             }
             .task {
                 if !AppModel.isHostingTests { delegate.model.start() }
-            }
-            .onChange(of: scenePhase) { _, phase in
-                delegate.model.scenePhaseChanged(active: phase == .active, background: phase == .background)
             }
             // Room for the chat list beside a conversation.
             .minimumWindowSize(CGSize(width: 760, height: 520))

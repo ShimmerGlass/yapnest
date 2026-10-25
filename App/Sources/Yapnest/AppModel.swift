@@ -465,7 +465,6 @@ final class AppModel {
     /// The Mac never suspends apps, so there the session stays connected,
     /// and the app notifies for what arrives while another app is in front.
     func scenePhaseChanged(active: Bool, background: Bool) {
-        // UIKit's notifications and SwiftUI's scene phase both say it.
         guard active != isActive || background != isBackground else { return }
         isActive = active
         isBackground = background
@@ -492,10 +491,14 @@ final class AppModel {
         session.setActive(active)
     }
 
-    /// Follows the app's lifecycle as UIKit posts it. SwiftUI's scene phase
-    /// can reach `onChange` only after the app was suspended, and then the
-    /// session still held the process lock and the database, which iOS kills
-    /// a suspended app for (0xdead10cc). UIKit posts these before it lets the
+    /// Follows the app's lifecycle as UIKit posts it, and only that: it is the
+    /// one source of `scenePhaseChanged`. SwiftUI's scene phase can reach
+    /// `onChange` only after the app was suspended, in no fixed order with
+    /// UIKit's, so a late background from it after UIKit's foreground would
+    /// suspend a session that is on screen. The Mac posts the same
+    /// notifications. Also, a session left to SwiftUI's phase still held the
+    /// process lock and the database when the app was suspended, which iOS
+    /// kills an app for (0xdead10cc). UIKit posts these before it lets the
     /// app go, so the background task that lets go of them starts in time.
     func followLifecycle(of center: NotificationCenter = .default) {
         let phases: [(Notification.Name, active: Bool, background: Bool)] = [

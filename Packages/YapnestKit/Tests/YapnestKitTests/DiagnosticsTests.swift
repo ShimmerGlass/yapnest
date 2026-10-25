@@ -162,6 +162,20 @@ struct DiagnosticsTests {
         #expect(!xmpp.rendered.contains("bob"))
     }
 
+    @Test func exportLeavesOutLinesWrittenBeforeTheLogsWereCoarsened() throws {
+        let dir = makeDirectory()
+        let store = DiagnosticsStore(directory: dir, process: .app, flushInterval: 60)
+        let old = "2026-10-25T13:37:46.123Z I send Uploaded bytes=123456 port=35222\n"
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(old.utf8).write(to: dir.appending(path: "app.old.log"))
+        store.append(date: Date(timeIntervalSince1970: 1_800_000_000), category: .app, level: .info, text: "now")
+        let url = try DiagnosticsExport.make(store: store)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(!text.contains("123456"))
+        #expect(!text.contains(".123Z"))
+        #expect(text.contains("now"))
+    }
+
     @Test func exportHoldsNoIdentifiersOrBodies() throws {
         struct LeakyError: LocalizedError {
             var errorDescription: String? { "failed for alice@secret.example in room Secret Room" }

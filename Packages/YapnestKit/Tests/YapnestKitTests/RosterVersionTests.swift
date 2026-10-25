@@ -42,10 +42,31 @@ import Testing
         #expect(sentVersion() == .some(""))
     }
 
-    @Test func anAnswerWithoutItemsToAVersionedRequestRemovesNothing() async throws {
+    private static func emptyQuery(version: String?) -> Element {
+        let query = Element(name: "query", xmlns: "jabber:iq:roster")
+        if let version { query.attribute("ver", newValue: version) }
+        return query
+    }
+
+    @Test func anAnswerWithoutItemsAndWithTheVersionWeSentRemovesNothing() async throws {
         keep("bob@localhost")
         store.set(version: "42", for: client)
-        try await fetch { FakeWire.result(to: $0, Element(name: "query", xmlns: "jabber:iq:roster")) }
+        try await fetch { FakeWire.result(to: $0, Self.emptyQuery(version: "42")) }
+        #expect(store.items(for: client).map(\.jid) == [JID("bob@localhost")])
+    }
+
+    @Test func aNewVersionWithoutItemsIsTheEmptyRosterAndRemovesTheContacts() async throws {
+        keep("bob@localhost")
+        store.set(version: "42", for: client)
+        try await fetch { FakeWire.result(to: $0, Self.emptyQuery(version: "43")) }
+        #expect(store.items(for: client).isEmpty)
+        #expect(store.version(for: client) == "43")
+    }
+
+    @Test func aResultWithoutAQueryChangesNothing() async throws {
+        keep("bob@localhost")
+        store.set(version: "42", for: client)
+        try await fetch { FakeWire.result(to: $0) }
         #expect(store.items(for: client).map(\.jid) == [JID("bob@localhost")])
     }
 

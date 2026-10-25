@@ -12,6 +12,8 @@ public struct AccountWarning: Identifiable, Sendable {
     public var detail: String
     /// Tries the action again. Nil when trying again wouldn't help.
     public var retry: (@Sendable () async throws -> Void)?
+    /// The lead of `detail`, kept so that a failed retry says the same.
+    var friendly: String?
 
     public var id: String { key }
 }
@@ -38,7 +40,11 @@ public final class AccountWarnings: @unchecked Sendable {
     ///         session.warnings.clear("profile")
     ///     }
     public func post(_ key: String, title: String, detail: String, retry: (@Sendable () async throws -> Void)? = nil) {
-        let warning = AccountWarning(key: key, title: title, detail: detail, retry: retry)
+        post(AccountWarning(key: key, title: title, detail: detail, retry: retry))
+    }
+
+    private func post(_ warning: AccountWarning) {
+        let key = warning.key
         lock.withLock {
             var list = subject.value
             if let index = list.firstIndex(where: { $0.key == key }) { list[index] = warning } else { list.append(warning) }
@@ -47,9 +53,20 @@ public final class AccountWarnings: @unchecked Sendable {
     }
 
     /// The same, with the detail from the error: the server's own reason
-    /// after `friendly`, such as "Your profile wasn't saved".
+    /// after `friendly`, such as "Your profile wasn't saved". An error of our
+    /// own, such as being offline, says what it is instead.
     public func post(_ key: String, title: String, friendly: String, error: Error, retry: (@Sendable () async throws -> Void)? = nil) {
-        post(key, title: title, detail: ServerError.classify(error).describe(friendly), retry: retry)
+        post(AccountWarning(key: key, title: title, detail: ServerError.userMessage(for: error, friendly: friendly), retry: retry, friendly: friendly))
+    }
+
+    /// Removes what a room posted, such as "room-history:cake@rooms.example.org",
+    /// once the user has left it and can no longer act on it.
+    public func clear(room: JID) {
+        lock.withLock {
+            let list = subject.value
+            let kept = list.filter { !$0.key.hasSuffix(":\(room)") }
+            if kept.count != list.count { subject.send(kept) }
+        }
     }
 
     /// Removes the warning with `key`, when its action has succeeded. Does nothing if there is none.
@@ -73,7 +90,7 @@ public final class AccountWarnings: @unchecked Sendable {
         } catch {
             // The poster's closure may have posted its own outcome meanwhile.
             guard current.first(where: { $0.key == key }) != nil else { return true }
-            post(key, title: warning.title, friendly: warning.title, error: error, retry: retry)
+            post(key, title: warning.title, friendly: warning.friendly ?? warning.title, error: error, retry: retry)
             return false
         }
     }

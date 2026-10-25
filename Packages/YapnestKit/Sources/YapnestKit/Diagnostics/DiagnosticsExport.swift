@@ -24,7 +24,7 @@ public enum DiagnosticsExport {
         for file in files {
             guard let data = try? Data(contentsOf: file) else { continue }
             let text = String(decoding: data, as: UTF8.self)
-            for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            for line in text.split(separator: "\n", omittingEmptySubsequences: true) where isCurrentFormat(line) {
                 lines.append((line.prefix(20), lines.count, line))
             }
         }
@@ -50,6 +50,17 @@ public enum DiagnosticsExport {
         let url = folder.appending(path: "Yapnest-diagnostics.txt")
         try Data(output.utf8).write(to: url, options: .atomic)
         return url
+    }
+
+    /// Whether a line is stamped to the second, as lines are since the logs
+    /// stopped identifying who was talked to. Older builds' lines, still in the
+    /// rotating files, have milliseconds and exact sizes and ports; they are
+    /// left out rather than coarsened, as a file can hold both formats. Judged
+    /// line by line, so it needs no marker to survive a crash or a file
+    /// another process wrote.
+    static func isCurrentFormat(_ line: Substring) -> Bool {
+        let bytes = Array(line.utf8.prefix(20))
+        return bytes.count == 20 && bytes[4] == UInt8(ascii: "-") && bytes[10] == UInt8(ascii: "T") && bytes[19] == UInt8(ascii: "Z")
     }
 
     static func header(at date: Date) -> String {

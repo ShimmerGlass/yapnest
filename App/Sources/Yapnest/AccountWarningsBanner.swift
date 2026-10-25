@@ -69,20 +69,25 @@ private struct AccountWarningsSheet: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
-                    if warning.retry != nil {
-                        Button {
-                            retry(warning.key)
-                        } label: {
-                            if retrying.contains(warning.key) {
-                                ProgressView()
-                            } else {
-                                Text("Retry")
+                    HStack {
+                        if warning.retry != nil {
+                            Button {
+                                retry(warning.key)
+                            } label: {
+                                if retrying.contains(warning.key) {
+                                    ProgressView()
+                                } else {
+                                    Text("Retry")
+                                }
                             }
+                            .disabled(retrying.contains(warning.key))
+                            .accessibilityIdentifier("accountWarningRetry")
                         }
-                        .buttonStyle(.bordered)
-                        .disabled(retrying.contains(warning.key))
-                        .accessibilityIdentifier("accountWarningRetry")
+                        // For a problem the user doesn't mean to fix; it comes back if it happens again.
+                        Button("Dismiss") { warnings.clear(warning.key) }
+                            .accessibilityIdentifier("accountWarningDismiss")
                     }
+                    .buttonStyle(.bordered)
                 }
                 .padding(.vertical, 4)
                 .accessibilityElement(children: .contain)
