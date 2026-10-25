@@ -4,7 +4,7 @@ An XMPP client for iOS 18+ and the Mac (Mac Catalyst, Mac idiom). `README.md` co
 
 ## Layout
 
-- `Taskfile.yml`: the checks, through [Task](https://taskfile.dev): `task kit`, `build`, `unit`, `ui`, and `check` for all of them. `task testflight` archives and uploads the iOS and Mac apps (`dev/testflight.sh`) and sets each build's "What to Test" from its changelog (`dev/testflight-notes.swift`), with the App Store Connect API key in the git-ignored `keys/`. UI tests run on at most 6 simulator clones (`WORKERS`), as each takes up to 2.5 GB; keep that cap in any `xcodebuild test` run.
+- `Taskfile.yml`: the checks, through [Task](https://taskfile.dev): `task kit`, `build`, `unit`, `ui`, and `check` for all of them. `task testflight` archives and uploads the iOS and Mac apps (`dev/testflight.sh`) and sets each build's "What to Test" from its changelog (`dev/testflight-notes.swift`), then adds both builds to the "friends" external test group and sends them to Beta App Review (`dev/testflight-group.swift`), with the App Store Connect API key in the git-ignored `keys/`. UI tests run on at most 6 simulator clones (`WORKERS`), as each takes up to 2.5 GB; keep that cap in any `xcodebuild test` run.
 - `project.yml`: the xcodegen spec. `Yapnest.xcodeproj` is generated and ignored by git, so put project and scheme settings here, never in Xcode. Run `xcodegen generate` after adding or removing files.
 - `Config/Base.xcconfig`: shared build settings. `Config/Local.xcconfig` holds the signing team, and isn't committed.
 - `Packages/YapnestKit`: everything that isn't UI. It builds and tests on macOS with `swift test`.

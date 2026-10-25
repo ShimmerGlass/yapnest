@@ -1,6 +1,7 @@
 #!/bin/zsh
-# Archives the iOS and Mac apps, uploads both to App Store Connect, and sets
-# each build's "What to Test" from changelogs/<version>-<build>.md.
+# Archives the iOS and Mac apps, uploads both to App Store Connect, sets
+# each build's "What to Test" from changelogs/<version>-<build>.md, and gives
+# both to the "friends" test group (YAPNEST_TESTFLIGHT_GROUP picks another).
 #
 # Needs the API key in keys/ (git-ignored): appstoreconnect.p8, and its ids in
 # appstoreconnect.keyid and appstoreconnect.issuer.
@@ -47,4 +48,6 @@ done
 
 for platform in IOS MAC_OS; do
   swift dev/testflight-notes.swift "$key" "$key_id" "$issuer" "$bundle" "$version" "$build" "$platform" "$notes"
+  # After the notes: an external group's testers see them with the build.
+  swift dev/testflight-group.swift "$key" "$key_id" "$issuer" "$bundle" "$version" "$build" "$platform" "${YAPNEST_TESTFLIGHT_GROUP:-friends}"
 done
