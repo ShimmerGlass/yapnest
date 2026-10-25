@@ -86,7 +86,7 @@ extension XMPPSession {
     /// server's form asks for it. The caller stores the password and drops the
     /// other clients' FAST tokens (see `AppModel.changePassword`).
     public func changePassword(to new: String, current: String) async throws {
-        guard isConnected else { throw PasswordError.offline }
+        guard await waitForConnection() else { throw PasswordError.offline }
         guard let username = account.localPart else { throw PasswordError.notAllowed }
         let domain = account.domain
         let request = try await changeRequest(username: username, domain: domain, new: new, current: current)

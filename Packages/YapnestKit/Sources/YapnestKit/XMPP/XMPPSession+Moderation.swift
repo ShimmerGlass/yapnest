@@ -71,7 +71,7 @@ extension XMPPSession {
     /// Puts the occupant `nickname` out of the room for now, for a moderator.
     /// They keep their membership and may come back (§8.2).
     public func kick(nickname: String, reason: String? = nil, in room: JID) async throws {
-        let status = try joinedStatus(room)
+        let status = try await joinedStatus(room)
         guard let occupant = status.occupants[nickname],
               GroupModeration.actions(
                   by: status.affiliation, on: occupant.affiliation, isSelf: nickname == status.nickname,
@@ -85,7 +85,7 @@ extension XMPPSession {
 
     /// Asks the room for who is banned, which `RoomStatus.banned` keeps.
     public func refreshBanList(of room: JID) async throws {
-        guard try joinedStatus(room).canSeeBans else { throw GroupError.notAllowed }
+        guard try await joinedStatus(room).canSeeBans else { throw GroupError.notAllowed }
         let response = try await roomRequest(OutboundStanza.affiliationList(.outcast, of: room))
         listReceived(.outcast, in: room, response)
     }
@@ -93,7 +93,7 @@ extension XMPPSession {
     private func changeAffiliation(
         of member: JID, in room: JID, to affiliation: RoomAffiliation, requires needs: KeyPath<GroupModeration.MemberActions, Bool>,
     ) async throws {
-        let status = try joinedStatus(room)
+        let status = try await joinedStatus(room)
         guard GroupModeration.actions(
             by: status.affiliation, on: status.affiliation(of: member), isSelf: member == account, isLastOwner: status.isLastOwner(account),
         )[keyPath: needs] else { throw GroupError.notAllowed }
@@ -134,9 +134,9 @@ extension XMPPSession {
     /// Takes someone else's message back for everyone (XEP-0425). The room
     /// announces it to all, us included, but the message goes at once.
     public func retractForEveryone(_ message: Message) async throws {
-        guard isConnected, let target = message.serverId,
-              let conversation = try database.conversation(id: message.conversationId),
-              let status = roomStatus(conversation.peer), status.isJoined else { throw GroupError.notConnected }
+        guard let target = message.serverId,
+              let conversation = try database.conversation(id: message.conversationId) else { throw GroupError.notConnected }
+        _ = try await joinedStatus(conversation.peer)
         guard canRetractForEveryone(message, in: conversation.peer) else { throw GroupError.notAllowed }
         _ = try await roomRequest(OutboundStanza.moderatedRetraction(of: target, in: conversation.peer), repeatable: false)
         if let attachment = try database.applyModeratedRetraction(in: conversation.peer, target: target) { attachments.remove(attachment) }
