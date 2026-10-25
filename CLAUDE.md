@@ -91,6 +91,8 @@ An XMPP client for iOS 18+ and the Mac (Mac Catalyst, Mac idiom). `README.md` co
 - Observe the database with GRDB's `values(in:bufferingPolicy: .bufferingNewest(1))`, so a burst of changes redraws once.
 - Keep database writes and catch-up work off the main thread. Run repeated requests as a single background run (see `markRead()` and `notifyInBackground`).
 - Show progress for every server action: a spinner in the button or toolbar, and an alert if it fails.
+- An update made while offline is queued and sent once connected, never dropped or refused: stored so it survives the app being killed, and cleared only once the server confirms it. The exceptions fail with an offline error: an action whose effect could differ if sent later (ad-hoc commands, a password change), one that depends on the server's live answer or our current role so that what follows would fail out of order (joining or creating a group, inviting, moderation), and one that needs the connection itself (calls, file transfers). Typing notifications and receipts only matter in the moment and are dropped.
+- Never swallow or hide a server's error: show it to the user, unless a comment says why it's safe not to. Logging it alone counts as hiding it.
 - On the Mac, UIKit buttons draw as Mac controls unless given `preferredBehavioralStyle = .pad`. A button drawn that way doesn't open its menu on click, which is why the attach button is set up the way it is.
 
 ## Gotchas
