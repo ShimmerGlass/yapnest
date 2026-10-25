@@ -1428,10 +1428,10 @@ public final class XMPPSession: @unchecked Sendable {
                 }
             }
             guard isConnected, lock.withLock({ $0.attempt == attempt && $0.awaitsAccountDiscovery }) else { return }
-            if ServerError.classify(failure).isFinal {
-                warnings.post("discovery", title: String(localized: "Server features unknown"), friendly: String(localized: "The server didn't say what it supports"), error: failure) { [weak self] in
-                    try await self?.discoverAccountFeatures()
-                }
+            // Whatever the error: one that kept passing through every retry is
+            // still a server that never said what it supports.
+            warnings.post("discovery", title: String(localized: "Server features unknown"), friendly: String(localized: "The server didn't say what it supports"), error: failure) { [weak self] in
+                try await self?.discoverAccountFeatures()
             }
             startSync(archiveVersion: nil)
         }

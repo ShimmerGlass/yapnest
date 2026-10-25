@@ -70,7 +70,8 @@ extension XMPPSession {
 
     /// An enable that failed may pass: it is tried again a few times, and
     /// again when a resumed stream returns (`resumeWork`), as one stream can
-    /// last days. What stays failing is shown.
+    /// last days. What stays failing is shown, whatever its type, unless the
+    /// connection went away meanwhile: the next session enables it again.
     private func pushEnableFinished(_ result: Result<Void, Error>) {
         switch result {
         case .success:
@@ -81,14 +82,15 @@ extension XMPPSession {
             guard ServerError.classify(error).isPassing else { return postPushWarning(error) }
             Task { [weak self] in
                 guard let self else { return }
-                let backoff = lock.withLock { $0.retryBackoff }
+                let (backoff, started) = lock.withLock { ($0.retryBackoff, $0.attempt) }
                 if backoff > 0 { try? await Task.sleep(for: .seconds(backoff)) }
                 guard isConnected else { return }
                 do {
                     try await retryingPassingErrors { try await attemptPushEnable() }
                     pushEnableFinished(.success(()))
                 } catch {
-                    if ServerError.classify(error).isFinal { postPushWarning(error) }
+                    guard isConnected, lock.withLock({ $0.attempt }) == started else { return }
+                    postPushWarning(error)
                 }
             }
         }
@@ -100,9 +102,25 @@ extension XMPPSession {
         }
     }
 
+    /// Why an attempt to enable push couldn't be made at all.
+    enum PushEnableError: Error, LocalizedError {
+        /// iOS hasn't given this device a token, so there is nothing to register.
+        case noToken
+
+        var errorDescription: String? {
+            String(localized: "This device hasn't been given a notification token yet.")
+        }
+    }
+
     /// For the retries and the warning's Retry: a try that throws what failed.
+    /// Returning means push is enabled: being offline, or having no token,
+    /// throws, so a Retry doesn't clear the warning for what it didn't fix.
     private func attemptPushEnable() async throws {
-        guard isConnected, let token = try? database.setting(.pushToken), let environment = try? database.setting(.pushEnvironment) else { return }
+        // A dropped connection, which passes: the next session enables it again.
+        guard isConnected else { throw URLError(.networkConnectionLost) }
+        guard let token = try? database.setting(.pushToken), let environment = try? database.setting(.pushEnvironment) else {
+            throw PushEnableError.noToken
+        }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             requestPushEnable(token: token, environment: environment) { continuation.resume(with: $0) }
         }

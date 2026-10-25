@@ -44,11 +44,11 @@ struct AccountDiscoveryFailureTests {
         wire.written.compactMap { $0 as? Iq }.filter { isDisco($0) && $0.to?.stringValue == "me@example.org" }.count
     }
 
-    @Test func aDiscoveryThatKeepsTimingOutStillLeadsToCatchUp() async throws {
+    @Test func aDiscoveryThatKeepsTimingOutStillLeadsToCatchUpAndIsShown() async throws {
         connect { FakeWire.error(to: $0, condition: "remote-server-timeout", type: "wait") }
         #expect(await eventually { session.state.value == .connected(isSyncing: false) })
         #expect(discoRequests == ServerRetry.attempts + 1)
-        #expect(session.warnings.current.isEmpty)
+        #expect(session.warnings.current.map(\.key) == ["discovery"])
     }
 
     @Test func aFinalRefusalOfTheDiscoveryGoesOnAndShowsTheReason() async throws {
