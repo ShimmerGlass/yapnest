@@ -11,6 +11,7 @@ struct ChangePasswordView: View {
     @State private var confirmation = ""
     @State private var change = ServerAction()
     @State private var didChange = false
+    @State private var outcomeUnknown = false
 
     private var problem: XMPPSession.PasswordProblem? {
         XMPPSession.passwordProblem(current: current, new: new, confirmation: confirmation)
@@ -60,6 +61,11 @@ struct ChangePasswordView: View {
             }
         }
         .actionAlert("Couldn't change the password", change)
+        .alert("Password may have changed", isPresented: $outcomeUnknown) {
+            Button("OK") { dismiss() }
+        } message: {
+            Text(XMPPSession.PasswordError.outcomeUnknown.errorDescription ?? "")
+        }
         .alert("Password changed", isPresented: $didChange) {
             Button("OK") { dismiss() }
         } message: {
@@ -71,8 +77,13 @@ struct ChangePasswordView: View {
         guard problem == nil else { return }
         let (current, new) = (current, new)
         change.run { [model] in
-            try await model.changePassword(current: current, new: new)
-            didChange = true
+            do {
+                try await model.changePassword(current: current, new: new)
+                didChange = true
+            } catch XMPPSession.PasswordError.outcomeUnknown {
+                // Not a failure: it is told apart so it isn't called one.
+                outcomeUnknown = true
+            }
         }
     }
 }

@@ -382,17 +382,51 @@ final class AppModel {
                 throw XMPPSession.PasswordError.wrongCurrentPassword
             }
         }
-        try await environment.changePassword(session, new, current)
+        do {
+            try await environment.changePassword(session, new, current)
+        } catch XMPPSession.PasswordError.outcomeUnknown {
+            // Kept beside the old one, so a sign-in the server refuses for it
+            // can try the new one (the session does, and the extensions). No
+            // client keeps a token, so the next sign-in tells which is right.
+            environment.forgetFastTokens()
+            if var stored, stored.jid == session.account {
+                stored.candidatePassword = new
+                do {
+                    try await offMain { [credentials, stored] in try credentials.update(stored) }
+                } catch {
+                    DiagLog.error(.app, "Keeping the new password as a candidate failed", .error(error))
+                }
+            }
+            throw XMPPSession.PasswordError.outcomeUnknown
+        }
         // The server has the new password from here on, so whatever fails next
         // must not leave a token or the old password to sign in with.
         environment.forgetFastTokens()
         guard var stored, stored.jid == session.account else { return }
         stored.password = new
+        stored.candidatePassword = nil
         do {
             try await offMain { [credentials, stored] in try credentials.update(stored) }
         } catch {
             throw XMPPSession.PasswordError.changedButNotSaved
         }
+    }
+
+    /// A session that held a candidate password has signed in, with the stored
+    /// password or the candidate. The keychain keeps the one that worked.
+    private func storeConfirmedPassword(_ password: String, wasCandidate: Bool, account: JID) async {
+        do {
+            try await offMain { [credentials] in
+                guard var stored = try credentials.load(), stored.jid == account else { return }
+                stored.password = password
+                stored.candidatePassword = nil
+                try credentials.update(stored)
+            }
+        } catch {
+            DiagLog.error(.app, "Storing the confirmed password failed", .error(error))
+        }
+        // The old password's tokens, in the extensions too.
+        if wasCandidate { environment.forgetFastTokens() }
     }
 
     /// Closes the welcome screen for good, once its choices are saved.
@@ -738,6 +772,11 @@ final class AppModel {
             )
         }
         calls.attach(session)
+        session.onPasswordConfirmed { [weak self] password, wasCandidate in
+            Task { @MainActor in
+                await self?.storeConfirmedPassword(password, wasCandidate: wasCandidate, account: credentials.jid)
+            }
+        }
         linkPreviews = LinkPreviewer(database: session.database, directory: directory.previews)
         cancellables = []
         session.state

@@ -18,6 +18,7 @@ public struct CredentialStore: Sendable {
         var host: String?
         var port: Int?
         var disableTLS: Bool?
+        var candidatePassword: String?
     }
 
     private var baseQuery: [String: Any] {
@@ -40,7 +41,7 @@ public struct CredentialStore: Sendable {
         guard status == errSecSuccess, let data = result as? Data else { throw KeychainError(status: status) }
         let stored = try JSONDecoder().decode(Stored.self, from: data)
         guard let jid = JID(stored.jid) else { return nil }
-        return .init(jid: jid, password: stored.password, host: stored.host, port: stored.port, disableTLS: stored.disableTLS ?? false)
+        return .init(jid: jid, password: stored.password, host: stored.host, port: stored.port, disableTLS: stored.disableTLS ?? false, candidatePassword: stored.candidatePassword)
     }
 
     private func encoded(_ credentials: XMPPSession.Credentials) throws -> Data {
@@ -50,6 +51,7 @@ public struct CredentialStore: Sendable {
             host: credentials.host,
             port: credentials.port,
             disableTLS: credentials.disableTLS,
+            candidatePassword: credentials.candidatePassword,
         ))
     }
 

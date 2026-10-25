@@ -1,5 +1,7 @@
 import Foundation
+import os
 @preconcurrency import Martin
+@testable import Martin
 import Testing
 @testable import YapnestKit
 
@@ -200,6 +202,97 @@ struct PasswordChangeTests {
         try await session.changePassword(to: "new", current: "old")
 
         #expect(password(of: session) == "new")
+    }
+
+    /// How many password changes were sent.
+    private func changes() -> Int {
+        wire.written.compactMap { $0 as? Iq }.filter { $0.type == .set && query($0) != nil }.count
+    }
+
+    private final class Calls: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func next() -> Int { lock.withLock { value += 1; return value } }
+    }
+
+    @Test func aChangeThatTimedOutIsSentAgain() async throws {
+        session.lock.withLock { $0.retryBackoff = 0 }
+        let sets = Calls()
+        serve(fields: plainFields()) { sets.next() == 1 ? FakeWire.error(to: $0, condition: "remote-server-timeout") : FakeWire.result(to: $0) }
+
+        try await session.changePassword(to: "new", current: "old")
+
+        #expect(changes() == 2)
+        #expect(password(of: session) == "new")
+    }
+
+    @Test func aChangeWhoseAnswerNeverCameKeepsTheNewPasswordAsACandidate() async throws {
+        session.lock.withLock { $0.retryBackoff = 0 }
+        tokens.save(token)
+        serve(fields: plainFields()) { FakeWire.error(to: $0, condition: "remote-server-timeout") }
+
+        await #expect(throws: XMPPSession.PasswordError.outcomeUnknown) { try await session.changePassword(to: "new", current: "old") }
+
+        #expect(changes() == 3)
+        #expect(session.lock.withLock { $0.candidatePassword } == "new")
+        #expect(password(of: session) == "old")
+        // A token would sign in whichever password is right, and confirm the old one.
+        #expect(tokens.load() == nil)
+    }
+
+    // MARK: A candidate password at sign-in
+
+    private func sessionWithCandidate() throws -> XMPPSession {
+        try XMPPSession(
+            credentials: .init(jid: JID("me@example.org")!, password: "old", candidatePassword: "new"), resource: "t",
+            database: try AppDatabase.inMemory(), fastTokens: tokens,
+        )
+    }
+
+    @Test func aRefusedPasswordTriesTheCandidateOnceAndKeepsItWhenItWorks() throws {
+        let session = try sessionWithCandidate()
+        let confirmed = OSAllocatedUnfairLock<[String]>(initialState: [])
+        session.onPasswordConfirmed { password, wasCandidate in confirmed.withLock { $0.append("\(password) \(wasCandidate)") } }
+        tokens.save(token)
+
+        session.client.update(state: .connecting)
+        session.client.update(state: .disconnected(.authenticationFailure(SaslError.not_authorized)))
+
+        #expect(password(of: session) == "new")
+        #expect(tokens.load() == nil)
+        if case .failed = session.state.value { Issue.record("The sign-in was given up on") }
+
+        session.client.update(state: .connected())
+        #expect(confirmed.withLock { $0 } == ["new true"])
+        #expect(session.lock.withLock { $0.candidatePassword } == nil)
+    }
+
+    @Test func aRefusedCandidateIsFinal() async throws {
+        let session = try sessionWithCandidate()
+        session.client.update(state: .connecting)
+        session.client.update(state: .disconnected(.authenticationFailure(SaslError.not_authorized)))
+        session.client.update(state: .connecting)
+        session.client.update(state: .disconnected(.authenticationFailure(SaslError.not_authorized)))
+
+        await eventually("the failure") { if case .failed = session.state.value { true } else { false } }
+    }
+
+    @Test func aWorkingPasswordDropsTheCandidate() throws {
+        let session = try sessionWithCandidate()
+        let confirmed = OSAllocatedUnfairLock<[String]>(initialState: [])
+        session.onPasswordConfirmed { password, wasCandidate in confirmed.withLock { $0.append("\(password) \(wasCandidate)") } }
+
+        session.client.update(state: .connected())
+
+        #expect(confirmed.withLock { $0 } == ["old false"])
+        #expect(password(of: session) == "old")
+    }
+
+    @Test func otherRefusalsDontTryTheCandidate() throws {
+        let session = try sessionWithCandidate()
+        session.client.update(state: .connecting)
+        session.client.update(state: .disconnected(.authenticationFailure(SaslError.temporary_auth_failure)))
+        #expect(password(of: session) == "old")
     }
 
     @Test func theFeatureIsOfferedOnlyWhenTheDomainListsIt() {

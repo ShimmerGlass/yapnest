@@ -40,7 +40,7 @@ struct ContactRequestRow: View {
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.circle)
                 .disabled(answer.isBusy)
-            Button("Accept", systemImage: "checkmark") { perform(session.acceptContactRequest) }
+            Button("Accept", systemImage: "checkmark", action: accept)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.circle)
@@ -48,12 +48,19 @@ struct ContactRequestRow: View {
         }
         .padding(.vertical, 8)
         .contextMenu {
-            Button("Accept", systemImage: "checkmark") { perform(session.acceptContactRequest) }
+            Button("Accept", systemImage: "checkmark", action: accept)
             Button("Decline", systemImage: "xmark") { perform(session.declineContactRequest) }
             Button("Block", systemImage: "hand.raised", role: .destructive) { confirmsBlock = true }
         }
         .blockConfirmation(isPresented: $confirmsBlock, session: session, peer: contact.jid, name: contact.requestTitle)
         .actionAlert("Couldn't answer", answer)
+    }
+
+    /// Waits for the server to take the contact, and keeps the request on the
+    /// list if it refuses.
+    private func accept() {
+        let (session, jid) = (session, contact.jid)
+        answer.run { try await session.acceptContactRequest(from: jid) }
     }
 
     private func perform(_ action: @escaping @Sendable (JID) throws -> Void) {

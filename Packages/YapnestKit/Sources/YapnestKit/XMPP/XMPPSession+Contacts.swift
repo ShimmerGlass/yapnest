@@ -33,7 +33,9 @@ extension XMPPSession {
     public func addContactAndWait(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {
         guard isConnected else { throw ContactError.offline }
         guard jid != account else { return }
-        _ = try await client.module(.roster).addItem(jid: Martin.JID(jid.martin), name: name, groups: [])
+        _ = try await retryingPassingErrors {
+            try await client.module(.roster).addItem(jid: Martin.JID(jid.martin), name: name, groups: [])
+        }
         // Only once the server took the item: a refused or unanswered add
         // must not leave a stranger's later request auto-approved.
         markAddedBeforeAsking(jid)
@@ -54,6 +56,30 @@ extension XMPPSession {
         // Tells them who is asking (XEP-0172), as they only have an address.
         write(OutboundStanza.subscriptionRequest(to: jid, nickname: nickname, preauth: preauth))
         client.module(.presence).subscribed(by: Martin.JID(jid.martin))
+    }
+
+    /// Reads the roster of a new session. What passes is retried; a final
+    /// error is a warning with a Retry, as the contacts shown (and how
+    /// incoming messages are treated) would otherwise stay as they were.
+    func fetchRoster(attempt: Int) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await requestRoster()
+                warnings.clear("roster")
+            } catch {
+                // A new connection asks again by itself.
+                guard isConnected, lock.withLock({ $0.attempt }) == attempt else { return }
+                warnings.post(
+                    "roster", title: String(localized: "Contacts not updated"),
+                    friendly: String(localized: "Your contacts couldn't be read from the server"), error: error,
+                ) { [weak self] in try await self?.requestRoster() }
+            }
+        }
+    }
+
+    private func requestRoster() async throws {
+        try await retryingPassingErrors { try await client.module(.roster).requestRoster() }
     }
 
     /// Takes `jid` off the roster on all our devices: neither of us sees the
@@ -83,12 +109,14 @@ extension XMPPSession {
         _ = try await client.module(.roster).updateItem(jid: Martin.JID(jid.martin), name: Self.normalizedNickname(name), groups: contact.rosterGroups)
     }
 
-    /// Adds them back and lets them see our presence, as `addContact` does.
-    public func acceptContactRequest(from jid: JID) throws {
+    /// Adds them back and lets them see our presence, as `addContactAndWait`
+    /// does. The request stays on the list if the server refuses the roster
+    /// item, and nothing is sent to them.
+    public func acceptContactRequest(from jid: JID) async throws {
         guard isConnected else { throw ContactError.offline }
         // Their chosen name isn't copied into the roster: it would be ours on
         // every device, set by a stranger. The roster name stays the user's.
-        addContact(jid)
+        try await addContactAndWait(jid)
         try database.clearContactRequest(from: jid)
     }
 
@@ -96,12 +124,27 @@ extension XMPPSession {
     /// accepted, which also takes it off the chat list; anyone else not yet
     /// on the roster is added. Offline it does nothing: the chat opens all the
     /// same, and its banner offers the same step once there's a connection.
-    public func befriendForNewChat(_ jid: JID) {
+    /// Nobody waits on it, so a failure is a warning with a Retry.
+    public func befriendForNewChat(_ jid: JID) async {
         guard isConnected else { return }
+        let key = "befriend:\(jid.description)"
+        do {
+            try await befriend(jid)
+            warnings.clear(key)
+        } catch {
+            // A dropped connection leaves the chat's banner to offer it again.
+            guard isConnected else { return }
+            warnings.post(key, title: String(localized: "Contact not added"), friendly: String(localized: "\(jid.description) wasn't added to your contacts"), error: error) { [weak self] in
+                try await self?.befriend(jid)
+            }
+        }
+    }
+
+    private func befriend(_ jid: JID) async throws {
         if (try? database.contact(jid))??.hasContactRequest == true {
-            try? acceptContactRequest(from: jid)
+            try await acceptContactRequest(from: jid)
         } else if (try? database.isInRoster(jid)) != true {
-            addContact(jid)
+            try await addContactAndWait(jid)
         }
     }
 

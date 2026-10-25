@@ -99,7 +99,7 @@ struct ChatListView: View {
                         self.sheet = nil
                         // Ask to see their presence and avatar. Offline, the
                         // chat's banner offers this once connected.
-                        Task { [session] in await offMain { session.befriendForNewChat(peer) } }
+                        Task { [session] in await session.befriendForNewChat(peer) }
                         show(peer)
                     },
                     onNewGroup: { self.sheet = .newGroup },

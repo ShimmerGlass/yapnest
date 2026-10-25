@@ -44,16 +44,19 @@ extension XMPPSession {
         let report = reason.flatMap { reason in
             canReport ? BlockingCommandModule.Report(cause: reason.cause, stanzas: reportedMessages(from: jid)) : nil
         }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            module.block(jid: Martin.JID(jid.martin), report: report) { continuation.resume(with: $0.mapError { $0 as Error }) }
+        // Before the block: once it is in place our server bounces what we
+        // send them (XEP-0191), the decline with it, and their request would
+        // be kept and repeated on unblocking. The stream keeps the order.
+        let declines = (try? database.contact(jid))??.subscriptionRequestedAt != nil
+        if declines { try await client.module(.presence).unsubscribed(by: Martin.JID(jid.martin)) }
+        try await retryingPassingErrors {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                module.block(jid: Martin.JID(jid.martin), report: report) { continuation.resume(with: $0.mapError { $0 as Error }) }
+            }
         }
         // The server's push says the same; this is for the UI, right away.
         try database.setBlocked(true, jid)
-        // Otherwise the server keeps their request, and repeats it once
-        // they're unblocked.
-        if (try? database.contact(jid))??.subscriptionRequestedAt != nil {
-            try? declineContactRequest(from: jid)
-        }
+        if declines { try database.clearContactRequest(from: jid) }
     }
 
     public func unblock(_ jid: JID) async throws {

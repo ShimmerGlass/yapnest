@@ -16,6 +16,9 @@ extension XMPPSession {
         /// The server asks for something Yapnest can't fill in.
         case formRequired
         case timedOut
+        /// The request was sent and the connection or the answer was lost, so
+        /// the server may have changed the password. Both are accepted for now.
+        case outcomeUnknown
         case refused(reason: String)
         /// The current password typed isn't the one this device signed in with.
         case wrongCurrentPassword
@@ -34,6 +37,8 @@ extension XMPPSession {
                 }
             case .formRequired: String(localized: "Your server asks for details that Yapnest can't give, so the password can't be changed here.")
             case .timedOut: String(localized: "The server didn't answer.")
+            case .outcomeUnknown:
+                String(localized: "The server didn't say whether it changed your password. Yapnest will use the new one if the old one stops working. Check by signing in elsewhere.")
             case .refused(let reason): String(localized: "The server refused it: \(reason)")
             case .wrongCurrentPassword: String(localized: "That isn't your current password.")
             case .changedButNotSaved:
@@ -86,16 +91,77 @@ extension XMPPSession {
         let domain = account.domain
         let request = try await changeRequest(username: username, domain: domain, new: new, current: current)
         do {
-            _ = try await client.context.writer.write(iq: request)
+            // Setting the same password again does no harm, so a request that
+            // timed out, or whose connection dropped, is sent once more.
+            _ = try await retryingPassingErrors { try await client.context.writer.write(iq: request) }
         } catch {
+            if (error as? XMPPError)?.errorCondition == .remote_server_timeout {
+                // It may have been applied: the sign-in after this one has to
+                // be able to find out, with a password, as a token the server
+                // kept would sign in either way and confirm the old one.
+                lock.withLock { $0.candidatePassword = new }
+                fastTokens.save(nil)
+                client.module(.sasl2).fastToken = nil
+                throw PasswordError.outcomeUnknown
+            }
             throw Self.passwordError(from: error)
         }
+        lock.withLock { $0.candidatePassword = nil }
         client.connectionConfiguration.credentials = .password(password: new)
         // The server drops tokens on a password change, or keeps them: either
         // way the next sign-in is better off with the password, which also
         // gets a token again.
         fastTokens.save(nil)
         client.module(.sasl2).fastToken = nil
+    }
+
+    /// A refused sign-in after a password change of unknown outcome: the new
+    /// password is tried once, in place of the old. False when there is
+    /// nothing to try, or the failure isn't a refused password.
+    func switchToCandidatePassword(after failure: Error) -> Bool {
+        switch failure as? SaslError {
+        case .not_authorized?, .invalid_authzid?: break
+        default: return false
+        }
+        let candidate = lock.withLock { state -> String? in
+            guard !state.triedCandidate, let candidate = state.candidatePassword else { return nil }
+            state.triedCandidate = true
+            state.usesCandidate = true
+            return candidate
+        }
+        guard let candidate else { return false }
+        client.connectionConfiguration.credentials = .password(password: candidate)
+        // A token was issued for the old password.
+        fastTokens.save(nil)
+        client.module(.sasl2).fastToken = nil
+        return true
+    }
+
+    /// Called when a new session has signed in: tells the owner of the stored
+    /// credentials which password worked, if a candidate was in play, so it
+    /// can keep that one and forget the other.
+    func confirmPassword() {
+        let confirmed = lock.withLock { state -> (password: String, wasCandidate: Bool, handler: (@Sendable (String, Bool) -> Void))? in
+            guard let candidate = state.candidatePassword, let handler = state.passwordConfirmed else { return nil }
+            let wasCandidate = state.usesCandidate
+            state.candidatePassword = nil
+            state.usesCandidate = false
+            guard case .password(let current, _, _) = client.connectionConfiguration.credentials else { return nil }
+            return (wasCandidate ? candidate : current, wasCandidate, handler)
+        }
+        guard let confirmed else { return }
+        if confirmed.wasCandidate {
+            // The other clients' tokens were issued for the old password.
+            fastTokens.save(nil)
+        }
+        confirmed.handler(confirmed.password, confirmed.wasCandidate)
+    }
+
+    /// Hands `handler` which password a new session signed in with, when the
+    /// credentials held a candidate (`Credentials.candidatePassword`), and
+    /// whether it was the candidate. The owner stores that one alone.
+    public func onPasswordConfirmed(_ handler: @escaping @Sendable (_ password: String, _ wasCandidate: Bool) -> Void) {
+        lock.withLock { $0.passwordConfirmed = handler }
     }
 
     /// Whether the server accepts `password` for this account, by signing in

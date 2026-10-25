@@ -38,7 +38,7 @@ extension LiveServer {
             // Cleaned on arrival.
             #expect(try c.database.contact(alice)?.requestedNickname == "Mom")
 
-            try c.acceptContactRequest(from: alice)
+            try await c.acceptContactRequest(from: alice)
             try await waitUntil("carol's roster to show alice") { try c.database.contact(alice)?.subscription == .both }
             let contact = try #require(try c.database.contact(alice))
             #expect(contact.name == nil)
@@ -62,7 +62,7 @@ extension LiveServer {
             try? await c.removeContact(alice)
             try await waitUntil("carol to be off alice's roster") { try !a.database.isInRoster(carol) }
 
-            a.befriendForNewChat(carol)
+            await a.befriendForNewChat(carol)
             try await waitUntil("carol to be on alice's roster") { try a.database.isInRoster(carol) }
             try await waitUntil("carol to get the request") { try c.database.contact(alice)?.hasContactRequest == true }
 
@@ -82,7 +82,7 @@ extension LiveServer {
             c.addContact(alice)
             try await waitUntil("alice to get the request") { try a.database.contact(carol)?.hasContactRequest == true }
 
-            a.befriendForNewChat(carol)
+            await a.befriendForNewChat(carol)
             // At once: waiting would let the server's roster push clear it anyway.
             #expect(try a.database.contact(carol)?.hasContactRequest == false)
             try await waitUntil("carol to be on alice's roster") { try a.database.isInRoster(carol) }

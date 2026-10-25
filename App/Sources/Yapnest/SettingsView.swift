@@ -25,6 +25,7 @@ struct SettingsView: View {
     @State private var name = ""
     @State private var savedName = ""
     @State private var isSavingName = false
+    @State private var profileAction = ServerAction()
     @State private var availability = XMPPSession.Availability.available
     @State private var status = ""
     @State private var savedStatus = ""
@@ -60,7 +61,7 @@ struct SettingsView: View {
                             .textInputAutocapitalization(.words)
                             .submitLabel(.done)
                             .onSubmit(saveName)
-                            .disabled(isSavingName || !isLoaded)
+                            .disabled(profileAction.isBusy || !isLoaded)
                         if isSavingName {
                             ProgressView()
                         } else if XMPPSession.normalizedNickname(name) ?? "" != savedName {
@@ -70,10 +71,10 @@ struct SettingsView: View {
                     PhotosPicker(selection: $photo, matching: .images) {
                         Label("Choose Photo", systemImage: "photo")
                     }
-                    .disabled(isChangingAvatar)
+                    .disabled(profileAction.isBusy)
                     if me?.avatarHash != nil {
                         Button("Remove Photo", systemImage: "trash", role: .destructive, action: removeAvatar)
-                            .disabled(isChangingAvatar)
+                            .disabled(profileAction.isBusy)
                     }
                 } header: {
                     Text("Profile")
@@ -238,6 +239,7 @@ struct SettingsView: View {
             }
             .diagnosticsErrorAlert(diagnostics)
             .errorAlert("Couldn't change the setting", $privacyError)
+            .actionAlert("Couldn't update your profile", profileAction)
             .errorAlert("Couldn't update your profile", $profileError)
             .onChange(of: photo) { _, item in
                 guard let item else { return }
@@ -301,30 +303,24 @@ struct SettingsView: View {
     }
 
     private func setAvatar(from item: PhotosPickerItem) {
-        isChangingAvatar = true
-        Task {
+        let session = session
+        profileAction.run {
+            isChangingAvatar = true
             defer { isChangingAvatar = false }
-            do {
-                let prepared = try await AvatarImagePreparation.prepare(item)
-                try await session.publishAvatar(prepared.data, mimeType: prepared.mimeType, width: prepared.side, height: prepared.side)
-            } catch {
-                profileError = error.localizedDescription
-            }
+            let prepared = try await AvatarImagePreparation.prepare(item)
+            try await session.publishAvatar(prepared.data, mimeType: prepared.mimeType, width: prepared.side, height: prepared.side)
         }
     }
 
     private func saveName() {
         guard !isSavingName, XMPPSession.normalizedNickname(name) ?? "" != savedName else { return }
-        isSavingName = true
-        Task {
+        let (session, typed) = (session, name)
+        profileAction.run {
+            isSavingName = true
             defer { isSavingName = false }
-            do {
-                try await session.setNickname(name)
-                savedName = await offMain { [session] in session.nickname ?? "" }
-                name = savedName
-            } catch {
-                profileError = error.localizedDescription
-            }
+            try await session.setNickname(typed)
+            savedName = await offMain { session.nickname ?? "" }
+            name = savedName
         }
     }
 
@@ -356,14 +352,11 @@ struct SettingsView: View {
     }
 
     private func removeAvatar() {
-        isChangingAvatar = true
-        Task {
+        let session = session
+        profileAction.run {
+            isChangingAvatar = true
             defer { isChangingAvatar = false }
-            do {
-                try await session.removeAvatar()
-            } catch {
-                profileError = error.localizedDescription
-            }
+            try await session.removeAvatar()
         }
     }
 

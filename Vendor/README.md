@@ -581,6 +581,22 @@ Each entry gives what went wrong for users, why, and what changed.
   filter for callers that must agree with the wire. Pinned by `XMLEscapingTests` and
   `ControlCharacterIntegrationTests`.
 
+**The roster was fetched in full on every connect, and a failed fetch went unseen**
+(`RosterModule.requestRoster`, `requestsRosterOnConnect`)
+- *Symptom:* every sign-in downloaded the whole roster, although we store its
+  version, and a roster request that timed out left the contacts as they were
+  until the next session, with nothing to say so.
+- *Cause:* the stored version was sent only if the stream features announced
+  roster versioning, which servers do after authentication and a SASL 2 sign-in
+  with an inline bind has no stream restart to read them from. The request
+  was made from the module's state callback, out of the app's reach.
+- *Fix:* the stored version (or an empty one, to be given a version) is always
+  sent, which servers without versioning ignore (RFC 6121 section 2.6); an
+  answer without items to a versioned request no longer removes the contacts
+  we hold. `requestsRosterOnConnect` turns the automatic request off, so
+  Yapnest asks itself, retries and shows the failure. Pinned by
+  `RosterVersionTests`.
+
 ### MartinOMEMO
 
 **Logs named people publicly** (`OMEMOModule`)

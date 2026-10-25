@@ -437,7 +437,10 @@ struct ConversationView: View {
     /// what accepting shares.
     private func requestBanner(_ contact: Contact) -> some View {
         banner(Text("\(contact.requestTitle) (\(peer.description)) wants to add you as a contact and see when you're online.")) {
-            Button("Accept") { answer { try $0.acceptContactRequest(from: $1) } }
+            Button("Accept") {
+                let (session, peer) = (session, peer)
+                answering.run { try await session.acceptContactRequest(from: peer) }
+            }
                 .buttonStyle(.borderedProminent)
                 .disabled(answering.isBusy)
             Button("Decline") { answer { try $0.declineContactRequest(from: $1) } }

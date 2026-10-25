@@ -76,8 +76,13 @@ open class RosterModule: XmppModuleBaseSessionStateAware, AbstractIQModule {
         super.init();
     }
     
+    /// Whether a new session asks for the roster by itself. An app that wants
+    /// to see the request fail, and retry it, turns this off and calls
+    /// `requestRoster` itself.
+    public var requestsRosterOnConnect = true;
+
     public override func stateChanged(newState: XMPPClient.State) {
-        guard case .connected(let resumed) = newState, !resumed else {
+        guard requestsRosterOnConnect, case .connected(let resumed) = newState, !resumed else {
             return;
         }
         self.requestRoster();
@@ -168,9 +173,15 @@ open class RosterModule: XmppModuleBaseSessionStateAware, AbstractIQModule {
             (module as? RosterAnnotationAwareProtocol)?.prepareRosterGetRequest(queryElem: query);
         }
         
-        if isRosterVersioningAvailable, let context = self.context {
+        // Sent whether or not the stream features said so: a server that
+        // sends them only after authentication, as one does when SASL 2 binds
+        // inline, never shows them to us, and one without versioning ignores
+        // the attribute (RFC 6121 section 2.6).
+        var sentVersion: String? = nil;
+        if let context = self.context {
             let x = rosterManager.version(for: context) ?? "";
             query.setAttribute("ver", value: x);
+            sentVersion = x.isEmpty ? nil : x;
         }
         iq.addChild(query);
         
@@ -183,7 +194,9 @@ open class RosterModule: XmppModuleBaseSessionStateAware, AbstractIQModule {
                         return self.processRosterItem(item, context: context);
                     }));
                     
-                    let removed = oldJids.filter({ !newJids.contains($0) });
+                    // Asked for changes since a version, an answer without items
+                    // says nothing changed; only a full roster tells what is gone.
+                    let removed = sentVersion != nil && newJids.isEmpty ? [] : oldJids.filter({ !newJids.contains($0) });
                     for jid in removed {
                         if let item = self.rosterManager.deleteItem(for: context, jid: jid) {
                             self.eventsSender.send(.removed(jid));

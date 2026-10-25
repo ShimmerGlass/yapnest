@@ -61,7 +61,7 @@ struct ContactRequestTests {
         let session = try makeSession(JID("me@example.org")!, database: db)
         try db.recordContactRequest(from: stranger, nickname: nil)
         await #expect(throws: XMPPSession.ContactError.self) { try await session.removeContact(alice) }
-        #expect(throws: XMPPSession.ContactError.self) { try session.acceptContactRequest(from: stranger) }
+        await #expect(throws: XMPPSession.ContactError.self) { try await session.acceptContactRequest(from: stranger) }
         #expect(throws: XMPPSession.ContactError.self) { try session.declineContactRequest(from: stranger) }
         // The request waits for the user to try again.
         #expect(try db.contact(stranger)?.hasContactRequest == true)
@@ -99,11 +99,11 @@ struct ContactRequestTests {
         #expect(try db.contact(alice) == nil)
     }
 
-    @Test func befriendingOfflineChangesNothing() throws {
+    @Test func befriendingOfflineChangesNothing() async throws {
         let session = try makeSession(JID("me@example.org")!, database: db)
         try db.recordContactRequest(from: stranger, nickname: nil)
-        session.befriendForNewChat(stranger)
-        session.befriendForNewChat(alice)
+        await session.befriendForNewChat(stranger)
+        await session.befriendForNewChat(alice)
         #expect(try db.contact(stranger)?.hasContactRequest == true)
         #expect(try db.contact(alice) == nil)
     }

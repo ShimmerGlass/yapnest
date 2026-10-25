@@ -262,7 +262,7 @@ extension LiveServer.IntegrationTests {
         // Third time; accepted, which adds her back.
         c.addContact(alice)
         try await waitUntil("alice to get the third request") { try request(on: phone) }
-        try phone.acceptContactRequest(from: carol)
+        try await phone.acceptContactRequest(from: carol)
         try await waitUntil("both to see each other") {
             try phone.database.contact(carol)?.subscription == .both && c.database.contact(alice)?.subscription == .both
         }
@@ -285,7 +285,7 @@ extension LiveServer.IntegrationTests {
 
         a.addContact(carol)
         try await waitUntil("carol to get the request") { try c.database.contact(alice)?.hasContactRequest == true }
-        try c.acceptContactRequest(from: alice)
+        try await c.acceptContactRequest(from: alice)
         try await waitUntil("both to see each other") {
             try a.database.contact(carol)?.subscription == .both && c.database.contact(alice)?.subscription == .both
         }

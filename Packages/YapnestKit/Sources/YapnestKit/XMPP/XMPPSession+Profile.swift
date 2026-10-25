@@ -30,9 +30,9 @@ extension XMPPSession {
         // Martin's own publishAvatar sends no publish-options, leaving the
         // node at the server's default, which is readable only by contacts
         // we've approved, and it refuses anything that isn't PNG.
-        try await publishPEP(node: NS.avatarData, itemId: hash, payload: ProfileStanza.avatarData(data), accessModel: "open")
+        try await publishProfilePEP(node: NS.avatarData, itemId: hash, payload: ProfileStanza.avatarData(data), accessModel: "open")
         let info = PEPUserAvatarModule.Info(id: hash, size: data.count, mimeType: mimeType, height: height, width: width)
-        try await publishPEP(node: NS.avatarMetadata, itemId: hash, payload: ProfileStanza.avatarMetadata(info), accessModel: "open")
+        try await publishProfilePEP(node: NS.avatarMetadata, itemId: hash, payload: ProfileStanza.avatarMetadata(info), accessModel: "open")
         // The files are named by their hash, so only a failed write keeps
         // the picture from showing.
         guard avatars.save(data, hash: hash) else { throw ProfileError.imageTooLarge }
@@ -42,8 +42,28 @@ extension XMPPSession {
     /// Removes our avatar, by publishing empty metadata (XEP-0084 §4.2).
     public func removeAvatar() async throws {
         guard isConnected else { throw ProfileError.offline }
-        try await publishPEP(node: NS.avatarMetadata, itemId: nil, payload: ProfileStanza.avatarMetadata(nil), accessModel: "open")
+        try await publishProfilePEP(node: NS.avatarMetadata, itemId: nil, payload: ProfileStanza.avatarMetadata(nil), accessModel: "open")
         try database.setAvatarHash(nil, for: account)
+    }
+
+    /// `publishPEP` for the profile, which a screen waits on: what passes is
+    /// retried, and the server's error is thrown as it came, so the screen can
+    /// give its reason and a Retry. A connection that went away on the way is
+    /// the not-connected error.
+    private func publishProfilePEP(node: String, itemId: String?, payload: Element, accessModel: String) async throws {
+        do {
+            try await retryingPassingErrors {
+                try await publishPEPKeepingErrors(node: node, itemId: itemId, payload: payload, accessModel: accessModel)
+            }
+        } catch {
+            throw profileFailure(error)
+        }
+    }
+
+    /// `error` as the profile calls throw it: the not-connected error when the
+    /// connection dropped under a request, otherwise as it is.
+    private func profileFailure(_ error: Error) -> Error {
+        !isConnected && ServerError.classify(error).isPassing ? ProfileError.offline : error
     }
 
     /// Publishes one item to our own PEP node, with `accessModel` set on the
@@ -185,17 +205,33 @@ extension XMPPSession {
         guard isConnected else { throw ProfileError.offline }
         let name = Self.normalizedNickname(name)
         if let name {
-            try await publishPEP(node: NS.nick, itemId: Self.nicknameItemId, payload: ProfileStanza.nick(name), accessModel: "open")
+            try await publishProfilePEP(node: NS.nick, itemId: Self.nicknameItemId, payload: ProfileStanza.nick(name), accessModel: "open")
         } else {
-            do {
-                try await retractPEPItem(node: NS.nick, itemId: Self.nicknameItemId)
-            } catch let error as PubSubError where error.error == .item_not_found {
-                // Nothing there to take back.
-            } catch let error as PubSubError {
-                throw ProfileError.refused(reason: error.localizedDescription)
-            }
+            try await retractNicknames()
         }
         try database.setSetting(.nickname, name)
+    }
+
+    /// XEP-0172 fixes no item id, so whatever the node holds is taken back,
+    /// including a name another client published under its own id. A node
+    /// that isn't there has nothing to take back.
+    private func retractNicknames() async throws {
+        do {
+            let page: PubSubModule.RetrievedItems = try await retryingPassingErrors(callback: { done in
+                self.client.module(.pubsub).retrieveItems(from: self.account.martin, for: NS.nick) { done($0.mapError { $0 }) }
+            })
+            for item in page.items {
+                do {
+                    try await retryingPassingErrors { try await retractPEPItem(node: NS.nick, itemId: item.id) }
+                } catch let error as PubSubError where error.error == .item_not_found {
+                    // Taken back meanwhile.
+                }
+            }
+        } catch let error as PubSubError where error.error == .item_not_found {
+            // No node, so no name.
+        } catch {
+            throw profileFailure(error)
+        }
     }
 
     static let nicknameItemId = "current"

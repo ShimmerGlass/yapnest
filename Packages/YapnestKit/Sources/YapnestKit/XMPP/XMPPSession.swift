@@ -20,10 +20,15 @@ public final class XMPPSession: @unchecked Sendable {
         public var port: Int?
         /// Skips STARTTLS. Only for local development servers.
         public var disableTLS: Bool
+        /// The new password of a change whose outcome the app never learned
+        /// (the request timed out or the connection dropped). Tried once if the
+        /// sign-in with `password` is refused.
+        public var candidatePassword: String?
 
-        public init(jid: JID, password: String, host: String? = nil, port: Int? = nil, disableTLS: Bool = false) {
+        public init(jid: JID, password: String, host: String? = nil, port: Int? = nil, disableTLS: Bool = false, candidatePassword: String? = nil) {
             self.jid = jid
             self.password = password
+            self.candidatePassword = candidatePassword
             self.host = host
             self.port = port
             self.disableTLS = disableTLS
@@ -195,6 +200,14 @@ public final class XMPPSession: @unchecked Sendable {
         var bounceBackoff: TimeInterval = 5
         /// The wait before `retryingPassingErrors` makes a request again; tests lower it.
         var retryBackoff: TimeInterval = ServerRetry.backoff
+        /// A password that may be the account's now (see `Credentials.candidatePassword`).
+        var candidatePassword: String?
+        /// The candidate is in the connection's configuration, in place of the stored password.
+        var usesCandidate = false
+        /// The candidate has been tried, so a second refusal is final.
+        var triedCandidate = false
+        /// Told which password a new session signed in with, when a candidate was in play.
+        var passwordConfirmed: (@Sendable (_ password: String, _ wasCandidate: Bool) -> Void)?
         /// How many times the server closed the stream with an error while a stanza of ours,
         /// by its id, was the oldest it hadn't acknowledged. An acknowledgement clears it.
         /// Kept across reconnects: that is where the count comes from.
@@ -410,6 +423,7 @@ public final class XMPPSession: @unchecked Sendable {
             }
         }
 
+        lock.withLock { $0.candidatePassword = credentials.candidatePassword }
         registerModules(requireTLS: !credentials.disableTLS, resource: resource)
         client.context.module(.streamFeatures).stanzaRefused = { _, bytes, limit in
             DiagLog.error(.send, "Stanza over the server's limit", .size("bytes", bytes), .int("limit", limit))
@@ -495,7 +509,10 @@ public final class XMPPSession: @unchecked Sendable {
         // stored offline: the archive has them, and the app gets them later.
         presence.initialPresence = policy.announcesPresence
         modules.register(presence)
-        modules.register(RosterModule(rosterManager: RosterManagerBase(store: DatabaseRosterStore(database: database))))
+        let roster = RosterModule(rosterManager: RosterManagerBase(store: DatabaseRosterStore(database: database)))
+        // The session asks itself (`fetchRoster`), to retry and to say when it fails.
+        roster.requestsRosterOnConnect = false
+        modules.register(roster)
         modules.register(MessageModule(chatManager: AnyPeerChatManager()))
         modules.register(MessageCarbonsModule())
         modules.register(MessageArchiveManagementModule())
@@ -1168,6 +1185,11 @@ public final class XMPPSession: @unchecked Sendable {
             } else {
                 lock.withLock { $0.probation = nil; $0.probationToken += 1 }
             }
+            if case .authenticationFailure(let error) = reason, switchToCandidatePassword(after: error) {
+                // Off Martin's state callback, which login() would re-enter.
+                DispatchQueue.global().async { [weak self] in self?.reconnectNow() }
+                return
+            }
             let retryNow = lock.withLock {
                 defer { $0.retryNow = false }
                 return $0.retryNow
@@ -1209,6 +1231,7 @@ public final class XMPPSession: @unchecked Sendable {
                 // state, which it won't send again; only a new one starts over.
                 clearPresences()
                 clearRooms()
+                confirmPassword()
                 lock.withLock {
                     $0.isSyncing = true
                     $0.presenceUnsent = false
@@ -1243,6 +1266,7 @@ public final class XMPPSession: @unchecked Sendable {
                 runOnceConnected(attempt: attempt) { [self] in
                     accountDiscovered(client.module(.disco).accountDiscoResult)
                 }
+                runOnceConnected(attempt: attempt) { [self] in fetchRoster(attempt: attempt) }
             }
         }
     }
