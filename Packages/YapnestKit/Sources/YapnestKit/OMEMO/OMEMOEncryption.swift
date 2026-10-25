@@ -28,7 +28,7 @@ final class OMEMOEncryption: @unchecked Sendable {
     private let encodeLock = NSLock()
 
     /// How long to wait for device lists and bundles before giving up on a send.
-    static let setupTimeout: TimeInterval = 45
+    var setupTimeout: TimeInterval = 45
 
     init(database: AppDatabase, account: JID, identityKeys: any IdentityKeyStore, now: @escaping @Sendable () -> Date = { Date() }) throws {
         self.account = account
@@ -106,9 +106,15 @@ final class OMEMOEncryption: @unchecked Sendable {
         /// an error that isn't "no such thing", or didn't answer in time.
         case fetchFailed(JID, ServerError)
 
-        /// Whether sending again later may work, so it is retried and not shown.
+        /// The `detail` of the error for a setup that ran out of time with no answer.
+        static let setupTimeoutDetail = "setup-timeout"
+
+        /// Whether sending again soon may work, so it is retried and not shown:
+        /// a server's answer that may pass. Not the whole setup running out of
+        /// time, which has already held the send queue for its full wait and
+        /// would again, once per message, for a peer whose server never answers.
         var isPassing: Bool {
-            if case .fetchFailed(_, let error) = self { return error.isPassing }
+            if case .fetchFailed(_, let error) = self { return error.isPassing && error.detail != Self.setupTimeoutDetail }
             return false
         }
 
@@ -138,9 +144,9 @@ final class OMEMOEncryption: @unchecked Sendable {
             if case .success(let addresses) = result { fetched = addresses }
             done.signal()
         }
-        guard done.wait(timeout: .now() + Self.setupTimeout) == .success, let fetched else {
+        guard done.wait(timeout: .now() + setupTimeout) == .success, let fetched else {
             // The wait ended with no answer, which may pass.
-            return .failure(.fetchFailed(recipients.first ?? account, ServerError(condition: "remote-server-timeout", type: .wait)))
+            return .failure(.fetchFailed(recipients.first ?? account, ServerError(condition: "remote-server-timeout", type: .wait, detail: EncryptError.setupTimeoutDetail)))
         }
 
         var usable: [SignalAddress] = []

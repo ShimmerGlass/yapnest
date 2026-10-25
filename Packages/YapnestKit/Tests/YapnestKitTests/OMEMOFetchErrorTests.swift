@@ -142,6 +142,15 @@ struct EncryptedSendRetryTests {
         #expect(after.error?.contains("remote-server-timeout") == true)
     }
 
+    @Test func aSetupThatTimedOutIsTriedOnce() async throws {
+        session.omemo.setupTimeout = 0.2
+        wire.answer { iq in answeringLists(iq, ofAlice: { _ in nil }) }
+        let message = try session.send("hi", to: alice)
+        session.drainSendQueue(alice)
+        #expect(listRequests() == 1)
+        #expect(try stored(message).status == .failed)
+    }
+
     @Test func aListThatPassesTheSecondTimeIsNotShownAsAnError() async throws {
         let asked = OSAllocatedCounter()
         wire.answer { iq in
