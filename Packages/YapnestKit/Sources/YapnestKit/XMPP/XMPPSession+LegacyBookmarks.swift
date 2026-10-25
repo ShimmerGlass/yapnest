@@ -89,7 +89,7 @@ extension XMPPSession {
     func removeLegacyBookmark(_ room: JID, then done: @escaping @Sendable (Bool) -> Void = { _ in }) {
         updateLegacyBookmarks({ storage in
             storage.removeChildren { $0.getAttribute("jid") == room.description }
-        }, then: done)
+        }, unsupportedMeansNothingToChange: true, then: done)
     }
 
     /// Another of our clients changed the old bookmarks. A server with
@@ -100,8 +100,12 @@ extension XMPPSession {
     }
 
     /// Reads the list, changes it and writes it back, keeping what we don't
-    /// understand (URL bookmarks, other clients' extensions) as it was.
-    private func updateLegacyBookmarks(_ change: @escaping @Sendable (Element) -> Void, then done: @escaping @Sendable (Bool) -> Void) {
+    /// understand (URL bookmarks, other clients' extensions) as it was. A
+    /// server that keeps no such list has nothing to remove from it, which a
+    /// removal counts as done.
+    private func updateLegacyBookmarks(
+        _ change: @escaping @Sendable (Element) -> Void, unsupportedMeansNothingToChange: Bool = false, then done: @escaping @Sendable (Bool) -> Void,
+    ) {
         Self.legacyBookmarkQueue.async { [self] in
             let pubsub = client.module(.pubsub)
             let storage: Element
@@ -113,6 +117,9 @@ extension XMPPSession {
                 storage = page.items.first?.payload ?? Element(name: "storage", xmlns: NS.legacyBookmarks)
             case .noNode?:
                 storage = Element(name: "storage", xmlns: NS.legacyBookmarks)
+            case .unsupported? where unsupportedMeansNothingToChange:
+                done(true)
+                return
             default:
                 // Writing back a list we couldn't read would drop the others.
                 logger.warning("Couldn't read the old bookmarks to change them")

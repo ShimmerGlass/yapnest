@@ -3,6 +3,28 @@ import Foundation
 
 /// Moderating a group: who is in it, and which messages stay.
 extension XMPPSession {
+    // MARK: Requests
+
+    /// Asks the room, and again while the answer is one that can pass. What
+    /// it throws is for the user: the server's own error, which `ServerError`
+    /// can tell apart, or that we're offline. The request is made anew for
+    /// each attempt, as a stanza keeps its id.
+    func roomRequest(_ iq: @autoclosure () -> Iq) async throws -> Iq {
+        do {
+            return try await retryingPassingErrors { try await client.context.writer.write(iq: iq()) }
+        } catch {
+            throw Self.roomRequestError(error, isConnected: isConnected)
+        }
+    }
+
+    /// A connection that went away reads as Martin's not-authorized, which
+    /// would be taken for the room refusing us.
+    static func roomRequestError(_ error: Error, isConnected: Bool) -> Error {
+        if !isConnected { return GroupError.notConnected }
+        if case XMPPError.not_authorized(let message?) = error, message.contains("not connected") { return GroupError.notConnected }
+        return error
+    }
+
     // MARK: Members
 
     /// Takes `member` out of the group. In a members-only room losing the
@@ -52,7 +74,7 @@ extension XMPPSession {
                   by: status.affiliation, on: occupant.affiliation, isSelf: nickname == status.nickname,
                   actorRole: status.role, targetIsPresent: true,
               ).canKick else { throw GroupError.notAllowed }
-        _ = try await client.context.writer.write(iq: OutboundStanza.kick(nickname: nickname, reason: reason, in: room))
+        _ = try await roomRequest(OutboundStanza.kick(nickname: nickname, reason: reason, in: room))
         updateRoom(room) { status in
             _ = status?.occupants.removeValue(forKey: nickname)
         }
@@ -61,7 +83,7 @@ extension XMPPSession {
     /// Asks the room for who is banned, which `RoomStatus.banned` keeps.
     public func refreshBanList(of room: JID) async throws {
         guard try joinedStatus(room).canSeeBans else { throw GroupError.notAllowed }
-        let response = try await client.context.writer.write(iq: OutboundStanza.affiliationList(.outcast, of: room))
+        let response = try await roomRequest(OutboundStanza.affiliationList(.outcast, of: room))
         listReceived(.outcast, in: room, response)
     }
 
@@ -72,7 +94,7 @@ extension XMPPSession {
         guard GroupModeration.actions(
             by: status.affiliation, on: status.affiliation(of: member), isSelf: member == account, isLastOwner: status.isLastOwner(account),
         )[keyPath: needs] else { throw GroupError.notAllowed }
-        _ = try await client.context.writer.write(iq: OutboundStanza.affiliation(affiliation, of: member, in: room))
+        _ = try await roomRequest(OutboundStanza.affiliation(affiliation, of: member, in: room))
         // Someone who isn't here sends no presence to tell by.
         updateRoom(room) { status in
             status?.setAffiliation(affiliation, of: member)
@@ -113,7 +135,7 @@ extension XMPPSession {
               let conversation = try database.conversation(id: message.conversationId),
               let status = roomStatus(conversation.peer), status.isJoined else { throw GroupError.notConnected }
         guard canRetractForEveryone(message, in: conversation.peer) else { throw GroupError.notAllowed }
-        _ = try await client.context.writer.write(iq: OutboundStanza.moderatedRetraction(of: target, in: conversation.peer))
+        _ = try await roomRequest(OutboundStanza.moderatedRetraction(of: target, in: conversation.peer))
         if let attachment = try database.applyModeratedRetraction(in: conversation.peer, target: target) { attachments.remove(attachment) }
     }
 

@@ -189,7 +189,7 @@ struct RoomCatchUpTests {
 
     @Test func aPageTheArchiveRefusedLeavesTheCursorForLiveMessagesToo() throws {
         wire.answer { request in
-            request.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") == nil ? nil : FakeWire.error(to: request, condition: "internal-server-error")
+            request.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") == nil ? nil : FakeWire.error(to: request, condition: "forbidden", type: "auth")
         }
         session.roomPresence(selfPresence(), room: room)
 
