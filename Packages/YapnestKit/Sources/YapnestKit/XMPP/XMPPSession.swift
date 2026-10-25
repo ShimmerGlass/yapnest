@@ -837,13 +837,16 @@ public final class XMPPSession: @unchecked Sendable {
                 // A new connection since the ping has proved itself.
                 return $0.attempt == attempt
             }
-            // Only once a silent stream is dropped, so nothing waiting on the
-            // check takes the time out for an answer.
-            defer { if lock.withLock({ $0.livenessCheck == nil }) { livenessPending.send(false) } }
             let heard = answered.withLock { $0 }
-            guard current, isConnected else { return }
+            guard current, isConnected else {
+                if lock.withLock({ $0.livenessCheck == nil }) { livenessPending.send(false) }
+                return
+            }
             DiagLog.notice(.connection, "Liveness check finished", .value("outcome", heard ? LivenessOutcome.answered : .silent), .duration("timeout", timeout))
             guard !heard else { return }
+            // A silent stream stays pending until the next connection clears
+            // it: Martin may still read as connected for a moment after the
+            // drop, and a waiter must not take that for an answer.
             abort(.transient("The connection was lost."), because: .noAnswer)
         }
     }
