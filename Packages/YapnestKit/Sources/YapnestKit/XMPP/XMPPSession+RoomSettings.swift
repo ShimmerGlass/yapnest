@@ -9,7 +9,7 @@ extension XMPPSession {
     /// The room's configuration as its owner form has it (XEP-0045 §10.2).
     /// Fields the room doesn't offer are nil.
     public func roomConfiguration(of room: JID) async throws -> RoomConfiguration {
-        try requireOwner(of: room)
+        try await requireOwner(of: room)
         guard let form = try await ownerForm(of: room) else { throw GroupError.unsupported }
         let configuration = RoomConfiguration(form: form)
         if let allowed = configuration.membersCanChangeSubject {
@@ -27,7 +27,7 @@ extension XMPPSession {
     /// The name is the room's own: a renamed room shows its new name in every
     /// member's chat list, and our bookmark follows.
     public func updateRoomConfiguration(_ configuration: RoomConfiguration, in room: JID) async throws {
-        try requireOwner(of: room)
+        try await requireOwner(of: room)
         guard let form = try await ownerForm(of: room) else { throw GroupError.unsupported }
         let changes = try configuration.changes(from: RoomConfiguration(form: form), in: form)
         guard !changes.isEmpty else { return }
@@ -38,8 +38,8 @@ extension XMPPSession {
         await refreshedRoomInfo(room)
     }
 
-    private func requireOwner(of room: JID) throws {
-        guard try joinedStatus(room).canEditInfo else { throw GroupError.notAllowed }
+    private func requireOwner(of room: JID) async throws {
+        guard try await joinedStatus(room).canEditInfo else { throw GroupError.notAllowed }
     }
 
     // MARK: Picture
@@ -49,7 +49,7 @@ extension XMPPSession {
     /// and encoded, as for `publishAvatar`. Throws `GroupError.unsupported`
     /// if the room's server keeps no vCard for rooms.
     public func setGroupAvatar(_ image: Data?, mimeType: String = "image/png", in room: JID) async throws {
-        try requireOwner(of: room)
+        try await requireOwner(of: room)
         // Checked before the room hears of it: it would show a picture that
         // we can't. The store names files by their hash, so a picture the
         // room then refuses is only left unused.
@@ -100,7 +100,7 @@ extension XMPPSession {
     /// bookmark gone. The room's destruction comes first, as a bookmark
     /// removed from a group that then stays would only be a lost bookmark.
     public func destroyGroup(_ room: JID, reason: String? = nil) async throws {
-        guard try joinedStatus(room).canDestroy else { throw GroupError.notAllowed }
+        guard try await joinedStatus(room).canDestroy else { throw GroupError.notAllowed }
         _ = try await roomRequest(OutboundStanza.destroy(room, reason: reason))
         groupDestroyed(room)
     }

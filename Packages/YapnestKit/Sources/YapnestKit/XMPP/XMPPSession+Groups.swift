@@ -294,9 +294,25 @@ extension XMPPSession {
     }
 
     /// The room's status while we're connected and in it, for what only
-    /// works there.
-    func joinedStatus(_ room: JID) throws -> RoomStatus {
-        guard isConnected, let status = roomStatus(room), status.isJoined else { throw GroupError.notConnected }
+    /// works there. Back from the background the connection and then the
+    /// rejoin take a few seconds, which this waits for, within one grace. A
+    /// room we've left or that failed to join won't come, so it doesn't wait.
+    func joinedStatus(_ room: JID) async throws -> RoomStatus {
+        let started = Date()
+        guard await waitForConnection() else { throw GroupError.notConnected }
+        if let status = roomStatus(room), status.isJoined { return status }
+        guard let group = try? database.groupChat(room), !group.hasLeft else { throw GroupError.notConnected }
+        let grace = lock.withLock { $0.connectionGrace }
+        let remaining = max(0, grace - Date().timeIntervalSince(started))
+        let status = try? await withTimeout(remaining) { [self] () -> RoomStatus? in
+            for await all in rooms.values {
+                guard let status = all[room] else { continue }
+                if case .failed = status.phase { return nil }
+                if status.isJoined { return status }
+            }
+            return nil
+        }
+        guard let status, isConnected else { throw GroupError.notConnected }
         return status
     }
 
@@ -1669,7 +1685,7 @@ extension XMPPSession {
     static let joinTimeout: TimeInterval = 30
 
     func joinGroup(_ room: JID, nickname: String?, mayCreate: Bool, password: String?, timeout: TimeInterval) async throws {
-        guard isConnected else { throw GroupError.notConnected }
+        guard await waitForConnection() else { throw GroupError.notConnected }
         if let status = roomStatus(room), status.isJoined {
             try database.removeGroupInvitation(room)
             return
@@ -1745,7 +1761,7 @@ extension XMPPSession {
     /// it exists: a failure to invite is reported as a warning with Retry
     /// instead, as an error would make the user create it twice.
     public func createGroup(name: String, inviting invitees: [JID]) async throws -> JID {
-        guard isConnected else { throw GroupError.notConnected }
+        guard await waitForConnection() else { throw GroupError.notConnected }
         let service = try await mucService()
         let alphabet = Array("abcdefghijklmnopqrstuvwxyz0123456789")
         let local = String((0..<12).map { _ in alphabet.randomElement()! })
@@ -1814,7 +1830,7 @@ extension XMPPSession {
     static let inviteGrace: TimeInterval = 3
 
     func invite(_ invitees: [JID], to room: JID, grace: TimeInterval) async throws {
-        if try joinedStatus(room).isOwnerOrAdmin {
+        if try await joinedStatus(room).isOwnerOrAdmin {
             // One request each: Prosody only applies the first item of a request.
             for invitee in invitees {
                 _ = try await roomRequest(OutboundStanza.affiliation(.member, of: invitee, in: room))
@@ -1898,7 +1914,7 @@ extension XMPPSession {
     /// and the next connection would join the group again. The bookmark goes
     /// first for that reason; once it's gone, nothing can undo leaving.
     public func leaveGroup(_ room: JID) async throws {
-        guard isConnected else { throw GroupError.notConnected }
+        guard await waitForConnection() else { throw GroupError.notConnected }
         try await retractBookmarkAwaiting(room)
         leaveRoom(room)
     }
@@ -1981,7 +1997,7 @@ extension XMPPSession {
     /// or said why not. Whether we may is the room's call: moderators always,
     /// participants if it lets them (`RoomStatus.canChangeSubject`).
     public func setSubject(_ subject: String, in room: JID) async throws {
-        _ = try joinedStatus(room)
+        _ = try await joinedStatus(room)
         do {
             try await retryingPassingErrors { try await sendSubject(subject, in: room) }
         } catch let error as ServerError where ["forbidden", "not-allowed"].contains(error.condition) {

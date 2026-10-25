@@ -171,7 +171,7 @@ extension XMPPSession {
     /// address; a contact's is one of its devices' full addresses (see
     /// `commandEntities(of:)`).
     public func adHocCommands(at jid: String) async throws -> [AdHocCommand] {
-        guard isConnected else { throw AdHocError.offline }
+        guard await waitForConnection() else { throw AdHocError.offline }
         let entity = Martin.JID(jid)
         let query = Element(name: "query", xmlns: DiscoveryModule.ITEMS_XMLNS)
         query.setAttribute("node", value: NS.commands)
@@ -187,7 +187,7 @@ extension XMPPSession {
     /// member's address is `room/nick`, and its presence needn't carry
     /// capabilities, so it is asked. Any failure counts as no.
     public func offersCommands(at jid: String) async -> Bool {
-        guard isConnected else { return false }
+        guard await waitForConnection() else { return false }
         let entity = Martin.JID(jid)
         let iq = Iq()
         iq.type = .get
@@ -207,7 +207,7 @@ extension XMPPSession {
     public func execute(
         _ command: AdHocCommand, action: AdHocAction = .execute, sessionID: String? = nil, form: XDataForm? = nil,
     ) async throws -> AdHocResponse {
-        guard isConnected else { throw AdHocError.offline }
+        guard await waitForConnection() else { throw AdHocError.offline }
         let entity = Martin.JID(command.jid)
         let iq = AdHocStanza.request(to: entity, node: command.node, action: action, sessionID: sessionID, form: form)
         let reply = try await send(iq, to: entity)

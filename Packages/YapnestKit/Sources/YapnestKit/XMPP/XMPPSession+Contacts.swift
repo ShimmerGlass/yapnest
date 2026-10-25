@@ -31,7 +31,7 @@ extension XMPPSession {
     /// server to take the roster item, and throws if it refuses or never
     /// answers. The subscription request is only sent once it has.
     public func addContactAndWait(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {
-        guard isConnected else { throw ContactError.offline }
+        guard await waitForConnection() else { throw ContactError.offline }
         guard jid != account else { return }
         _ = try await retryingPassingErrors {
             try await client.module(.roster).addItem(jid: Martin.JID(jid.martin), name: name, groups: [])
@@ -86,7 +86,7 @@ extension XMPPSession {
     /// other's presence any more, and a request we sent them is withdrawn.
     /// The chat stays, and they can still message us.
     public func removeContact(_ jid: JID) async throws {
-        guard isConnected else { throw ContactError.offline }
+        guard await waitForConnection() else { throw ContactError.offline }
         // Removing the item should withdraw our request too (RFC 6121),
         // but ejabberd keeps it, and they'd still be asked.
         if (try? database.contact(jid))??.isSubscriptionPending == true {
@@ -102,7 +102,7 @@ extension XMPPSession {
     /// already in the roster: a roster set would otherwise add them, which
     /// shares our presence. The database follows the server's roster push.
     public func setContactName(_ jid: JID, name: String?) async throws {
-        guard isConnected else { throw ContactError.offline }
+        guard await waitForConnection() else { throw ContactError.offline }
         guard let contact = try database.contact(jid), contact.isInRoster else { throw ContactError.notInRoster }
         // A roster set replaces the item's name and groups, so the groups are
         // the current ones. Its subscription is left out, which keeps it.
@@ -113,7 +113,7 @@ extension XMPPSession {
     /// does. The request stays on the list if the server refuses the roster
     /// item, and nothing is sent to them.
     public func acceptContactRequest(from jid: JID) async throws {
-        guard isConnected else { throw ContactError.offline }
+        guard await waitForConnection() else { throw ContactError.offline }
         // Their chosen name isn't copied into the roster: it would be ours on
         // every device, set by a stranger. The roster name stays the user's.
         try await addContactAndWait(jid)

@@ -92,6 +92,9 @@ public final class XMPPSession: @unchecked Sendable {
     /// The XEP-0357 app server that wakes this device.
     let pushRelay: JID
     public let state = CurrentValueSubject<State, Never>(.disconnected(error: nil))
+    /// Whether a liveness check has been sent and neither answered nor given
+    /// up on: a request written then may go down a dead stream.
+    let livenessPending = CurrentValueSubject<Bool, Never>(false)
     public let events = PassthroughSubject<Event, Never>()
     /// How the room answered a subject change, which only comes back as a
     /// message: its echo, or an error.
@@ -307,6 +310,9 @@ public final class XMPPSession: @unchecked Sendable {
         var lastSeenSchedule = LastSeenSchedule()
         /// The liveness check in flight, so one runs at a time.
         var livenessCheck: UUID?
+        /// How long an action that needs the connection waits for it to come
+        /// back before it fails as offline. Tests shrink it.
+        var connectionGrace: TimeInterval = XMPPSession.defaultConnectionGrace
         /// Chat states (XEP-0085) by contact.
         var chatStates: [JID: ChatStateTracker] = [:]
         /// Archive results of the pages being fetched, each stored with the
@@ -813,11 +819,15 @@ public final class XMPPSession: @unchecked Sendable {
             return $0.attempt
         }
         guard let attempt else { return }
+        livenessPending.send(true)
         // Martin only checks its timeouts every 30 seconds, so ours is separate.
         let answered = OSAllocatedUnfairLock(initialState: false)
-        client.module(.ping).ping(Martin.JID(account.martin), timeout: timeout) { result in
+        client.module(.ping).ping(Martin.JID(account.martin), timeout: timeout) { [weak self] result in
             if case .failure(.remote_server_timeout) = result { return }
             answered.withLock { $0 = true }
+            // The connection is proven now, though the check stays until its
+            // time is up so that only one runs at a time.
+            self?.livenessPending.send(false)
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak self] in
             guard let self else { return }
@@ -827,6 +837,9 @@ public final class XMPPSession: @unchecked Sendable {
                 // A new connection since the ping has proved itself.
                 return $0.attempt == attempt
             }
+            // Only once a silent stream is dropped, so nothing waiting on the
+            // check takes the time out for an answer.
+            defer { if lock.withLock({ $0.livenessCheck == nil }) { livenessPending.send(false) } }
             let heard = answered.withLock { $0 }
             guard current, isConnected else { return }
             DiagLog.notice(.connection, "Liveness check finished", .value("outcome", heard ? LivenessOutcome.answered : .silent), .duration("timeout", timeout))
@@ -1019,6 +1032,35 @@ public final class XMPPSession: @unchecked Sendable {
     var isConnected: Bool {
         if case .connected = client.state { return true }
         return false
+    }
+
+    static let defaultConnectionGrace: TimeInterval = 8
+
+    /// Whether the connection is up and trusted, waiting up to the grace for
+    /// it to come back if the session is reconnecting or checking the old
+    /// stream (the user has just returned to the app). False at once if it
+    /// isn't going to: signed out, or the server refused the account. It
+    /// doesn't wait for the archive catch-up, which these actions don't need.
+    func waitForConnection() async -> Bool {
+        if isConnected, !livenessPending.value { return true }
+        if !isConnected {
+            guard lock.withLock({ $0.wantsConnection }) else { return false }
+            if case .failed = state.value { return false }
+        }
+        let grace = lock.withLock { $0.connectionGrace }
+        let connected = try? await withTimeout(grace) { [self] () -> Bool in
+            for await (value, pending) in state.combineLatest(livenessPending).values {
+                if case .failed = value { return false }
+                guard case .connected = value, !pending else { continue }
+                // Martin publishes the state before it holds it.
+                for _ in 0..<20 {
+                    if isConnected { return true }
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+            }
+            return false
+        }
+        return connected ?? false
     }
 
     /// What Martin's connector reports about each endpoint, as the diagnostics log has it.
@@ -1241,6 +1283,8 @@ public final class XMPPSession: @unchecked Sendable {
             }
             callStep(.connectionRestored)
             runOnceConnected(attempt: attempt) { [self] in sendUnsentCallMessages() }
+            // A ping sent on the old stream says nothing about this one.
+            livenessPending.send(false)
             if resumed {
                 self.state.send(.connected(isSyncing: lock.withLock { $0.isSyncing }))
                 // Martin publishes the state before it holds it, so in here the
@@ -2749,7 +2793,7 @@ public final class XMPPSession: @unchecked Sendable {
     public func removeOwnDevices(_ devices: [OMEMODevice]) async throws {
         let ids = devices.filter { $0.jid == account && UInt32(bitPattern: $0.id) != omemo.deviceId }.map(\.id)
         guard !ids.isEmpty else { return }
-        guard isConnected else { throw DeviceRemovalError.offline }
+        guard await waitForConnection() else { throw DeviceRemovalError.offline }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             omemo.module.removeDevices(withIds: ids) { result in
                 switch result {

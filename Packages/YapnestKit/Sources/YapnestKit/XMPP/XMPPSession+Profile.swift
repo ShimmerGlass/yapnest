@@ -24,7 +24,7 @@ extension XMPPSession {
     /// Publishes `data` as our avatar and shows it right away, without
     /// waiting for the server to notify us of our own change.
     public func publishAvatar(_ data: Data, mimeType: String, width: Int? = nil, height: Int? = nil) async throws {
-        guard isConnected else { throw ProfileError.offline }
+        guard await waitForConnection() else { throw ProfileError.offline }
         guard data.count <= AvatarStore.maxSize else { throw ProfileError.imageTooLarge }
         let hash = AvatarStore.hash(of: data)
         // Martin's own publishAvatar sends no publish-options, leaving the
@@ -41,7 +41,7 @@ extension XMPPSession {
 
     /// Removes our avatar, by publishing empty metadata (XEP-0084 §4.2).
     public func removeAvatar() async throws {
-        guard isConnected else { throw ProfileError.offline }
+        guard await waitForConnection() else { throw ProfileError.offline }
         try await publishProfilePEP(node: NS.avatarMetadata, itemId: nil, payload: ProfileStanza.avatarMetadata(nil), accessModel: "open")
         try database.setAvatarHash(nil, for: account)
     }
@@ -202,7 +202,7 @@ extension XMPPSession {
     /// Publishes `name` as ours, readable by anyone, or takes it back when
     /// it's blank. Our copy is kept once the server has it.
     public func setNickname(_ name: String?) async throws {
-        guard isConnected else { throw ProfileError.offline }
+        guard await waitForConnection() else { throw ProfileError.offline }
         let name = Self.normalizedNickname(name)
         if let name {
             try await publishProfilePEP(node: NS.nick, itemId: Self.nicknameItemId, payload: ProfileStanza.nick(name), accessModel: "open")
