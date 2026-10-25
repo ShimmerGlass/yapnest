@@ -170,3 +170,65 @@ enum CallRefusedAction: String, DiagEnum {
 enum RelayDiscoveryOutcome: String, DiagEnum {
     case found, none, unavailable, timedOut, failed
 }
+
+/// Whether the app may use the camera, as the system reports it.
+public enum CameraAuthorization: String, DiagEnum {
+    case authorized, notDetermined, denied, restricted, unknown
+}
+
+/// Why starting a call stopped in the app, before or while handing it to the session.
+public enum CallStartExit: String, DiagEnum {
+    case noCameraAccess, peerNotCallable, audioActivation, sessionStart, callKitRequest, callKitStart
+}
+
+/// Which `CallError` the session refused a call with.
+public enum CallErrorKind: String, DiagEnum {
+    case unavailable, notConnected, busy, other
+
+    public init(_ error: Error) {
+        switch error as? CallError {
+        case .unavailable: self = .unavailable
+        case .notConnected: self = .notConnected
+        case .busy: self = .busy
+        case nil: self = .other
+        }
+    }
+}
+
+/// Where a call's camera came from, or why it is a generated picture instead.
+public enum CallCaptureSource: String, DiagEnum {
+    case chosenDevice, positionMatch, firstDevice
+    case syntheticRequested, syntheticNoDevice, syntheticNoFormat
+}
+
+/// A picture's size as a class, not the exact numbers.
+public enum PictureClass: String, DiagEnum {
+    case under480, p480, p720, p1080, larger
+
+    public init(height: Int) {
+        switch height {
+        case ..<480: self = .under480
+        case ..<720: self = .p480
+        case ..<1080: self = .p720
+        case 1080..<1440: self = .p1080
+        default: self = .larger
+        }
+    }
+}
+
+/// Why the system paused the camera's capture session
+/// (`AVCaptureSession.InterruptionReason`).
+public enum CaptureInterruptionKind: String, DiagEnum {
+    case notAvailableInBackground, audioInUse, videoInUse, multipleForegroundApps, systemPressure, other
+
+    public init(code: Int?) {
+        switch code {
+        case 1: self = .notAvailableInBackground
+        case 2: self = .audioInUse
+        case 3: self = .videoInUse
+        case 4: self = .multipleForegroundApps
+        case 5: self = .systemPressure
+        default: self = .other
+        }
+    }
+}

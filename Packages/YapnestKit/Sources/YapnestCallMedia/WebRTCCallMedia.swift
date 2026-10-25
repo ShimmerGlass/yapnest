@@ -10,7 +10,7 @@ public enum CallMediaError: Error {
 }
 
 /// Which of a video call's two pictures a renderer shows.
-public enum CallVideoSide: Sendable {
+public enum CallVideoSide: String, Sendable, DiagEnum {
     case local, remote
 }
 
@@ -196,19 +196,25 @@ public final class WebRTCCallMedia: CallMedia, @unchecked Sendable {
     /// Draws a side's video into `renderer`, from now on and also if the
     /// track only arrives later (the remote one comes with the peer's answer).
     public func addRenderer(_ renderer: any RTCVideoRenderer, for side: CallVideoSide) {
-        lock.withLock {
+        let hasTrack = lock.withLock {
             switch side {
             case .local:
                 localRenderers.append(renderer)
                 localVideoTrack?.add(renderer)
+                return localVideoTrack != nil
             case .remote:
                 remoteRenderers.append(renderer)
                 remoteVideoTrack?.add(renderer)
+                return remoteVideoTrack != nil
             }
         }
+        // Without a track the renderer waits for it, which is what a picture
+        // that never comes looks like from here.
+        DiagLog.info(.calls, "Call renderer attached", .value("side", side), .bool("hasTrack", hasTrack))
     }
 
     public func removeRenderer(_ renderer: any RTCVideoRenderer, for side: CallVideoSide) {
+        defer { DiagLog.info(.calls, "Call renderer detached", .value("side", side)) }
         lock.withLock {
             switch side {
             case .local:

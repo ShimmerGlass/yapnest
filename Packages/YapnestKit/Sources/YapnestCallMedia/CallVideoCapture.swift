@@ -1,6 +1,8 @@
 import AVFoundation
 import CoreVideo
 import Foundation
+import os
+import YapnestKit
 @preconcurrency import WebRTC
 
 /// Where a call's outgoing video comes from, feeding one `RTCVideoSource`.
@@ -19,8 +21,11 @@ final class CallVideoCapture: @unchecked Sendable {
     // alone couldn't tell them apart.
     private var chosenID: String?
     private var choiceObserver: (any NSObjectProtocol)?
+    // What the capture session reports while the camera runs.
+    private var sessionObservers: [any NSObjectProtocol] = []
     // The capturer holds its delegate weakly.
-    private lazy var upright = UprightFrames(target: source)
+    private lazy var framed = FirstFrameLogging(target: source)
+    private lazy var upright = UprightFrames(target: framed)
 
     /// `synthetic` skips the camera even if there is one, so a test never
     /// prompts for it.
@@ -55,6 +60,7 @@ final class CallVideoCapture: @unchecked Sendable {
             let devices = useSynthetic ? [] : RTCCameraVideoCapturer.captureDevices()
             let current = devices.firstIndex { $0.uniqueID == chosenID }
                 ?? devices.firstIndex { $0.position == position } ?? 0
+            DiagLog.info(.calls, "Call camera switch asked", .int("devices", devices.count), .bool("capturing", camera != nil))
             if !devices.isEmpty {
                 let next = devices[(current + 1) % devices.count]
                 chosenID = next.uniqueID
@@ -71,6 +77,7 @@ final class CallVideoCapture: @unchecked Sendable {
         let devices = RTCCameraVideoCapturer.captureDevices()
         let wanted = CallDeviceResolution.camera(choice: CallDeviceChoices.shared.cameraID, available: devices.map(\.uniqueID))
         guard wanted != current.device.uniqueID else { return }
+        DiagLog.info(.calls, "Call camera choice changed")
         stopLocked()
         startLocked()
     }
@@ -80,27 +87,90 @@ final class CallVideoCapture: @unchecked Sendable {
         #if targetEnvironment(macCatalyst)
         chosenID = CallDeviceResolution.camera(choice: CallDeviceChoices.shared.cameraID, available: devices.map(\.uniqueID))
         #endif
-        guard let device = devices.first(where: { $0.uniqueID == chosenID })
-            ?? devices.first(where: { $0.position == position }) ?? devices.first else {
-            if synthetic == nil {
-                let capturer = SyntheticVideoCapturer(delegate: source)
-                synthetic = capturer
-                capturer.start()
-            }
+        let candidates = devices.map { CameraCandidate(id: $0.uniqueID, position: $0.position) }
+        guard let pick = Self.choose(from: candidates, chosenID: chosenID, position: position) else {
+            startSynthetic(useSynthetic ? .syntheticRequested : .syntheticNoDevice, devices: devices.count)
             return
         }
+        let device = devices[pick.index]
         guard camera == nil else { return }
         #if targetEnvironment(macCatalyst)
         let capturer = RTCCameraVideoCapturer(delegate: upright)
         #else
-        let capturer = RTCCameraVideoCapturer(delegate: source)
+        let capturer = RTCCameraVideoCapturer(delegate: framed)
         #endif
+        // A capturer without a format would never start, and the call would
+        // send nothing, so a generated picture stands in as with no camera.
+        guard let format = Self.format(of: device, preferring: capturer.preferredOutputPixelFormat()) else {
+            startSynthetic(.syntheticNoFormat, devices: devices.count)
+            return
+        }
         camera = capturer
-        guard let format = Self.format(of: device, preferring: capturer.preferredOutputPixelFormat()) else { return }
-        capturer.startCapture(with: device, format: format, fps: Self.frameRate(of: format))
+        let size = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        let fps = Self.frameRate(of: format)
+        DiagLog.info(.calls, "Call camera starting",
+            .int("devices", devices.count), .value("source", pick.source),
+            .value("picture", PictureClass(height: Int(size.height))), .int("fps", fps))
+        capturer.startCapture(with: device, format: format, fps: fps) { error in
+            if let error {
+                DiagLog.error(.calls, "Call camera failed to start", .error(error))
+            } else {
+                DiagLog.info(.calls, "Call camera capturing")
+            }
+        }
+        observe(capturer.captureSession)
+    }
+
+    private func startSynthetic(_ source: CallCaptureSource, devices: Int) {
+        guard synthetic == nil else { return }
+        DiagLog.info(.calls, "Call camera starting", .int("devices", devices), .value("source", source))
+        let capturer = SyntheticVideoCapturer(delegate: framed)
+        synthetic = capturer
+        capturer.start()
+    }
+
+    private func observe(_ session: AVCaptureSession) {
+        removeObservers()
+        let center = NotificationCenter.default
+        sessionObservers = [
+            center.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil) { note in
+                if let error = note.userInfo?[AVCaptureSessionErrorKey] as? NSError {
+                    DiagLog.error(.calls, "Call camera runtime error", .error(error))
+                } else {
+                    DiagLog.error(.calls, "Call camera runtime error")
+                }
+            },
+            center.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: nil) { note in
+                #if os(iOS)
+                let code = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber)?.intValue
+                #else
+                let code: Int? = nil
+                _ = note
+                #endif
+                DiagLog.notice(.calls, "Call camera interrupted", .value("reason", CaptureInterruptionKind(code: code)))
+            },
+            center.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: nil) { _ in
+                DiagLog.info(.calls, "Call camera interruption ended")
+            },
+        ]
+    }
+
+    private func removeObservers() {
+        for observer in sessionObservers { NotificationCenter.default.removeObserver(observer) }
+        sessionObservers = []
+    }
+
+    /// Which camera is used: the one chosen, else the one at the position
+    /// asked for, else the first. Nil when there is none.
+    static func choose(from devices: [CameraCandidate], chosenID: String?, position: AVCaptureDevice.Position) -> (index: Int, source: CallCaptureSource)? {
+        if let index = devices.firstIndex(where: { $0.id == chosenID }) { return (index, .chosenDevice) }
+        if let index = devices.firstIndex(where: { $0.position == position }) { return (index, .positionMatch) }
+        return devices.isEmpty ? nil : (0, .firstDevice)
     }
 
     private func stopLocked() {
+        DiagLog.info(.calls, "Call camera stopping", .bool("camera", camera != nil), .bool("synthetic", synthetic != nil))
+        removeObservers()
         camera?.stopCapture()
         camera = nil
         synthetic?.stop()
@@ -127,6 +197,30 @@ final class CallVideoCapture: @unchecked Sendable {
     static func frameRate(of format: AVCaptureDevice.Format) -> Int {
         let best = format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? Double(maxFrameRate)
         return max(1, min(maxFrameRate, Int(best)))
+    }
+}
+
+struct CameraCandidate {
+    let id: String
+    let position: AVCaptureDevice.Position
+}
+
+/// Logs the first picture the camera (or the generated one) delivers, once per
+/// call, then passes every frame on. Together with the remote side's log, it
+/// tells a camera that gave nothing from one whose picture wasn't drawn.
+final class FirstFrameLogging: NSObject, RTCVideoCapturerDelegate, @unchecked Sendable {
+    private let target: any RTCVideoCapturerDelegate
+    private let logged = OSAllocatedUnfairLock(initialState: false)
+
+    init(target: any RTCVideoCapturerDelegate) {
+        self.target = target
+    }
+
+    func capturer(_ capturer: RTCVideoCapturer, didCapture frame: RTCVideoFrame) {
+        if logged.withLock({ let first = !$0; $0 = true; return first }) {
+            DiagLog.info(.calls, "First local video frame", .value("picture", PictureClass(height: Int(frame.height))))
+        }
+        target.capturer(capturer, didCapture: frame)
     }
 }
 
