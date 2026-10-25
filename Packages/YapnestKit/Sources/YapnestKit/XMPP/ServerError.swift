@@ -43,6 +43,11 @@ public struct ServerError: Error, Equatable, Sendable {
         )
     }
 
+    /// The error a bounced stanza carries; a bare `<error/>` or none is undefined.
+    public static func bounce(of stanza: Martin.Message) -> ServerError {
+        ServerError(stanza.element) ?? ServerError(condition: "undefined-condition")
+    }
+
     /// The condition `element`'s error names, or nil if it names none (a bare
     /// `<error/>`), as `ServerError` would read it.
     public static func declaredCondition(in element: Element) -> String? {

@@ -20,7 +20,8 @@ private struct ConversationPrompts: ViewModifier {
         case .linkPreviews:
             (String(localized: "Show link previews in this chat?"),
              String(localized: "Previews are loaded by your phone, so a linked site can see your IP address and that you received its link. You can change this in Chat Settings."))
-        case .failure(let id): (String(localized: "Message not sent"), model.failureText(of: id))
+        case .failure(let id): (model.failureTitle(of: id), model.failureText(of: id))
+        case .reactionFailure(let id): (String(localized: "Reaction not delivered"), model.reactionFailureText(of: id))
         case .quoteNotFound:
             (String(localized: "Message not found"), String(localized: "The message that was quoted may be too old, or have been deleted."))
         case .microphoneDenied:
@@ -69,6 +70,10 @@ private struct ConversationPrompts: ViewModifier {
             Button("Not Now", role: .cancel) {}
         case .failure(let id):
             Button("Try Again") { model.retry(id) }
+            Button("Cancel", role: .cancel) {}
+        case .reactionFailure(let id):
+            Button("Try Again") { model.retryReactions(id) }
+            Button("Remove", role: .destructive) { model.removeReactions(id) }
             Button("Cancel", role: .cancel) {}
         case .microphoneDenied:
             Button("Open Settings") {

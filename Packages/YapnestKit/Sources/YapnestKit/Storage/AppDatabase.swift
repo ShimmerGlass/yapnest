@@ -643,6 +643,19 @@ public final class AppDatabase: Sendable {
             try db.execute(sql: "CREATE INDEX message_on_actionPendingId ON message(actionPendingId) WHERE actionPendingId IS NOT NULL")
         }
 
+        migrator.registerMigration("v38-action-errors") { db in
+            // Why a correction, a retraction or our reactions never reached the
+            // other side, once the server (or the give-up) said so. Nothing
+            // else records it: by then the stanza was acknowledged and its
+            // pending id is gone.
+            try db.alter(table: "message") { t in
+                t.add(column: "actionError", .text)
+            }
+            try db.alter(table: "reaction") { t in
+                t.add(column: "error", .text)
+            }
+        }
+
         return migrator
     }
 

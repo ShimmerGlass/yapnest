@@ -20,7 +20,7 @@ struct MessageMenu: View {
             reactions
             Button("Reply", systemImage: "arrowshape.turn.up.left") { model.reply(to: id) }
         }
-        if message.direction == .outgoing, message.status == .failed {
+        if message.deliveryProblem != nil {
             Button("Try Again", systemImage: "arrow.clockwise") { model.retry(id) }
         }
         if item.attachment?.state == .offered {

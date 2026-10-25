@@ -130,6 +130,28 @@ struct PendingReactionTests {
         ))
     }
 
+    @Test func aPendingReactionInARoomWeLeftIsDroppedNotQueuedEverySession() throws {
+        let message = try roomMessage(.incoming, remoteId: "g1", serverId: "s1")
+        session.updateRoom(room) {
+            var status = RoomStatus(phase: .joined, nickname: "me")
+            status.isSyncing = true
+            $0 = status
+        }
+        try database.setReactions(["👍"], from: Author(jid: me, nick: "me"), conversationId: message.conversationId, messageRef: "s1", pendingId: "r1")
+        #expect(try isPending(in: room))
+
+        session.leaveRoom(room)
+        session.sendUnclaimedPending()
+        #expect(reactionStanzas().isEmpty)
+        #expect(!(try isPending(in: room)))
+        #expect(try rows().allSatisfy { $0.error == nil })
+    }
+
+    private func isPending(in peer: YapnestKit.JID) throws -> Bool {
+        let items = try database.reader.read { try AppDatabase.conversationItems($0, peer: peer, me: me) }
+        return items.flatMap(\.reactions).contains { $0.isPending }
+    }
+
     @Test func reactingToAGroupMessageTheRoomHasntEchoedYetThrows() throws {
         _ = try roomMessage(.incoming, remoteId: "g0", serverId: "s0")
         let mine = try roomMessage(.outgoing, remoteId: "g1", serverId: nil)

@@ -136,10 +136,11 @@ extension AppDatabase {
         }
     }
 
-    /// The server has our reactions stanza `id`.
-    func clearPendingReactions(id: String) throws {
+    /// The server has our reactions stanza `id`; or, with an `error`, it was
+    /// given up on and they show as failed.
+    func clearPendingReactions(id: String, error: String? = nil) throws {
         try writer.write { db in
-            try Reaction.filter(Column("pendingId") == id).updateAll(db, Column("pendingId").set(to: nil))
+            try Reaction.filter(Column("pendingId") == id).updateAll(db, Self.clearing("pendingId", errorColumn: "error", error: error))
         }
     }
 
@@ -164,17 +165,78 @@ extension AppDatabase {
     }
 
     /// Gives up on reactions that can no longer be sent, so they don't stay
-    /// marked as sending for good.
-    func clearPendingReactions(messageId: Int64) throws {
+    /// marked as sending for good. With an `error` they show as failed, which
+    /// is for a bounce that came after the stanza was acknowledged; `sender`
+    /// then keeps it to our own rows.
+    /// `bouncedId` is the stanza that bounced: rows pending under another id
+    /// belong to a newer change, which stands.
+    func clearPendingReactions(messageId: Int64, from sender: JID? = nil, error: String? = nil, unlessSupersededBy bouncedId: String? = nil) throws {
         try writer.write { db in
-            try Reaction.filter(Column("messageId") == messageId).updateAll(db, Column("pendingId").set(to: nil))
+            var request = Reaction.filter(Column("messageId") == messageId)
+            if let sender { request = request.filter(Column("sender") == sender) }
+            if let bouncedId { request = request.filter(Column("pendingId") == nil || Column("pendingId") == bouncedId) }
+            try request.updateAll(db, Self.clearing("pendingId", errorColumn: "error", error: error))
         }
     }
 
-    /// The server has our correction or retraction stanza `id`.
-    func clearPendingAction(id: String) throws {
+    /// The server has our correction or retraction stanza `id`; or, with an
+    /// `error`, it was given up on and the message shows that it didn't reach
+    /// the others.
+    func clearPendingAction(id: String, error: String? = nil) throws {
         try writer.write { db in
-            try Message.filter(Column("actionPendingId") == id).updateAll(db, Column("actionPendingId").set(to: nil))
+            try Message.filter(Column("actionPendingId") == id).updateAll(db, Self.clearing("actionPendingId", errorColumn: "actionError", error: error))
+        }
+    }
+
+    /// The same for a bounce that came after the acknowledgement, which the
+    /// stanza's id no longer finds.
+    /// A newer change pending under another id than `bouncedId` stands.
+    func clearPendingAction(messageId: Int64, error: String, unlessSupersededBy bouncedId: String) throws {
+        try writer.write { db in
+            try Message.filter(key: messageId)
+                .filter(Column("actionPendingId") == nil || Column("actionPendingId") == bouncedId)
+                .updateAll(db, Self.clearing("actionPendingId", errorColumn: "actionError", error: error))
+        }
+    }
+
+    /// Clears a pending id, and records why where an `error` is given.
+    private static func clearing(_ pending: String, errorColumn: String, error: String?) -> [ColumnAssignment] {
+        var assignments = [Column(pending).set(to: nil)]
+        if let error { assignments.append(Column(errorColumn).set(to: error)) }
+        return assignments
+    }
+
+    /// What a bounce or the user makes pending again, under the stanza `id`.
+    enum Resend {
+        case action(messageId: Int64)
+        case reactions(messageId: Int64, from: JID)
+    }
+
+    /// Marks `item` pending under `id` and clears a failure, so the resend
+    /// paths pick it up. With `bouncedId`, not where a newer change is pending
+    /// under another id: it stands.
+    func repend(_ item: Resend, id: String, ifNotSupersededBy bouncedId: String? = nil) throws {
+        try writer.write { db in
+            switch item {
+            case .action(let messageId):
+                var request = Message.filter(key: messageId)
+                if let bouncedId { request = request.filter(Column("actionPendingId") == nil || Column("actionPendingId") == bouncedId) }
+                try request
+                    .updateAll(db, Column("actionPendingId").set(to: id), Column("actionError").set(to: nil))
+            case .reactions(let messageId, let sender):
+                var request = Reaction.filter(Column("messageId") == messageId && Column("sender") == sender)
+                if let bouncedId { request = request.filter(Column("pendingId") == nil || Column("pendingId") == bouncedId) }
+                try request
+                    .updateAll(db, Column("pendingId").set(to: id), Column("error").set(to: nil))
+            }
+        }
+    }
+
+    /// Our message `remoteId` bounced: pending again where the error may pass,
+    /// failed where it won't.
+    func bounceOutgoing(conversationId: Int64, remoteId: String, to status: Message.Status, error: String? = nil) throws {
+        try writer.write { db in
+            try Self.bounceOutgoing(db, conversationId: conversationId, remoteId: remoteId, to: status, error: error)
         }
     }
 

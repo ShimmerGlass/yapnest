@@ -245,6 +245,7 @@ struct PendingActionTests {
         #expect(corrections().isEmpty)
         #expect(try stored(mine).actionPendingId == nil)
         #expect(try stored(mine).body == "hi all")
+        #expect(try stored(mine).actionError != nil)
     }
 
     @Test func anActionWaitingForARoomWeLeftIsDropped() throws {
@@ -262,5 +263,6 @@ struct PendingActionTests {
         session.drainSendQueue(room)
         #expect(retractions().isEmpty)
         #expect(try stored(mine).actionPendingId == nil)
+        #expect(try stored(mine).actionError == nil)
     }
 }

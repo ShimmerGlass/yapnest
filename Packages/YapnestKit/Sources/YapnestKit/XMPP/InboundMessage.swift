@@ -287,7 +287,7 @@ extension InboundMessage {
         self.nick = nick
         self.type = stanza.type?.rawValue
         self.isError = stanza.type == .error
-        self.bounce = isError ? (ServerError(stanza.element) ?? ServerError(condition: "undefined-condition")) : nil
+        self.bounce = isError ? ServerError.bounce(of: stanza) : nil
         self.errorText = bounce.map(Self.describeError)
 
         switch source {

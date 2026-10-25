@@ -15,6 +15,8 @@ struct MessageBubble: View {
     private var message: Message { row.message }
     private var isOutgoing: Bool { row.isOutgoing }
     private var isFailed: Bool { isOutgoing && message.status == .failed }
+    /// The message, or an edit or deletion of it, never reached the others; a tap says why.
+    private var needsExplaining: Bool { message.deliveryProblem != nil }
 
     var body: some View {
         if content.isBare {
@@ -38,12 +40,12 @@ struct MessageBubble: View {
                 Text(segment.text)
                     .foregroundStyle(.primary)
             }
-            BubbleFooter(message: message, time: content.time, security: content.security, isFailed: isFailed, isOutgoing: isOutgoing, isBare: true)
+            BubbleFooter(message: message, time: content.time, security: content.security, isOutgoing: isOutgoing, isBare: true)
         }
         .padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
         .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 14))
         .onTapGesture {
-            if isFailed { model.explainFailure(of: row.id) }
+            if needsExplaining { model.explainFailure(of: row.id) }
         }
     }
 
@@ -109,7 +111,7 @@ struct MessageBubble: View {
         }
         .contentShape(.contextMenuPreview, UnevenRoundedRectangle(cornerRadii: Self.corners(isOutgoing: isOutgoing, layout: content.layout)))
         .onTapGesture {
-            if isFailed { model.explainFailure(of: row.id) }
+            if needsExplaining { model.explainFailure(of: row.id) }
         }
     }
 
@@ -141,7 +143,7 @@ struct MessageBubble: View {
     /// they don't fit side by side, the footer drops to its own line below.
     @ViewBuilder
     private func footer(foreground: Color) -> some View {
-        let footer = BubbleFooter(message: message, time: content.time, security: content.security, isFailed: isFailed, isOutgoing: isOutgoing)
+        let footer = BubbleFooter(message: message, time: content.time, security: content.security, isOutgoing: isOutgoing)
         if hasActions {
             let actions = HStack(spacing: 12) {
                 if showsMore {
@@ -279,11 +281,20 @@ struct BubbleFooter: View {
     let message: Message
     let time: String
     let security: Message.Security
-    let isFailed: Bool
     let isOutgoing: Bool
     /// Drawn on the chat's background, not on a bubble: the colors made for
     /// the bubble's fill would vanish or clash there.
     var isBare = false
+
+    private var problem: Message.DeliveryProblem? { message.deliveryProblem }
+
+    private var caption: String {
+        switch problem {
+        case .notSent: String(localized: "Not sent · Tap for details")
+        case let problem?: String(localized: "\(problem.title) · Retry")
+        case nil: message.editedAt != nil ? String(localized: "Edited · \(time)") : time
+        }
+    }
 
     private var onAccent: Bool { isOutgoing && !isBare }
     private var secondary: Color { isBare ? .secondary : (onAccent ? Color.white : Color.primary).opacity(0.7) }
@@ -293,7 +304,7 @@ struct BubbleFooter: View {
             if !message.isRetracted {
                 lock
             }
-            Text(isFailed ? String(localized: "Not sent · Tap for details") : message.editedAt != nil ? String(localized: "Edited · \(time)") : time)
+            Text(caption)
                 .font(.caption2)
                 .lineLimit(1)
                 .foregroundStyle(secondary)
@@ -329,7 +340,7 @@ struct BubbleFooter: View {
 
     @ViewBuilder
     private var statusIcon: some View {
-        if message.status == .failed {
+        if problem != nil {
             // Drawn as a symbol rather than the shared image, to size it with the footer.
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 11))
@@ -392,6 +403,7 @@ struct ReactionsChip: View {
     @ScaledMetric private var height: CGFloat = Platform.isMac ? 34 : 28
 
     private var isPending: Bool { reactions.contains(where: \.isPending) }
+    private var isFailed: Bool { reactions.contains(where: \.isFailed) }
 
     var body: some View {
         let total = reactions.reduce(0) { $0 + $1.senders.count }
@@ -416,14 +428,17 @@ struct ReactionsChip: View {
                 }
                 // The dots of the sending icon: ours isn't acknowledged yet.
                 .overlay {
-                    if isPending {
+                    if isFailed {
+                        // Ours never reached the other side; a tap says why.
+                        Capsule().strokeBorder(Color.red, lineWidth: 1.25)
+                    } else if isPending {
                         Capsule().strokeBorder(Color.secondary, style: StrokeStyle(lineWidth: 1.25, lineCap: .round, dash: [0, 3.5]))
                     }
                 }
         }
         .buttonStyle(.plain)
         .help(who ?? "")
-        .accessibilityLabel(reactions.map { "\($0.emoji) \($0.senders.count)" }.joined(separator: ", ") + (isPending ? ", " + String(localized: "Sending") : ""))
+        .accessibilityLabel(reactions.map { "\($0.emoji) \($0.senders.count)" }.joined(separator: ", ") + (isFailed ? ", " + String(localized: "Not delivered") : isPending ? ", " + String(localized: "Sending") : ""))
     }
 }
 
@@ -521,5 +536,16 @@ private extension View {
 
     func bubbleSpacingAfter(_ spacing: CGFloat) -> some View {
         layoutValue(key: BubbleSpacingKey.self, value: spacing)
+    }
+}
+
+extension Message.DeliveryProblem {
+    /// What a prompt about it is called, and the footer says before "Retry".
+    var title: String {
+        switch self {
+        case .notSent: String(localized: "Message not sent")
+        case .editNotDelivered: String(localized: "Edit not delivered")
+        case .deletionNotDelivered: String(localized: "Not deleted for everyone")
+        }
     }
 }

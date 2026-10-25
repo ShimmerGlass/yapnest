@@ -236,6 +236,7 @@ struct StreamErrorStrikeTests {
         }
         close(with: streamError("policy-violation"))
         #expect(try stored(original).actionPendingId == nil)
+        #expect(try stored(original).actionError != nil)
         let writes = written(actionId)
         reconnect()
         #expect(written(actionId) == writes)
@@ -256,6 +257,7 @@ struct StreamErrorStrikeTests {
         }
         close(with: streamError("policy-violation"))
         #expect(try database.reader.read { try Reaction.fetchOne($0)?.pendingId } == nil)
+        #expect(try database.reader.read { try Reaction.fetchOne($0)?.error } != nil)
         let writes = written(id)
         reconnect()
         #expect(written(id) == writes)

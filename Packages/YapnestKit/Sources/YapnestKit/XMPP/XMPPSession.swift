@@ -182,6 +182,15 @@ public final class XMPPSession: @unchecked Sendable {
         var writtenReactions: Set<String> = []
         /// The same for the stanzas of corrections and retractions.
         var writtenActions: Set<String> = []
+        /// Who the errors that bounce our stanzas belong to.
+        var bounces = BounceRouter()
+        /// Stanzas a passing bounce made pending again, until they are written
+        /// again. The server's acknowledgement of the earlier write may still
+        /// come, and must not undo that.
+        var repended: Set<String> = []
+        /// How long a bounce that may pass waits before the item is sent again;
+        /// doubled for each time it bounces.
+        var bounceBackoff: TimeInterval = 5
         /// How many times the server closed the stream with an error while a stanza of ours,
         /// by its id, was the oldest it hadn't acknowledged. An acknowledgement clears it.
         /// Kept across reconnects: that is where the count comes from.
@@ -1063,13 +1072,13 @@ public final class XMPPSession: @unchecked Sendable {
             giveUp = { [self] in
                 DiagLog.error(.send, "Correction or retraction given up", .id("stanza", blamed), .value("reason", reason))
                 lock.withLock { _ = $0.writtenActions.remove(id) }
-                giveUpAction(id)
+                giveUpAction(id, because: String(localized: "The server closed the connection each time this was sent."))
             }
         } else if isReactions {
             giveUp = { [self] in
                 DiagLog.error(.send, "Reactions given up", .id("stanza", blamed), .value("reason", reason))
                 lock.withLock { _ = $0.writtenReactions.remove(id) }
-                try? database.clearPendingReactions(id: id)
+                try? database.clearPendingReactions(id: id, error: String(localized: "The server closed the connection each time this was sent."))
             }
         } else if let message = try? database.pendingOutgoing(remoteId: id) {
             giveUp = { [self] in
@@ -1205,6 +1214,7 @@ public final class XMPPSession: @unchecked Sendable {
                     $0.sends.reset()
                     $0.writtenReactions = []
                     $0.writtenActions = []
+                    $0.repended = []
                     $0.uploadService = nil
                     $0.mucService = nil
                     $0.publishedDisplayed = [:]
@@ -1399,6 +1409,7 @@ public final class XMPPSession: @unchecked Sendable {
             return
         }
         if let to, isGroup(to) { return }
+        if routeBounce(stanza) { return }
 
         // Calls are signalled in messages of their own, which carry nothing
         // else and are never encrypted.
@@ -1548,6 +1559,9 @@ public final class XMPPSession: @unchecked Sendable {
         if let id = stanza.id {
             lock.withLock { _ = $0.streamErrorStrikes.removeValue(forKey: id) }
             endProbation(acknowledged: id)
+            // That write bounced and is to be sent again; its acknowledgement
+            // is not the new one's.
+            if lock.withLock({ $0.repended.contains(id) }) { return }
         }
         if stanza.name == "message", let id = stanza.id, lock.withLock({ $0.writtenActions.remove(id) != nil }) {
             do {
@@ -1962,6 +1976,12 @@ public final class XMPPSession: @unchecked Sendable {
         for (message, peer, id) in pending {
             guard let messageId = message.id else { continue }
             guard !lock.withLock({ $0.writtenReactions.contains(id) }) else { continue }
+            // A room we left never becomes ready, so it would be queued again
+            // every session for good.
+            if (try? database.groupChat(peer))?.hasLeft == true {
+                try? database.clearPendingReactions(messageId: messageId)
+                continue
+            }
             // Rebuilt from what we hold now, which the stored id names.
             guard !message.isRetracted, let target = reference(to: message),
                   let mine = try? database.reactions(on: message, from: account) else {
@@ -1970,14 +1990,28 @@ public final class XMPPSession: @unchecked Sendable {
             }
             let route = route(to: peer)
             let stanza = OutboundStanza.reactions(mine, to: route, target: target, id: id)
-            whenReady(route) { [self] in writeReactions(stanza, id: id) }
+            whenReady(route) { [self] in writeReactions(stanza, id: id, messageId: messageId, peer: peer) }
         }
     }
 
     /// Writes a reactions stanza once, asking for its acknowledgement, or
     /// pinging for it where the stream has no stream management.
-    private func writeReactions(_ stanza: Martin.Message, id: String) {
+    private func writeReactions(_ stanza: Martin.Message, id: String, messageId: Int64, peer: JID) {
         guard isConnected, !isHeldByProbation(id), lock.withLock({ $0.writtenReactions.insert(id).inserted }) else { return }
+        expectBounce(
+            of: id, key: .reactions(messageId), peer: peer,
+            release: { [weak self] in self?.lock.withLock { _ = $0.writtenReactions.remove(id) } },
+            repend: { [weak self] in
+                guard let self else { return }
+                try? database.repend(.reactions(messageId: messageId, from: account), id: id, ifNotSupersededBy: id)
+            },
+            fail: { [weak self] error in
+                guard let self else { return }
+                try? database.clearPendingReactions(
+                    messageId: messageId, from: account, error: error.describe(ConversationItem.ReactionGroup.notDelivered), unlessSupersededBy: id,
+                )
+            },
+        )
         let acknowledges = streamAcknowledges
         client.context.writer.write(stanza) { [weak self] result in
             if case .failure = result { self?.lock.withLock { _ = $0.writtenReactions.remove(id) } }
@@ -2091,6 +2125,17 @@ public final class XMPPSession: @unchecked Sendable {
                 DiagLog.notice(.send, "Write dropped by the session", .id("msg", sendId))
                 lock.withLock { $0.sends.releaseDropped(id, token: token) }
             }
+            let conversationId = message.conversationId
+            expectBounce(
+                of: id, key: .message(id), peer: peer,
+                release: { [weak self] in self?.lock.withLock { $0.sends.release(id) } },
+                repend: { [weak self] in try? self?.database.bounceOutgoing(conversationId: conversationId, remoteId: id, to: .pending) },
+                fail: { [weak self] error in
+                    try? self?.database.bounceOutgoing(
+                        conversationId: conversationId, remoteId: id, to: .failed, error: InboundMessage.describeError(error),
+                    )
+                },
+            )
             switch deliver(stanza, to: peer, encrypted: message.encryption == .omemo, onDropped: dropped) {
             case .success(let (trust, acknowledged)):
                 DiagLog.info(.send, "Written to the stream", .id("msg", sendId), .bool("streamAcknowledges", acknowledged))
@@ -2207,6 +2252,8 @@ public final class XMPPSession: @unchecked Sendable {
         /// A correction can't become a file the way a long new message does, and a server
         /// refuses a stanza that large.
         case editTooLong
+        /// A change to a group's messages that can't be sent from a room we left.
+        case leftGroup
 
         public var errorDescription: String? {
             switch self {
@@ -2214,6 +2261,7 @@ public final class XMPPSession: @unchecked Sendable {
             case .notYetConfirmed: String(localized: "The group hasn't received this message yet.")
             case .cannotReact: String(localized: "This chat doesn't let this message be reacted to.")
             case .editTooLong: String(localized: "This text is too long to edit a message with. Send it as a new message instead.")
+            case .leftGroup: String(localized: "You've left this group.")
             }
         }
     }
@@ -2293,7 +2341,8 @@ public final class XMPPSession: @unchecked Sendable {
     private func sendAction(id: String, of messageId: Int64, to peer: JID) {
         guard !isHeldByProbation(id) else { return }
         // A room we left never becomes ready, so it would wait for good.
-        if (try? database.groupChat(peer))?.hasLeft == true { return giveUpAction(id) }
+        // Nothing is shown for it: they left, and no one there is waiting for it.
+        if (try? database.groupChat(peer))?.hasLeft == true { return giveUpAction(id, because: nil) }
         whenReady(route(to: peer)) { [self] in
             // After any correction still being encrypted.
             sendQueue(for: peer).async { [self] in
@@ -2303,35 +2352,119 @@ public final class XMPPSession: @unchecked Sendable {
                 let stanza: Martin.Message
                 if message.isRetracted {
                     // Groups name messages by the room's stanza-id, 1:1 chats by the stanza's id.
-                    guard let target = route.reference(to: message) else { return giveUpAction(id) }
+                    guard let target = route.reference(to: message) else { return giveUpAction(id, because: Self.unsendableChange) }
                     stanza = OutboundStanza.retraction(of: target, to: route, id: id)
                 } else {
-                    guard let original = message.remoteId else { return giveUpAction(id) }
+                    guard let original = message.remoteId else { return giveUpAction(id, because: Self.unsendableChange) }
                     // Corrections name the original's stanza id, in groups too.
                     stanza = OutboundStanza.text(message.body, to: route, id: id, replyingTo: quote(of: message, in: route),
                                                  mentions: mentions(in: message.body, route: route))
                     stanza.addChild(Element(name: "replace", attributes: ["xmlns": NS.correction, "id": original]))
                 }
                 guard lock.withLock({ $0.writtenActions.insert(id).inserted }) else { return }
+                let isRetraction = message.isRetracted
+                expectBounce(
+                    of: id, key: .action(messageId), peer: peer,
+                    release: { [weak self] in self?.lock.withLock { _ = $0.writtenActions.remove(id) } },
+                    repend: { [weak self] in try? self?.database.repend(.action(messageId: messageId), id: id, ifNotSupersededBy: id) },
+                    fail: { [weak self] error in
+                        let friendly = isRetraction ? String(localized: "The deletion couldn't be delivered.") : String(localized: "The edit couldn't be delivered.")
+                        try? self?.database.clearPendingAction(messageId: messageId, error: error.describe(friendly), unlessSupersededBy: id)
+                    },
+                )
                 let dropped: @Sendable () -> Void = { [weak self] in self?.lock.withLock { _ = $0.writtenActions.remove(id) } }
                 switch deliver(stanza, to: peer, encrypted: !message.isRetracted && message.encryption == .omemo, onDropped: dropped) {
                 case .success(let (_, acknowledged)):
                     if !acknowledged { confirmByPing(stanza) }
                 case .failure(.offline):
                     dropped()
-                case .failure(.failed(_, let reason)):
+                case .failure(.failed(let text, let reason)):
                     // Like a message that can't be encrypted for the chat, it
                     // won't go next session either.
                     dropped()
-                    giveUpAction(id)
+                    giveUpAction(id, because: text)
                     DiagLog.error(.send, "Correction or retraction failed", .value("reason", reason))
                 }
             }
         }
     }
 
-    private func giveUpAction(_ id: String) {
-        try? database.clearPendingAction(id: id)
+    private static var unsendableChange: String { String(localized: "The change couldn't be sent.") }
+
+    /// Stops sending the correction or retraction `id`. With a reason, the
+    /// message shows that it didn't reach the others, with a way to try again.
+    private func giveUpAction(_ id: String, because reason: String?) {
+        try? database.clearPendingAction(id: id, error: reason)
+    }
+
+    /// Sends a correction or retraction that did not reach the others again,
+    /// with what the message holds now.
+    public func retryAction(on message: Message) throws {
+        guard let messageId = message.id,
+              let stored = try database.reader.read({ try Message.fetchOne($0, key: messageId) }), stored.actionError != nil,
+              let peer = try database.conversation(id: stored.conversationId)?.peer else { return }
+        // Sending would give up at once, and the failure would be gone.
+        guard (try database.groupChat(peer))?.hasLeft != true else { throw MessageActionError.leftGroup }
+        let id = OutboundStanza.newId()
+        try database.repend(.action(messageId: messageId), id: id)
+        sendAction(id: id, of: messageId, to: peer)
+    }
+
+    // MARK: Bounces
+
+    /// Remembers that the stanza `id` belongs to `key`, for `routeBounce`.
+    /// When its error comes, `release` lets the stanza be written again,
+    /// `repend` makes the item pending where the error may pass, and `fail`
+    /// records it where it won't.
+    func expectBounce(
+        of id: String, key: BounceKey, peer: JID,
+        release: @escaping @Sendable () -> Void,
+        repend: @escaping @Sendable () -> Void,
+        fail: @escaping @Sendable (ServerError) -> Void,
+    ) {
+        let handle: @Sendable (BounceRouter.Outcome) -> Void = { [weak self] outcome in
+            release()
+            switch outcome {
+            case .retry(let passes):
+                self?.lock.withLock { _ = $0.repended.insert(id) }
+                repend()
+                self?.resendAfterBounce(passes: passes)
+            case .fail(let error):
+                fail(error)
+            }
+        }
+        lock.withLock {
+            $0.bounces.register(id, .init(key: key, peer: peer, handle: handle))
+            $0.repended.remove(id)
+        }
+    }
+
+    /// Hands the error `stanza` to the stanza it bounces, if we wrote one that
+    /// the ledger still holds. False for any other, which ingest looks for in
+    /// the database.
+    func routeBounce(_ stanza: Martin.Message) -> Bool {
+        guard stanza.type == .error, let id = stanza.id else { return false }
+        let error = ServerError.bounce(of: stanza)
+        let from = stanza.from.flatMap { JID($0) }
+        guard let (owner, outcome) = lock.withLock({ $0.bounces.route(id, from: from, account: account, error: error) }) else { return false }
+        switch outcome {
+        case .retry(let passes): DiagLog.notice(.send, "Bounce may pass", .id("stanza", Redacted.id(id)), .int("passes", passes))
+        case .fail: DiagLog.notice(.send, "Bounce is final", .id("stanza", Redacted.id(id)))
+        }
+        owner.handle(outcome)
+        return true
+    }
+
+    /// Sends what bounced again, after a wait that doubles each time. Nothing
+    /// waits for a second chance to pass otherwise: a session that comes back
+    /// sends it by itself.
+    private func resendAfterBounce(passes: Int) {
+        let delay = lock.withLock { $0.bounceBackoff } * Double(1 << min(max(passes - 1, 0), 10))
+        let resend: @Sendable () -> Void = { [weak self] in
+            guard let self, isConnected else { return }
+            sendUnclaimedPending()
+        }
+        if delay <= 0 { resend() } else { DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: resend) }
     }
 
     /// Sends the corrections and retractions the server never acknowledged,
@@ -2471,6 +2604,7 @@ public final class XMPPSession: @unchecked Sendable {
     public func retry(_ message: Message) throws {
         guard message.direction == .outgoing, message.status == .failed, let id = message.remoteId,
               let peer = try database.conversation(id: message.conversationId)?.peer else { return }
+        lock.withLock { $0.bounces.forget(.message(id)) }
         try database.markPending(conversationId: message.conversationId, remoteId: id)
         var pending = message
         pending.status = .pending
@@ -2488,18 +2622,37 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Adds or removes our `emoji` reaction on `message`.
     public func toggleReaction(_ emoji: String, on message: Message, peer: JID) throws {
-        guard let target = reference(to: message) else {
+        var mine = try database.reactions(on: message, from: account)
+        if mine.contains(emoji) { mine.remove(emoji) } else { mine.insert(emoji) }
+        try setMyReactions(mine, on: message, peer: peer)
+    }
+
+    /// Sends our reactions on `message` again, after the other side never got
+    /// them (see `ReactionGroup.error`).
+    public func retryReactions(on message: Message, peer: JID) throws {
+        guard (try database.groupChat(peer))?.hasLeft != true else { throw MessageActionError.leftGroup }
+        try setMyReactions(database.reactions(on: message, from: account), on: message, peer: peer)
+    }
+
+    /// Takes our reactions on `message` back, after the other side never got
+    /// them: it may have the earlier ones, so the empty set goes out.
+    public func removeReactions(on message: Message, peer: JID) throws {
+        guard (try database.groupChat(peer))?.hasLeft != true else { throw MessageActionError.leftGroup }
+        try setMyReactions([], on: message, peer: peer)
+    }
+
+    /// Makes `mine` our reactions on `message`, here and for the others.
+    /// Offline, they stay pending and go out once a session is back.
+    private func setMyReactions(_ mine: Set<String>, on message: Message, peer: JID) throws {
+        guard let messageId = message.id, let target = reference(to: message) else {
             throw try reactionBlocker(for: message, peer: peer)
         }
         let route = route(to: peer)
-        var mine = try database.reactions(on: message, from: account)
-        if mine.contains(emoji) { mine.remove(emoji) } else { mine.insert(emoji) }
         let me = Author(jid: account, nick: try nickname(in: peer), occupantId: route.occupantId)
-        // Offline, it stays pending and goes out once a session is back.
         let id = OutboundStanza.newId()
         try database.setReactions(mine, from: me, conversationId: message.conversationId, messageRef: target, pendingId: id)
         let stanza = OutboundStanza.reactions(mine, to: route, target: target, id: id)
-        whenReady(route) { [self] in writeReactions(stanza, id: id) }
+        whenReady(route) { [self] in writeReactions(stanza, id: id, messageId: messageId, peer: peer) }
     }
 
     /// Marks the conversation read and tells the peer and our other devices.

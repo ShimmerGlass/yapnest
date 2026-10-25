@@ -128,7 +128,7 @@ struct MessageRowView: View, Equatable {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(row.content.accessibilityLabel)
             .accessibilityActions {
-                if row.isOutgoing && row.message.status == .failed {
+                if row.message.deliveryProblem != nil {
                     Button("Show error") { model.explainFailure(of: row.id) }
                 } else if row.content.attachment != nil {
                     Button("Open") { model.attachmentTapped(row.id) }

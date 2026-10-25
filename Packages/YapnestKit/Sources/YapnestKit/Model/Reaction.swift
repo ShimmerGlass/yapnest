@@ -14,6 +14,9 @@ public struct Reaction: Codable, Hashable, Sendable, FetchableRecord, Persistabl
     /// For our own reactions: the id of the stanza that carries them while the
     /// server hasn't acknowledged it. Nil once it has, and on anyone else's.
     public var pendingId: String?
+    /// For our own reactions: why the server (or the give-up) kept them from
+    /// reaching the other side for good. Cleared when they are sent again.
+    public var error: String?
 
     public init(messageId: Int64, sender: JID, nick: String = "", emoji: String, occupantId: String? = nil, pendingId: String? = nil) {
         self.messageId = messageId

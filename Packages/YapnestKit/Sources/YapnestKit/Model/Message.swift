@@ -110,6 +110,28 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
     /// server hasn't acknowledged. A later one replaces it, as only the latest
     /// state needs to reach the peer.
     public var actionPendingId: String?
+    /// Why our latest correction or retraction of this message was not
+    /// delivered, for good. Cleared when the user tries again or changes it.
+    public var actionError: String?
+
+    /// Why one of our messages, or a change to it, didn't reach the others.
+    public enum DeliveryProblem: Sendable {
+        case notSent
+        case editNotDelivered
+        case deletionNotDelivered
+
+        /// A correction or retraction, which the message still shows as made.
+        public var isAction: Bool { self != .notSent }
+    }
+
+    /// What went wrong with delivering this message, if anything. Only ours;
+    /// a message that wasn't sent comes before a change that wasn't delivered.
+    public var deliveryProblem: DeliveryProblem? {
+        guard direction == .outgoing else { return nil }
+        if status == .failed { return .notSent }
+        guard actionError != nil else { return nil }
+        return isRetracted ? .deletionNotDelivered : .editNotDelivered
+    }
 
     public init(
         id: Int64? = nil,

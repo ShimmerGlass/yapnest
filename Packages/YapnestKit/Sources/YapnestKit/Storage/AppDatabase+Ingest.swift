@@ -62,13 +62,8 @@ extension AppDatabase {
         }
 
         if inbound.isError {
-            if let id = inbound.id, var message = try Self.outgoingMessage(db, conversationId: conversationId, remoteId: id),
-               message.status == .pending || message.status == .sent {
-                // Once the recipient's side confirmed it, an error naming the
-                // message is not to be believed.
-                message.status = .failed
-                message.error = inbound.errorText
-                try message.update(db)
+            if let id = inbound.id {
+                try Self.bounceOutgoing(db, conversationId: conversationId, remoteId: id, to: .failed, error: inbound.errorText)
             }
             return result
         }
@@ -76,6 +71,8 @@ extension AppDatabase {
         let room = conversation.kind == .groupchat ? conversation.peer : nil
         if let target = inbound.retractionOf {
             if var original = try Self.ownedMessage(db, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room) {
+                // Our own change still on its way is moot now.
+                original.actionPendingId = nil
                 result.retractedAttachment = try Self.retract(db, &original)
             } else if try Self.referencedMessage(db, conversationId: conversationId, id: target) == nil {
                 try Self.retractStandIns(db, of: Self.fittingPending(db, .correct, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room))
@@ -309,6 +306,9 @@ extension AppDatabase {
         guard !isAttachment, original.callOutcome == nil, timestamp >= original.editedAt ?? .distantPast else { return nil }
         original.setBody(body)
         original.editedAt = timestamp
+        // The text shown isn't the edit that failed any more. A change still
+        // in flight keeps its pending id: it has its own.
+        original.actionError = nil
         original.mentionsMe = mentionsMe
         // The offer is the correcting message's, which may make none.
         // Actions already chosen stay chosen if the correction still offers them.
@@ -334,6 +334,7 @@ extension AppDatabase {
         try Attachment.filter(Column("messageId") == id).deleteAll(db)
         try Reaction.filter(Column("messageId") == id).deleteAll(db)
         message.isRetracted = true
+        message.actionError = nil
         message.isModerated = moderated
         message.body = ""
         message.link = nil

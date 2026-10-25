@@ -10,6 +10,15 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
         public var includesMe: Bool
         /// One of ours is still waiting for the server to acknowledge it.
         public var isPending: Bool
+        /// Why one of ours never reached the other side, for good. Only ever
+        /// set on our own.
+        public var error: String?
+
+        public var isFailed: Bool { error != nil }
+
+        /// What a reaction that wasn't delivered says when the server gave no
+        /// reason of its own.
+        public static var notDelivered: String { String(localized: "The reaction couldn't be delivered.") }
     }
 
     public struct Quote: Hashable, Sendable {
@@ -151,6 +160,7 @@ extension AppDatabase {
                     senders: reactions.sorted { ($0.sender, $0.nick) < ($1.sender, $1.nick) }.map(\.author),
                     includesMe: reactions.contains { $0.sender == me },
                     isPending: reactions.contains { $0.sender == me && $0.pendingId != nil },
+                    error: reactions.first { $0.sender == me && $0.error != nil }?.error,
                 )
             }
             .sorted { ($0.senders.count, $1.emoji) > ($1.senders.count, $0.emoji) }

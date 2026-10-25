@@ -165,6 +165,17 @@ extension AppDatabase {
         try referencedMessage(db, conversationId: conversationId, id: remoteId, direction: .outgoing)
     }
 
+    /// Moves our message `remoteId` to the status an error naming it leads to.
+    /// Only while it is pending or sent: once the recipient's side confirmed
+    /// it, an error naming it is not to be believed.
+    static func bounceOutgoing(_ db: Database, conversationId: Int64, remoteId: String, to status: Message.Status, error: String?) throws {
+        guard var message = try outgoingMessage(db, conversationId: conversationId, remoteId: remoteId),
+              message.status == .pending || message.status == .sent else { return }
+        message.status = status
+        message.error = error
+        try message.update(db)
+    }
+
     /// Replaces `author`'s reactions on the referenced message, as XEP-0444
     /// requires: each reactions element carries the full set. Returns false if
     /// the message isn't stored, or is retracted: a replay would otherwise
@@ -346,7 +357,7 @@ extension AppDatabase {
         try writer.write { db in
             guard var message = try Message.fetchOne(db, key: messageId), !message.isRetracted else { return nil }
             message.setBody(body)
-            if let actionId { message.actionPendingId = actionId }
+            if let actionId { message.actionPendingId = actionId; message.actionError = nil }
             if marksEdited { message.editedAt = date }
             try message.update(db)
             return message
@@ -358,7 +369,7 @@ extension AppDatabase {
     public func applyRetraction(of messageId: Int64, actionId: String? = nil) throws -> Attachment? {
         try writer.write { db in
             guard var message = try Message.fetchOne(db, key: messageId), !message.isRetracted else { return nil }
-            if let actionId { message.actionPendingId = actionId }
+            if let actionId { message.actionPendingId = actionId; message.actionError = nil }
             return try Self.retract(db, &message)
         }
     }
@@ -371,6 +382,7 @@ extension AppDatabase {
             guard let conversation = try Conversation.filter(Column("peer") == room).fetchOne(db), let conversationId = conversation.id,
                   var message = try Message.filter(Column("conversationId") == conversationId && Column("serverId") == target && Column("isRetracted") == false).fetchOne(db)
             else { return nil }
+            message.actionPendingId = nil
             return try Self.retract(db, &message, moderated: true)
         }
     }

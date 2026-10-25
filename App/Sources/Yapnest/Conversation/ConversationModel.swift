@@ -47,6 +47,9 @@ final class ConversationModel {
         /// Whether a moderator takes someone else's message back for everyone.
         case confirmModeration(Int64)
         case reactions(Int64)
+        /// Our reactions on a message that never reached the other side, with
+        /// their way to try again or be taken back.
+        case reactionFailure(Int64)
         case quoteNotFound
         /// The microphone is off for the app, so a voice message can't be recorded.
         case microphoneDenied
@@ -2359,7 +2362,21 @@ final class ConversationModel {
 
     func retry(_ id: Int64) {
         guard let message = items[id]?.message else { return }
-        write { [session] in try session.retry(message) }
+        if message.deliveryProblem?.isAction == true {
+            write { [session] in try session.retryAction(on: message) }
+        } else {
+            write { [session] in try session.retry(message) }
+        }
+    }
+
+    func retryReactions(_ id: Int64) {
+        guard let message = items[id]?.message else { return }
+        write { [session, peer] in try session.retryReactions(on: message, peer: peer) }
+    }
+
+    func removeReactions(_ id: Int64) {
+        guard let message = items[id]?.message else { return }
+        write { [session, peer] in try session.removeReactions(on: message, peer: peer) }
     }
 
     /// Writes for something the user did, off the main thread. Each waits for
@@ -2391,7 +2408,17 @@ final class ConversationModel {
     }
 
     func failureText(of id: Int64) -> String {
-        items[id]?.message.error ?? String(localized: "The message couldn't be delivered.")
+        guard let message = items[id]?.message else { return String(localized: "The message couldn't be delivered.") }
+        let reason = message.deliveryProblem?.isAction == true ? message.actionError : message.error
+        return reason ?? String(localized: "The message couldn't be delivered.")
+    }
+
+    func failureTitle(of id: Int64) -> String {
+        (items[id]?.message.deliveryProblem ?? .notSent).title
+    }
+
+    func reactionFailureText(of id: Int64) -> String {
+        items[id]?.reactions.lazy.compactMap(\.error).first ?? ConversationItem.ReactionGroup.notDelivered
     }
 
     func reply(to id: Int64) {
@@ -2607,7 +2634,8 @@ final class ConversationModel {
     }
 
     func showReactions(for id: Int64) {
-        prompt = .reactions(id)
+        let failed = items[id]?.reactions.contains(where: \.isFailed) == true
+        prompt = failed ? .reactionFailure(id) : .reactions(id)
     }
 
     /// Who reacted how, for the sheet that lists them.
