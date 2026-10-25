@@ -25,10 +25,15 @@ struct RoomLookupFailureTests {
         session.connectForTesting(wire)
     }
 
+    private func sentJoin() -> Bool {
+        wire.written.compactMap { $0 as? Presence }.contains { $0.firstChild(name: "x", xmlns: "http://jabber.org/protocol/muc") != nil }
+    }
+
     @Test func aTimeoutLookingUpAnInvitedRoomIsNotAMissingGroup() async throws {
         wire.answer { iq in isDisco(iq, "info") ? timeout(iq) : nil }
-        session.join(room, nickname: "me", mayCreate: false)
+        session.join(room, nickname: "me", mayCreate: false, mustBeFound: true)
         #expect(await eventually { session.roomStatus(room)?.canRetry == true })
+        #expect(!sentJoin())
         guard case .failed(let reason)? = session.roomStatus(room)?.phase else {
             Issue.record("the join did not fail")
             return
@@ -49,8 +54,31 @@ struct RoomLookupFailureTests {
     @Test func aTimeoutLookingUpOurOwnRoomStillJoinsIt() async throws {
         wire.answer { iq in isDisco(iq, "info") ? timeout(iq) : nil }
         session.join(room, nickname: "me")
-        #expect(await eventually { wire.written.contains { $0 is Presence } })
+        #expect(await eventually { sentJoin() })
         #expect(session.roomStatus(room)?.canRetry != true)
+    }
+
+    @Test func aTimeoutLookingUpOurOwnRoomThatMustNotBeCreatedStillJoinsIt() async throws {
+        wire.answer { iq in isDisco(iq, "info") ? timeout(iq) : nil }
+        session.join(room, nickname: "me", mayCreate: false)
+        #expect(await eventually { sentJoin() })
+        #expect(session.roomStatus(room)?.canRetry != true)
+    }
+
+    @Test func aRemoteServerNotFoundLookingUpOurOwnRoomStillJoinsIt() async throws {
+        wire.answer { iq in isDisco(iq, "info") ? FakeWire.error(to: iq, condition: "remote-server-not-found") : nil }
+        session.join(room, nickname: "me", mayCreate: false)
+        #expect(await eventually { sentJoin() })
+        #expect(session.roomStatus(room)?.phase == .joining)
+    }
+
+    @Test func aStuckJoinOfAnInvitedRoomKeepsWaitingForItToBeFound() async throws {
+        session.updateRoom(room) { $0 = RoomStatus(phase: .joining, nickname: "me", mayCreate: false, mustBeFound: true) }
+        wire.answer { iq in isDisco(iq, "info") ? timeout(iq) : nil }
+        session.rejoinStuckRooms()
+        #expect(await eventually { session.roomStatus(room)?.canRetry == true })
+        #expect(!sentJoin())
+        session.cancelAllRejoins()
     }
 
     @Test func aTimeoutRereadingARoomsInfoLearnsNothingOfItsArchive() async throws {
@@ -63,7 +91,7 @@ struct RoomLookupFailureTests {
     @Test func aFinalRefusalOfTheLookupStillJoinsSoTheRoomGivesItsOwnReason() async throws {
         wire.answer { iq in isDisco(iq, "info") ? FakeWire.error(to: iq, condition: "forbidden", type: "auth") : nil }
         session.join(room, nickname: "me")
-        #expect(await eventually { wire.written.contains { $0 is Presence } })
+        #expect(await eventually { sentJoin() })
     }
 }
 

@@ -656,6 +656,17 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v39-room-passwords") { db in
+            // A room's password came with the invitation and lived in memory
+            // only, so a new session joined without it and was refused for good.
+            try db.alter(table: "groupChat") { t in
+                t.add(column: "password", .text)
+            }
+            try db.alter(table: "groupInvitation") { t in
+                t.add(column: "password", .text)
+            }
+        }
+
         return migrator
     }
 

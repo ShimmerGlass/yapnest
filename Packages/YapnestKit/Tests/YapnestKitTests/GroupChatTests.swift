@@ -204,6 +204,19 @@ struct GroupChatParsingTests {
         #expect(try messages().count == 1)
     }
 
+    @Test func migrationAddsRoomPasswordsToWhatWasStored() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v38-action-errors")
+        try queue.write { db in
+            try db.execute(sql: "INSERT INTO conversation (peer, kind, lastActivityAt) VALUES ('room@rooms.example.org', 'groupchat', 0)")
+            try db.execute(sql: "INSERT INTO groupChat (conversationId, jid, nickname) VALUES (1, 'room@rooms.example.org', 'me')")
+            try db.execute(sql: "INSERT INTO groupInvitation (room, inviter, receivedAt) VALUES ('x@rooms.example.org', 'a@example.org', 0)")
+        }
+        try AppDatabase.migrator.migrate(queue)
+        #expect(try queue.read { try GroupChat.fetchAll($0) }.map(\.password) == [nil])
+        #expect(try queue.read { try GroupInvitation.fetchAll($0) }.map(\.password) == [nil])
+    }
+
     @Test func migrationKeepsReactions() throws {
         let queue = try DatabaseQueue()
         try AppDatabase.migrator.migrate(queue, upTo: "v6-attachments")

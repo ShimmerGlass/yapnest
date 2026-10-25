@@ -24,7 +24,7 @@ extension XMPPSession {
     /// its members. Nil if it does, else why not.
     func joinToSend(_ room: JID, timeout: TimeInterval) async -> String? {
         guard let group = try? database.groupChat(room), !group.hasLeft else { return String(localized: "You're no longer in this group.") }
-        join(room, nickname: group.nickname)
+        join(room, nickname: group.nickname, mayCreate: false)
         do {
             return try await withTimeout(timeout) { [self] () -> String? in
                 for await all in rooms.values {
