@@ -143,6 +143,19 @@ struct GroupInvitationSessionTests {
         #expect(stored.map(\.isVouched) == [true])
     }
 
+    @Test func aRosterItemTheServerMadeIsDroppedAndDoesNotNotify() throws {
+        // Openfire's answer to a stranger's unsolicited `subscribed`.
+        try database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        session.invitationReceived(relayed())
+        session.invitationReceived(parseStanza("<message from='alice@example.org/x' to='me@example.org'><x xmlns='jabber:x:conference' jid='club@groups.example.net'/></message>"))
+        #expect(try database.reader.read(AppDatabase.groupInvitations).isEmpty)
+        #expect(try database.claimNotifications().isEmpty)
+        try database.markAddedByUser(alice)
+        session.invitationReceived(relayed())
+        #expect(try database.groupInvitation(foreign) != nil)
+        #expect(try database.claimNotifications().count == 1)
+    }
+
     @Test func strangersAreDropped() throws {
         session.invitationReceived(relayed(from: "mallory@example.net"))
         #expect(try database.reader.read(AppDatabase.groupInvitations).isEmpty)

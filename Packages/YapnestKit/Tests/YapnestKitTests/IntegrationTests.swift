@@ -219,7 +219,7 @@ extension LiveServer.IntegrationTests {
         try await waitUntil("alice to get carol's request") { try request(on: phone) }
         // Openfire turns carol's unasked `subscribed` into a roster item, so
         // the roster can't tell; what matters is that alice hasn't agreed.
-        #expect(try phone.database.hasApprovedOrAdded(carol) == false)
+        #expect(try phone.database.hasConsented(carol) == false)
 
         // The server repeats it to a device that signs in later.
         let laptop = try session(alice)

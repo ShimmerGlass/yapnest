@@ -135,7 +135,7 @@ struct CallSessionHarness {
             credentials: .init(jid: me, password: "x"), resource: "phone", database: database,
             callMedia: withMedia ? factory : nil,
         )
-        try database.writer.write { try Contact(jid: alice, isInRoster: true).insert($0) }
+        try database.writer.write { try Contact(jid: alice, subscription: .both, isInRoster: true).insert($0) }
         wire.answer { iq in
             // A server without relays refuses the request, as one without extdisco does.
             iq.firstChild(name: "services", xmlns: "urn:xmpp:extdisco:2") != nil ? FakeWire.error(to: iq, condition: "service-unavailable") : FakeWire.result(to: iq)
@@ -481,6 +481,40 @@ struct CallSessionOutgoingTests {
 }
 
 struct CallSessionIncomingTests {
+    /// Openfire makes a roster item, subscription `to`, for a stranger's
+    /// unsolicited `subscribed`, so the roster alone can't decide who rings.
+    @Test func aRosterItemTheServerMadeDoesNotRing() throws {
+        let h = try CallSessionHarness()
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        h.receive(h.propose())
+        #expect(h.session.callState.value == nil)
+        #expect(h.sentSignals.isEmpty)
+    }
+
+    @Test func aContactTheUserAddedRingsBeforeTheyAnswer() throws {
+        let h = try CallSessionHarness()
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        try h.database.markAddedByUser(alice)
+        h.receive(h.propose())
+        #expect(h.phase == .incoming)
+    }
+
+    @Test func aRosterItemTheServerMadeGetsNoReceiptAndAnApprovedOneDoes() async throws {
+        let h = try CallSessionHarness()
+        func xml(_ id: String) -> String {
+            "<message from='alice@example.org/phone' to='me@example.org' type='chat' id='\(id)'><body>hi</body><request xmlns='urn:xmpp:receipts'/></message>"
+        }
+        func receipts() -> [String] {
+            h.wire.messages.compactMap { $0.element.firstChild(name: "received", xmlns: "urn:xmpp:receipts")?.getAttribute("id") }
+        }
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        h.receive(xml("m1"))
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        h.receive(xml("m2"))
+        await eventually("the approved contact's receipt") { !receipts().isEmpty }
+        #expect(receipts() == ["m2"])
+    }
+
     @Test func aCallRingsIsAnsweredAndEnded() async throws {
         let h = try CallSessionHarness()
         h.receive(h.propose())
@@ -593,7 +627,7 @@ struct CallSessionIncomingTests {
     @Test func aSecondCallFromSomeoneElseWhileOneIsGoingOnIsRefusedAsBusy() async throws {
         let h = try CallSessionHarness()
         let bob = YapnestKit.JID("bob@example.org")!
-        try await h.database.writer.write { try Contact(jid: bob, isInRoster: true).insert($0) }
+        try await h.database.writer.write { try Contact(jid: bob, subscription: .both, isInRoster: true).insert($0) }
         try h.session.startCall(to: alice)
         let own = try #require(h.session.callState.value?.sid)
         h.receive(h.propose(sid: "other", from: "bob@example.org/desktop"))
@@ -671,7 +705,7 @@ struct CallSessionIncomingTests {
         // zed@... sorts after me@..., so we win.
         let g = try CallSessionHarness()
         let zed = YapnestKit.JID("zed@example.org")!
-        try await g.database.writer.write { try Contact(jid: zed, isInRoster: true).insert($0) }
+        try await g.database.writer.write { try Contact(jid: zed, subscription: .both, isInRoster: true).insert($0) }
         try g.session.startCall(to: zed)
         let sid = try #require(g.session.callState.value?.sid)
         g.receive(g.propose(sid: sid, from: "zed@example.org/x"))

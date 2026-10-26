@@ -36,7 +36,7 @@ private func stanza(_ xml: String) -> Martin.Message {
     }
 
     private func autoDownloads(_ message: YapnestKit.Message, isPrivate: Bool = false) -> Bool {
-        XMPPSession.trustsForAutoDownload(isOutgoing: isOurs(message), isPrivateGroup: isPrivate, isInRoster: false)
+        XMPPSession.trustsForAutoDownload(isOutgoing: isOurs(message), isPrivateGroup: isPrivate, trustsGroupMembers: true, isTrusted: false)
     }
 
     private func previews(_ message: YapnestKit.Message) -> LinkPreviewPolicy.Decision {

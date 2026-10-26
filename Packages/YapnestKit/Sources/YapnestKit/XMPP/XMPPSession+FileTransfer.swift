@@ -98,11 +98,11 @@ extension XMPPSession {
             reply(to: iq)
             write(JingleFileOffer.sessionTerminate(to: from, sid: sid, reason: reason))
         }
-        // Files come from the people we know, from a device (a session has
-        // to be answered somewhere), and not from our own account's other
-        // devices or a room's occupants.
+        // Files come from the people the user added or approved, from a
+        // device (a session has to be answered somewhere), and not from our
+        // own account's other devices or a room's occupants.
         guard from.resource != nil, let peer = JID(from.bareJid.stringValue), peer != account, !isGroup(peer),
-              (try? database.contact(peer))?.isInRoster == true else {
+              (try? database.hasConsented(peer)) == true else {
             turnDown(.decline)
             return
         }

@@ -6,18 +6,11 @@ extension AppDatabase {
         try reader.read { db in try Contact.fetchOne(db, key: jid)?.isInRoster ?? false }
     }
 
-    /// Whether a `subscribe` from `jid` needs no answer from the user: they
-    /// already see our presence (we approved them before), we have a request
-    /// to them outstanding (the server's `ask`, so every device and client of
-    /// the user sees it), or the user added them on this device (for when
-    /// they accepted ours and the server didn't keep the pre-approval). A
-    /// roster item alone isn't consent, as the server can create one for a
-    /// stranger.
-    func hasApprovedOrAdded(_ jid: JID) throws -> Bool {
-        try reader.read { db in
-            guard let contact = try Contact.fetchOne(db, key: jid) else { return false }
-            return contact.isAddedByUser || contact.isSubscriptionPending || contact.subscription == .from || contact.subscription == .both
-        }
+    /// Whether the user added or approved `jid` (`Contact.hasConsent`): what
+    /// a `subscribe` needs to be answered without asking, and what every
+    /// other trust decision about a contact asks.
+    func hasConsented(_ jid: JID) throws -> Bool {
+        try reader.read { db in try Contact.fetchOne(db, key: jid)?.hasConsent ?? false }
     }
 
     /// Applies `change` to the stored contact, or a new one, and saves only

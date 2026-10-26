@@ -119,7 +119,7 @@ struct ContactRequestTests {
         wire.answer { FakeWire.error(to: $0, condition: "forbidden") }
         await #expect(throws: (any Error).self) { try await session.addContactAndWait(alice) }
         #expect(!wire.written.contains { ($0 as? Presence)?.type == .subscribe })
-        #expect(try !db.hasApprovedOrAdded(alice))
+        #expect(try !db.hasConsented(alice))
     }
 
     @Test func addingAndWaitingOfflineThrows() async throws {
@@ -191,6 +191,39 @@ struct SubscribeConsentTests {
         wire.written.compactMap { $0 as? Presence }.filter { $0.type == .subscribed }
     }
 
+    @Test func onlyWhatTheUserDidOrApprovedIsConsent() {
+        // Openfire's roster item for a stranger's unsolicited `subscribed`.
+        #expect(!Contact(jid: carol, subscription: .to, isInRoster: true).hasConsent)
+        #expect(!Contact(jid: carol, subscription: .none, isInRoster: true).hasConsent)
+        // Their request, which we haven't answered, isn't consent either.
+        #expect(!Contact(jid: carol, subscription: .to, isInRoster: true, subscriptionRequestedAt: Date()).hasConsent)
+        #expect(Contact(jid: carol, subscription: .to, isInRoster: true, isAddedByUser: true).hasConsent)
+        #expect(Contact(jid: carol, subscription: .none, isSubscriptionPending: true, isInRoster: true).hasConsent)
+        #expect(Contact(jid: carol, subscription: .from, isInRoster: true).hasConsent)
+        #expect(Contact(jid: carol, subscription: .both, isInRoster: true).hasConsent)
+    }
+
+    @Test func anUnansweredRequestStaysUnconsentedUntilTheUserAccepts() throws {
+        try db.updateRosterItem(jid: carol, name: nil, subscription: .to, isPending: false)
+        try subscribe(from: carol)
+        #expect(try !db.hasConsented(carol))
+        // What accepting does first (`addContactAndWait`).
+        try db.markAddedByUser(carol)
+        #expect(try db.hasConsented(carol))
+    }
+
+    @Test func autoDownloadFollowsConsentAndTheGroupSetting() {
+        func trusts(outgoing: Bool = false, privateGroup: Bool = false, groupSetting: Bool = true, trusted: Bool = false) -> Bool {
+            XMPPSession.trustsForAutoDownload(isOutgoing: outgoing, isPrivateGroup: privateGroup, trustsGroupMembers: groupSetting, isTrusted: trusted)
+        }
+        #expect(!trusts())
+        #expect(trusts(outgoing: true))
+        #expect(trusts(trusted: true))
+        #expect(trusts(privateGroup: true))
+        #expect(!trusts(privateGroup: true, groupSetting: false))
+        #expect(trusts(privateGroup: true, groupSetting: false, trusted: true))
+    }
+
     @Test func aRosterItemTheServerMadeIsNotConsent() throws {
         for subscription in [Contact.Subscription.to, .none] {
             try db.updateRosterItem(jid: carol, name: nil, subscription: subscription, isPending: false)
@@ -244,11 +277,11 @@ struct SubscribeConsentTests {
 
     @Test func removingAContactForgetsThatTheUserAddedThem() throws {
         try db.markAddedByUser(carol)
-        #expect(try db.hasApprovedOrAdded(carol))
+        #expect(try db.hasConsented(carol))
         try db.updateRosterItem(jid: carol, name: nil, subscription: .to, isPending: false)
-        #expect(try db.hasApprovedOrAdded(carol))
+        #expect(try db.hasConsented(carol))
         try db.removeRosterItem(jid: carol)
-        #expect(try !db.hasApprovedOrAdded(carol))
+        #expect(try !db.hasConsented(carol))
         try subscribe(from: carol)
         #expect(approvals.isEmpty)
         #expect(try db.contact(carol)?.hasContactRequest == true)

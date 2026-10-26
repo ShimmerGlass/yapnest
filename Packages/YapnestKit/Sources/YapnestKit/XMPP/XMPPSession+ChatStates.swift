@@ -49,10 +49,10 @@ extension XMPPSession {
 
     /// Whether we tell `peer` anything about our chat states: the build's
     /// policy allows it, they're a contact rather than a group, the user
-    /// hasn't turned it off, and they're in our roster.
+    /// hasn't turned it off, and the user added or approved them.
     func mayShareChatStates(with peer: JID) -> Bool {
         policy.sendsChatStates && !isGroup(peer) && sendsChatStates
-            && (try? database.isInRoster(peer)) == true
+            && (try? database.hasConsented(peer)) == true
     }
 
     /// Decides whether `chatState` goes to `peer` now, and if so records it
@@ -129,7 +129,7 @@ extension XMPPSession {
 
     /// The message id to mark as displayed for `peer`, if it's news to them.
     func claimDisplayed(conversationId: Int64, to peer: JID, through date: Date) -> String? {
-        guard sendsReadMarkers, (try? database.isInRoster(peer)) == true,
+        guard sendsReadMarkers, (try? database.hasConsented(peer)) == true,
               let message = try? database.lastIncoming(conversationId: conversationId, markable: true, through: date),
               let target = message.remoteId else { return nil }
         let isNew = lock.withLock { $0.sentDisplayed.updateValue(target, forKey: peer) != target }

@@ -93,7 +93,7 @@ extension AppDatabase {
                 SELECT attachment.*, message.direction = 'outgoing' AS isOutgoing, message.isWrittenHere AS isWrittenHere,
                        conversation.kind = 'groupchat' AS isGroup,
                        COALESCE(groupChat.isMembersOnly AND groupChat.isNonAnonymous, 0) AS isPrivateGroup,
-                       COALESCE(contact.isInRoster, 0) AS isInRoster
+                       COALESCE(contact.isAddedByUser OR contact.isSubscriptionPending OR contact.subscription IN ('from', 'both'), 0) AS hasConsent
                 FROM attachment
                 JOIN message ON message.id = attachment.messageId
                 JOIN conversation ON conversation.id = message.conversationId
@@ -110,7 +110,7 @@ extension AppDatabase {
                 let attachment = try Attachment(row: row)
                 guard attachment.isImage, XMPPSession.trustsForAutoDownload(
                     isOutgoing: Message.isTrustedOutgoing(isOutgoing: row["isOutgoing"], isWrittenHere: row["isWrittenHere"], inGroup: row["isGroup"]),
-                    isPrivateGroup: trustsGroupMembers && row["isGroup"] && row["isPrivateGroup"], isInRoster: row["isInRoster"],
+                    isPrivateGroup: row["isGroup"] && row["isPrivateGroup"], trustsGroupMembers: trustsGroupMembers, isTrusted: row["hasConsent"],
                 ) else { continue }
                 found.append(attachment)
             }

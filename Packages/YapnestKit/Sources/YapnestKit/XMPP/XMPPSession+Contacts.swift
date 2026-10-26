@@ -179,7 +179,7 @@ extension XMPPSession {
                 // all the user's devices), or the user added them here (a
                 // fallback if the server dropped our pre-approval). The
                 // roster alone doesn't say so: a server can put a stranger in it.
-                if try database.hasApprovedOrAdded(jid) {
+                if try database.hasConsented(jid) {
                     client.module(.presence).subscribed(by: Martin.JID(jid.martin))
                     return
                 }

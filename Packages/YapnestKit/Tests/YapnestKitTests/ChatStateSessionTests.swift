@@ -154,6 +154,16 @@ struct ChatStateSessionTests {
         #expect(session.claimChatState(.composing, to: alice) != nil)
     }
 
+    /// Openfire makes a roster item, subscription `to`, for a stranger's
+    /// unsolicited `subscribed`.
+    @Test func nothingGoesToARosterItemTheServerMade() throws {
+        session.noteChatStates(of: try parse(bodyWithState), source: .live)
+        try database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        #expect(session.claimChatState(.composing, to: alice) == nil)
+        try database.markAddedByUser(alice)
+        #expect(session.claimChatState(.composing, to: alice) != nil)
+    }
+
     @Test func nothingGoesToAGroup() throws {
         let room = YapnestKit.JID("room@conference.example.org")!
         try database.updateRosterItem(jid: room, name: nil, subscription: .both, isPending: false)
@@ -215,6 +225,14 @@ struct ChatStateSessionTests {
         #expect(session.claimDisplayed(conversationId: id, to: alice, through: .distantFuture) == nil)
         _ = try ingestMarkable("m2")
         #expect(session.claimDisplayed(conversationId: id, to: alice, through: .distantFuture) == "m2")
+    }
+
+    @Test func noMarkerGoesToARosterItemTheServerMade() throws {
+        let id = try ingestMarkable("m1")
+        try database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        #expect(session.claimDisplayed(conversationId: id, to: alice, through: .distantFuture) == nil)
+        try database.updateRosterItem(jid: alice, name: nil, subscription: .from, isPending: false)
+        #expect(session.claimDisplayed(conversationId: id, to: alice, through: .distantFuture) == "m1")
     }
 
     @Test func markersGoOnlyToTheRosterAndWhenOn() throws {

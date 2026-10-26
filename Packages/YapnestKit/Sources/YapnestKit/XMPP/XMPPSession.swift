@@ -1646,7 +1646,8 @@ public final class XMPPSession: @unchecked Sendable {
             // Fetching reveals our IP address to the sender's upload
             // server, so only for people we know.
             if let attachment = result.newAttachment, Self.trustsForAutoDownload(
-                isOutgoing: inbound.isOutgoing, isInRoster: (try? database.isInRoster(inbound.peer)) ?? false,
+                isOutgoing: inbound.isOutgoing, isPrivateGroup: false, trustsGroupMembers: false,
+                isTrusted: (try? database.hasConsented(inbound.peer)) ?? false,
             ) {
                 autoDownload(attachment)
             }
@@ -1656,7 +1657,7 @@ public final class XMPPSession: @unchecked Sendable {
         // receipts aren't due, and the server hands the app its live copy
         // when it comes back. This is the one to acknowledge (XEP-0184).
         if source == .live, !inbound.isOutgoing, !inbound.isError, inbound.requestsReceipt, inbound.body != nil,
-           result.conversationId != nil, let id = inbound.id, (try? database.isInRoster(inbound.peer)) == true {
+           result.conversationId != nil, let id = inbound.id, (try? database.hasConsented(inbound.peer)) == true {
             write(OutboundStanza.receipt(to: inbound.peer, for: id))
         }
         if let chatState = result.chatState {

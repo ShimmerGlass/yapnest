@@ -13,7 +13,7 @@ struct CallLogTests {
 
     init() throws {
         db = try AppDatabase.inMemory()
-        try db.writer.write { try Contact(jid: alice, isInRoster: true).insert($0) }
+        try db.writer.write { try Contact(jid: alice, subscription: .both, isInRoster: true).insert($0) }
     }
 
     private func signal(_ action: CallSignal.Action, sid: String = "s1", fromAccount: Bool = false, peer: JID = alice, at offset: TimeInterval = 0) -> CallSignal {
@@ -233,7 +233,7 @@ struct CallLogTests {
     }
 
     @Test func aStrangerCannotChangeAnotherChatsCall() throws {
-        try db.writer.write { try Contact(jid: bob, isInRoster: true).insert($0) }
+        try db.writer.write { try Contact(jid: bob, subscription: .both, isInRoster: true).insert($0) }
         try apply(signal(propose, sid: "s1"))
         try apply(signal(.proceed, sid: "s1", peer: bob), signal(.reject(.busy), sid: "s1", peer: bob))
         let alices = try #require(try rows().first { $0.sender == alice })

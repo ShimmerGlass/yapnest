@@ -414,7 +414,7 @@ extension XMPPSession {
             return true
         }
         guard isLivePropose,
-              (try? database.isInRoster(signal.sender)) == true else { return false }
+              (try? database.hasConsented(signal.sender)) == true else { return false }
         ring(for: signal)
         return true
     }

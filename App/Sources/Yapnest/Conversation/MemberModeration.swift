@@ -46,7 +46,7 @@ private struct MemberModeration: ViewModifier {
     private var isBusy: Bool { server.isBusy || addContact.isBusy }
 
     private var canAddContact: Bool {
-        row.jid != nil && !row.isMe && row.contact?.isInRoster != true && !didAddContact
+        row.jid != nil && !row.isMe && row.contact?.hasConsent != true && !didAddContact
     }
 
     func body(content: Content) -> some View {

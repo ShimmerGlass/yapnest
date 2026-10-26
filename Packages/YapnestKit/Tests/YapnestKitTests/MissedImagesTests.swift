@@ -12,10 +12,12 @@ private struct Fixture {
     let db = try! AppDatabase.inMemory()
     var nextId = 0
 
+    /// An approved contact when `inRoster`: a roster item alone isn't trusted.
     func contact(_ jid: JID, inRoster: Bool) throws {
         try db.writer.write { db in
             var contact = Contact(jid: jid)
             contact.isInRoster = inRoster
+            if inRoster { contact.subscription = .both }
             try contact.save(db)
         }
     }
@@ -64,6 +66,18 @@ struct MissedImagesTests {
         let ours = try f.add(in: bob, from: me, outgoing: true)
         #expect(try f.missed() == [known, ours])
         #expect(try f.missed(peer: bob) == [ours])
+    }
+
+    @Test func aRosterItemTheServerMadeIsNotTrusted() throws {
+        var f = Fixture()
+        // Openfire's answer to a stranger's unsolicited `subscribed`.
+        try f.db.writer.write { try Contact(jid: alice, subscription: .to, isInRoster: true).save($0) }
+        try f.db.writer.write { try Contact(jid: bob, subscription: .none, isSubscriptionPending: true, isInRoster: true).save($0) }
+        try f.db.writer.write { try Contact(jid: JID("carol@example.org")!, isInRoster: true, isAddedByUser: true).save($0) }
+        _ = try f.add(in: alice, from: alice)
+        let asked = try f.add(in: bob, from: bob)
+        let added = try f.add(in: JID("carol@example.org")!, from: JID("carol@example.org")!)
+        #expect(try f.missed() == [asked, added])
     }
 
     @Test func groupsTrustPrivateRoomsOrRosterSenders() throws {

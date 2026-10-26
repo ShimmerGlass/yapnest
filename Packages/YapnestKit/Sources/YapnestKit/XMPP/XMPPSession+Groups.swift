@@ -1371,7 +1371,8 @@ extension XMPPSession {
             events.send(.newMessage(message))
             if let attachment = result.newAttachment, Self.trustsForAutoDownload(
                 isOutgoing: Message.isTrustedOutgoing(isOutgoing: message.direction == .outgoing, isWrittenHere: message.isWrittenHere, inGroup: true),
-                isPrivateGroup: isPrivate && downloadsFromGroupMembers, isInRoster: (try? database.isInRoster(inbound.sender)) ?? false,
+                isPrivateGroup: isPrivate, trustsGroupMembers: downloadsFromGroupMembers,
+                isTrusted: (try? database.hasConsented(inbound.sender)) ?? false,
             ) {
                 autoDownload(attachment)
             }
@@ -1442,8 +1443,8 @@ extension XMPPSession {
             return
         }
         let room = invitation.room, inviter = invitation.inviter
-        guard (try? database.isInRoster(inviter)) == true else {
-            logger.info("Ignoring invitation to \(room, privacy: .private) from \(inviter, privacy: .private), who isn't a contact")
+        guard (try? database.hasConsented(inviter)) == true else {
+            logger.info("Ignoring invitation to \(room, privacy: .private) from \(inviter, privacy: .private), who the user hasn't added or approved")
             return
         }
         if let group = try? database.groupChat(room), !group.hasLeft { return }
@@ -1730,7 +1731,7 @@ extension XMPPSession {
     /// they're a contact we have a subscription with, and the invitation was
     /// relayed through the room: a direct one (XEP-0249) has no decline.
     static func sendsDecline(for invitation: GroupInvitation, inviter: Contact?) -> Bool {
-        guard !invitation.isDirect, let inviter, inviter.isInRoster else { return false }
+        guard !invitation.isDirect, let inviter, inviter.hasConsent else { return false }
         return inviter.subscription != .none
     }
 

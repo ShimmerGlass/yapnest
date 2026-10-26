@@ -205,18 +205,22 @@ extension XMPPSession {
     }
 
     /// Whether a picture from someone in a private group we haven't added
-    /// downloads by itself. Off, only the group's members in the roster do;
+    /// downloads by itself. Off, only the group's members the user added do;
     /// the rest show tap-to-download.
     public var downloadsFromGroupMembers: Bool { database.flag(.downloadsFromGroupMembers, default: true) }
 
     /// Whether we fetch a received image without being asked, which reveals
     /// our IP address to the sender's upload server: ours, in a private group
-    /// (or a private message from a room), or from someone in the roster.
+    /// (or a private message from a room), or from someone the user added
+    /// or approved (`Contact.hasConsent`).
     /// `isOutgoing` is `Message.isTrustedOutgoing`, which in a group doesn't
-    /// take a room's word that a message is ours. `isInRoster` is for the 1:1
-    /// peer, or for the real address of a group message's sender.
-    static func trustsForAutoDownload(isOutgoing: Bool, isPrivateGroup: Bool = false, isInRoster: @autoclosure () -> Bool) -> Bool {
-        isOutgoing || isPrivateGroup || isInRoster()
+    /// take a room's word that a message is ours. `trustsGroupMembers` is the
+    /// setting that lets a private group's members through. `isTrusted` is
+    /// for the 1:1 peer, or for the real address of a group message's sender.
+    static func trustsForAutoDownload(
+        isOutgoing: Bool, isPrivateGroup: Bool, trustsGroupMembers: Bool, isTrusted: @autoclosure () -> Bool,
+    ) -> Bool {
+        isOutgoing || (isPrivateGroup && trustsGroupMembers) || isTrusted()
     }
 
     /// Downloads the recent images that should have come on their own but

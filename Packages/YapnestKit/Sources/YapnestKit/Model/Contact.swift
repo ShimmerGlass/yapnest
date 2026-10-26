@@ -75,7 +75,19 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
 
     /// Whether the user chose this contact, so a name they publish may stand
     /// for them. Anyone else could call themselves "Mom".
-    public var isKnown: Bool { isInRoster && (subscription != .none || isSubscriptionPending) }
+    public var isKnown: Bool { isInRoster && hasConsent }
+
+    /// Whether the user added or approved them: they added them here, asked
+    /// them and are waiting for the answer (the server's `ask`), or approved
+    /// them so they see our presence. A roster item alone is not consent, as
+    /// the server can create one for a stranger, so everything a stranger
+    /// mustn't get (a ringing phone, receipts, automatic downloads, being
+    /// told our presence or last seen) hangs on this, never on `isInRoster`.
+    /// A request from them we haven't answered doesn't count either.
+    /// `AppDatabase.missedImages` repeats this in SQL.
+    public var hasConsent: Bool {
+        isAddedByUser || isSubscriptionPending || subscription == .from || subscription == .both
+    }
 
     /// The roster name, else the name they publish if the user added them,
     /// else the bare address.

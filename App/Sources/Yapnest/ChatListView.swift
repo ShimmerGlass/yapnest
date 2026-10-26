@@ -350,7 +350,7 @@ struct ChatListView: View {
         let (isKnown, hasJoined) = await offMain { [database = session.database] in
             let contact = try? database.contact(link.jid)
             let group = (try? database.groupChat(link.jid)) ?? nil
-            return (contact?.isInRoster == true || contact?.hasContactRequest == true || group != nil, group?.hasLeft == false)
+            return (contact?.hasConsent == true || contact?.hasContactRequest == true || group != nil, group?.hasLeft == false)
         }
         switch link.action {
         case .join:

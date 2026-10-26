@@ -335,6 +335,33 @@ struct FileTransferReceivingTests {
         try turnedDown(h.offer(from: "room@conference.example.org/alice", size: 10), reason: "decline")
     }
 
+    /// Openfire makes a roster item, subscription `to`, for a stranger's
+    /// unsolicited `subscribed`: being in the roster is no reason to take a file.
+    @Test func aRosterItemTheServerMadeIsNotAContact() throws {
+        let h = try TransferHarness()
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        try h.harness.receive(iq: h.offer(size: 10))
+        #expect(h.sent.contains { $0.action == "session-terminate" && $0.reason == "decline" })
+        #expect(h.sentAction("session-accept") == nil)
+        #expect(h.incomingRows.isEmpty)
+    }
+
+    @Test(arguments: [Contact.Subscription.from, .both])
+    func anApprovedContactsOfferIsTaken(subscription: Contact.Subscription) throws {
+        let h = try TransferHarness()
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: subscription, isPending: false)
+        try h.harness.receive(iq: h.offer(size: 10))
+        #expect(h.sentAction("session-accept") != nil)
+    }
+
+    @Test func aContactTheUserAddedIsTakenEvenBeforeTheyAnswer() throws {
+        let h = try TransferHarness()
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        try h.database.markAddedByUser(alice)
+        try h.harness.receive(iq: h.offer(size: 10))
+        #expect(h.sentAction("session-accept") != nil)
+    }
+
     @Test func aRepeatedSessionIdIsAnErrorAndChangesNothing() throws {
         let h = try TransferHarness()
         h.session.autoAcceptedOfferSize = 0
@@ -416,7 +443,7 @@ struct FileTransferReceivingTests {
 
     @Test func offersLeftFromAnEarlierLaunchAreOverWhenTheSessionStarts() async throws {
         let database = try AppDatabase.inMemory()
-        try await database.writer.write { try Contact(jid: alice, isInRoster: true).insert($0) }
+        try await database.writer.write { try Contact(jid: alice, subscription: .both, isInRoster: true).insert($0) }
         let offer = JingleFileOffer(name: "a", mediaType: nil, size: 1, date: nil, sha256: nil, ibbSid: "i", blockSize: 10)
         _ = try database.insertFileOffer(from: alice, sid: "left", offer: offer)
         let attachments = AttachmentStore.temporary()
