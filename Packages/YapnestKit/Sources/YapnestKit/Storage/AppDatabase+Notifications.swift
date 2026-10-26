@@ -19,9 +19,11 @@ public struct MessageNotification: Sendable, Equatable {
     /// hide addresses leave this, and the avatar, empty: an occupant has none.
     public var senderJID: JID?
     public var senderAvatarHash: String?
-    /// A message of a group that doesn't notify for it. The push that announced
-    /// it can't be suppressed without Apple's filtering entitlement, so the
-    /// extension shows this one silently and takes it down again.
+    /// A message of a group that doesn't notify for it, or that arrives within
+    /// the group's notification interval of the last loud one and isn't a
+    /// mention. The push that announced it can't be suppressed without Apple's
+    /// filtering entitlement, so the extension shows this one silently and
+    /// takes it down again.
     public var isQuiet: Bool = false
     /// The conversation's stored sound choice, as `NotificationSound` reads it.
     public var sound: String?
@@ -37,8 +39,12 @@ extension AppDatabase {
     /// catch-up also stores history, such as a new device's first week, which
     /// is new to the database but not to the user. The first claim only sets
     /// the mark.
-    public func claimNotifications(now: Date = Date()) throws -> [MessageNotification] {
-        try claimNotificationsAndEdits(now: now).new
+    ///
+    /// `notifies` is false for a claim whose notifications won't be shown, as
+    /// the app's while it's on screen: it doesn't start a group's
+    /// notification interval, so the next message after it still notifies.
+    public func claimNotifications(now: Date = Date(), notifies: Bool = true) throws -> [MessageNotification] {
+        try claimNotificationsAndEdits(now: now, notifies: notifies).new
     }
 
     /// `claimNotifications`, and the messages corrected since the last claim
@@ -50,7 +56,7 @@ extension AppDatabase {
     /// again by the next one. Replacing a notification twice with the same
     /// text is harmless, and it's what keeps an edit stored just before the
     /// mark moved, but stamped by a slow clock, from being missed.
-    public func claimNotificationsAndEdits(now: Date = Date()) throws -> (new: [MessageNotification], edited: [MessageNotification]) {
+    public func claimNotificationsAndEdits(now: Date = Date(), notifies: Bool = true) throws -> (new: [MessageNotification], edited: [MessageNotification]) {
         try writer.write { db in
             func setting(_ key: SettingKey) throws -> String? {
                 try Self.setting(db, key)
@@ -80,7 +86,7 @@ extension AppDatabase {
                 .order(Column("editedAt"), Column("id"))
                 .fetchAll(db)
             return (
-                try messages.compactMap { try Self.notification(db, for: $0) },
+                try messages.compactMap { try Self.notification(db, for: $0, claimedAt: notifies ? now : nil) },
                 try edits.compactMap { try Self.notification(db, for: $0) }.filter { !$0.isQuiet },
             )
         }
@@ -92,7 +98,10 @@ extension AppDatabase {
         try setting(db, .lastNotifiedAt).flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0) }
     }
 
-    static func notification(_ db: Database, for message: Message) throws -> MessageNotification? {
+    /// `claimedAt` is set when the message is new to the claim, which holds a
+    /// group to its notification interval, and moves the interval on when
+    /// the message notifies loudly. An edit only replaces what's shown.
+    static func notification(_ db: Database, for message: Message, claimedAt now: Date? = nil) throws -> MessageNotification? {
         guard let id = message.id, let conversation = try Conversation.fetchOne(db, key: message.conversationId) else { return nil }
         var body: String
         if message.callOutcome != nil {
@@ -112,7 +121,22 @@ extension AppDatabase {
             var isQuiet = false
             let group = try GroupChat.filter(Column("conversationId") == conversation.id).fetchOne(db)
             switch group?.notify ?? .always {
-            case .always: break
+            case .always:
+                // Compared with the claim's clock, not the message's, as it's
+                // when this device told the user.
+                if let now, let group, let minutes = conversation.notificationInterval {
+                    // A last time well ahead of now is from a clock set back
+                    // since, and would hold the group silent until it's
+                    // reached. Within a second it's this claim's own, stored
+                    // to the millisecond.
+                    let elapsed = conversation.lastLoudNotificationAt.map { now.timeIntervalSince($0) }
+                    if let elapsed, elapsed > -1, elapsed < TimeInterval(minutes) * 60 {
+                        isQuiet = try !isMention(db, message, nickname: group.nickname)
+                    }
+                    if !isQuiet {
+                        try Conversation.filter(key: message.conversationId).updateAll(db, Column("lastLoudNotificationAt").set(to: now))
+                    }
+                }
             case .onMention:
                 if let group { isQuiet = try !isMention(db, message, nickname: group.nickname) }
             case .never: isQuiet = true

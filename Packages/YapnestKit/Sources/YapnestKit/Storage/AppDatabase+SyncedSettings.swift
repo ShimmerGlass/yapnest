@@ -95,6 +95,15 @@ extension AppDatabase {
             read: { $0.notificationSound },
             apply: { db, c, value in try setColumn(db, c, Column("notificationSound").set(to: value)) },
         ),
+        "notificationInterval": chatKey(
+            read: { $0.notificationInterval.map(String.init) },
+            // Up to a day: the value comes from the server, and minutes past
+            // what a claim can turn into seconds would trap there.
+            apply: { db, c, value in
+                let minutes = value.flatMap(Int.init).flatMap { (1...1440).contains($0) ? $0 : nil }
+                try setColumn(db, c, Column("notificationInterval").set(to: minutes))
+            },
+        ),
         "pinned": chatKey(
             read: { $0.isPinned ? "1" : nil },
             apply: { db, c, value in try setColumn(db, c, Column("isPinned").set(to: value == "1")) },

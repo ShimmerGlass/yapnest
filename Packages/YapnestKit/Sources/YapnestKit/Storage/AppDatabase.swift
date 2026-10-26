@@ -667,6 +667,13 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v40-notification-interval") { db in
+            try db.alter(table: "conversation") { t in
+                t.add(column: "notificationInterval", .integer)
+                t.add(column: "lastLoudNotificationAt", .datetime)
+            }
+        }
+
         return migrator
     }
 

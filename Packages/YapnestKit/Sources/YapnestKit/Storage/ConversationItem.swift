@@ -375,6 +375,18 @@ extension AppDatabase {
         }
     }
 
+    /// The minutes a group that notifies for every message stays silent after a notification; nil is off.
+    public func notificationInterval(peer: JID) throws -> Int? {
+        try reader.read { db in try Conversation.filter(Column("peer") == peer).fetchOne(db)?.notificationInterval }
+    }
+
+    public func setNotificationInterval(_ minutes: Int?, peer: JID) throws {
+        try writer.write { db in
+            _ = try Self.conversation(db, with: peer)
+            try Self.setChatSetting(db, peer, "notificationInterval", minutes.map(String.init))
+        }
+    }
+
     public func contact(_ jid: JID) throws -> Contact? {
         try reader.read { db in try Contact.fetchOne(db, key: jid) }
     }

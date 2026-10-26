@@ -482,7 +482,7 @@ final class AppModel {
             connect(session)
             // Seen here: no notification for any of it.
             let database = session.database
-            Task { await offMain { _ = try? database.claimNotifications() } }
+            Task { await offMain { _ = try? database.claimNotifications(notifies: false) } }
             // The unread observation clears quiet notifications only when the counts change.
             if environment.managesBadge { Task { await UNUserNotificationCenter.current().removeQuietNotifications() } }
         } else if background, !Platform.staysConnected {
@@ -713,9 +713,9 @@ final class AppModel {
         claim = Task {
             repeat {
                 claimsAgain = false
-                let database = session.database
+                let database = session.database, notifies = !isActive
                 let (claimed, badge) = await Task.detached(priority: .utility) {
-                    ((try? database.claimNotificationsAndEdits()) ?? ([], []), try? database.unreadCount())
+                    ((try? database.claimNotificationsAndEdits(notifies: notifies)) ?? ([], []), try? database.unreadCount())
                 }.value
                 let (notifications, edited) = claimed
                 guard !isActive, self.session === session else { continue }

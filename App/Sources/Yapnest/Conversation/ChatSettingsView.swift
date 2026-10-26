@@ -23,6 +23,7 @@ struct ChatSettingsView: View {
     @State private var isLoaded = false
     @State private var linkPreviews: Bool?
     @State private var notificationSound: String?
+    @State private var notificationInterval: Int?
     @State private var previewsOffInSettings = false
     /// Set for group chats.
     @State private var group: GroupChat?
@@ -59,6 +60,7 @@ struct ChatSettingsView: View {
         var isEncrypted: Bool
         var linkPreviews: Bool?
         var notificationSound: String?
+        var notificationInterval: Int?
         var previewsOff: Bool
         var group: GroupChat?
         var contact: Contact?
@@ -72,6 +74,7 @@ struct ChatSettingsView: View {
                 isEncrypted: (try? database.isEncrypted(with: peer)) ?? true,
                 linkPreviews: (try? database.linkPreviews(peer: peer)) ?? nil,
                 notificationSound: (try? database.notificationSound(peer: peer)) ?? nil,
+                notificationInterval: (try? database.notificationInterval(peer: peer)) ?? nil,
                 previewsOff: database.linkPreviewSetting == .never,
                 group: try? database.groupChat(peer),
                 contact: try? database.contact(peer),
@@ -80,6 +83,7 @@ struct ChatSettingsView: View {
         isEncrypted = initial.isEncrypted
         linkPreviews = initial.linkPreviews
         notificationSound = initial.notificationSound
+        notificationInterval = initial.notificationInterval
         previewsOffInSettings = initial.previewsOff
         group = initial.group
         contact = initial.contact
@@ -459,6 +463,20 @@ struct ChatSettingsView: View {
                 BusyLabel(title: "Notifications", systemImage: "bell", isBusy: changeNotify.isBusy)
             }
             .disabled(changeNotify.isBusy)
+            if group.notify == .always {
+                Picker(selection: Binding(get: { notificationInterval }, set: setNotificationInterval)) {
+                    Text("Off").tag(Int?.none)
+                    Text("Every 5 Minutes").tag(Int?.some(5))
+                    Text("Every 15 Minutes").tag(Int?.some(15))
+                    Text("Every Hour").tag(Int?.some(60))
+                    // A value another version of the app synced, which this one doesn't offer.
+                    if let minutes = notificationInterval, ![5, 15, 60].contains(minutes) {
+                        Text("Every \(Self.duration(minutes))").tag(Int?.some(minutes))
+                    }
+                } label: {
+                    Label("Notify at Most", systemImage: "bell.badge")
+                }
+            }
             if room?.offersCommands == true || !presentNicks.isEmpty {
                 NavigationLink {
                     // A bot can't offer commands at the room's own address, so
@@ -470,7 +488,10 @@ struct ChatSettingsView: View {
             }
         } footer: {
             switch group.notify {
-            case .always: EmptyView()
+            case .always:
+                if let notificationInterval {
+                    Text("After a notification, messages for the next \(Self.duration(notificationInterval)) arrive silently, unless they mention you, say “\(group.nickname)” or reply to yours. They still count in the app's badge.")
+                }
             case .onMention: Text("Only messages that mention you, say “\(group.nickname)” or reply to yours notify you or count in the app's badge.")
             case .never: Text("Messages from this group don't notify you or count in the app's badge.")
             }
@@ -650,6 +671,20 @@ struct ChatSettingsView: View {
         notificationSound = sound
         saves.run({ [database = session.database, peer] in try database.setNotificationSound(sound, peer: peer) }, onFailure: { error in
             notificationSound = previous
+            saveError = error.localizedDescription
+        })
+    }
+
+    /// "15 minutes", "1 hour", in the user's language.
+    private static func duration(_ minutes: Int) -> String {
+        Duration.seconds(minutes * 60).formatted(.units(allowed: [.hours, .minutes], width: .wide))
+    }
+
+    private func setNotificationInterval(_ minutes: Int?) {
+        let previous = notificationInterval
+        notificationInterval = minutes
+        saves.run({ [database = session.database, peer] in try database.setNotificationInterval(minutes, peer: peer) }, onFailure: { error in
+            notificationInterval = previous
             saveError = error.localizedDescription
         })
     }

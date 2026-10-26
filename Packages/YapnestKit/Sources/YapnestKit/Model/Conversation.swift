@@ -28,6 +28,12 @@ public struct Conversation: Codable, Hashable, Sendable, Identifiable, Fetchable
     /// The sound of this chat's notifications: nil for the system's, else
     /// what `NotificationSound` stores.
     public var notificationSound: String?
+    /// For a group that notifies for every message: the minutes after a
+    /// notification during which the next messages arrive silently. nil is off.
+    public var notificationInterval: Int?
+    /// When this device last notified loudly about the chat. It starts the
+    /// interval, and is never synced: each device has been told on its own.
+    public var lastLoudNotificationAt: Date?
     /// When the chat was archived. The chat is archived while this is set and
     /// nothing newer than it has arrived, which is what the other devices
     /// are told; `isArchived` is that answer.
@@ -46,6 +52,8 @@ public struct Conversation: Codable, Hashable, Sendable, Identifiable, Fetchable
         historyComplete: Bool = false,
         historyCursor: String? = nil,
         notificationSound: String? = nil,
+        notificationInterval: Int? = nil,
+        lastLoudNotificationAt: Date? = nil,
         archivedAt: Date? = nil,
     ) {
         self.id = id
@@ -60,6 +68,8 @@ public struct Conversation: Codable, Hashable, Sendable, Identifiable, Fetchable
         self.historyComplete = historyComplete
         self.historyCursor = historyCursor
         self.notificationSound = notificationSound
+        self.notificationInterval = notificationInterval
+        self.lastLoudNotificationAt = lastLoudNotificationAt
         self.archivedAt = archivedAt
     }
 
