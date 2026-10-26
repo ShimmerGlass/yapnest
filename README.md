@@ -7,8 +7,9 @@ company or a phone number.
 ## What it does
 
 - **Encrypted chats.** One-to-one chats and private groups are end-to-end
-  encrypted with OMEMO by default, and you decide which of your contacts'
-  devices to trust.
+  encrypted with OMEMO by default. A contact's new devices are trusted
+  automatically until you verify one of theirs; after that, you decide on
+  each new device.
 - **Everything you'd expect from a chat app.** Reactions, replies, edits and
   deleting messages, mentions, photos, videos, files, GIFs, voice messages,
   link previews, locations, and read state that follows you across your
