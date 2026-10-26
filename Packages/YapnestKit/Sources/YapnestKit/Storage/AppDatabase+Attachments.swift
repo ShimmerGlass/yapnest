@@ -87,7 +87,8 @@ extension AppDatabase {
     /// ones, so a sweep doesn't pull years of history. `peer` narrows it to
     /// one conversation.
     func missedImages(since: Date, limit: Int, maxSize: Int64, peer: JID? = nil) throws -> [Attachment] {
-        try reader.read { db in
+        let trustsGroupMembers = flag(.downloadsFromGroupMembers, default: true)
+        return try reader.read { db in
             let rows = try Row.fetchCursor(db, sql: """
                 SELECT attachment.*, message.direction = 'outgoing' AS isOutgoing, message.isWrittenHere AS isWrittenHere,
                        conversation.kind = 'groupchat' AS isGroup,
@@ -109,7 +110,7 @@ extension AppDatabase {
                 let attachment = try Attachment(row: row)
                 guard attachment.isImage, XMPPSession.trustsForAutoDownload(
                     isOutgoing: Message.isTrustedOutgoing(isOutgoing: row["isOutgoing"], isWrittenHere: row["isWrittenHere"], inGroup: row["isGroup"]),
-                    isPrivateGroup: row["isGroup"] && row["isPrivateGroup"], isInRoster: row["isInRoster"],
+                    isPrivateGroup: trustsGroupMembers && row["isGroup"] && row["isPrivateGroup"], isInRoster: row["isInRoster"],
                 ) else { continue }
                 found.append(attachment)
             }

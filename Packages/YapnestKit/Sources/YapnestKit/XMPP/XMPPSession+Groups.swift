@@ -1371,7 +1371,7 @@ extension XMPPSession {
             events.send(.newMessage(message))
             if let attachment = result.newAttachment, Self.trustsForAutoDownload(
                 isOutgoing: Message.isTrustedOutgoing(isOutgoing: message.direction == .outgoing, isWrittenHere: message.isWrittenHere, inGroup: true),
-                isPrivateGroup: isPrivate, isInRoster: (try? database.isInRoster(inbound.sender)) ?? false,
+                isPrivateGroup: isPrivate && downloadsFromGroupMembers, isInRoster: (try? database.isInRoster(inbound.sender)) ?? false,
             ) {
                 autoDownload(attachment)
             }

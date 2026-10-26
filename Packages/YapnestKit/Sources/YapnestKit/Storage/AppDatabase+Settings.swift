@@ -66,6 +66,10 @@ extension AppDatabase {
         /// Whether our name and photo are readable by everyone, rather than
         /// only by contacts. Off unless turned on.
         case sharesProfilePublicly
+        /// Whether a picture from a member of a private group we haven't added
+        /// downloads by itself. On unless turned off, as it shows our IP
+        /// address to the sender's server.
+        case downloadsFromGroupMembers
         /// The highest settings version issued or seen, so the clock never
         /// goes back, even after a relaunch: see `SettingsVersion`.
         case settingsClock

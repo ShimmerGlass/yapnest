@@ -81,6 +81,21 @@ struct MissedImagesTests {
         #expect(try p.missed() == [anyone])
     }
 
+    @Test func privateGroupStrangersAreSkippedWhenTheSettingIsOff() throws {
+        var f = Fixture()
+        try f.group(private: true)
+        try f.contact(alice, inRoster: true)
+        let friend = try f.add(in: room, from: alice)
+        let stranger = try f.add(in: room, from: bob)
+        #expect(try f.missed() == [friend, stranger])
+        try f.db.setFlag(.downloadsFromGroupMembers, false)
+        #expect(try f.missed() == [friend])
+    }
+
+    @Test func groupMembersAreDownloadedFromByDefault() throws {
+        #expect(try AppDatabase.inMemory().flag(.downloadsFromGroupMembers, default: true))
+    }
+
     @Test func failedIsRetriedReadyAndOtherFilesAreNot() throws {
         var f = Fixture()
         try f.contact(alice, inRoster: true)

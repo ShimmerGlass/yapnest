@@ -204,6 +204,11 @@ extension XMPPSession {
         download(attachment, limit: Self.maxDownloadSize)
     }
 
+    /// Whether a picture from someone in a private group we haven't added
+    /// downloads by itself. Off, only the group's members in the roster do;
+    /// the rest show tap-to-download.
+    public var downloadsFromGroupMembers: Bool { database.flag(.downloadsFromGroupMembers, default: true) }
+
     /// Whether we fetch a received image without being asked, which reveals
     /// our IP address to the sender's upload server: ours, in a private group
     /// (or a private message from a room), or from someone in the roster.
