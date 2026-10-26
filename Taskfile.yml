@@ -39,11 +39,14 @@ tasks:
     desc: UI tests on the iPhone 17 and the iOS 26 simulators; extra arguments go to xcodebuild
     deps: [project]
     # Both run even if the first fails, as each catches what the other can't.
+    # A test that hangs fails after 4 minutes: the slowest take about 2.5
+    # under load, and without a limit a hung app stalls the run for 10 or
+    # more minutes with no output while xcodebuild collects diagnostics.
     cmds:
       - |
         failed=0
         for destination in '{{.IPHONE}}' '{{.IOS26}}'; do
-          xcodebuild test -scheme YapnestUITests -destination "$destination" -parallel-testing-worker-count {{.WORKERS}} -quiet {{.CLI_ARGS}} || failed=1
+          xcodebuild test -scheme YapnestUITests -destination "$destination" -parallel-testing-worker-count {{.WORKERS}} -test-timeouts-enabled YES -default-test-execution-time-allowance 240 -quiet {{.CLI_ARGS}} || failed=1
         done
         exit $failed
 
