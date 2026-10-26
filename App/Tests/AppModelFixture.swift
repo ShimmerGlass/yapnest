@@ -76,7 +76,8 @@ final class AppModelFixture {
         environment.registersForNotifications = false
         environment.managesBadge = false
         environment.forgetSharedState = {}
-        environment.forgetDiagnostics = { [unowned self] in diagnosticsWipes += 1 }
+        // Weak: sign-out calls it last, from a task that can outlive the test.
+        environment.forgetDiagnostics = { [weak self] in self?.diagnosticsWipes += 1 }
         environment.forgetFastTokens = { [unowned self] in fastTokenWipes += 1 }
         environment.changePassword = { [unowned self] _, new, current in
             passwordChanges.append((new, current))
