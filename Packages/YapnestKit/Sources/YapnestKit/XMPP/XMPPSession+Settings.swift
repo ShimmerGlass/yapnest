@@ -347,10 +347,10 @@ extension XMPPSession {
             }
         }
         do {
-            if try await settingsAccessModel() == "whitelist" { return .isPrivate }
+            if try await pepNodeAccessModel(NS.settings) == "whitelist" { return .isPrivate }
             logger.warning("The settings node isn't private; setting it to be")
             try await configurePEPNode(NS.settings, fields: ["pubsub#access_model": ["whitelist"]])
-            if try await settingsAccessModel() == "whitelist" { return .isPrivate }
+            if try await pepNodeAccessModel(NS.settings) == "whitelist" { return .isPrivate }
             logger.error("The server keeps the settings node readable by others, so settings aren't synced")
         } catch {
             // Syncing stays off for the session when the node couldn't be
@@ -362,10 +362,17 @@ extension XMPPSession {
         return .refused
     }
 
-    private func settingsAccessModel() async throws -> String? {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String?, Error>) in
-            client.module(.pubsub).retrieveNodeConfiguration(from: nil, node: NS.settings) { (result: Result<PubSubNodeConfig, PubSubError>) in
-                continuation.resume(with: result.map { $0.accessModel?.rawValue })
+    /// The access model of one of our PEP nodes; nil when it has none.
+    func pepNodeAccessModel(_ node: String) async throws -> String? {
+        try await pepNodeConfig(node) { $0.accessModel?.rawValue }
+    }
+
+    /// What `read` makes of one of our PEP nodes' configuration, which isn't
+    /// itself fit to leave the callback.
+    func pepNodeConfig<T: Sendable>(_ node: String, read: @escaping @Sendable (PubSubNodeConfig) -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+            client.module(.pubsub).retrieveNodeConfiguration(from: nil, node: node) { (result: Result<PubSubNodeConfig, PubSubError>) in
+                continuation.resume(with: result.map(read))
             }
         }
     }
@@ -596,12 +603,8 @@ extension XMPPSession {
     /// Whether the node is set to keep a number of items rather than `max`.
     /// False when the configuration can't be read: nothing says it is capped.
     private func settingsNodeHasLimit() async -> Bool {
-        let hasLimit = try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
-            client.module(.pubsub).retrieveNodeConfiguration(from: nil, node: NS.settings) { (result: Result<PubSubNodeConfig, PubSubError>) in
-                continuation.resume(with: result.map { config in
-                    if case .value? = config.maxItems { true } else { false }
-                })
-            }
+        let hasLimit = try? await pepNodeConfig(NS.settings) { config in
+            if case .value? = config.maxItems { true } else { false }
         }
         return hasLimit ?? false
     }

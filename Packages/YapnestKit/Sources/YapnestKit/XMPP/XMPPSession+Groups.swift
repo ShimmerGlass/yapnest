@@ -1450,10 +1450,9 @@ extension XMPPSession {
         // A room relaying an invitation names the inviter itself, so it could
         // name anyone. It can only speak for its own server's users; for any
         // other the user is told that.
-        let isVouched = invitation.isDirect || Self.vouches(room: room, for: inviter)
-        logger.info("Holding invitation to \(room, privacy: .private) from \(inviter, privacy: .private), vouched for: \(isVouched)")
+        logger.info("Holding invitation to \(room, privacy: .private) from \(inviter, privacy: .private), vouched for: \(invitation.isDirect || Self.vouches(room: room, for: inviter))")
         do {
-            try database.recordGroupInvitation(room: room, inviter: inviter, reason: invitation.reason, password: invitation.password, isDirect: invitation.isDirect, isVouched: isVouched)
+            try database.recordGroupInvitation(room: room, inviter: inviter, reason: invitation.reason, password: invitation.password, isDirect: invitation.isDirect)
             events.send(.invitationHeld)
         } catch {
             logger.error("Failed to store group invitation: \(error)")

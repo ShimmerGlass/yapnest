@@ -8,8 +8,8 @@ import YapnestKit
 struct WebRTCCallMediaTests {
     @Test("two peers in one process connect over host candidates")
     func loopback() async throws {
-        let factory = WebRTCCallMediaFactory(forceRelay: false, receiveOnly: true)
-        try await connect(factory.makeMedia(), factory.makeMedia(), iceServers: [])
+        let factory = WebRTCCallMediaFactory(receiveOnly: true)
+        try await connect(factory.makeMedia(relayOnly: false), factory.makeMedia(relayOnly: false), iceServers: [])
     }
 
     /// Needs a TURN server and its credentials in `YAPNEST_TURN_USER` and
@@ -27,10 +27,9 @@ struct WebRTCCallMediaTests {
         "two peers connect through the dev server's TURN relay",
         .enabled(if: Self.turnServer != nil))
     func throughTurn() async throws {
-        let relayed = WebRTCCallMediaFactory(forceRelay: true, receiveOnly: true)
-        let direct = WebRTCCallMediaFactory(forceRelay: false, receiveOnly: true)
+        let factory = WebRTCCallMediaFactory(receiveOnly: true)
         try await connect(
-            relayed.makeMedia(), direct.makeMedia(), iceServers: [try #require(Self.turnServer)])
+            factory.makeMedia(relayOnly: true), factory.makeMedia(relayOnly: false), iceServers: [try #require(Self.turnServer)])
     }
 
     private static let turnServer: CallIceServer? = {
@@ -48,8 +47,8 @@ struct WebRTCCallMediaTests {
     /// send its audio, not just receive the caller's.
     @Test("both sides send their audio")
     func bothSidesSend() async throws {
-        let factory = WebRTCCallMediaFactory(forceRelay: false, receiveOnly: false)
-        let caller = factory.makeMedia(), callee = factory.makeMedia()
+        let factory = WebRTCCallMediaFactory(receiveOnly: false)
+        let caller = factory.makeMedia(relayOnly: false), callee = factory.makeMedia(relayOnly: false)
         try await caller.start(iceServers: [], video: false)
         try await callee.start(iceServers: [], video: false)
         let offer = try await caller.makeOffer()
@@ -62,8 +61,8 @@ struct WebRTCCallMediaTests {
 
     @Test("both sides send their video, and the offer lists video codecs")
     func bothSidesSendVideo() async throws {
-        let factory = WebRTCCallMediaFactory(forceRelay: false, receiveOnly: false, syntheticCamera: true)
-        let caller = factory.makeMedia(), callee = factory.makeMedia()
+        let factory = WebRTCCallMediaFactory(receiveOnly: false, syntheticCamera: true)
+        let caller = factory.makeMedia(relayOnly: false), callee = factory.makeMedia(relayOnly: false)
         try await caller.start(iceServers: [], video: true)
         try await callee.start(iceServers: [], video: true)
         let offer = try await caller.makeOffer()
@@ -79,8 +78,8 @@ struct WebRTCCallMediaTests {
 
     @Test("an audio call offers no video")
     func audioOnlyOffersNoVideo() async throws {
-        let factory = WebRTCCallMediaFactory(forceRelay: false, receiveOnly: false, syntheticCamera: true)
-        let caller = factory.makeMedia()
+        let factory = WebRTCCallMediaFactory(receiveOnly: false, syntheticCamera: true)
+        let caller = factory.makeMedia(relayOnly: false)
         try await caller.start(iceServers: [], video: false)
         #expect(try await !caller.makeOffer().contains("m=video"))
         caller.close()
@@ -88,7 +87,7 @@ struct WebRTCCallMediaTests {
 
     @Test("a receive-only side leaves its camera out and only receives video")
     func receiveOnlyVideo() async throws {
-        let caller = WebRTCCallMediaFactory(forceRelay: false, receiveOnly: true).makeMedia()
+        let caller = WebRTCCallMediaFactory(receiveOnly: true).makeMedia(relayOnly: false)
         try await caller.start(iceServers: [], video: true)
         let offer = try await caller.makeOffer()
         #expect(Self.direction(of: "video", in: offer) == "recvonly")
@@ -97,8 +96,8 @@ struct WebRTCCallMediaTests {
 
     @Test("video flows between two peers into the remote renderer")
     func videoLoopback() async throws {
-        let factory = WebRTCCallMediaFactory(forceRelay: false, receiveOnly: true, syntheticCamera: true)
-        let caller = factory.makeMedia(), callee = factory.makeMedia()
+        let factory = WebRTCCallMediaFactory(receiveOnly: true, syntheticCamera: true)
+        let caller = factory.makeMedia(relayOnly: false), callee = factory.makeMedia(relayOnly: false)
         let remote = FrameCounter(), local = FrameCounter()
         let calleeMedia = try #require(callee as? WebRTCCallMedia)
         // Before the call is set up: the renderers wait for their tracks.
@@ -133,7 +132,7 @@ struct WebRTCCallMediaTests {
 
     @Test("a closed media finishes its events and refuses more work")
     func close() async throws {
-        let media = WebRTCCallMediaFactory(forceRelay: false, receiveOnly: true).makeMedia()
+        let media = WebRTCCallMediaFactory(receiveOnly: true).makeMedia(relayOnly: false)
         try await media.start(iceServers: [], video: false)
         media.close()
         media.close()

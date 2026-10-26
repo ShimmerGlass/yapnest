@@ -648,10 +648,15 @@ private struct ChatListContent: View {
         }
         .task(id: archived) {
             guard !archived else { return }
+            var previous: Set<JID>?
             await session.database.forEachValue(of: session.database.observeGroupInvitations(), "Group invitation") { list in
                 if invitations == nil { invitations = list } else { withAnimation { invitations = list } }
                 let held = Set(list.map(\.room))
-                Task { await UNUserNotificationCenter.current().removeStaleInvitationNotifications(held: held) }
+                // The first value also clears what an earlier run left; after
+                // that only a room leaving the set can have left one behind.
+                let changed = previous.map { !$0.isSubset(of: held) } ?? true
+                previous = held
+                if changed { Task { await UNUserNotificationCenter.current().removeStaleInvitationNotifications(held: held) } }
             }
         }
         .task(id: archived) {

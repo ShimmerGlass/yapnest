@@ -17,7 +17,7 @@ public struct AccountDirectory: Sendable {
 
     public func openDatabase() throws -> AppDatabase {
         let database = try AppDatabase.open(at: databaseURL)
-        BackupPolicy.apply(also: [url])
+        BackupPolicy.apply(included: BackupPolicy.includesMessages(), to: [url])
         return database
     }
 

@@ -17,7 +17,14 @@ public enum SharedContainer {
             ?? FileManager.default.temporaryDirectory
     }
 
-    public static var accounts: URL { url.appending(path: "accounts") }
+    public static var accounts: URL { accounts(in: url) }
+
+    /// The diagnostics log's folder, which the app and both extensions write.
+    public static var logs: URL { logs(in: url) }
+
+    /// The same inside another container, for a test's own.
+    static func accounts(in container: URL) -> URL { container.appending(path: "accounts") }
+    static func logs(in container: URL) -> URL { container.appending(path: "Logs") }
 
     /// Everything of one account: its database, avatars and files.
     public static func directory(for account: JID) -> URL {

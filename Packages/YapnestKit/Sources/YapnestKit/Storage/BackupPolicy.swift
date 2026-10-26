@@ -25,21 +25,20 @@ public enum BackupPolicy {
         apply(defaults: defaults, container: container)
     }
 
-    /// Makes the account folders (and `also`, one just made or opened) and
-    /// `SharedContainer.url/Logs` follow the choice. Called whenever an account
-    /// folder is opened, so a folder made after a restore or reinstall picks it
-    /// up and the flag can't drift. The flag on a folder covers what is inside it.
+    /// Makes every account folder and the log folder follow the choice. Run
+    /// when the app launches, as a folder made by a restore or a reinstall, or
+    /// by an older version, may not. A folder the app opens is also put right
+    /// as it opens (`AccountDirectory.openDatabase`), so one made later can't
+    /// drift. The flag on a folder covers what is inside it.
     ///
     /// `container` is where the account folders and `Logs` live, a test's own.
-    public static func apply(
-        also extra: [URL] = [], defaults: UserDefaults = SharedContainer.defaults, container: URL = SharedContainer.url,
-    ) {
-        let logs = container.appending(path: "Logs")
+    public static func apply(defaults: UserDefaults = SharedContainer.defaults, container: URL = SharedContainer.url) {
+        let logs = SharedContainer.logs(in: container)
         try? FileManager.default.createProtectedDirectory(at: logs)
         let accounts = (try? FileManager.default.contentsOfDirectory(
-            at: container.appending(path: "accounts"), includingPropertiesForKeys: nil, options: .skipsHiddenFiles,
+            at: SharedContainer.accounts(in: container), includingPropertiesForKeys: nil, options: .skipsHiddenFiles,
         )) ?? []
-        apply(included: includesMessages(in: defaults), to: accounts + extra + [logs])
+        apply(included: includesMessages(in: defaults), to: accounts + [logs])
     }
 
     /// Sets or clears the exclusion on each folder that exists, leaving alone

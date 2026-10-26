@@ -25,13 +25,18 @@ extension XMPPSession {
         do {
             try await applyProfileAccess()
         } catch {
-            if ServerError.classify(error).isPassing {
-                logger.info("Couldn't change who reads the profile now: \(error.localizedDescription, privacy: .private)")
-                return
-            }
+            if passesByItself(error, "Couldn't change who reads the profile now") { return }
             try? database.setFlag(.sharesProfilePublicly, before)
             throw error
         }
+    }
+
+    /// Whether `error` is one that can pass, which is left for the next
+    /// connect; it is logged, as the caller has nothing more to do with it.
+    private func passesByItself(_ error: Error, _ what: StaticString) -> Bool {
+        guard ServerError.classify(error).isPassing else { return false }
+        logger.info("\(what): \(error.localizedDescription, privacy: .private)")
+        return true
     }
 
     private static let profileNodes = [NS.avatarData, NS.avatarMetadata, NS.nick]
@@ -46,28 +51,29 @@ extension XMPPSession {
         var wanted: String
         repeat {
             wanted = profileAccessModel
-            for node in Self.profileNodes {
-                do {
-                    let current = try await profileNodeAccessModel(node)
-                    if current != wanted { try await configurePEPNode(node, fields: ["pubsub#access_model": [wanted]]) }
-                } catch let error as PubSubError where error.error == .item_not_found {
-                    continue
-                } catch {
-                    firstError = firstError ?? error
+            let model = wanted
+            let errors = await withTaskGroup(of: (Int, Error?).self) { group in
+                for (index, node) in Self.profileNodes.enumerated() {
+                    group.addTask {
+                        do {
+                            let current = try await self.pepNodeAccessModel(node)
+                            if current != model { try await self.configurePEPNode(node, fields: ["pubsub#access_model": [model]]) }
+                            return (index, nil)
+                        } catch let error as PubSubError where error.error == .item_not_found {
+                            return (index, nil)
+                        } catch {
+                            return (index, error)
+                        }
+                    }
                 }
+                return await group.reduce(into: [Int: Error]()) { if let error = $1.1 { $0[$1.0] = error } }
             }
+            // The first in the nodes' order, as when they were read one by one.
+            if firstError == nil { firstError = errors.sorted { $0.key < $1.key }.first?.value }
             // The setting changed while this ran, as another change was
             // applying: go round again, so the last word is the setting's.
         } while wanted != profileAccessModel
         if let firstError { throw firstError }
-    }
-
-    private func profileNodeAccessModel(_ node: String) async throws -> String? {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String?, Error>) in
-            client.module(.pubsub).retrieveNodeConfiguration(from: nil, node: node) { (result: Result<PubSubNodeConfig, PubSubError>) in
-                continuation.resume(with: result.map { $0.accessModel?.rawValue })
-            }
-        }
     }
 
     /// Runs `applyProfileAccess` on connecting and when another device changes
@@ -80,10 +86,7 @@ extension XMPPSession {
             try await applyProfileAccess()
             warnings.clear("profile-access")
         } catch {
-            if ServerError.classify(error).isPassing {
-                logger.info("Couldn't check who reads the profile: \(error.localizedDescription, privacy: .private)")
-                return
-            }
+            if passesByItself(error, "Couldn't check who reads the profile") { return }
             logger.error("Couldn't change who reads the profile: \(error.localizedDescription, privacy: .private)")
             warnings.post("profile-access", title: String(localized: "Name and photo visibility not updated"), friendly: String(localized: "The server wouldn't change who can see your name and photo"), error: error) { [weak self] in
                 try await self?.applyProfileAccess()

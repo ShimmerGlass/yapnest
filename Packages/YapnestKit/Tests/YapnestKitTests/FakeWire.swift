@@ -155,6 +155,33 @@ func parseStanza<T: Stanza>(_ xml: String) -> T {
     Stanza.from(element: Element.from(string: xml)!) as! T
 }
 
+/// The fields of a data form, by name.
+func formFields(of form: Element?) -> [String: [String]] {
+    let fields = form.flatMap(XDataForm.init)?.fields ?? []
+    return Dictionary(fields.compactMap { field in field.name.map { ($0, field.values) } }, uniquingKeysWith: { _, last in last })
+}
+
+/// A synced setting from another device, newer than anything the tests hold.
+func settingsEntry(_ key: String, _ value: String?, by: String = "other") -> SettingsEntry {
+    let ms = Int64(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000)
+    return SettingsEntry(key: key, value: value, version: SettingsVersion(ms: ms, counter: 0), by: by)
+}
+
+func settingsItem(_ entries: SettingsEntry...) -> Element { SettingsItem(entries: entries).element }
+
+/// The notification that a settings item was published.
+func settingsEvent(from sender: String?, id: String = "global", _ payload: Element) -> Martin.Message {
+    let message = Martin.Message()
+    message.type = .headline
+    if let sender { message.from = Martin.JID(sender) }
+    let item = Element(name: "item", attributes: ["id": id])
+    item.addChild(payload)
+    let items = Element(name: "items", attributes: ["node": NS.settings])
+    items.addChild(item)
+    message.addChild(Element(name: "event", xmlns: "http://jabber.org/protocol/pubsub#event", children: [items]))
+    return message
+}
+
 /// Starts the listener and answers with the port it got.
 func startListening(_ listener: NWListener, on queue: DispatchQueue) async throws -> UInt16 {
     final class Once: @unchecked Sendable {

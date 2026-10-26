@@ -18,19 +18,18 @@ public struct GroupInvitation: Codable, Hashable, Sendable, FetchableRecord, Per
     /// Whether the inviter's claim holds: they sent it themselves, or the
     /// room is on their own server and can speak for them. Otherwise a room
     /// on another server named them, and could have named anyone.
-    public var isVouched: Bool
+    public var isVouched: Bool { isDirect || XMPPSession.vouches(room: room, for: inviter) }
     /// Whether the notification for it was claimed (see `claimNotifications`),
     /// by the app or the notification extension, whichever came first.
     public var isNotified: Bool
 
-    public init(room: JID, inviter: JID, reason: String? = nil, password: String? = nil, receivedAt: Date = Date(), isDirect: Bool = false, isVouched: Bool = false, isNotified: Bool = false) {
+    public init(room: JID, inviter: JID, reason: String? = nil, password: String? = nil, receivedAt: Date = Date(), isDirect: Bool = false, isNotified: Bool = false) {
         self.room = room
         self.inviter = inviter
         self.reason = reason
         self.password = password
         self.receivedAt = receivedAt
         self.isDirect = isDirect
-        self.isVouched = isVouched
         self.isNotified = isNotified
     }
 

@@ -56,6 +56,8 @@ struct CallRelayTests {
         await eventually("the call to fail") { h.phase == .ended(.failed) }
         #expect(h.factory.made.isEmpty)
         #expect(h.session.warnings.current.contains { $0.key == "call-relay" })
+        // The peer's phone never rang.
+        #expect(h.sentSignals.isEmpty)
     }
 
     @Test func aCalleeWithNoRelayFailsToo() async throws {
@@ -65,6 +67,9 @@ struct CallRelayTests {
         h.receive(h.propose())
         h.session.answerCall()
         await eventually("the call to fail") { h.phase == .ended(.failed) }
+        await eventually("the caller to be told") { h.sentSignals.contains { $0.action == "reject" } }
+        // Nothing said we were coming.
+        #expect(!h.sentSignals.contains { $0.action == "proceed" || $0.action == "accept" })
         #expect(h.factory.made.isEmpty)
         #expect(h.session.warnings.current.contains { $0.key == "call-relay" })
     }

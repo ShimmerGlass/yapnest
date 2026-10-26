@@ -18,30 +18,31 @@ struct InvitationNotificationTests {
     }
 
     @Test func aNewInvitationIsClaimedOnce() throws {
-        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, isVouched: true)
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil)
         let claimed = try db.claimNotifications()
-        #expect(claimed.map(\.invitationRoom) == [room])
+        #expect(claimed.map(\.peer) == [room])
+        #expect(claimed.map(\.isInvitation) == [true])
         #expect(try db.claimNotifications().isEmpty)
     }
 
     @Test func aReplacementIsNotClaimedAgain() throws {
-        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, isVouched: true)
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil)
         _ = try db.claimNotifications()
-        try db.recordGroupInvitation(room: room, inviter: alice, reason: "Again", isVouched: true)
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: "Again")
         #expect(try db.claimNotifications().isEmpty)
     }
 
     @Test func aReplacementBeforeTheClaimIsOneNotification() throws {
-        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, isVouched: true)
-        try db.recordGroupInvitation(room: room, inviter: alice, reason: "Again", isVouched: true)
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil)
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: "Again")
         #expect(try db.claimNotifications().count == 1)
     }
 
     @Test func aVouchedInvitationSaysWhoInvitedYou() throws {
-        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, isVouched: true)
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil)
         let notification = try #require(try db.claimNotifications().first)
         #expect(notification.body == "Alice invited you to club@conference.example.org")
-        #expect(notification.invitationRoom == room)
+        #expect(notification.isInvitation && notification.peer == room)
         #expect(!notification.isQuiet)
         let content = notification.content(badge: nil)
         #expect(content.userInfo[MessageNotification.peerKey] == nil)
@@ -56,13 +57,13 @@ struct InvitationNotificationTests {
     }
 
     @Test func aClaimThatDoesNotNotifyStillUsesTheInvitationUp() throws {
-        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, isVouched: true)
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil)
         #expect(try db.claimNotifications(notifies: false).isEmpty)
         #expect(try db.claimNotifications().isEmpty)
     }
 
     @Test func anInvitationAnsweredBeforeTheClaimIsNotNotified() throws {
-        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, isVouched: true)
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil)
         try db.removeGroupInvitation(room)
         #expect(try db.claimNotifications().isEmpty)
     }
@@ -77,19 +78,15 @@ struct InvitationNotificationTests {
         #expect(MessageNotification.staleInvitationNotifications(among: delivered, held: []) == ["push-1", "invitation-book"])
     }
 
-    @Test func anInvitationNotificationSurvivesTheBadgeCleanup() {
-        let bob = YapnestKit.JID("bob@example.org")!
-        let delivered = [
-            (id: "invitation-club", thread: MessageNotification.invitationsThread),
-            (id: "message-1", thread: bob.description),
-            (id: "message-2", thread: alice.description),
-        ]
-        let stale = AppDatabase.staleNotifications(threads: delivered, unread: [alice: 1, bob: 0])
-        #expect(stale == ["message-1"])
+    @Test func anInvitationNotificationCarriesNoPeerForTheBadgeCleanup() throws {
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil)
+        let invitation = try #require(try db.claimNotifications().first)
+        #expect(invitation.isInvitation)
+        #expect(invitation.content(badge: nil).userInfo[MessageNotification.peerKey] == nil)
     }
 
     @Test func anInvitationNotificationIsOnTheInvitationsThread() throws {
-        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, isVouched: true)
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil)
         let notification = try #require(try db.claimNotifications().first)
         #expect(notification.content(badge: nil).threadIdentifier == MessageNotification.invitationsThread)
     }

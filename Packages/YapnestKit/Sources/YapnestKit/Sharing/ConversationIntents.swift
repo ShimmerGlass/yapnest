@@ -223,7 +223,7 @@ extension MessageNotification {
     /// plain content, which shows the app's icon.
     public func content(badge: Int?, avatars: AvatarStore) async -> UNNotificationContent {
         let plain = content(badge: badge)
-        guard invitationRoom == nil, let intent = ConversationIntents.incomingIntent(for: self, avatars: avatars) else { return plain }
+        guard !isInvitation, let intent = ConversationIntents.incomingIntent(for: self, avatars: avatars) else { return plain }
         await ConversationIntents.donate(intent, peer: peer, direction: .incoming)
         return (try? plain.updating(from: intent)) ?? plain
     }

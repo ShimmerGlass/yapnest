@@ -136,7 +136,7 @@ final class AppModel {
         }
         /// The diagnostic log and the key its ids are hashed with, which hold
         /// nothing of the next account's.
-        var forgetDiagnostics: @MainActor () -> Void = { DiagLog.reset() }
+        var forgetDiagnostics: @MainActor () async -> Void = { await offMain { DiagLog.reset() } }
     }
 
     @ObservationIgnored private let environment: Environment
@@ -198,6 +198,9 @@ final class AppModel {
         }
         Self.moveToSharedContainer()
         Redacted.prepare()
+        // Folders made by a restore or an older version may not follow the
+        // backup choice yet. Opening a database checks only its own folder.
+        Task { await offMain { BackupPolicy.apply() } }
         #if DEBUG
         if let fixture = DevFixture.requested {
             startFixture(fixture)
@@ -457,7 +460,7 @@ final class AppModel {
                 try? await UNUserNotificationCenter.current().setBadgeCount(0)
             }
             // Last, so nothing the steps above log lands in the next account's log.
-            environment.forgetDiagnostics()
+            await environment.forgetDiagnostics()
         }
         signingOut = task
         Task {
@@ -756,8 +759,12 @@ final class AppModel {
                 // Archived and deleted chats aren't in the counts at all, so
                 // it's what's unread that stays, not what's read that goes.
                 let delivered = await center.deliveredNotifications()
+                // Only a chat's notifications, which name their peer: an
+                // invitation's isn't read or unread.
                 let stale = AppDatabase.staleNotifications(
-                    threads: delivered.map { ($0.request.identifier, $0.request.content.threadIdentifier) },
+                    chats: delivered.compactMap { notification in
+                        (notification.request.content.userInfo[MessageNotification.peerKey] as? String).map { (notification.request.identifier, $0) }
+                    },
                     unread: counts)
                 let quiet = delivered.filter(\.isQuiet).map(\.request.identifier)
                 center.removeDeliveredNotifications(withIdentifiers: stale + quiet)
@@ -771,10 +778,6 @@ final class AppModel {
 
     func open(_ peer: JID) {
         requestedConversation = peer
-    }
-
-    func openChatList() {
-        requestsChatList = true
     }
 
     /// An `xmpp:` link from the system or from a message. Nothing is sent

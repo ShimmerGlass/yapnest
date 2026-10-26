@@ -7,7 +7,7 @@ import os
 /// `Redacted.id`.
 public enum DiagLog {
     private static let shared = DiagnosticsStore(
-        directory: SharedContainer.url.appending(path: "Logs"),
+        directory: SharedContainer.logs,
         process: .current,
     )
 

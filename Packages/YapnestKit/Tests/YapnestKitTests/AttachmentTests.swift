@@ -153,18 +153,14 @@ struct AttachmentTests {
     }
 
     @Test func photosLoseMetadataAndShrink() async throws {
-        let original = gpsImageData(.jpeg, width: 4000, height: 3000)
-        #expect(gpsFlags(inImageData: original) == [true])
-        let directory = FileManager.default.temporaryDirectory.appending(path: "photo-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let source = directory.appending(path: "IMG_1.heic")
-        try original.write(to: source)
-        let store = AttachmentStore(directory: directory.appending(path: "store"))
-        let photo = try await store.importFile(at: source, name: "IMG_1.heic", asPhoto: true)
-        #expect((photo.width, photo.height) == (2048, 1536))
+        let original = cameraImageData(.jpeg, withLocation: true, width: 4000, height: 3000)
+        #expect(cameraDetails(CGImageSourceCreateWithData(original as CFData, nil)!) == [Self.allCameraDetails + ["gps"]])
+        let photo = try await withImportedFile(original, name: "IMG_1.heic", asPhoto: true) { stored in
+            #expect(cameraDetails(inImageAt: stored) == [[]])
+        }
+        // Turned a quarter, so it is measured as it is shown.
+        #expect((photo.width, photo.height) == (1536, 2048))
         #expect(photo.name == "IMG_1.jpg")
-        #expect(gpsFlags(inImageData: try Data(contentsOf: store.directory.appending(path: photo.file))) == [false])
     }
 
     @Test func importedPortraitVideoIsMeasuredAfterItsRotation() async throws {
@@ -205,50 +201,19 @@ struct AttachmentTests {
         #expect(try await hasLocation(source))
     }
 
-    @Test func imageSequenceLosesItsLocationButKeepsItsFrames() async throws {
-        let data = gpsImageData(.tiff, frames: 2, width: 40, height: 30)
-
-        let directory = FileManager.default.temporaryDirectory.appending(path: "tiff-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let source = directory.appending(path: "scan.tiff")
-        try data.write(to: source)
-        #expect(gpsFlags(inImageAt: source) == [true, true])
-
-        let store = AttachmentStore(directory: directory.appending(path: "store"))
-        let imported = try await store.importFile(at: source, name: "scan.tiff", asPhoto: true)
-        #expect(gpsFlags(inImageAt: store.directory.appending(path: imported.file)) == [false, false])
-        #expect((imported.width, imported.height) == (40, 30))
-    }
-
-    @Test func aPhotoSentAsAFileLosesItsLocation() async throws {
-        let data = gpsImageData(.jpeg, width: 40, height: 30)
-
-        let directory = FileManager.default.temporaryDirectory.appending(path: "file-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let source = directory.appending(path: "IMG_2.jpg")
-        try data.write(to: source)
-        #expect(gpsFlags(inImageAt: source) == [true])
-
-        let store = AttachmentStore(directory: directory.appending(path: "store"))
-        let imported = try await store.importFile(at: source, name: "IMG_2.jpg", asPhoto: false)
-        #expect(imported.name == "IMG_2.jpg")
-        #expect(gpsFlags(inImageAt: store.directory.appending(path: imported.file)) == [false])
-        #expect((imported.width, imported.height) == (40, 30))
-    }
-
     @Test func aPhotoSentAsAFileLosesItsCameraDetailsButKeepsItsOrientation() async throws {
         let data = cameraImageData(.jpeg, withLocation: true)
-        try await withImportedFile(data, name: "IMG_3.jpg") { stored in
+        let imported = try await withImportedFile(data, name: "IMG_3.jpg") { stored in
             #expect(cameraDetails(inImageAt: stored) == [[]])
             #expect(orientations(inImageAt: stored) == [6])
         }
+        #expect(imported.name == "IMG_3.jpg")
+        #expect((imported.width, imported.height) == (30, 40))
     }
 
     @Test func aPhotoWithoutALocationStillLosesItsCameraDetails() async throws {
         let data = cameraImageData(.jpeg, withLocation: false)
-        #expect(cameraDetails(CGImageSourceCreateWithData(data as CFData, nil)!) == [["make", "model", "date", "software", "artist", "serial", "captured", "iptc"]])
+        #expect(cameraDetails(CGImageSourceCreateWithData(data as CFData, nil)!) == [Self.allCameraDetails])
         try await withImportedFile(data, name: "IMG_4.jpg") { stored in
             #expect(cameraDetails(inImageAt: stored) == [[]])
             #expect(orientations(inImageAt: stored) == [6])
@@ -256,11 +221,12 @@ struct AttachmentTests {
     }
 
     @Test func imageSequenceLosesItsCameraDetailsButKeepsItsFrames() async throws {
-        let data = cameraImageData(.tiff, frames: 2, withLocation: false)
-        try await withImportedFile(data, name: "scan.tiff") { stored in
+        let data = cameraImageData(.tiff, frames: 2, withLocation: true)
+        let imported = try await withImportedFile(data, name: "scan.tiff", asPhoto: true) { stored in
             #expect(cameraDetails(inImageAt: stored) == [[], []])
             #expect(orientations(inImageAt: stored) == [6, 6])
         }
+        #expect((imported.width, imported.height) == (30, 40))
     }
 
     @Test func anImageWithNothingToRemoveIsLeftAsItIs() async throws {
@@ -274,16 +240,18 @@ struct AttachmentTests {
         }
     }
 
-    /// Imports `data` as a file and hands the stored copy to `inspect`.
-    private func withImportedFile(_ data: Data, name: String, inspect: (URL) throws -> Void) async throws {
+    /// Imports `data` and hands the stored copy to `inspect`.
+    @discardableResult
+    private func withImportedFile(_ data: Data, name: String, asPhoto: Bool = false, inspect: (URL) throws -> Void) async throws -> AttachmentStore.Imported {
         let directory = FileManager.default.temporaryDirectory.appending(path: "meta-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let source = directory.appending(path: name)
         try data.write(to: source)
         let store = AttachmentStore(directory: directory.appending(path: "store"))
-        let imported = try await store.importFile(at: source, name: name, asPhoto: false)
+        let imported = try await store.importFile(at: source, name: name, asPhoto: asPhoto)
         try inspect(store.directory.appending(path: imported.file))
+        return imported
     }
 
     @Test func setDownloadedKeepsTheKnownSizeWhenNothingWasMeasured() throws {
@@ -344,22 +312,9 @@ struct AttachmentTests {
         return context.makeImage()!
     }
 
-    /// An image of `frames` identical frames, each tagged with a location.
-    private func gpsImageData(_ type: UTType, frames: Int = 1, width: Int, height: Int) -> Data {
-        let gps: [CFString: Any] = [kCGImagePropertyGPSLatitude: 48.85, kCGImagePropertyGPSLatitudeRef: "N",
-                                    kCGImagePropertyGPSLongitude: 2.29, kCGImagePropertyGPSLongitudeRef: "E"]
-        let data = NSMutableData()
-        let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, frames, nil)!
-        for _ in 0..<frames {
-            CGImageDestinationAddImage(destination, makeImage(width: width, height: height), [kCGImagePropertyGPSDictionary: gps] as CFDictionary)
-        }
-        #expect(CGImageDestinationFinalize(destination))
-        return data as Data
-    }
-
     /// Frames tagged with what a camera writes, and optionally a location,
     /// turned a quarter turn.
-    private func cameraImageData(_ type: UTType, frames: Int = 1, withLocation: Bool) -> Data {
+    private func cameraImageData(_ type: UTType, frames: Int = 1, withLocation: Bool, width: Int = 40, height: Int = 30) -> Data {
         var properties: [CFString: Any] = [
             kCGImagePropertyOrientation: 6,
             kCGImagePropertyTIFFDictionary: [
@@ -375,10 +330,13 @@ struct AttachmentTests {
         }
         let data = NSMutableData()
         let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, frames, nil)!
-        for _ in 0..<frames { CGImageDestinationAddImage(destination, makeImage(width: 40, height: 30), properties as CFDictionary) }
+        for _ in 0..<frames { CGImageDestinationAddImage(destination, makeImage(width: width, height: height), properties as CFDictionary) }
         #expect(CGImageDestinationFinalize(destination))
         return data as Data
     }
+
+    /// What `cameraImageData` writes, besides a location.
+    private static let allCameraDetails = ["make", "model", "date", "software", "artist", "serial", "captured", "iptc"]
 
     /// For each frame, the identifying entries it still carries.
     private func cameraDetails(_ source: CGImageSource) -> [[String]] {
@@ -406,21 +364,6 @@ struct AttachmentTests {
         return (0..<CGImageSourceGetCount(source)).map {
             (CGImageSourceCopyPropertiesAtIndex(source, $0, nil) as? [CFString: Any])?[kCGImagePropertyOrientation] as? Int ?? 1
         }
-    }
-
-    /// Whether each frame of the image carries a location.
-    private func gpsFlags(_ source: CGImageSource) -> [Bool] {
-        (0..<CGImageSourceGetCount(source)).map {
-            (CGImageSourceCopyPropertiesAtIndex(source, $0, nil) as? [CFString: Any])?[kCGImagePropertyGPSDictionary] != nil
-        }
-    }
-
-    private func gpsFlags(inImageAt url: URL) -> [Bool] {
-        gpsFlags(CGImageSourceCreateWithURL(url as CFURL, nil)!)
-    }
-
-    private func gpsFlags(inImageData data: Data) -> [Bool] {
-        gpsFlags(CGImageSourceCreateWithData(data as CFData, nil)!)
     }
 
     @Test func animatedGifSentAsPhotoStaysAnimated() async throws {

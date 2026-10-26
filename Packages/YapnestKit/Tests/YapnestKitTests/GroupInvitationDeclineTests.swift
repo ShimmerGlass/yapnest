@@ -106,7 +106,7 @@ struct GroupInvitationDeclineTests {
 
     @Test func aDirectInvitationIsForgottenWithoutAnswer() throws {
         try database.updateRosterItem(jid: alice, name: "Alice", subscription: .both, isPending: false)
-        try database.recordGroupInvitation(room: room, inviter: alice, reason: nil, isDirect: true, isVouched: true)
+        try database.recordGroupInvitation(room: room, inviter: alice, reason: nil, isDirect: true)
         try session.declineGroupInvitation(room)
         #expect(try database.groupInvitation(room) == nil)
         #expect(declines.isEmpty)
@@ -115,8 +115,10 @@ struct GroupInvitationDeclineTests {
 
     @Test func aRelayedInvitationFromAVouchedRoomIsStillDeclined() throws {
         try database.updateRosterItem(jid: alice, name: "Alice", subscription: .both, isPending: false)
-        try database.recordGroupInvitation(room: room, inviter: alice, reason: nil, isVouched: true)
-        try session.declineGroupInvitation(room)
+        let vouching = YapnestKit.JID("club@conference.example.org")!
+        try database.recordGroupInvitation(room: vouching, inviter: alice, reason: nil)
+        #expect(try database.groupInvitation(vouching)?.isVouched == true)
+        try session.declineGroupInvitation(vouching)
         #expect(declines.count == 1)
     }
 }

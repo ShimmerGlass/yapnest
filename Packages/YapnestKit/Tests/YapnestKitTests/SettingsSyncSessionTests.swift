@@ -55,11 +55,6 @@ private final class SettingsServer: @unchecked Sendable {
     var events: [String] { lock.withLock { log } }
     var publishes: [(id: String, options: [String: [String]])] { lock.withLock { published } }
 
-    static func fields(of form: Element?) -> [String: [String]] {
-        let fields = form.flatMap(XDataForm.init)?.fields ?? []
-        return Dictionary(fields.compactMap { field in field.name.map { ($0, field.values) } }, uniquingKeysWith: { _, last in last })
-    }
-
     func attach(to wire: FakeWire) {
         wire.answer { [self] in respond(to: $0) }
     }
@@ -79,7 +74,7 @@ private final class SettingsServer: @unchecked Sendable {
                         let form = XMPPSession.dataForm(type: "form", formType: "http://jabber.org/protocol/pubsub#node_config", fields: ["pubsub#access_model": [access]].merging(reportedMaxItems.map { ["pubsub#max_items": [$0]] } ?? [:]) { a, _ in a })
                         return FakeWire.result(to: iq, Element(name: "pubsub", xmlns: pubsub.xmlns, children: [Element(name: "configure", children: [form])]))
                     }
-                    let fields = Self.fields(of: configure.firstChild(name: "x"))
+                    let fields = formFields(of: configure.firstChild(name: "x"))
                     log.append("config-set")
                     configured.append(fields)
                     if !keepsAccess, let model = fields["pubsub#access_model"]?.first { access = model }
@@ -93,13 +88,13 @@ private final class SettingsServer: @unchecked Sendable {
                 log.append("create")
                 if exists { return FakeWire.error(to: iq, condition: "conflict") }
                 exists = true
-                created = Self.fields(of: pubsub.firstChild(name: "configure")?.firstChild(name: "x"))
+                created = formFields(of: pubsub.firstChild(name: "configure")?.firstChild(name: "x"))
                 access = created?["pubsub#access_model"]?.first ?? "open"
                 return FakeWire.result(to: iq)
             }
             if let publish = pubsub.firstChild(name: "publish") {
                 let id = publish.firstChild(name: "item")?.attribute("id") ?? ""
-                let options = Self.fields(of: pubsub.firstChild(name: "publish-options")?.firstChild(name: "x"))
+                let options = formFields(of: pubsub.firstChild(name: "publish-options")?.firstChild(name: "x"))
                 log.append("publish")
                 published.append((id, options))
                 if silentOnMax, options["pubsub#max_items"] == ["max"] {
@@ -165,11 +160,6 @@ struct SettingsSyncSessionTests {
         return (session, wire)
     }
 
-    private func entry(_ key: String, _ value: String?, by: String = "other") -> SettingsEntry {
-        let ms = Int64(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000)
-        return SettingsEntry(key: key, value: value, version: SettingsVersion(ms: ms, counter: 0), by: by)
-    }
-
     private func held(_ item: String) throws -> [SettingsEntry] {
         try db.reader.read { try AppDatabase.syncedEntries($0, item: item) }
     }
@@ -177,8 +167,6 @@ struct SettingsSyncSessionTests {
     private func hold(_ item: String, _ entries: SettingsEntry...) throws {
         try db.writer.write { _ = try AppDatabase.applyRemote($0, item: item, entries: entries) }
     }
-
-    private func item(_ entries: SettingsEntry...) -> Element { SettingsItem(entries: entries).element }
 
     // MARK: Publishing
 
@@ -400,7 +388,7 @@ struct SettingsSyncSessionTests {
 
     @Test func aDropDuringTheReadIsSyncedAgainWhenTheStreamResumes() async throws {
         let server = SettingsServer()
-        server.items = [("chat:friend@example.org", item(entry("pinned", "1")))]
+        server.items = [("chat:friend@example.org", settingsItem(settingsEntry("pinned", "1")))]
         let (session, _) = try connect(server)
         server.onItems = { session.client.update(state: .disconnected()) }
         await session.runSettingsSync()
@@ -417,17 +405,17 @@ struct SettingsSyncSessionTests {
         let server = SettingsServer()
         let (session, _) = try connect(server)
         server.onItems = {
-            try? session.client.module(.pubsub).process(message: event(from: "me@example.org", id: "chat:late@example.org", item(entry("pinned", "1"))))
+            try? session.client.module(.pubsub).process(message: settingsEvent(from: "me@example.org", id: "chat:late@example.org", settingsItem(settingsEntry("pinned", "1"))))
         }
         await session.runSettingsSync()
         #expect(try held("chat:late@example.org").count == 1)
     }
 
     @Test func aFullPageWithNoPagingDataIsNotTakenAsTheWholeNode() async throws {
-        try hold("chat:old@example.org", entry("pinned", "1"))
+        try hold("chat:old@example.org", settingsEntry("pinned", "1"))
         let server = SettingsServer()
         for index in 0..<XMPPSession.settingsPageSize {
-            server.items.append(("chat:friend\(index)@example.org", item(entry("pinned", "1"))))
+            server.items.append(("chat:friend\(index)@example.org", settingsItem(settingsEntry("pinned", "1"))))
         }
         let (session, _) = try connect(server)
         await session.runSettingsSync()
@@ -436,9 +424,9 @@ struct SettingsSyncSessionTests {
     }
 
     @Test func aShortPageWithNoPagingDataIsTheWholeNode() async throws {
-        try hold("chat:old@example.org", entry("pinned", "1"))
+        try hold("chat:old@example.org", settingsEntry("pinned", "1"))
         let server = SettingsServer()
-        server.items = [("chat:friend@example.org", item(entry("pinned", "1")))]
+        server.items = [("chat:friend@example.org", settingsItem(settingsEntry("pinned", "1")))]
         let (session, _) = try connect(server)
         await session.runSettingsSync()
         #expect(try held("chat:old@example.org").isEmpty)
@@ -446,7 +434,7 @@ struct SettingsSyncSessionTests {
 
     @Test func changingTheAvailabilityKeepsAMessageAnotherDeviceSet() throws {
         let (session, _) = try connect(SettingsServer())
-        let remote = entry("statusMessage", "remote")
+        let remote = settingsEntry("statusMessage", "remote")
         try hold("global", remote)
         try session.setAvailability(.away)
         // A caller whose copy of the message is the current one writes it back.
@@ -460,9 +448,9 @@ struct SettingsSyncSessionTests {
         let server = SettingsServer()
         server.pageSize = 2
         for index in 0..<5 {
-            server.items.append(("chat:friend\(index)@example.org", item(entry("pinned", "1"))))
+            server.items.append(("chat:friend\(index)@example.org", settingsItem(settingsEntry("pinned", "1"))))
         }
-        server.items.append(("global", item(entry("availability", "away"))))
+        server.items.append(("global", settingsItem(settingsEntry("availability", "away"))))
         let (session, _) = try connect(server)
         await session.runSettingsSync()
         #expect(try db.setting(.availability) == "away")
@@ -473,7 +461,7 @@ struct SettingsSyncSessionTests {
     }
 
     @Test func aFailedReadNeverDeletesWhatIsHeldHere() async throws {
-        try hold("chat:friend@example.org", entry("pinned", "1"))
+        try hold("chat:friend@example.org", settingsEntry("pinned", "1"))
         let server = SettingsServer()
         server.failsReads = true
         let (session, _) = try connect(server)
@@ -483,10 +471,10 @@ struct SettingsSyncSessionTests {
     }
 
     @Test func anIncompleteReadAppliesWhatCameWithoutDeleting() async throws {
-        try hold("chat:friend@example.org", entry("pinned", "1"))
+        try hold("chat:friend@example.org", settingsEntry("pinned", "1"))
         let server = SettingsServer()
         server.pageSize = 1
-        server.items = [("global", item(entry("availability", "away"))), ("global", item(entry("availability", "away")))]
+        server.items = [("global", settingsItem(settingsEntry("availability", "away"))), ("global", settingsItem(settingsEntry("availability", "away")))]
         let (session, _) = try connect(server)
         await session.runSettingsSync()
         // The server repeated a page, so the node isn't known to be read.
@@ -496,7 +484,7 @@ struct SettingsSyncSessionTests {
     }
 
     @Test func aMissingNodeIsAnEmptyOneSoWhatWasRemovedThereGoesHere() async throws {
-        try hold("chat:friend@example.org", entry("pinned", "1"))
+        try hold("chat:friend@example.org", settingsEntry("pinned", "1"))
         let server = SettingsServer(exists: false)
         let (session, _) = try connect(server)
         await session.runSettingsSync()
@@ -506,27 +494,18 @@ struct SettingsSyncSessionTests {
 
     // MARK: Events
 
-    private func event(from sender: String?, id: String = "global", _ payload: Element) -> Martin.Message {
-        let message = Martin.Message()
-        message.type = .headline
-        if let sender { message.from = Martin.JID(sender) }
-        let items = node("items", ["node": NS.settings], [node("item", ["id": id], [payload])])
-        message.addChild(Element(name: "event", xmlns: "http://jabber.org/protocol/pubsub#event", children: [items]))
-        return message
-    }
-
     @Test func anEventFromSomeoneElseIsIgnored() throws {
         let (session, _) = try connect(SettingsServer())
-        try session.client.module(.pubsub).process(message: event(from: "mallory@example.org", item(entry("availability", "dnd"))))
+        try session.client.module(.pubsub).process(message: settingsEvent(from: "mallory@example.org", settingsItem(settingsEntry("availability", "dnd"))))
         #expect(try db.setting(.availability) == nil)
-        try session.client.module(.pubsub).process(message: event(from: "me@example.org", item(entry("availability", "dnd"))))
+        try session.client.module(.pubsub).process(message: settingsEvent(from: "me@example.org", settingsItem(settingsEntry("availability", "dnd"))))
         #expect(try db.setting(.availability) == "dnd")
     }
 
     @Test func aRemoteStatusChangeSendsPresenceAgain() throws {
         let (session, wire) = try connect(SettingsServer())
         let before = wire.written.compactMap { $0 as? Presence }.count
-        try session.client.module(.pubsub).process(message: event(from: "me@example.org", item(entry("availability", "dnd"))))
+        try session.client.module(.pubsub).process(message: settingsEvent(from: "me@example.org", settingsItem(settingsEntry("availability", "dnd"))))
         let presences = wire.written.compactMap { $0 as? Presence }
         #expect(presences.count == before + 1)
         #expect(presences.last?.show == .dnd)
@@ -539,7 +518,7 @@ struct SettingsSyncSessionTests {
         try db.writer.write { try Contact(jid: contact).save($0) }
         try db.setLastSeen(Date(), for: contact)
         let before = wire.written.compactMap { $0 as? Presence }.count
-        try session.client.module(.pubsub).process(message: event(from: nil, item(entry("sharesLastSeen", nil))))
+        try session.client.module(.pubsub).process(message: settingsEvent(from: nil, settingsItem(settingsEntry("sharesLastSeen", nil))))
         #expect(!session.sharesLastSeen)
         #expect(wire.written.compactMap { $0 as? Presence }.count == before + 1)
         #expect(try db.contact(contact)?.lastSeenAt == nil)

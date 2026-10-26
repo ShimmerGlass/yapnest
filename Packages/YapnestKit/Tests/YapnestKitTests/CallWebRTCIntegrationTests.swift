@@ -18,8 +18,10 @@ extension LiveServer {
         private func device(_ jid: JID, forceRelay: Bool, syntheticCamera: Bool = false) async throws -> XMPPSession {
             let session = try LiveServer.makeSession(
                 jid, resource: "webrtc-\(UUID().uuidString.prefix(6))", database: try AppDatabase.inMemory(),
-                callMedia: WebRTCCallMediaFactory(forceRelay: forceRelay, receiveOnly: true, syntheticCamera: syntheticCamera),
+                callMedia: WebRTCCallMediaFactory(receiveOnly: true, syntheticCamera: syntheticCamera),
             )
+            // The setting is what makes the session ask its media for the relay alone.
+            if forceRelay { try session.database.setFlag(.relaysCalls, true) }
             try await LiveServer.connected(session)
             return session
         }

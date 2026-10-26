@@ -133,14 +133,14 @@ struct SettingsView: View {
                 .disabled(!isLoaded)
 
                 Section {
-                    Toggle("Download Pictures from Group Members", isOn: Binding(get: { downloadsFromGroupMembers }, set: setDownloadsFromGroupMembers))
+                    Toggle("Download Pictures from Group Members", isOn: Binding(get: { downloadsFromGroupMembers }, set: { on in setFlag(.downloadsFromGroupMembers, on) { downloadsFromGroupMembers = on } }))
                 } footer: {
                     Text("Downloading a picture shows your IP address to the sender's server. With this off, you tap a picture from a group member you haven't added to download it.")
                 }
                 .disabled(!isLoaded)
 
                 Section {
-                    Toggle("Always Relay Calls", isOn: Binding(get: { relaysCalls }, set: setRelaysCalls))
+                    Toggle("Always Relay Calls", isOn: Binding(get: { relaysCalls }, set: { on in setFlag(.relaysCalls, on) { relaysCalls = on } }))
                 } footer: {
                     Text("Relaying hides your IP address from the person you call, and may lower the quality. It needs your server to offer a relay; without one, calls fail rather than connect directly.")
                 }
@@ -165,7 +165,7 @@ struct SettingsView: View {
 
                 if Klipy.apiKey != nil {
                     Section {
-                        Toggle("GIFs", isOn: Binding(get: { gifsEnabled }, set: setGifsEnabled))
+                        Toggle("GIFs", isOn: Binding(get: { gifsEnabled }, set: { on in setFlag(.gifs, on) { gifsEnabled = on } }))
                     } footer: {
                         Text("Searches go to KLIPY, which sees what you search for and your IP address.")
                     }
@@ -183,7 +183,7 @@ struct SettingsView: View {
                 #endif
 
                 Section {
-                    Toggle("Encrypt New Chats", isOn: Binding(get: { encryptsNewChats }, set: setEncryptsNewChats))
+                    Toggle("Encrypt New Chats", isOn: Binding(get: { encryptsNewChats }, set: { on in setFlag(.encryptsNewChats, on) { encryptsNewChats = on } }))
                         .disabled(!isLoaded)
                     NavigationLink {
                         DevicesList(session: session, peer: nil)
@@ -439,24 +439,13 @@ struct SettingsView: View {
         }
     }
 
-    private func setDownloadsFromGroupMembers(_ on: Bool) {
-        save({ [session] in try session.database.setFlag(.downloadsFromGroupMembers, on) }) { downloadsFromGroupMembers = on }
-    }
-
-    private func setRelaysCalls(_ on: Bool) {
-        save({ [session] in try session.database.setFlag(.relaysCalls, on) }) { relaysCalls = on }
+    /// Saves a flag that only differs from the others by its key; `done` shows it.
+    private func setFlag(_ key: AppDatabase.SettingKey, _ on: Bool, then done: @escaping () -> Void) {
+        save({ [session] in try session.database.setFlag(key, on) }, then: done)
     }
 
     private func setIncludesMessagesInBackups(_ on: Bool) {
         save({ BackupPolicy.setIncludesMessages(on) }) { includesMessagesInBackups = on }
-    }
-
-    private func setGifsEnabled(_ on: Bool) {
-        save({ [session] in try session.database.setFlag(.gifs, on) }) { gifsEnabled = on }
-    }
-
-    private func setEncryptsNewChats(_ on: Bool) {
-        save({ [session] in try session.database.setFlag(.encryptsNewChats, on) }) { encryptsNewChats = on }
     }
 
     private func save(_ write: @escaping @Sendable () throws -> Void, then done: @escaping () -> Void) {

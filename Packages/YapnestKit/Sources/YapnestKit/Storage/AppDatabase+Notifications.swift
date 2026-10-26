@@ -32,8 +32,8 @@ public struct MessageNotification: Sendable, Equatable {
     /// The conversation's stored sound choice, as `NotificationSound` reads it.
     public var sound: String?
     /// Set on the notification of a held group invitation, which has no
-    /// message: the group's address.
-    public var invitationRoom: JID?
+    /// message; `peer` is then the group.
+    public var isInvitation: Bool = false
 }
 
 extension AppDatabase {
@@ -106,10 +106,14 @@ extension AppDatabase {
     /// Not told for a claim whose notifications won't be shown, as the app's
     /// while it's on screen: the invitation's row is in front of the user.
     private static func claimInvitations(_ db: Database, notifies: Bool) throws -> [MessageNotification] {
-        let pending = try GroupInvitation.filter(Column("isNotified") == false).order(Column("receivedAt")).fetchAll(db)
+        let unnotified = GroupInvitation.filter(Column("isNotified") == false)
+        guard notifies else {
+            try unnotified.updateAll(db, Column("isNotified").set(to: true))
+            return []
+        }
+        let pending = try unnotified.order(Column("receivedAt")).fetchAll(db)
         guard !pending.isEmpty else { return [] }
-        try GroupInvitation.filter(Column("isNotified") == false).updateAll(db, Column("isNotified").set(to: true))
-        guard notifies else { return [] }
+        try unnotified.updateAll(db, Column("isNotified").set(to: true))
         return try pending.map { invitation in
             let inviter = try Contact.fetchOne(db, key: invitation.inviter)?.displayName ?? invitation.inviter.description
             let group = try GroupChat.filter(Column("jid") == invitation.room).fetchOne(db)?.displayName ?? invitation.room.description
@@ -120,7 +124,8 @@ extension AppDatabase {
                 : String(localized: "\(group) says \(inviter) invited you")
             return MessageNotification(
                 messageId: 0, peer: invitation.room, title: String(localized: "Group invitation"),
-                body: body, timestamp: invitation.receivedAt, isGroup: true, invitationRoom: invitation.room,
+                // A group, for the group's sound.
+                body: body, timestamp: invitation.receivedAt, isGroup: true, isInvitation: true,
             )
         }
     }
@@ -314,15 +319,16 @@ extension AppDatabase {
         return try candidates.count(where: { try isMention(db, $0, nickname: nickname, word: word) })
     }
 
-    /// The delivered notifications to take down, given each one's thread. A
-    /// chat that isn't counted any more is archived, deleted or read, so
-    /// anything but a chat with unread messages goes. A message in an archived
-    /// chat brings it back, and its new notification with it.
-    public static func staleNotifications(threads: [(id: String, thread: String)], unread: [JID: Int]) -> [String] {
-        let unreadThreads = Set(unread.filter { $0.value > 0 }.keys.map(\.description))
-        // An invitation's notification is taken down when the invitation goes
-        // (`removeStaleInvitationNotifications`), not when no chat is unread.
-        return threads.filter { !$0.thread.isEmpty && $0.thread != MessageNotification.invitationsThread && !unreadThreads.contains($0.thread) }.map(\.id)
+    /// The delivered notifications to take down, given the chat each one is
+    /// for (its `peerKey`). A chat that isn't counted any more is archived,
+    /// deleted or read, so anything but a chat with unread messages goes. A
+    /// message in an archived chat brings it back, and its new notification
+    /// with it. Notifications that aren't for a chat, an invitation's, are
+    /// left out of `chats`: they go when the invitation does
+    /// (`removeStaleInvitationNotifications`).
+    public static func staleNotifications(chats: [(id: String, peer: String)], unread: [JID: Int]) -> [String] {
+        let unreadPeers = Set(unread.filter { $0.value > 0 }.keys.map(\.description))
+        return chats.filter { !unreadPeers.contains($0.peer) }.map(\.id)
     }
 
     /// Tells this process's observers about changes another process made,

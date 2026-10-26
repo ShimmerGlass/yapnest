@@ -675,11 +675,10 @@ public final class AppDatabase: Sendable {
         }
 
         migrator.registerMigration("v41-invitation-origin") { db in
-            // Held invitations were all relayed by a room that couldn't vouch
-            // for the inviter, which the defaults say.
+            // Held invitations were all relayed by the room, which the default
+            // says; whether it can vouch for the inviter follows from the JIDs.
             try db.alter(table: "groupInvitation") { t in
                 t.add(column: "isDirect", .boolean).notNull().defaults(to: false)
-                t.add(column: "isVouched", .boolean).notNull().defaults(to: false)
             }
         }
 

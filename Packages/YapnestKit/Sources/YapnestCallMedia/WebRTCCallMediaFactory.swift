@@ -5,36 +5,29 @@ import YapnestKit
 /// Makes the WebRTC media for each call, all on one peer connection factory:
 /// creating one is slow and it owns the audio device.
 public struct WebRTCCallMediaFactory: CallMediaFactory {
-    private let forceRelay: Bool
     private let receiveOnly: Bool
     private let syntheticCamera: Bool
 
     public init() {
-        self.init(forceRelay: false, receiveOnly: false)
+        self.init(receiveOnly: false)
     }
 
-    /// For tests: `forceRelay` only offers TURN candidates, and `receiveOnly`
-    /// leaves out the local audio track. WebRTC opens the microphone once
+    /// For tests: `receiveOnly` leaves out the local audio track. WebRTC opens the microphone once
     /// something sends, and the macOS build can't take a stand-in audio device
     /// (its headers don't declare `RTCAudioDevice`), so a test avoids the
     /// permission prompt by never sending. ICE and DTLS run all the same.
     /// Video is left out by `receiveOnly` too, unless `syntheticCamera`
     /// sends a generated picture, which touches no camera.
     @_spi(Testing)
-    public init(forceRelay: Bool, receiveOnly: Bool, syntheticCamera: Bool = false) {
-        self.forceRelay = forceRelay
+    public init(receiveOnly: Bool, syntheticCamera: Bool = false) {
         self.receiveOnly = receiveOnly
         self.syntheticCamera = syntheticCamera
-    }
-
-    public func makeMedia() -> any CallMedia {
-        makeMedia(relayOnly: false)
     }
 
     public func makeMedia(relayOnly: Bool) -> any CallMedia {
         WebRTCCallMedia(
             factory: SharedFactory.shared,
-            forceRelay: forceRelay || relayOnly, receiveOnly: receiveOnly, syntheticCamera: syntheticCamera)
+            forceRelay: relayOnly, receiveOnly: receiveOnly, syntheticCamera: syntheticCamera)
     }
 }
 

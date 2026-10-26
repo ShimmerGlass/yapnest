@@ -47,6 +47,31 @@ struct CallMachineOutgoingTests {
         #expect(effects.contains(.armTimer(after: 60, token: 1)))
     }
 
+    @Test func aCallThatNeedsARelayProposesOnlyOnceOneIsFound() {
+        var (machine, effects) = CallMachine.outgoing(sid: "s1", peer: alice, account: me, me: myDevice, needsRelay: true, now: t0)
+        #expect(effects == [.checkRelay])
+        effects = machine.handle(.relayChecked(true))
+        #expect(effects.first == .send(.propose(to: "alice@example.org", video: false)))
+        #expect(effects.contains(.prepareMedia))
+        #expect(timerToken(effects) != nil)
+    }
+
+    @Test func aCallThatNeedsARelayEndsUnsignalledWhenThereIsNone() {
+        var (machine, _) = CallMachine.outgoing(sid: "s1", peer: alice, account: me, me: myDevice, needsRelay: true, now: t0)
+        let effects = machine.handle(.relayChecked(false))
+        #expect(machine.phase == .ended(.failed))
+        #expect(!effects.contains { if case .send = $0 { true } else { false } })
+        #expect(!effects.contains(.prepareMedia))
+    }
+
+    @Test func hangingUpBeforeTheProposeWentOutRetractsNothing() {
+        var (machine, _) = CallMachine.outgoing(sid: "s1", peer: alice, account: me, me: myDevice, needsRelay: true, now: t0)
+        let effects = machine.handle(.hangUp)
+        #expect(machine.phase == .ended(.cancelled))
+        #expect(!effects.contains { if case .send = $0 { true } else { false } })
+        #expect(machine.handle(.relayChecked(true)).isEmpty)
+    }
+
     @Test func aVideoCallProposesVideo() {
         let (machine, effects) = CallMachine.outgoing(sid: "s1", peer: alice, account: me, me: myDevice, video: true, now: t0)
         #expect(machine.wantsVideo)
@@ -333,6 +358,15 @@ struct CallMachineIncomingTests {
         #expect(effects.contains(.send(.accept(to: "me@example.org"))))
         #expect(effects.contains(.prepareMedia))
         #expect(timerToken(effects) != nil)
+    }
+
+    @Test func noRelayRejectsTheCallerWithoutAnswering() {
+        var machine = ringing()
+        let effects = machine.handle(.relayChecked(false))
+        #expect(machine.phase == .ended(.failed))
+        #expect(effects.contains(.send(.reject(to: aliceDevice, reason: .decline))))
+        #expect(!effects.contains(.send(.proceed(to: aliceDevice))))
+        #expect(!effects.contains(.prepareMedia))
     }
 
     @Test func decliningRejectsToTheCallersDevice() {

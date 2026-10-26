@@ -132,7 +132,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let isInvitation = userInfo[MessageNotification.invitationKey] != nil
         // Delegate callbacks come on the main thread.
         MainActor.assumeIsolated {
-            if let peer { model.open(peer) } else if isInvitation { model.openChatList() }
+            if let peer { model.open(peer) } else if isInvitation { model.requestsChatList = true }
         }
         completionHandler()
     }

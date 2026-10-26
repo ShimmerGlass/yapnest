@@ -119,8 +119,12 @@ extension AppDatabase {
 
     /// A setting that's on or off, `defaultValue` until set.
     public func flag(_ key: SettingKey, default defaultValue: Bool) -> Bool {
-        guard let value = try? setting(key) else { return defaultValue }
-        return value == "1"
+        (try? reader.read { try Self.flag($0, key, default: defaultValue) }) ?? defaultValue
+    }
+
+    /// For a read that must see the flag as of the same transaction as the rest.
+    static func flag(_ db: Database, _ key: SettingKey, default defaultValue: Bool) throws -> Bool {
+        try setting(db, key).map { $0 == "1" } ?? defaultValue
     }
 
     public func setFlag(_ key: SettingKey, _ on: Bool) throws {

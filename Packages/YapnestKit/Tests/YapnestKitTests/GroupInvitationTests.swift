@@ -117,7 +117,7 @@ struct GroupInvitationSessionTests {
 
     @Test func aDirectInvitationFromAContactIsHeld() throws {
         let xml = "<message from='alice@example.org/phone' to='me@example.org'><x xmlns='jabber:x:conference' jid='club@groups.example.net' password='pw'/></message>"
-        session.invitationReceived(Stanza.from(element: Element.from(string: xml)!) as! Martin.Message)
+        session.invitationReceived(parseStanza(xml))
         let invitation = try #require(try database.groupInvitation(foreign))
         #expect(invitation.isDirect)
         #expect(invitation.isVouched)
@@ -127,11 +127,11 @@ struct GroupInvitationSessionTests {
 
     @Test func aDirectInvitationFromAStrangerIsDropped() throws {
         let xml = "<message from='mallory@example.net/x' to='me@example.org'><x xmlns='jabber:x:conference' jid='club@groups.example.net'/></message>"
-        session.invitationReceived(Stanza.from(element: Element.from(string: xml)!) as! Martin.Message)
+        session.invitationReceived(parseStanza(xml))
         #expect(try database.reader.read(AppDatabase.groupInvitations).isEmpty)
     }
 
-    @Test func migrationMarksStoredInvitationsAsRelayedAndUnvouched() throws {
+    @Test func migrationMarksStoredInvitationsAsRelayed() throws {
         let queue = try DatabaseQueue()
         try AppDatabase.migrator.migrate(queue, upTo: "v40-notification-interval")
         try queue.write { db in
@@ -140,7 +140,7 @@ struct GroupInvitationSessionTests {
         try AppDatabase.migrator.migrate(queue)
         let stored = try queue.read { try GroupInvitation.fetchAll($0) }
         #expect(stored.map(\.isDirect) == [false])
-        #expect(stored.map(\.isVouched) == [false])
+        #expect(stored.map(\.isVouched) == [true])
     }
 
     @Test func strangersAreDropped() throws {

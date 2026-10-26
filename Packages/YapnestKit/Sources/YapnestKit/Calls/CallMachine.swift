@@ -109,10 +109,17 @@ struct CallMachine: Sendable, Equatable {
         /// The stream is back, resumed or new.
         case connectionRestored
         case connectionTimer(Int)
+        /// Whether the server offers the relay that Always Relay Calls needs,
+        /// which was asked for before anything was signalled. Only sent when
+        /// the setting is on.
+        case relayChecked(Bool)
     }
 
     enum Effect: Sendable, Equatable {
         case send(CallMessage)
+        /// Finds out whether there is a relay, before the call is proposed or
+        /// answered, and answers with `relayChecked`.
+        case checkRelay
         /// The caller makes the offer and sends `session-initiate`.
         case startSession(to: String)
         /// The callee answers the offer that `session-initiate` carried.
@@ -150,6 +157,9 @@ struct CallMachine: Sendable, Equatable {
     private var timerToken = 0
     private var connectionToken = 0
     private var isConnectionLost = false
+    /// Our outgoing call waits to learn there is a relay before its propose
+    /// goes out, so until then there is nothing to retract.
+    private var isProposeHeld = false
     /// Another of our devices answered while we had too: the caller picks one.
     private var otherDeviceAnswered = false
 
@@ -163,10 +173,26 @@ struct CallMachine: Sendable, Equatable {
 
     // MARK: Starting
 
-    static func outgoing(sid: String, peer: JID, account: JID, me: String, video: Bool = false, now: Date) -> (CallMachine, [Effect]) {
+    ///
+    /// With `needsRelay` nothing is sent until `relayChecked(true)`, so that a
+    /// call that can't be relayed never rings the peer.
+    static func outgoing(sid: String, peer: JID, account: JID, me: String, video: Bool = false, needsRelay: Bool = false, now: Date) -> (CallMachine, [Effect]) {
         var machine = CallMachine(sid: sid, direction: .outgoing, peer: peer, account: account, me: me, phase: .proposing, proposedAt: now, wantsVideo: video)
-        let timer = machine.arm(ringWindow)
-        return (machine, [.send(.propose(to: peer.description, video: video)), timer, .prepareMedia])
+        if needsRelay {
+            machine.isProposeHeld = true
+            return (machine, [.checkRelay])
+        }
+        let effects = machine.propose()
+        return (machine, effects)
+    }
+
+    private mutating func propose() -> [Effect] {
+        [.send(.propose(to: peer.description, video: wantsVideo)), arm(Self.ringWindow), .prepareMedia]
+    }
+
+    /// Takes back our propose, if it went out.
+    private func retract(_ reason: CallReason, tieBreak: Bool = false) -> [Effect] {
+        isProposeHeld ? [] : [.send(.retract(to: peer.description, reason: reason, tieBreak: tieBreak))]
     }
 
     /// A call that came in as `propose`. One that has waited past the ring
@@ -218,11 +244,12 @@ struct CallMachine: Sendable, Equatable {
             if phase == .proposing { phase = .ringing }
             return []
         case .answer: return answer(now: now)
+        case .relayChecked(let found): return relayChecked(found)
         case .decline: return direction == .incoming && phase == .incoming ? decline() : []
         case .dismiss: return direction == .incoming && phase == .incoming ? end(.dismissed) : []
         case .yieldToTieBreak:
             guard direction == .outgoing, phase.isAwaitingAnswer else { return [] }
-            return [.send(.retract(to: peer.description, reason: .expired, tieBreak: true))] + end(.tieBreak)
+            return retract(.expired, tieBreak: true) + end(.tieBreak)
         case .hangUp: return hangUp()
         case .timer(let token): return token == timerToken ? timedOut() : []
         case .sessionInitiate(let device):
@@ -310,6 +337,20 @@ struct CallMachine: Sendable, Equatable {
         return [.prepareMedia, .send(.proceed(to: device)), .send(.accept(to: account.description)), arm(Self.setupWindow)]
     }
 
+    private mutating func relayChecked(_ found: Bool) -> [Effect] {
+        switch (direction, phase) {
+        case (.outgoing, .proposing) where isProposeHeld:
+            isProposeHeld = false
+            return found ? propose() : end(.failed)
+        case (.incoming, .incoming) where !found:
+            // Answering would tell the caller we're coming, and then fail.
+            let reject = peerDevice.map { Effect.send(.reject(to: $0, reason: .decline)) }
+            return (reject.map { [$0] } ?? []) + end(.failed)
+        default:
+            return []
+        }
+    }
+
     private mutating func decline() -> [Effect] {
         var effects: [Effect] = []
         if let device = peerDevice { effects.append(.send(.reject(to: device, reason: .decline))) }
@@ -321,7 +362,7 @@ struct CallMachine: Sendable, Equatable {
         case .incoming:
             return decline()
         case .proposing, .ringing:
-            return [.send(.retract(to: peer.description, reason: .cancel))] + end(.cancelled)
+            return retract(.cancel) + end(.cancelled)
         case .accepted, .connecting:
             return leaveSession(.cancel) + end(direction == .outgoing ? .cancelled : .declined)
         case .active:
@@ -334,7 +375,7 @@ struct CallMachine: Sendable, Equatable {
     private mutating func timedOut() -> [Effect] {
         switch phase {
         case .proposing, .ringing:
-            return [.send(.retract(to: peer.description, reason: .timeout))] + end(.noAnswer)
+            return retract(.timeout) + end(.noAnswer)
         case .incoming:
             return end(.missed)
         case .accepted where otherDeviceAnswered:
@@ -351,7 +392,7 @@ struct CallMachine: Sendable, Equatable {
     private mutating func lostConnection() -> [Effect] {
         switch phase {
         case .proposing, .ringing:
-            return [.send(.retract(to: peer.description, reason: .generalError))] + end(.connectionLost)
+            return retract(.generalError) + end(.connectionLost)
         case .incoming:
             // Like a dismissed call, so that the caller's other devices go on.
             return end(.connectionLost)
@@ -365,7 +406,7 @@ struct CallMachine: Sendable, Equatable {
     private mutating func mediaFailed() -> [Effect] {
         switch phase {
         case .proposing, .ringing:
-            return [.send(.retract(to: peer.description, reason: .generalError))] + end(.failed)
+            return retract(.generalError) + end(.failed)
         case .accepted, .connecting, .active:
             return fail()
         case .incoming, .ended:

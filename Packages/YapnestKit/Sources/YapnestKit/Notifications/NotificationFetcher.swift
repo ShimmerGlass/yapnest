@@ -184,8 +184,8 @@ extension MessageNotification {
     public static let messageIdKey = "messageId"
     /// Where a held group invitation's notification keeps the group's address.
     public static let invitationKey = "invitation"
-    /// The thread of every invitation's notification. They aren't a chat, so
-    /// `staleNotifications` must not read this thread as a read chat's.
+    /// The thread of every invitation's notification, which groups them
+    /// apart from the chats'.
     public static let invitationsThread = "invitations"
 
     public func content(badge: Int?) -> UNMutableNotificationContent {
@@ -194,10 +194,10 @@ extension MessageNotification {
         if let subtitle { content.subtitle = subtitle }
         content.body = body
         content.sound = NotificationSound.choice(kind: isGroup ? .groupchat : .chat, stored: sound, isQuiet: isQuiet).unSound
-        if let invitationRoom {
+        if isInvitation {
             // No peer: it isn't a chat to open, and the chat list shows the invitation.
             content.threadIdentifier = Self.invitationsThread
-            content.userInfo = [Self.invitationKey: invitationRoom.description]
+            content.userInfo = [Self.invitationKey: peer.description]
         } else {
             content.threadIdentifier = peer.description
             content.userInfo = [Self.peerKey: peer.description, Self.messageIdKey: messageId]
@@ -210,7 +210,7 @@ extension MessageNotification {
         return content
     }
 
-    public var requestIdentifier: String { invitationRoom.map { "invitation-\($0)" } ?? "message-\(messageId)" }
+    public var requestIdentifier: String { isInvitation ? "invitation-\(peer)" : "message-\(messageId)" }
 
     /// The delivered notifications of invitations that aren't held any more,
     /// whether they were joined, declined or answered from another device.

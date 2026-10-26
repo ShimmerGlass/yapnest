@@ -30,7 +30,7 @@ private final class ProfileServer: @unchecked Sendable {
                 if let publish = pubsub.firstChild(name: "publish") {
                     let node = publish.attribute("node") ?? ""
                     let form = pubsub.firstChild(name: "publish-options")?.firstChild(name: "x")
-                    let fields = Dictionary((form.flatMap(XDataForm.init)?.fields ?? []).compactMap { f in f.name.map { ($0, f.values) } }, uniquingKeysWith: { _, l in l })
+                    let fields = formFields(of: form)
                     publishOptions = fields
                     if let model = fields["pubsub#access_model"]?.first { models[node] = models[node] ?? model }
                     return FakeWire.result(to: iq)
@@ -134,17 +134,7 @@ struct ProfileAccessTests {
     @Test func aRemoteFlipReconfiguresTheNodes() async throws {
         let server = ProfileServer([NS.avatarData: "presence", NS.avatarMetadata: "presence", NS.nick: "presence"])
         let session = try connect(server)
-        let ms = Int64(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000)
-        let entry = SettingsEntry(key: "sharesProfilePublicly", value: "1", version: SettingsVersion(ms: ms, counter: 0), by: "other")
-        let event = Martin.Message()
-        event.type = .headline
-        let item = Element(name: "item", attributes: ["id": "global"])
-        item.addChild(SettingsItem(entries: [entry]).element)
-        let items = Element(name: "items", attributes: ["node": NS.settings])
-        items.addChild(item)
-        let wrapper = Element(name: "event", xmlns: "http://jabber.org/protocol/pubsub#event")
-        wrapper.addChild(items)
-        event.addChild(wrapper)
+        let event = settingsEvent(from: nil, settingsItem(settingsEntry("sharesProfilePublicly", "1")))
         try session.client.module(.pubsub).process(message: event)
         #expect(session.sharesProfilePublicly)
         await eventually("the nodes open") { server.access.values.allSatisfy { $0 == "open" } }

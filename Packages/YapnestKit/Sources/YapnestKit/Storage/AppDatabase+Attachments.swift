@@ -87,8 +87,8 @@ extension AppDatabase {
     /// ones, so a sweep doesn't pull years of history. `peer` narrows it to
     /// one conversation.
     func missedImages(since: Date, limit: Int, maxSize: Int64, peer: JID? = nil) throws -> [Attachment] {
-        let trustsGroupMembers = flag(.downloadsFromGroupMembers, default: true)
-        return try reader.read { db in
+        try reader.read { db in
+            let trustsGroupMembers = try Self.flag(db, .downloadsFromGroupMembers, default: true)
             let rows = try Row.fetchCursor(db, sql: """
                 SELECT attachment.*, message.direction = 'outgoing' AS isOutgoing, message.isWrittenHere AS isWrittenHere,
                        conversation.kind = 'groupchat' AS isGroup,

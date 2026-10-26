@@ -95,9 +95,9 @@ struct NotificationTests {
     @Test func onlyChatsWithUnreadMessagesKeepTheirNotifications() {
         let bob = JID("bob@example.org")!
         let gone = JID("gone@example.org")!
-        let delivered = [("1", alice.description), ("2", bob.description), ("3", gone.description), ("4", "")]
+        let delivered = [("1", alice.description), ("2", bob.description), ("3", gone.description)]
         // Bob is read, and gone is archived or deleted: not counted at all.
-        let stale = AppDatabase.staleNotifications(threads: delivered.map { (id: $0.0, thread: $0.1) }, unread: [alice: 2, bob: 0])
+        let stale = AppDatabase.staleNotifications(chats: delivered.map { (id: $0.0, peer: $0.1) }, unread: [alice: 2, bob: 0])
         #expect(stale == ["2", "3"])
     }
 

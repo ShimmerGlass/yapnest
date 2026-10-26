@@ -162,7 +162,7 @@ extension XMPPSession {
         let me = ownAddress
         let started = publish(callState, under: callPublishLock) { state -> (result: Bool, snapshot: CallState??) in
             if let call = state.call, !call.machine.phase.isEnded { return (false, nil) }
-            let (machine, effects) = CallMachine.outgoing(sid: sid, peer: peer, account: account, me: me, video: video, now: Date())
+            let (machine, effects) = CallMachine.outgoing(sid: sid, peer: peer, account: account, me: me, video: video, needsRelay: relaysCalls, now: Date())
             let run = CallRun(sid: sid)
             state.call = ActiveCall(machine: machine, run: run)
             perform(effects, run: run, machine: machine)
@@ -172,7 +172,18 @@ extension XMPPSession {
         if !started { throw CallError.busy }
     }
 
-    public func answerCall() { callStep(.answer) }
+    public func answerCall() {
+        guard relaysCalls, let sid = lock.withLock({ $0.call?.machine.sid }) else {
+            callStep(.answer)
+            return
+        }
+        // Answering tells the caller we're coming, so a call that can't be
+        // relayed is refused before that, not when its media fails to start.
+        Task { [self] in
+            let found = await hasRelay(sid: sid)
+            callStep(found ? .answer : .relayChecked(false), sid: sid)
+        }
+    }
 
     public func declineCall() { callStep(.decline) }
 
@@ -322,6 +333,20 @@ extension XMPPSession {
             "call-relay", title: String(localized: "Call couldn't connect"),
             detail: String(localized: "Always Relay Calls is on, but your server offers no relay to call through. Turn it off in Settings to call directly, or ask your server's administrator to set up a TURN relay."),
         )
+    }
+
+    /// Whether the server offers a relay to call through, which the servers
+    /// already found answer without asking again. Posts the warning when it
+    /// doesn't, as the call is refused.
+    private func hasRelay(sid: String) async -> Bool {
+        let found = await discoverIceServers().contains(where: \.isRelay)
+        if found {
+            warnings.clear("call-relay")
+        } else {
+            DiagLog.notice(.calls, "Call refused: relaying is on and the server offers no relay", fields: callFields(sid: sid))
+            warnNoRelay()
+        }
+        return found
     }
 
     private func failCall(_ sid: String) {
@@ -474,6 +499,8 @@ extension XMPPSession {
         switch effect {
         case .send(let message):
             writeCall(message, sid: sid)
+        case .checkRelay:
+            Task { [self] in callStep(.relayChecked(await hasRelay(sid: sid)), sid: sid) }
         case .prepareMedia:
             prepareMedia(run: run, sid: sid, video: machine.wantsVideo)
         case .startSession(let device):
@@ -582,6 +609,8 @@ extension XMPPSession {
             let servers = await self.discoverIceServers()
             // Never a direct connection when the user asked for relayed calls.
             let relayOnly = self.relaysCalls
+            // The last guard: the call was only let through if it had a relay,
+            // but the setting or the servers may have changed since.
             if relayOnly, !servers.contains(where: \.isRelay) {
                 DiagLog.notice(.calls, "Call refused: relaying is on and the server offers no relay", fields: self.callFields(sid: sid))
                 self.warnNoRelay()

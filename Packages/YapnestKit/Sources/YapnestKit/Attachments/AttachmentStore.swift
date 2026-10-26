@@ -159,7 +159,8 @@ public final class AttachmentStore: Sendable {
     static func stripMetadata(fromImageAt url: URL) throws {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let type = CGImageSourceGetType(source) else { return }
         let count = CGImageSourceGetCount(source)
-        guard (0..<count).contains(where: { hasRemovableMetadata(source, at: $0) }) else { return }
+        let frames = (0..<count).map { frameProperties(source, at: $0) }
+        guard frames.contains(where: hasRemovableMetadata) else { return }
         let temporary = url.deletingLastPathComponent().appending(path: UUID().uuidString.lowercased() + "." + url.pathExtension)
         defer { try? FileManager.default.removeItem(at: temporary) }
         guard let output = CGImageDestinationCreateWithURL(temporary as CFURL, type, count, nil) else { throw MetadataError() }
@@ -176,14 +177,13 @@ public final class AttachmentStore: Sendable {
                 kCGImageDestinationMergeMetadata: false,
             ]
             for key in removableDictionaries { options[key] = kCFNull }
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
-            if let orientation = properties?[kCGImagePropertyOrientation] { options[kCGImagePropertyOrientation] = orientation }
+            if let orientation = frames[index]?[kCGImagePropertyOrientation] { options[kCGImagePropertyOrientation] = orientation }
             CGImageDestinationAddImageFromSource(output, source, index, options as CFDictionary)
         }
         guard CGImageDestinationFinalize(output) else { throw MetadataError() }
         // Only a copy that came out clean replaces the original.
         guard let written = CGImageSourceCreateWithURL(temporary as CFURL, nil), CGImageSourceGetCount(written) == count,
-              !(0..<count).contains(where: { hasRemovableMetadata(written, at: $0) })
+              !(0..<count).contains(where: { hasRemovableMetadata(frameProperties(written, at: $0)) })
         else { throw MetadataError() }
         _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
     }
@@ -191,18 +191,19 @@ public final class AttachmentStore: Sendable {
     /// The property dictionaries that describe the photographer or the camera
     /// rather than the picture. The GIF and JFIF ones stay for the frame
     /// timing and density they hold.
-    private static var removableDictionaries: [CFString] { [
+    // CFString isn't Sendable, but these are constants nobody changes.
+    nonisolated(unsafe) private static let removableDictionaries: [CFString] = [
         kCGImagePropertyTIFFDictionary, kCGImagePropertyExifDictionary, kCGImagePropertyExifAuxDictionary,
         kCGImagePropertyGPSDictionary, kCGImagePropertyIPTCDictionary, kCGImagePropertyPNGDictionary,
         kCGImagePropertyMakerAppleDictionary, kCGImagePropertyMakerCanonDictionary, kCGImagePropertyMakerNikonDictionary,
         kCGImagePropertyMakerFujiDictionary, kCGImagePropertyMakerMinoltaDictionary, kCGImagePropertyMakerOlympusDictionary,
         kCGImagePropertyMakerPentaxDictionary, kCGImagePropertyCIFFDictionary, kCGImagePropertyDNGDictionary,
         kCGImagePropertyRawDictionary,
-    ] }
+    ]
 
     /// Which entries of the dictionaries that hold both kinds are only about
     /// how the picture is stored.
-    private static var structuralKeys: [CFString: Set<CFString>] { [
+    nonisolated(unsafe) private static let structuralKeys: [CFString: Set<CFString>] = [
         kCGImagePropertyTIFFDictionary: [
             kCGImagePropertyTIFFOrientation, kCGImagePropertyTIFFCompression, kCGImagePropertyTIFFPhotometricInterpretation,
             kCGImagePropertyTIFFResolutionUnit, kCGImagePropertyTIFFXResolution, kCGImagePropertyTIFFYResolution,
@@ -213,10 +214,14 @@ public final class AttachmentStore: Sendable {
             kCGImagePropertyPNGInterlaceType, kCGImagePropertyPNGGamma, kCGImagePropertyPNGsRGBIntent,
             kCGImagePropertyPNGXPixelsPerMeter, kCGImagePropertyPNGYPixelsPerMeter, kCGImagePropertyPNGChromaticities,
         ],
-    ] }
+    ]
 
-    private static func hasRemovableMetadata(_ source: CGImageSource, at index: Int) -> Bool {
-        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] else { return false }
+    private static func frameProperties(_ source: CGImageSource, at index: Int) -> [CFString: Any]? {
+        CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+    }
+
+    private static func hasRemovableMetadata(_ properties: [CFString: Any]?) -> Bool {
+        guard let properties else { return false }
         return removableDictionaries.contains { key in
             guard let entries = properties[key] as? [CFString: Any] else { return false }
             guard let structural = structuralKeys[key] else { return true }

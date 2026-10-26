@@ -51,7 +51,7 @@ struct BackupPolicyTests {
         let account = container.appending(path: "accounts/me@example.org")
         try FileManager.default.createDirectory(at: account, withIntermediateDirectories: true)
         let defaults = defaults()
-        let logs = container.appending(path: "Logs")
+        let logs = SharedContainer.logs(in: container)
 
         BackupPolicy.setIncludesMessages(false, defaults: defaults, container: container)
         #expect(try isExcluded(account))
@@ -61,13 +61,14 @@ struct BackupPolicyTests {
         #expect(try !isExcluded(logs))
     }
 
-    @Test func aFolderMadeLaterPicksTheChoiceUp() throws {
+    @Test func aFolderMadeLaterPicksTheChoiceUpAtTheNextSweep() throws {
         let container = try folder()
         let defaults = defaults()
         BackupPolicy.setIncludesMessages(false, defaults: defaults, container: container)
-        let later = container.appending(path: "accounts/new@example.org")
+        let later = SharedContainer.accounts(in: container).appending(path: "new@example.org")
         try FileManager.default.createDirectory(at: later, withIntermediateDirectories: true)
-        BackupPolicy.apply(also: [later], defaults: defaults, container: container)
+        #expect(try !isExcluded(later))
+        BackupPolicy.apply(defaults: defaults, container: container)
         #expect(try isExcluded(later))
     }
 
