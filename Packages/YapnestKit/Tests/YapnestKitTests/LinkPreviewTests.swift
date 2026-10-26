@@ -41,6 +41,44 @@ struct OpenGraphTests {
     @Test func emptyWithoutMetadata() {
         #expect(OpenGraph(html: "<html><body>hi</body></html>", base: base).isEmpty)
     }
+
+    @Test func attributeQuotingAndTagBoundaries() {
+        let html = """
+        <metadata name="og:title" content="not a meta tag">
+        <meta name=og:title content=bare>
+        <meta name = "og:description"
+              content = "spaced &amp; split">
+        <meta property="og:site_name" content="">
+        <title data-x="1">First</title><title>Second</title>
+        """
+        let graph = OpenGraph(html: html, base: base)
+        #expect(graph.title == "bare")
+        #expect(graph.description == "spaced & split")
+        #expect(graph.siteName == nil)
+        #expect(OpenGraph(html: "<TITLE>Loud</TITLE>", base: base).title == "Loud")
+    }
+
+    @Test func onlyTheStartOfAPageIsRead() {
+        let late = String(repeating: " ", count: OpenGraph.maxScanned) + "<meta property=\"og:title\" content=\"Late\">"
+        #expect(OpenGraph(html: late, base: base).isEmpty)
+    }
+
+    // A page can be a megabyte with no `</head>`. The old regexes took minutes
+    // to hours on these, so a loose bound is enough to tell them apart.
+    @Test(arguments: ["longName", "unclosedMeta", "unclosedTitle", "unclosedQuote", "bareValues"])
+    func craftedPagesAreParsedInLinearTime(kind: String) {
+        let size = 1 << 20
+        let html = switch kind {
+        case "longName": "<meta " + String(repeating: "a", count: size)
+        case "unclosedMeta": String(repeating: "<meta ", count: size / 6)
+        case "unclosedTitle": String(repeating: "<title>", count: size / 7)
+        case "unclosedQuote": String(repeating: "<meta a=\"", count: size / 9)
+        default: String(repeating: "<meta a=b ", count: size / 10)
+        }
+        let started = ContinuousClock.now
+        _ = OpenGraph(html: html, base: base)
+        #expect(ContinuousClock.now - started < .seconds(2))
+    }
 }
 
 struct LinkDetectorTests {
