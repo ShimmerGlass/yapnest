@@ -674,6 +674,17 @@ Each entry gives what went wrong for users, why, and what changed.
   location of that kind, and a redirect is followed only on an encrypted
   stream or an account that never uses one. Pinned by `SeeOtherHostTests`.
 
+**A group member could change a group's picture** (`PubSubModule.process(message:)`)
+- *Symptom:* a member's group message carrying an empty avatar event cleared
+  the group's picture for every member, and one naming a cached picture
+  swapped it in; a nickname event renamed it.
+- *Cause:* an event was taken from any message, and a room passes on what
+  its members put in theirs, from room/nick, whose bare address is the
+  room's.
+- *Fix:* an event in a group message, or from an address with a resource,
+  is ignored: a service notifies from its bare address. Pinned by
+  `PubSubEventSourceTests`.
+
 ### MartinOMEMO
 
 **Logs named people publicly** (`OMEMOModule`)

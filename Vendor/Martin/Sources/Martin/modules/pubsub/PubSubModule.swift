@@ -78,6 +78,14 @@ open class PubSubModule: XmppModuleBase, XmppModule {
         guard message.type != StanzaType.error, let event = message.findChild(name: "event", xmlns: PubSubModule.PUBSUB_EVENT_XMLNS) else {
             return;
         }
+        // A service notifies from its bare address: an account's own for PEP,
+        // or the PubSub service's. A group's members write from room/nick,
+        // and a room passes on what they put in a message, so an event from
+        // a full address, or in a group message, would let any of them
+        // publish in the room's name (its picture, its name).
+        guard message.type != StanzaType.groupchat, message.from?.resource == nil else {
+            return;
+        }
 
         let timestamp = message.delay?.stamp ?? Date();
         
