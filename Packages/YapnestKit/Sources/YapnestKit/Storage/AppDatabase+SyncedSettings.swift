@@ -78,6 +78,7 @@ extension AppDatabase {
         .encryptsNewChats: globalKey(.encryptsNewChats, default: "1"),
         .sharesLastSeen: globalKey(.sharesLastSeen, default: "0"),
         .downloadsFromGroupMembers: globalKey(.downloadsFromGroupMembers, default: "1"),
+        .relaysCalls: globalKey(.relaysCalls, default: "0"),
         .sharesProfilePublicly: globalKey(.sharesProfilePublicly, default: "0"),
         .availability: globalKey(.availability),
         .statusMessage: globalKey(.statusMessage),

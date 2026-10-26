@@ -70,6 +70,9 @@ extension AppDatabase {
         /// downloads by itself. On unless turned off, as it shows our IP
         /// address to the sender's server.
         case downloadsFromGroupMembers
+        /// Whether calls only go through the server's relay, so the person
+        /// called never sees our IP address. Off unless turned on.
+        case relaysCalls
         /// The highest settings version issued or seen, so the clock never
         /// goes back, even after a relaunch: see `SettingsVersion`.
         case settingsClock

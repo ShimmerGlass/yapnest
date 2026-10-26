@@ -71,6 +71,10 @@ extension XMPPSession {
     /// Whether this session can make or take calls at all: it needs media.
     public var supportsCalls: Bool { callMedia != nil }
 
+    /// Whether calls go only through the server's relay, hiding our address
+    /// from the person we call.
+    public var relaysCalls: Bool { database.flag(.relaysCalls, default: false) }
+
     /// Whether `peer` has a device that can take an audio call: one that
     /// advertises Jingle Message Initiation and RTP audio.
     /// With `video`, one that advertises RTP video too. The features have to
@@ -311,6 +315,13 @@ extension XMPPSession {
                   peer.map({ call.machine.isSessionPeer($0.stringValue) }) ?? true else { return nil }
             return call
         }
+    }
+
+    private func warnNoRelay() {
+        warnings.post(
+            "call-relay", title: String(localized: "Call couldn't connect"),
+            detail: String(localized: "Always Relay Calls is on, but your server offers no relay to call through. Turn it off in Settings to call directly, or ask your server's administrator to set up a TURN relay."),
+        )
     }
 
     private func failCall(_ sid: String) {
@@ -569,7 +580,15 @@ extension XMPPSession {
         run.prepare({ [weak self] in
             guard let self, let factory = self.callMedia else { throw CallRunError.closed }
             let servers = await self.discoverIceServers()
-            let media = factory.makeMedia()
+            // Never a direct connection when the user asked for relayed calls.
+            let relayOnly = self.relaysCalls
+            if relayOnly, !servers.contains(where: \.isRelay) {
+                DiagLog.notice(.calls, "Call refused: relaying is on and the server offers no relay", fields: self.callFields(sid: sid))
+                self.warnNoRelay()
+                throw CallRunError.noRelay
+            }
+            self.warnings.clear("call-relay")
+            let media = factory.makeMedia(relayOnly: relayOnly)
             let startedAt = Date()
             do {
                 try await media.start(iceServers: servers, video: video)
@@ -660,7 +679,8 @@ extension XMPPSession {
 
     /// The server's STUN and TURN servers, kept until their credentials
     /// expire, and asked for when a call rings so that answering needn't wait.
-    /// Without them the call still tries a direct path.
+    /// Without them the call still tries a direct path, unless the user has
+    /// asked for relayed calls, which then fail.
     func discoverIceServers() async -> [CallIceServer] {
         let start = Date()
         let servers = await iceServerCache.servers { [weak self] in await self?.fetchIceServers() }

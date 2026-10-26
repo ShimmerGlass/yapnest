@@ -12,6 +12,11 @@ public struct CallIceServer: Sendable, Hashable {
         self.username = username
         self.credential = credential
     }
+
+    /// Whether this server relays media, as a STUN one only reports our address.
+    public var isRelay: Bool {
+        urls.contains { $0.lowercased().hasPrefix("turn:") || $0.lowercased().hasPrefix("turns:") }
+    }
 }
 
 /// One ICE candidate, as WebRTC writes it in SDP.
@@ -71,5 +76,7 @@ public protocol CallMedia: AnyObject, Sendable {
 /// Makes the media for each call. The app passes the WebRTC one; sessions
 /// without it (the extensions, most tests) don't offer calls.
 public protocol CallMediaFactory: Sendable {
-    func makeMedia() -> any CallMedia
+    /// With `relayOnly`, the media offers no candidate but the relay's, so the
+    /// peer never learns our address.
+    func makeMedia(relayOnly: Bool) -> any CallMedia
 }

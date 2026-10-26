@@ -22,6 +22,7 @@ final class FakeCallMedia: CallMedia, @unchecked Sendable {
     private(set) var remoteCandidates: [CallCandidate] = []
     private(set) var muted = false
     private(set) var startedWithVideo: Bool?
+    var relayOnly = false
     private(set) var cameraEnabled: Bool?
     private(set) var cameraSwitches = 0
     private(set) var isClosed = false
@@ -100,8 +101,9 @@ final class FakeCallMediaFactory: CallMediaFactory, @unchecked Sendable {
     var failsToStart = false
     var answerOverride: String?
 
-    func makeMedia() -> any CallMedia {
+    func makeMedia(relayOnly: Bool) -> any CallMedia {
         let media = FakeCallMedia()
+        media.relayOnly = relayOnly
         media.failsToStart = failsToStart
         media.answerOverride = answerOverride
         lock.withLock { made.append(media) }

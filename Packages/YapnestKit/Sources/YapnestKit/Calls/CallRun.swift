@@ -191,6 +191,8 @@ enum CallRunError: Error {
     case closed
     /// The media's description couldn't be turned into Jingle, or back.
     case badDescription
+    /// The user asked for relayed calls and the server offers no relay.
+    case noRelay
 }
 
 /// How many candidates of each kind each side has brought, for working out

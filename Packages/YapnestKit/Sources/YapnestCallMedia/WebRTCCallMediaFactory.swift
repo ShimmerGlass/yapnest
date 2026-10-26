@@ -28,9 +28,13 @@ public struct WebRTCCallMediaFactory: CallMediaFactory {
     }
 
     public func makeMedia() -> any CallMedia {
+        makeMedia(relayOnly: false)
+    }
+
+    public func makeMedia(relayOnly: Bool) -> any CallMedia {
         WebRTCCallMedia(
             factory: SharedFactory.shared,
-            forceRelay: forceRelay, receiveOnly: receiveOnly, syntheticCamera: syntheticCamera)
+            forceRelay: forceRelay || relayOnly, receiveOnly: receiveOnly, syntheticCamera: syntheticCamera)
     }
 }
 

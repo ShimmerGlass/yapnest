@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var sharesProfilePublicly = false
     @State private var isChangingProfileAccess = false
     @State private var downloadsFromGroupMembers = true
+    @State private var relaysCalls = false
     @State private var gifsEnabled = true
     @State private var encryptsNewChats = true
     @State private var privacyError: String?
@@ -84,7 +85,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Profile")
                 } footer: {
-                    Text("Your contacts see your name and photo. Under Privacy you can choose to show them to everyone.")
+                    Text("Your contacts see your name and photo.")
                 }
 
                 Section {
@@ -112,16 +113,35 @@ struct SettingsView: View {
                     Toggle("Send Read Receipts", isOn: Binding(get: { sendsReadMarkers }, set: setSendsReadMarkers))
                     Toggle("Send Typing Indicator", isOn: Binding(get: { sendsChatStates }, set: setSendsChatStates))
                     Toggle("Activity Status", isOn: Binding(get: { sharesLastSeen }, set: setSharesLastSeen))
-                    Toggle("Download Pictures from Group Members", isOn: Binding(get: { downloadsFromGroupMembers }, set: setDownloadsFromGroupMembers))
+                } header: {
+                    Text("Privacy")
+                } footer: {
+                    Text("Only the people you've added see these. With Activity Status on, your contacts see how long ago you were online, and see you as away once you leave Yapnest on your iPhone or iPad, or step away from your Mac. You see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
+                }
+                .disabled(!isLoaded)
+
+                Section {
                     HStack {
                         Toggle("Show My Name and Photo to Everyone", isOn: Binding(get: { sharesProfilePublicly }, set: setSharesProfilePublicly))
                             .disabled(profileAction.isBusy)
                         if isChangingProfileAccess { ProgressView() }
                     }
-                } header: {
-                    Text("Privacy")
                 } footer: {
-                    Text("With Show My Name and Photo to Everyone off, only your contacts see your name and photo; people you haven't added, including members of your groups, don't. With Download Pictures from Group Members on, a picture from someone in a private group you haven't added downloads by itself, which shows your IP address to the sender's server; off, you tap a picture to download it. The other settings here are seen only by the people you've added. With Activity Status on, your contacts see how long ago you were online, and see you as away once you leave Yapnest on your iPhone or iPad, or step away from your Mac. You see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
+                    Text("With this off, only your contacts see your name and photo. People you haven't added, including members of your groups, don't.")
+                }
+                .disabled(!isLoaded)
+
+                Section {
+                    Toggle("Download Pictures from Group Members", isOn: Binding(get: { downloadsFromGroupMembers }, set: setDownloadsFromGroupMembers))
+                } footer: {
+                    Text("Downloading a picture shows your IP address to the sender's server. With this off, you tap a picture from a group member you haven't added to download it.")
+                }
+                .disabled(!isLoaded)
+
+                Section {
+                    Toggle("Always Relay Calls", isOn: Binding(get: { relaysCalls }, set: setRelaysCalls))
+                } footer: {
+                    Text("Relaying hides your IP address from the person you call, and may lower the quality. It needs your server to offer a relay; without one, calls fail rather than connect directly.")
                 }
                 .disabled(!isLoaded)
 
@@ -271,6 +291,7 @@ struct SettingsView: View {
                         sharesLastSeen: session.sharesLastSeen,
                         sharesProfilePublicly: session.sharesProfilePublicly,
                         downloadsFromGroupMembers: session.downloadsFromGroupMembers,
+                        relaysCalls: session.relaysCalls,
                         gifsEnabled: session.database.flag(.gifs, default: true),
                         encryptsNewChats: session.database.flag(.encryptsNewChats, default: true),
                     )
@@ -286,6 +307,7 @@ struct SettingsView: View {
                 sharesLastSeen = saved.sharesLastSeen
                 sharesProfilePublicly = saved.sharesProfilePublicly
                 downloadsFromGroupMembers = saved.downloadsFromGroupMembers
+                relaysCalls = saved.relaysCalls
                 gifsEnabled = saved.gifsEnabled
                 encryptsNewChats = saved.encryptsNewChats
                 isLoaded = true
@@ -409,6 +431,10 @@ struct SettingsView: View {
 
     private func setDownloadsFromGroupMembers(_ on: Bool) {
         save({ [session] in try session.database.setFlag(.downloadsFromGroupMembers, on) }) { downloadsFromGroupMembers = on }
+    }
+
+    private func setRelaysCalls(_ on: Bool) {
+        save({ [session] in try session.database.setFlag(.relaysCalls, on) }) { relaysCalls = on }
     }
 
     private func setGifsEnabled(_ on: Bool) {
