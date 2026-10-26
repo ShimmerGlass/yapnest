@@ -9,11 +9,6 @@ struct OpenGraph: Equatable {
     var siteName: String?
     var image: URL?
 
-    /// Only this much of a page is read. The tags sit in `<head>`, and the
-    /// fetch already stops at its end, but a page without one can be a
-    /// megabyte of whatever its author chose.
-    static let maxScanned = 128 * 1024
-
     init(title: String? = nil, description: String? = nil, siteName: String? = nil, image: URL? = nil) {
         self.title = title
         self.description = description
@@ -23,7 +18,9 @@ struct OpenGraph: Equatable {
 
     /// - Parameter base: the page's URL, for resolving a relative image URL.
     init(html: String, base: URL) {
-        let bytes = Array(html.utf8.prefix(Self.maxScanned))
+        // The fetch caps the page, so all of it is read: a head can hold a lot
+        // before its tags.
+        let bytes = Array(html.utf8)
         var meta: [String: String] = [:]
         var position = 0
         // Every step moves forward and the end of a tag is found once, so the

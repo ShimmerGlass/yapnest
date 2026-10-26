@@ -58,9 +58,9 @@ struct OpenGraphTests {
         #expect(OpenGraph(html: "<TITLE>Loud</TITLE>", base: base).title == "Loud")
     }
 
-    @Test func onlyTheStartOfAPageIsRead() {
-        let late = String(repeating: " ", count: OpenGraph.maxScanned) + "<meta property=\"og:title\" content=\"Late\">"
-        #expect(OpenGraph(html: late, base: base).isEmpty)
+    @Test func tagsAfterALongStretchOfAHeadAreFound() {
+        let late = String(repeating: " ", count: 200 * 1024) + "<meta property=\"og:title\" content=\"Late\">"
+        #expect(OpenGraph(html: late, base: base).title == "Late")
     }
 
     // A page can be a megabyte with no `</head>`. The old regexes took minutes
