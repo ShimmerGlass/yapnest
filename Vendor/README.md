@@ -947,7 +947,7 @@ They surfaced in YapnestKit's integration tests, which run real sessions
 against local Prosody and ejabberd servers (`dev/prosody`, `dev/ejabberd`):
 
 ```sh
-dev/prosody/reset.sh     # or dev/ejabberd/reset.sh; stop the other one first
+dev/prosody/setup.sh     # or dev/ejabberd/setup.sh; stop the other one first
 cd Packages/YapnestKit && YAPNEST_INTEGRATION=1 swift test --filter LiveServer
 ```
 

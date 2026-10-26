@@ -8,8 +8,9 @@
 # Plugins, downloaded from igniterealtime.org: Monitoring (message archive,
 # XEP-0313), Push Notification (XEP-0357) and HTTP File Upload (XEP-0363).
 # `OPENFIRE_BARE=1 ./setup.sh` leaves out the last two, as a server that
-# lacks them. It keeps its own data, so switching between the two takes a
-# `reset.sh` of the one that's running (both use the same ports).
+# lacks them. Both use the same ports, so stop the one that's running
+# (`docker compose down` here, or `COMPOSE_PROJECT_NAME=openfire-bare docker
+# compose down`) before starting the other.
 set -e
 cd "$(dirname "$0")"
 plugins=https://www.igniterealtime.org/projects/openfire/plugins
@@ -19,6 +20,13 @@ if [ -n "$OPENFIRE_BARE" ]; then
 else
     export OPENFIRE_PLUGINS=./plugins
 fi
+# Every start is a fresh server: accounts, archives and published OMEMO
+# devices left by earlier runs (or a run stopped halfway, such as one that
+# changed a password) would otherwise carry over. The tests' device
+# databases for this server go too, as they remember that server's archive.
+docker compose down -v
+target=openfire${OPENFIRE_BARE:+-bare}-35222
+rm -rf "${TMPDIR:-/tmp}/yapnest-integration/$target" "${TMPDIR:-/tmp}/yapnest-integration-kept/$target"
 mkdir -p "$OPENFIRE_PLUGINS"
 fetch() {
     [ -f "$OPENFIRE_PLUGINS/$2.jar" ] || curl -fsSL "$plugins/$1/$2.jar" -o "$OPENFIRE_PLUGINS/$2.jar"

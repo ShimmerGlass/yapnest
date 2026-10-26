@@ -2,6 +2,12 @@
 # Starts the dev server and creates the test accounts alice, bob, carol and pwchange @localhost (password: "password").
 set -e
 cd "$(dirname "$0")"
+# Every start is a fresh server: accounts, archives and published OMEMO
+# devices left by earlier runs (or a run stopped halfway, such as one that
+# changed a password) would otherwise carry over. The tests' device
+# databases for this server go too, as they remember that server's archive.
+docker compose down -v
+rm -rf "${TMPDIR:-/tmp}/yapnest-integration/prosody-5222" "${TMPDIR:-/tmp}/yapnest-integration-kept/prosody-5222"
 ../certs/make.sh
 docker compose up -d
 sleep 2
