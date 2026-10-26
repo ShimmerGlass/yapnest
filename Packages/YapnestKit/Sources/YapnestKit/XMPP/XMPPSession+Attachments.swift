@@ -110,12 +110,14 @@ extension XMPPSession {
                     DiagLog.info(.upload, "Upload slot granted", .id("msg", transferId), .size("bytes", size), .duration("took", since: started))
                     phase = .put
                     started = Date()
+                    let policy = DownloadPolicy(allowsInsecure: allowsInsecureTransfers)
+                    try await Self.check(slot, policy: policy)
 
                     var request = URLRequest(url: slot.putURL)
                     request.httpMethod = "PUT"
                     request.setValue(contentType, forHTTPHeaderField: "Content-Type")
                     for (header, value) in slot.putHeaders { request.setValue(value, forHTTPHeaderField: header) }
-                    let delegate = ProgressDelegate(policy: DownloadPolicy(allowsInsecure: allowsInsecureTransfers)) { [weak self] progress in self?.setProgress(progress, for: messageId) }
+                    let delegate = ProgressDelegate(policy: policy) { [weak self] progress in self?.setProgress(progress, for: messageId) }
                     let (_, response) = try await Self.transferSession.upload(for: request, fromFile: source, delegate: delegate)
                     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                     DiagLog.info(.upload, "Upload finished", .id("msg", transferId), .int("status", status), .size("bytes", size), .duration("took", since: started))
@@ -150,6 +152,26 @@ extension XMPPSession {
                 try? database.markFailed(conversationId: message.conversationId, remoteId: id, error: reason)
             }
         }
+    }
+
+    /// A slot is the server's word on where the file goes, so it could send
+    /// the PUT, with headers of its choosing, to a host on this device's own
+    /// network. The PUT gets a download's checks. The get URL is only fetched
+    /// by the recipients, who check it themselves, but one that isn't HTTPS
+    /// would be refused by them, so the file isn't sent to be lost.
+    static func check(_ slot: UploadSlot, policy: DownloadPolicy) async throws {
+        let refused = AttachmentError.uploadFailed(String(localized: "your server gave an address to upload to that isn't allowed."))
+        do {
+            try await policy.check(slot.putURL)
+        } catch let error as FetchError {
+            switch error {
+            // The name didn't resolve this time, which may pass.
+            case .timedOut: throw URLError(.timedOut)
+            case .unreachable: throw URLError(.cannotFindHost)
+            default: throw refused
+            }
+        }
+        guard policy.allowsInsecure || slot.getURL.scheme?.lowercased() == "https" else { throw refused }
     }
 
     /// Asks the upload service for a slot (XEP-0363). A file-too-large answer

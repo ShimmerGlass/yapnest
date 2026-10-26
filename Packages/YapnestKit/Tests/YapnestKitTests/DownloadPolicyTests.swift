@@ -61,4 +61,36 @@ struct DownloadPolicyTests {
         #expect(await !refused(policy, "http://localhost:5280/upload/a.jpg"))
         #expect(await !refused(policy, "http://192.168.1.1/a.jpg"))
     }
+
+    private func slot(put: String, get: String = "https://up.example.com/get/a.jpg") -> UploadSlot {
+        UploadSlot(getURL: URL(string: get)!, putURL: URL(string: put)!, putHeaders: ["Authorization": "Basic x"])
+    }
+
+    /// A server could point the PUT, and its headers, at this device's network.
+    @Test(arguments: ["https://192.168.1.1/put", "https://127.0.0.1:5280/put", "https://router.lan/put", "http://up.example.com/put"])
+    func anUploadToALocalOrPlainAddressIsRefusedForGood(put: String) async {
+        let policy = policy(dns: ["up.example.com": [publicAddress]])
+        await #expect(throws: XMPPSession.AttachmentError.self) { try await XMPPSession.check(slot(put: put), policy: policy) }
+    }
+
+    @Test func anUploadToAPublicHostWithAnHttpsGetGoes() async throws {
+        try await XMPPSession.check(slot(put: "https://up.example.com/put"), policy: policy(dns: ["up.example.com": [publicAddress]]))
+    }
+
+    @Test func aGetURLThatIsntHttpsIsRefused() async {
+        let policy = policy(dns: ["up.example.com": [publicAddress]])
+        await #expect(throws: XMPPSession.AttachmentError.self) {
+            try await XMPPSession.check(slot(put: "https://up.example.com/put", get: "http://up.example.com/get/a.jpg"), policy: policy)
+        }
+    }
+
+    @Test func aNameThatDoesntResolveMayPass() async {
+        await #expect {
+            try await XMPPSession.check(slot(put: "https://gone.example.com/put"), policy: policy())
+        } throws: { ServerRetry.isPassing($0) }
+    }
+
+    @Test func anInsecureAccountUploadsToItsLocalServer() async throws {
+        try await XMPPSession.check(slot(put: "http://localhost:5280/put", get: "http://localhost:5280/get"), policy: policy(insecure: true))
+    }
 }
