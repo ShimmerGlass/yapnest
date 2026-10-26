@@ -63,6 +63,9 @@ extension AppDatabase {
         /// Whether we tell contacts when we were last active (XEP-0012) and
         /// show them theirs. Off unless turned on.
         case sharesLastSeen
+        /// Whether our name and photo are readable by everyone, rather than
+        /// only by contacts. Off unless turned on.
+        case sharesProfilePublicly
         /// The highest settings version issued or seen, so the clock never
         /// goes back, even after a relaunch: see `SettingsVersion`.
         case settingsClock

@@ -14,6 +14,8 @@ struct SettingsView: View {
     @State private var linkPreviewSetting = LinkPreviewSetting.askPerConversation
     @State private var sendsChatStates = true
     @State private var sharesLastSeen = false
+    @State private var sharesProfilePublicly = false
+    @State private var isChangingProfileAccess = false
     @State private var gifsEnabled = true
     @State private var encryptsNewChats = true
     @State private var privacyError: String?
@@ -81,7 +83,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Profile")
                 } footer: {
-                    Text("Your contacts see your name and photo.")
+                    Text("Your contacts see your name and photo. Under Privacy you can choose to show them to everyone.")
                 }
 
                 Section {
@@ -109,10 +111,15 @@ struct SettingsView: View {
                     Toggle("Send Read Receipts", isOn: Binding(get: { sendsReadMarkers }, set: setSendsReadMarkers))
                     Toggle("Send Typing Indicator", isOn: Binding(get: { sendsChatStates }, set: setSendsChatStates))
                     Toggle("Activity Status", isOn: Binding(get: { sharesLastSeen }, set: setSharesLastSeen))
+                    HStack {
+                        Toggle("Show My Name and Photo to Everyone", isOn: Binding(get: { sharesProfilePublicly }, set: setSharesProfilePublicly))
+                            .disabled(profileAction.isBusy)
+                        if isChangingProfileAccess { ProgressView() }
+                    }
                 } header: {
                     Text("Privacy")
                 } footer: {
-                    Text("Only the people you've added see these. With Activity Status on, your contacts see how long ago you were online, and see you as away once you leave Yapnest on your iPhone or iPad, or step away from your Mac. You see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
+                    Text("With Show My Name and Photo to Everyone off, only your contacts see your name and photo; people you haven't added, including members of your groups, don't. The other settings here are seen only by the people you've added. With Activity Status on, your contacts see how long ago you were online, and see you as away once you leave Yapnest on your iPhone or iPad, or step away from your Mac. You see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
                 }
                 .disabled(!isLoaded)
 
@@ -260,6 +267,7 @@ struct SettingsView: View {
                         linkPreviewSetting: session.database.linkPreviewSetting,
                         sendsChatStates: session.sendsChatStates,
                         sharesLastSeen: session.sharesLastSeen,
+                        sharesProfilePublicly: session.sharesProfilePublicly,
                         gifsEnabled: session.database.flag(.gifs, default: true),
                         encryptsNewChats: session.database.flag(.encryptsNewChats, default: true),
                     )
@@ -273,6 +281,7 @@ struct SettingsView: View {
                 linkPreviewSetting = saved.linkPreviewSetting
                 sendsChatStates = saved.sendsChatStates
                 sharesLastSeen = saved.sharesLastSeen
+                sharesProfilePublicly = saved.sharesProfilePublicly
                 gifsEnabled = saved.gifsEnabled
                 encryptsNewChats = saved.encryptsNewChats
                 isLoaded = true
@@ -380,6 +389,18 @@ struct SettingsView: View {
 
     private func setSharesLastSeen(_ on: Bool) {
         save({ [session] in try session.setSharesLastSeen(on) }) { sharesLastSeen = on }
+    }
+
+    // The switch moves once the server has taken it, with a spinner and the
+    // profile alert's Retry if it didn't.
+    private func setSharesProfilePublicly(_ on: Bool) {
+        let session = session
+        profileAction.run {
+            isChangingProfileAccess = true
+            defer { isChangingProfileAccess = false }
+            try await session.setSharesProfilePublicly(on)
+            sharesProfilePublicly = on
+        }
     }
 
     private func setGifsEnabled(_ on: Bool) {

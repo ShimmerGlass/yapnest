@@ -2128,6 +2128,7 @@ public final class XMPPSession: @unchecked Sendable {
             if !succeeded { self?.owe(.bookmarks, generation: generation) }
         }
         fetchNickname()
+        Task.detached(priority: .utility) { [weak self] in await self?.reconcileProfileAccess() }
         syncSettings { [weak self] outcome in
             if outcome.isOwed { self?.owe(.settings, generation: generation) }
         }

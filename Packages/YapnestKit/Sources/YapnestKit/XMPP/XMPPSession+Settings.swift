@@ -152,6 +152,9 @@ extension XMPPSession {
         } else if !result.changedGlobalKeys.isDisjoint(with: [.availability, .statusMessage]) {
             sendPresence()
         }
+        if result.changedGlobalKeys.contains(.sharesProfilePublicly) {
+            Task.detached(priority: .utility) { [weak self] in await self?.reconcileProfileAccess() }
+        }
     }
 
     // MARK: Sync

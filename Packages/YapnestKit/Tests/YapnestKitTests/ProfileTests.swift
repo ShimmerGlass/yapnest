@@ -23,15 +23,23 @@ struct ProfileTests {
         #expect(try await values.next() == .init(availability: .dnd, message: "At the beach"))
     }
 
-    @Test func avatarNodesAreOpenToEveryone() throws {
-        let options = ProfileStanza.publishOptions(accessModel: "open")
+    @Test(arguments: ["open", "presence"])
+    func profileNodesAreAskedForWithTheGivenAccessModel(accessModel: String) throws {
+        let options = ProfileStanza.publishOptions(accessModel: accessModel)
         let fields = options.children.reduce(into: [String: String]()) { fields, field in
             fields[field.getAttribute("var") ?? ""] = field.firstChild(name: "value")?.value
         }
         #expect(options.getAttribute("type") == "submit")
         #expect(fields["FORM_TYPE"] == "http://jabber.org/protocol/pubsub#publish-options")
-        #expect(fields["pubsub#access_model"] == "open")
+        #expect(fields["pubsub#access_model"] == accessModel)
         #expect(fields["pubsub#persist_items"] == "true")
+    }
+
+    @Test func profileIsSharedPubliclyOnlyOnceTheUserSaysSo() throws {
+        #expect(!session.sharesProfilePublicly)
+        #expect(session.profileAccessModel == "presence")
+        try session.database.setFlag(.sharesProfilePublicly, true)
+        #expect(session.profileAccessModel == "open")
     }
 
     @Test func avatarPayloads() throws {

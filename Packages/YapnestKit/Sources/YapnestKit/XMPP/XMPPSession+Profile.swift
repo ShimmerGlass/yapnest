@@ -4,8 +4,94 @@ import GRDB
 @preconcurrency import Martin
 
 /// What others see of us: our avatar (XEP-0084), kept in PEP. Contacts read
-/// it from there, so its nodes must be readable by them.
+/// it from there, so its nodes must be readable by them; by everyone, only
+/// while the user shares their profile publicly.
 extension XMPPSession {
+    /// Whether our name and photo are readable by everyone, or only by the
+    /// contacts who see our presence.
+    public var sharesProfilePublicly: Bool { database.flag(.sharesProfilePublicly, default: false) }
+
+    /// The access model our profile nodes should have now.
+    var profileAccessModel: String { sharesProfilePublicly ? "open" : "presence" }
+
+    /// Saves the setting and has the nodes follow it. Offline, or when the
+    /// server's answer is one that can pass, the setting is kept and the nodes
+    /// are put right at the next connect. A server that refuses for good
+    /// throws, and the setting goes back to what it was.
+    public func setSharesProfilePublicly(_ on: Bool) async throws {
+        let before = sharesProfilePublicly
+        try database.setFlag(.sharesProfilePublicly, on)
+        guard isConnected else { return }
+        do {
+            try await applyProfileAccess()
+        } catch {
+            if ServerError.classify(error).isPassing {
+                logger.info("Couldn't change who reads the profile now: \(error.localizedDescription, privacy: .private)")
+                return
+            }
+            try? database.setFlag(.sharesProfilePublicly, before)
+            throw error
+        }
+    }
+
+    private static let profileNodes = [NS.avatarData, NS.avatarMetadata, NS.nick]
+
+    /// Makes every profile node's access model match the setting. The nodes
+    /// are read back rather than trusted to a marker: another device or an
+    /// older version may have left them either way, and a node a server
+    /// refused to change is found again at the next connect. A node that
+    /// doesn't exist yet is created with the right model when published.
+    func applyProfileAccess() async throws {
+        var firstError: Error?
+        var wanted: String
+        repeat {
+            wanted = profileAccessModel
+            for node in Self.profileNodes {
+                do {
+                    let current = try await profileNodeAccessModel(node)
+                    if current != wanted { try await configurePEPNode(node, fields: ["pubsub#access_model": [wanted]]) }
+                } catch let error as PubSubError where error.error == .item_not_found {
+                    continue
+                } catch {
+                    firstError = firstError ?? error
+                }
+            }
+            // The setting changed while this ran, as another change was
+            // applying: go round again, so the last word is the setting's.
+        } while wanted != profileAccessModel
+        if let firstError { throw firstError }
+    }
+
+    private func profileNodeAccessModel(_ node: String) async throws -> String? {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String?, Error>) in
+            client.module(.pubsub).retrieveNodeConfiguration(from: nil, node: node) { (result: Result<PubSubNodeConfig, PubSubError>) in
+                continuation.resume(with: result.map { $0.accessModel?.rawValue })
+            }
+        }
+    }
+
+    /// Runs `applyProfileAccess` on connecting and when another device changes
+    /// the setting. A failure that can pass is left for the next connect; a
+    /// final one is shown, with a Retry, as the user would otherwise believe
+    /// their name and photo are as private as they chose.
+    func reconcileProfileAccess() async {
+        guard policy.syncsAccountState, isConnected else { return }
+        do {
+            try await applyProfileAccess()
+            warnings.clear("profile-access")
+        } catch {
+            if ServerError.classify(error).isPassing {
+                logger.info("Couldn't check who reads the profile: \(error.localizedDescription, privacy: .private)")
+                return
+            }
+            logger.error("Couldn't change who reads the profile: \(error.localizedDescription, privacy: .private)")
+            warnings.post("profile-access", title: String(localized: "Name and photo visibility not updated"), friendly: String(localized: "The server wouldn't change who can see your name and photo"), error: error) { [weak self] in
+                try await self?.applyProfileAccess()
+                self?.warnings.clear("profile-access")
+            }
+        }
+    }
+
     public enum ProfileError: Error, LocalizedError {
         case offline
         case imageTooLarge
@@ -30,9 +116,9 @@ extension XMPPSession {
         // Martin's own publishAvatar sends no publish-options, leaving the
         // node at the server's default, which is readable only by contacts
         // we've approved, and it refuses anything that isn't PNG.
-        try await publishProfilePEP(node: NS.avatarData, itemId: hash, payload: ProfileStanza.avatarData(data), accessModel: "open")
+        try await publishProfilePEP(node: NS.avatarData, itemId: hash, payload: ProfileStanza.avatarData(data), accessModel: profileAccessModel)
         let info = PEPUserAvatarModule.Info(id: hash, size: data.count, mimeType: mimeType, height: height, width: width)
-        try await publishProfilePEP(node: NS.avatarMetadata, itemId: hash, payload: ProfileStanza.avatarMetadata(info), accessModel: "open")
+        try await publishProfilePEP(node: NS.avatarMetadata, itemId: hash, payload: ProfileStanza.avatarMetadata(info), accessModel: profileAccessModel)
         // The files are named by their hash, so only a failed write keeps
         // the picture from showing.
         guard avatars.save(data, hash: hash) else { throw ProfileError.imageTooLarge }
@@ -42,7 +128,7 @@ extension XMPPSession {
     /// Removes our avatar, by publishing empty metadata (XEP-0084 §4.2).
     public func removeAvatar() async throws {
         guard await waitForConnection() else { throw ProfileError.offline }
-        try await publishProfilePEP(node: NS.avatarMetadata, itemId: nil, payload: ProfileStanza.avatarMetadata(nil), accessModel: "open")
+        try await publishProfilePEP(node: NS.avatarMetadata, itemId: nil, payload: ProfileStanza.avatarMetadata(nil), accessModel: profileAccessModel)
         try database.setAvatarHash(nil, for: account)
     }
 
@@ -199,13 +285,13 @@ extension XMPPSession {
         Self.normalizedNickname(try? database.setting(.nickname))
     }
 
-    /// Publishes `name` as ours, readable by anyone, or takes it back when
+    /// Publishes `name` as ours, or takes it back when
     /// it's blank. Our copy is kept once the server has it.
     public func setNickname(_ name: String?) async throws {
         guard await waitForConnection() else { throw ProfileError.offline }
         let name = Self.normalizedNickname(name)
         if let name {
-            try await publishProfilePEP(node: NS.nick, itemId: Self.nicknameItemId, payload: ProfileStanza.nick(name), accessModel: "open")
+            try await publishProfilePEP(node: NS.nick, itemId: Self.nicknameItemId, payload: ProfileStanza.nick(name), accessModel: profileAccessModel)
         } else {
             try await retractNicknames()
         }

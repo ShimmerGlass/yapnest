@@ -55,13 +55,16 @@ extension LiveServer {
             try await session.setNickname("  ")
         }
 
-        @Test func reconfiguresANodeThatIsNotOpen() async throws {
+        /// The node as it stands before the setting matches, such as one an
+        /// earlier version or another client left; publishing puts it right.
+        @Test(arguments: [(sharesPublicly: false, left: "open", expected: "presence"), (sharesPublicly: true, left: "presence", expected: "open")])
+        func reconfiguresANodeThatDoesNotMatchTheSetting(sharesPublicly: Bool, left: String, expected: String) async throws {
             let session = try await connectedSession()
             defer { session.disconnect() }
             await deleteNode(session)
+            try session.database.setFlag(.sharesProfilePublicly, sharesPublicly)
 
-            // As another client would have left it.
-            try await session.publishPEP(node: NS.nick, itemId: "current", payload: ProfileStanza.nick("Old"), accessModel: "presence")
+            try await session.publishPEP(node: NS.nick, itemId: "current", payload: ProfileStanza.nick("Old"), accessModel: left)
 
             try await session.setNickname("Carol")
             #expect(try await publishedNames(session) == ["Carol"])
@@ -70,7 +73,7 @@ extension LiveServer {
                     continuation.resume(with: result.map { $0.accessModel?.rawValue })
                 }
             }
-            #expect(accessModel == "open")
+            #expect(accessModel == expected)
             await deleteNode(session)
         }
     }
