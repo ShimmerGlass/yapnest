@@ -240,6 +240,47 @@ struct AttachmentTests {
         }
     }
 
+    @Test func anAnimatedPNGIsImportedAndKeepsItsFrameTiming() async throws {
+        let data = animatedPNGData(withCameraDetails: false)
+        #expect(apngDelays(CGImageSourceCreateWithData(data as CFData, nil)!) == [0.5, 0.5])
+        try await withImportedFile(data, name: "bounce.png") { stored in
+            let kept = try Data(contentsOf: stored)
+            #expect(kept == data)
+        }
+    }
+
+    @Test func anAnimatedPNGLosesItsCameraDetailsButKeepsItsFrameTiming() async throws {
+        let data = animatedPNGData(withCameraDetails: true)
+        try await withImportedFile(data, name: "bounce.png") { stored in
+            let source = CGImageSourceCreateWithURL(stored as CFURL, nil)!
+            #expect(CGImageSourceGetCount(source) == 2)
+            #expect(cameraDetails(source) == [[], []])
+            #expect(apngDelays(source) == [0.5, 0.5])
+        }
+    }
+
+    private func animatedPNGData(withCameraDetails: Bool) -> Data {
+        var frame: [CFString: Any] = [kCGImagePropertyPNGDictionary: [kCGImagePropertyAPNGDelayTime: 0.5]]
+        if withCameraDetails {
+            frame[kCGImagePropertyTIFFDictionary] = [kCGImagePropertyTIFFMake: "Canon", kCGImagePropertyTIFFArtist: "Jane Doe"]
+            frame[kCGImagePropertyExifDictionary] = [kCGImagePropertyExifBodySerialNumber: "0123456789"]
+        }
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 2, nil)!
+        CGImageDestinationSetProperties(destination, [kCGImagePropertyPNGDictionary: [kCGImagePropertyAPNGLoopCount: 0]] as CFDictionary)
+        for _ in 0..<2 { CGImageDestinationAddImage(destination, makeImage(width: 40, height: 30), frame as CFDictionary) }
+        #expect(CGImageDestinationFinalize(destination))
+        return data as Data
+    }
+
+    private func apngDelays(_ source: CGImageSource) -> [Double] {
+        (0..<CGImageSourceGetCount(source)).map { index in
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+            let png = properties?[kCGImagePropertyPNGDictionary] as? [CFString: Any]
+            return png?[kCGImagePropertyAPNGUnclampedDelayTime] as? Double ?? -1
+        }
+    }
+
     /// Imports `data` and hands the stored copy to `inspect`.
     @discardableResult
     private func withImportedFile(_ data: Data, name: String, asPhoto: Bool = false, inspect: (URL) throws -> Void) async throws -> AttachmentStore.Imported {

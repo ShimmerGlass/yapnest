@@ -178,6 +178,18 @@ public final class AttachmentStore: Sendable {
             ]
             for key in removableDictionaries { options[key] = kCFNull }
             if let orientation = frames[index]?[kCGImagePropertyOrientation] { options[kCGImagePropertyOrientation] = orientation }
+            // An animated PNG's frame timing sits in the PNG dictionary that is
+            // dropped whole, and the frame would fall back to a default delay.
+            // Passing the dictionary on instead makes ImageIO keep the source's
+            // text and XMP too, so the frame is written from its pixels alone.
+            if let png = frames[index]?[kCGImagePropertyPNGDictionary] as? [CFString: Any],
+               case let timing = png.filter({ animationKeys.contains($0.key) }), !timing.isEmpty,
+               let image = CGImageSourceCreateImageAtIndex(source, index, nil) {
+                var properties: [CFString: Any] = [kCGImagePropertyPNGDictionary: timing]
+                if let orientation = options[kCGImagePropertyOrientation] { properties[kCGImagePropertyOrientation] = orientation }
+                CGImageDestinationAddImage(output, image, properties as CFDictionary)
+                continue
+            }
             CGImageDestinationAddImageFromSource(output, source, index, options as CFDictionary)
         }
         guard CGImageDestinationFinalize(output) else { throw MetadataError() }
@@ -201,6 +213,13 @@ public final class AttachmentStore: Sendable {
         kCGImagePropertyRawDictionary,
     ]
 
+    /// What an animated PNG's frames carry about their timing, which is no more
+    /// identifying than a GIF's.
+    nonisolated(unsafe) private static let animationKeys: Set<CFString> = [
+        kCGImagePropertyAPNGDelayTime, kCGImagePropertyAPNGUnclampedDelayTime, kCGImagePropertyAPNGLoopCount,
+        kCGImagePropertyAPNGCanvasPixelWidth, kCGImagePropertyAPNGCanvasPixelHeight, kCGImagePropertyAPNGFrameInfoArray,
+    ]
+
     /// Which entries of the dictionaries that hold both kinds are only about
     /// how the picture is stored.
     nonisolated(unsafe) private static let structuralKeys: [CFString: Set<CFString>] = [
@@ -210,10 +229,10 @@ public final class AttachmentStore: Sendable {
             kCGImagePropertyTIFFTileWidth, kCGImagePropertyTIFFTileLength,
         ],
         kCGImagePropertyExifDictionary: [kCGImagePropertyExifPixelXDimension, kCGImagePropertyExifPixelYDimension, kCGImagePropertyExifColorSpace],
-        kCGImagePropertyPNGDictionary: [
+        kCGImagePropertyPNGDictionary: Set([
             kCGImagePropertyPNGInterlaceType, kCGImagePropertyPNGGamma, kCGImagePropertyPNGsRGBIntent,
             kCGImagePropertyPNGXPixelsPerMeter, kCGImagePropertyPNGYPixelsPerMeter, kCGImagePropertyPNGChromaticities,
-        ],
+        ]).union(animationKeys),
     ]
 
     private static func frameProperties(_ source: CGImageSource, at index: Int) -> [CFString: Any]? {
