@@ -104,6 +104,12 @@ final class IceServerCache: Sendable {
         return await task!.value
     }
 
+    /// Whether the last discovery got an answer, empty or not. When it didn't,
+    /// the lack of servers says nothing about what the server offers.
+    func hasAnswer(now: Date = Date()) -> Bool {
+        guarded.withLockUnchecked { $0.servers != nil && now < $0.validUntil }
+    }
+
     /// Forgets everything, as a new connection has new credentials.
     func reset() {
         guarded.withLockUnchecked { state in

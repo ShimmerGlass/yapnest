@@ -364,7 +364,8 @@ struct CallMachineIncomingTests {
         var machine = ringing()
         let effects = machine.handle(.relayChecked(false))
         #expect(machine.phase == .ended(.failed))
-        #expect(effects.contains(.send(.reject(to: aliceDevice, reason: .decline))))
+        // The caller isn't told it was declined, as nobody chose to.
+        #expect(effects.contains(.send(.reject(to: aliceDevice, reason: .generalError))))
         #expect(!effects.contains(.send(.proceed(to: aliceDevice))))
         #expect(!effects.contains(.prepareMedia))
     }

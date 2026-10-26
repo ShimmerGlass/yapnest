@@ -343,8 +343,9 @@ struct CallMachine: Sendable, Equatable {
             isProposeHeld = false
             return found ? propose() : end(.failed)
         case (.incoming, .incoming) where !found:
-            // Answering would tell the caller we're coming, and then fail.
-            let reject = peerDevice.map { Effect.send(.reject(to: $0, reason: .decline)) }
+            // Answering would tell the caller we're coming, and then fail. The
+            // caller isn't told it was turned down, as it wasn't.
+            let reject = peerDevice.map { Effect.send(.reject(to: $0, reason: .generalError)) }
             return (reject.map { [$0] } ?? []) + end(.failed)
         default:
             return []

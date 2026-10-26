@@ -328,11 +328,21 @@ extension XMPPSession {
         }
     }
 
+    /// Warns that the call is refused for lack of a relay. A lookup that
+    /// couldn't be done says nothing about the server, so it isn't reported as
+    /// the server having none.
     private func warnNoRelay() {
-        warnings.post(
-            "call-relay", title: String(localized: "Call couldn't connect"),
-            detail: String(localized: "Always Relay Calls is on, but your server offers no relay to call through. Turn it off in Settings to call directly, or ask your server's administrator to set up a TURN relay."),
-        )
+        if iceServerCache.hasAnswer() {
+            warnings.post(
+                "call-relay", title: String(localized: "Call couldn't connect"),
+                detail: String(localized: "Always Relay Calls is on, but your server offers no relay to call through. Turn it off in Settings to call directly, or ask your server's administrator to set up a TURN relay."),
+            )
+        } else {
+            warnings.post(
+                "call-relay", title: String(localized: "Call couldn't connect"),
+                detail: String(localized: "Always Relay Calls is on, but your server's relay couldn't be reached to check it. Try the call again, or turn it off in Settings to call directly."),
+            )
+        }
     }
 
     /// Whether the server offers a relay to call through, which the servers

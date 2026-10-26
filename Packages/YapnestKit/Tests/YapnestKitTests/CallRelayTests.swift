@@ -8,12 +8,13 @@ import Testing
 struct CallRelayTests {
     private let alice = YapnestKit.JID("alice@example.org")!
 
-    private func serve(_ h: CallSessionHarness, services: [[String: String]]) {
+    private func serve(_ h: CallSessionHarness, services: [[String: String]], failing: Bool = false) {
         h.wire.answer { iq in
             if iq.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#info") != nil {
                 return FakeWire.discoInfo(to: iq, category: "server", type: "im", features: ["urn:xmpp:extdisco:2"])
             }
             if iq.firstChild(name: "services", xmlns: "urn:xmpp:extdisco:2") != nil {
+                if failing { return FakeWire.error(to: iq, condition: "service-unavailable") }
                 let list = Element(name: "services", xmlns: "urn:xmpp:extdisco:2")
                 for attributes in services { list.addChild(Element(name: "service", attributes: attributes)) }
                 return FakeWire.result(to: iq, list)
@@ -58,6 +59,27 @@ struct CallRelayTests {
         #expect(h.session.warnings.current.contains { $0.key == "call-relay" })
         // The peer's phone never rang.
         #expect(h.sentSignals.isEmpty)
+    }
+
+    @Test func aRelayThatCouldntBeAskedIsNotReportedAsMissing() async throws {
+        let h = try CallSessionHarness()
+        serve(h, services: [], failing: true)
+        try h.database.setFlag(.relaysCalls, true)
+        try h.session.startCall(to: alice)
+        await eventually("the call to fail") { h.phase == .ended(.failed) }
+        #expect(h.factory.made.isEmpty)
+        let warning = try #require(h.session.warnings.current.first { $0.key == "call-relay" })
+        #expect(warning.detail.contains("couldn't be reached"))
+    }
+
+    @Test func aServerWithNoRelayIsReportedAsHavingNone() async throws {
+        let h = try CallSessionHarness()
+        serve(h, services: [])
+        try h.database.setFlag(.relaysCalls, true)
+        try h.session.startCall(to: alice)
+        await eventually("the call to fail") { h.phase == .ended(.failed) }
+        let warning = try #require(h.session.warnings.current.first { $0.key == "call-relay" })
+        #expect(warning.detail.contains("offers no relay"))
     }
 
     @Test func aCalleeWithNoRelayFailsToo() async throws {
