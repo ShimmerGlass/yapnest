@@ -60,7 +60,7 @@ extension XMPPSession {
         let offered = Set(form?.filterChildren(name: "field", xmlns: nil).compactMap { $0.getAttribute("var") } ?? [])
         var fields = ["muc#roomconfig_enablearchiving": ["0"], "mam": ["0"]].filter { offered.contains($0.key) }
         // Openfire's archive is its room logging; elsewhere that is a log file.
-        let usedLogging = fields.isEmpty && offered.contains("muc#roomconfig_enablelogging")
+        let usedLogging = fields.isEmpty && offered.contains("muc#roomconfig_enablelogging") && Self.isOpenfireForm(offered: offered)
         if usedLogging { fields = ["muc#roomconfig_enablelogging": ["0"]] }
         try #require(!fields.isEmpty, "the server offers no archive option")
         let set = Iq()

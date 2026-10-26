@@ -21,7 +21,13 @@ struct PrivateRoomFieldsTests {
     }
 
     @Test func openfiresLoggingIsItsArchive() {
-        let fields = XMPPSession.privateRoomFields(name: "Club", offered: common.union([logging]))
+        let openfire = common.union([logging, "x-muc#roomconfig_canchangenick", "x-muc#roomconfig_registration", "x-muc#roomconfig_reservednick"])
+        let fields = XMPPSession.privateRoomFields(name: "Club", offered: openfire)
         #expect(fields[logging] == ["1"])
+    }
+
+    @Test func ejabberdsRoomLogIsLeftOffWithoutAnArchive() {
+        let fields = XMPPSession.privateRoomFields(name: "Club", offered: common.union([logging]))
+        #expect(fields[logging] == nil)
     }
 }

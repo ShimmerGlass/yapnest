@@ -2086,6 +2086,12 @@ extension XMPPSession {
         try await submitOwnerForm(fields, to: room)
     }
 
+    /// Whether an owner form with these fields is Openfire's, which alone
+    /// offers its own `x-muc#roomconfig_` ones.
+    static func isOpenfireForm(offered: Set<String>) -> Bool {
+        !offered.isDisjoint(with: ["x-muc#roomconfig_canchangenick", "x-muc#roomconfig_registration", "x-muc#roomconfig_reservednick"])
+    }
+
     /// The owner form fields to submit for a private room, out of those the form offers.
     static func privateRoomFields(name: String, offered: Set<String>) -> [String: [String]] {
         let archiveFields = ["muc#roomconfig_enablearchiving", "mam"]
@@ -2104,8 +2110,8 @@ extension XMPPSession {
         ]
         // Openfire's archive only keeps what a room logs, but elsewhere (ejabberd's mod_muc_log)
         // this writes the conversation to a file a server may publish over HTTP, so it is
-        // only for a server that offers no other archive option.
-        if !archiveFields.contains(where: offered.contains) {
+        // only for Openfire. Its form says so: it is the one that offers these fields.
+        if Self.isOpenfireForm(offered: offered) {
             wanted["muc#roomconfig_enablelogging"] = ["1"]
         }
         return wanted.filter { offered.contains($0.key) }
