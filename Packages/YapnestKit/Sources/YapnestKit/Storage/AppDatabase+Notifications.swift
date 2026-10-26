@@ -25,6 +25,10 @@ public struct MessageNotification: Sendable, Equatable {
     /// filtering entitlement, so the extension shows this one silently and
     /// takes it down again.
     public var isQuiet: Bool = false
+    /// Set on a message that is quiet only because of the group's notification
+    /// interval, not because the group is muted: how many messages of the
+    /// group are unread, for updating the loud notification still on screen.
+    public var heldCount: Int?
     /// The conversation's stored sound choice, as `NotificationSound` reads it.
     public var sound: String?
 }
@@ -119,6 +123,7 @@ extension AppDatabase {
         let action = message.meAction?.trimmingBlankEdgeLines
         if conversation.kind == .groupchat {
             var isQuiet = false
+            var heldCount: Int?
             let group = try GroupChat.filter(Column("conversationId") == conversation.id).fetchOne(db)
             switch group?.notify ?? .always {
             case .always:
@@ -132,6 +137,14 @@ extension AppDatabase {
                     let elapsed = conversation.lastLoudNotificationAt.map { now.timeIntervalSince($0) }
                     if let elapsed, elapsed > -1, elapsed < TimeInterval(minutes) * 60 {
                         isQuiet = try !isMention(db, message, nickname: group.nickname)
+                        if isQuiet {
+                            // Everything unread counts, as in the badge: a
+                            // group that notifies for every message has no
+                            // unread one that doesn't.
+                            heldCount = try Message
+                                .filter(Column("conversationId") == message.conversationId && Column("isRead") == false)
+                                .fetchCount(db)
+                        }
                     }
                     if !isQuiet {
                         try Conversation.filter(key: message.conversationId).updateAll(db, Column("lastLoudNotificationAt").set(to: now))
@@ -152,7 +165,7 @@ extension AppDatabase {
                 subtitle: author, body: body, timestamp: message.timestamp,
                 isGroup: true, peerAvatarHash: room?.avatarHash,
                 senderJID: contact?.jid, senderAvatarHash: contact?.avatarHash,
-                isQuiet: isQuiet,
+                isQuiet: isQuiet, heldCount: heldCount,
             )
         }
         let contact = try Contact.fetchOne(db, key: conversation.peer)

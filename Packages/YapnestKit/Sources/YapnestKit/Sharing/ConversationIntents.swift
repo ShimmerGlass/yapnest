@@ -40,6 +40,14 @@ public enum ConversationIntents {
                 senderName: notification.title, senderImage: peerImage, groupImage: nil,
             )
         }
+        if notification.heldCount != nil {
+            // A summary speaks for the group, not for its latest author.
+            guard let peerImage else { return nil }
+            return IncomingPlan(
+                peer: peer, groupName: notification.title, senderHandle: peer.description,
+                senderName: notification.title, senderImage: peerImage, groupImage: peerImage,
+            )
+        }
         // The group's picture is the one shown large; without it, the
         // sender's stands in, so the group isn't drawn with initials.
         guard let groupImage = peerImage ?? senderImage else { return nil }
@@ -144,6 +152,55 @@ extension MessageNotification {
             silent.interruptionLevel = .passive
             try? await center.add(UNNotificationRequest(identifier: identifier, content: silent, trigger: nil))
         }
+    }
+
+    /// Updates the loud notification of each group that has messages held back
+    /// by its notification interval, without a sound or a banner, to say how
+    /// many came in. A group whose loud notification was dismissed is left
+    /// alone: its messages stay silent.
+    ///
+    /// The notification then names the latest message, so a later correction
+    /// of that message replaces the summary with its own text.
+    public static func replaceHeld(_ held: [MessageNotification], badge: Int?, avatars: AvatarStore) async {
+        let latest = Dictionary(held.filter { $0.heldCount != nil }.map { ($0.peer, $0) }, uniquingKeysWith: { _, new in new })
+        guard !latest.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications().map {
+            (identifier: $0.request.identifier, thread: $0.request.content.threadIdentifier, isQuiet: $0.isQuiet, date: $0.date)
+        }
+        for (peer, notification) in latest {
+            guard let identifier = deliveredIdentifier(forHeldIn: peer, among: delivered) else { continue }
+            let summary = notification.summary
+            let content = await summary.content(badge: badge, avatars: avatars)
+            let silent = (content.mutableCopy() as? UNMutableNotificationContent) ?? summary.content(badge: badge)
+            silent.sound = nil
+            silent.interruptionLevel = .passive
+            try? await center.add(UNNotificationRequest(identifier: identifier, content: silent, trigger: nil))
+        }
+    }
+
+    /// The loud notification of the group still delivered that a summary
+    /// replaces: the most recent one that isn't a silent one.
+    static func deliveredIdentifier(
+        forHeldIn peer: JID, among delivered: [(identifier: String, thread: String, isQuiet: Bool, date: Date)],
+    ) -> String? {
+        delivered
+            .filter { $0.thread == peer.description && !$0.isQuiet }
+            .max { $0.date < $1.date }?.identifier
+    }
+
+    /// This message's notification as a summary of the group's held messages.
+    var summary: MessageNotification {
+        var copy = self
+        let count = heldCount ?? 1
+        let latest = subtitle.map { "\($0): \(body)" } ?? body
+        let first = count == 1 ? String(localized: "1 new message") : String(localized: "\(count) new messages")
+        copy.body = "\(first)\n\(latest)"
+        copy.subtitle = nil
+        copy.senderJID = nil
+        copy.senderAvatarHash = nil
+        copy.isQuiet = false
+        return copy
     }
 
     /// For each corrected message that has a delivered notification, the

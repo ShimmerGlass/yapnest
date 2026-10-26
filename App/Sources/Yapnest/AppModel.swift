@@ -720,6 +720,7 @@ final class AppModel {
                 let (notifications, edited) = claimed
                 guard !isActive, self.session === session else { continue }
                 await MessageNotification.replaceDelivered(edited, badge: badge, avatars: session.avatars)
+                await MessageNotification.replaceHeld(notifications, badge: badge, avatars: session.avatars)
                 for notification in notifications where !notification.isQuiet {
                     try? await UNUserNotificationCenter.current().add(await notification.request(badge: badge, avatars: session.avatars))
                 }

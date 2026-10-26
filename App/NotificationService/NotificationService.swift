@@ -49,6 +49,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         switch await fetcher.fetch() {
         case .notifications(let notifications, let edited, let badge):
             await MessageNotification.replaceDelivered(edited, badge: badge, avatars: avatars)
+            await MessageNotification.replaceHeld(notifications, badge: badge, avatars: avatars)
             let loud = notifications.filter { !$0.isQuiet }
             guard let first = loud.first else {
                 // Muted groups, or something without a message (a reaction, a

@@ -192,4 +192,76 @@ struct NotificationIntervalTests {
         try db.writer.write { try key.apply($0, room, "30") }
         #expect(try db.notificationInterval(peer: room) == 30)
     }
+
+    @Test func aThrottledMessageCarriesTheCountOfUnreadMessages() throws {
+        let chat = try group(room)
+        _ = try db.claimNotifications()
+        let start = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded())
+        try incoming("one", in: chat)
+        #expect(try db.claimNotifications(now: start).map(\.heldCount) == [nil])
+        try incoming("two", in: chat)
+        #expect(try db.claimNotifications(now: start.addingTimeInterval(60)).map(\.heldCount) == [2])
+        try incoming("three", in: chat)
+        #expect(try db.claimNotifications(now: start.addingTimeInterval(120)).map(\.heldCount) == [3])
+    }
+
+    @Test func mutedGroupsAndMentionsAreNotHeld() throws {
+        let mentions = try group(room, notify: .onMention)
+        let never = try group(other, notify: .never)
+        let always = try group(JID("soup@conference.example.org")!)
+        _ = try db.claimNotifications()
+        try incoming("one", in: mentions)
+        try incoming("two", in: never)
+        try incoming("three", in: always)
+        try incoming("hi", in: always, mentionsMe: true)
+        let claimed = try db.claimNotifications()
+        #expect(quiet(claimed) == [true, true, false, false])
+        #expect(claimed.map(\.heldCount) == [nil, nil, nil, nil])
+    }
+
+    @Test func theSummarySaysHowManyMessagesCameInAndWhoWroteTheLast() throws {
+        let chat = try group(room)
+        _ = try db.claimNotifications()
+        try incoming("one", in: chat)
+        try incoming("two", in: chat)
+        let held = try #require(try db.claimNotifications().last)
+        let summary = held.summary
+        #expect(summary.body == "2 new messages\nally: two")
+        #expect(summary.title == room.shortName)
+        #expect(summary.subtitle == nil)
+        #expect(!summary.isQuiet)
+        let content = summary.content(badge: nil)
+        #expect(content.userInfo[MessageNotification.quietKey] == nil)
+        #expect(content.userInfo[MessageNotification.messageIdKey] as? Int64 == held.messageId)
+        #expect(content.threadIdentifier == room.description)
+    }
+
+    @Test func theSummaryIsDrawnAsTheGroup() throws {
+        let chat = try group(room)
+        _ = try db.claimNotifications()
+        try incoming("one", in: chat)
+        try incoming("two", in: chat)
+        var held = try #require(try db.claimNotifications().last).summary
+        held.senderJID = alice
+        let image = Data([1])
+        let plan = try #require(ConversationIntents.incomingPlan(for: held, peerImage: image, senderImage: Data([2])))
+        #expect(plan.senderHandle == room.description)
+        #expect(plan.senderName == held.title)
+        #expect(plan.senderImage == image)
+        #expect(ConversationIntents.incomingPlan(for: held, peerImage: nil, senderImage: Data([2])) == nil)
+    }
+
+    @Test func theNewestLoudDeliveredNotificationOfTheGroupIsReplaced() {
+        let now = Date()
+        let delivered: [(identifier: String, thread: String, isQuiet: Bool, date: Date)] = [
+            ("old", room.description, false, now.addingTimeInterval(-600)),
+            ("newer", room.description, false, now.addingTimeInterval(-300)),
+            ("silent", room.description, true, now),
+            ("elsewhere", other.description, false, now),
+        ]
+        #expect(MessageNotification.deliveredIdentifier(forHeldIn: room, among: delivered) == "newer")
+        #expect(MessageNotification.deliveredIdentifier(forHeldIn: other, among: delivered) == "elsewhere")
+        #expect(MessageNotification.deliveredIdentifier(forHeldIn: alice, among: delivered) == nil)
+        #expect(MessageNotification.deliveredIdentifier(forHeldIn: room, among: Array(delivered[2...])) == nil)
+    }
 }
