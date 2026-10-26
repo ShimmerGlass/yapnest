@@ -124,8 +124,9 @@ extension XMPPSession {
     }
 
     /// Befriends someone the user starts a chat with. A request of theirs is
-    /// accepted, which also takes it off the chat list; anyone else not yet
-    /// on the roster is added. Offline it does nothing: the chat opens all the
+    /// accepted, which also takes it off the chat list; anyone else the user
+    /// hasn't added or approved is added, even if the server put them on the
+    /// roster. Offline it does nothing: the chat opens all the
     /// same, and its banner offers the same step once there's a connection.
     /// Nobody waits on it, so a failure is a warning with a Retry.
     public func befriendForNewChat(_ jid: JID) async {
@@ -146,7 +147,7 @@ extension XMPPSession {
     private func befriend(_ jid: JID) async throws {
         if (try? database.contact(jid))??.hasContactRequest == true {
             try await acceptContactRequest(from: jid)
-        } else if (try? database.isInRoster(jid)) != true {
+        } else if (try? database.hasConsented(jid)) != true {
             try await addContactAndWait(jid)
         }
     }

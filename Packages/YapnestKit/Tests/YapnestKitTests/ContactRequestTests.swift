@@ -137,6 +137,29 @@ struct ContactRequestTests {
         #expect(try db.contact(alice) == nil)
     }
 
+    @Test func befriendingAStrangerTheServerPutOnTheRosterAddsThem() async throws {
+        let session = try makeSession(JID("me@example.org")!, database: db)
+        let wire = FakeWire()
+        session.connectForTesting(wire)
+        wire.answer { FakeWire.result(to: $0) }
+        try db.updateRosterItem(jid: stranger, name: nil, subscription: .to, isPending: false)
+        #expect(try !db.hasConsented(stranger))
+        await session.befriendForNewChat(stranger)
+        #expect(try db.contact(stranger)?.isAddedByUser == true)
+        #expect(wire.written.contains { ($0 as? Presence)?.type == .subscribe })
+    }
+
+    @Test func befriendingSomeoneTheUserAddedDoesNothingMore() async throws {
+        let session = try makeSession(JID("me@example.org")!, database: db)
+        let wire = FakeWire()
+        session.connectForTesting(wire)
+        wire.answer { FakeWire.result(to: $0) }
+        try db.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        try db.markAddedByUser(alice)
+        await session.befriendForNewChat(alice)
+        #expect(!wire.written.contains { ($0 as? Presence)?.type == .subscribe })
+    }
+
     @Test func pruningKeepsOnlyRequestsTheServerRepeated() throws {
         let session = try makeSession(JID("me@example.org")!, database: db)
         try db.recordContactRequest(from: stranger, nickname: nil)
