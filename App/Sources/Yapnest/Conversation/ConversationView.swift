@@ -325,16 +325,16 @@ struct ConversationView: View {
     @ViewBuilder
     private var bottomBar: some View {
         if hasLeftGroup {
-            ActionBar(message: "You're no longer in this group.", button: "Join Again", errorTitle: "Couldn't join") {
+            ActionBar(message: Text("You're no longer in this group."), button: "Join Again", errorTitle: "Couldn't join") {
                 try await session.joinGroup(peer)
             }
         } else if hasBlockedContact {
-            ActionBar(message: "You blocked this contact.", button: "Unblock", errorTitle: "Couldn't unblock") {
+            ActionBar(message: Text("You blocked this contact."), button: "Unblock", errorTitle: "Couldn't unblock") {
                 try await session.unblock(peer)
             }
         } else if group != nil, case .failed(let reason)? = model.rooms[peer]?.phase {
             // Not left, but out for now; some failures retry by themselves.
-            ActionBar(message: LocalizedStringKey(reason), button: "Join Again", errorTitle: "Couldn't join") {
+            ActionBar(message: Text(verbatim: reason), button: "Join Again", errorTitle: "Couldn't join") {
                 try await session.joinGroup(peer)
             }
         } else {
@@ -527,7 +527,9 @@ private final class ScreenHolder {
 
 /// Stands in for the composer with a message and the one action that lifts it.
 private struct ActionBar: View {
-    let message: LocalizedStringKey
+    /// A `Text`, so a server's words can be drawn verbatim: as a string key,
+    /// its Markdown would make a link anyone running the room could plant.
+    let message: Text
     let button: LocalizedStringKey
     let errorTitle: LocalizedStringKey
     let action: @MainActor () async throws -> Void
@@ -536,7 +538,7 @@ private struct ActionBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(message)
+            message
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             Button {
