@@ -11,6 +11,7 @@ private final class ProfileServer: @unchecked Sendable {
     private var sets: [(node: String, model: String)] = []
     private var reads = 0
     private var failure: (condition: String, type: String)?
+    private var failingNodes: [String: (condition: String, type: String)] = [:]
     private var publishOptions: [String: [String]] = [:]
 
     init(_ models: [String: String]) { self.models = models }
@@ -21,6 +22,8 @@ private final class ProfileServer: @unchecked Sendable {
     var lastPublishOptions: [String: [String]] { lock.withLock { publishOptions } }
     /// Fails every configuration request this way.
     func fail(_ condition: String, type: String) { lock.withLock { failure = (condition, type) } }
+    /// Fails the configuration requests that change `node`, but not reads of it.
+    func failChanges(to node: String, _ condition: String, type: String) { lock.withLock { failingNodes[node] = (condition, type) } }
     func recover() { lock.withLock { failure = nil } }
 
     func attach(to wire: FakeWire) {
@@ -44,6 +47,7 @@ private final class ProfileServer: @unchecked Sendable {
                     let form = XMPPSession.dataForm(type: "form", formType: "http://jabber.org/protocol/pubsub#node_config", fields: ["pubsub#access_model": [model]])
                     return FakeWire.result(to: iq, Element(name: "pubsub", xmlns: pubsub.xmlns, children: [Element(name: "configure", children: [form])]))
                 }
+                if let failure = failingNodes[node] { return FakeWire.error(to: iq, condition: failure.condition, type: failure.type) }
                 let form = configure.firstChild(name: "x").flatMap(XDataForm.init)
                 let new = form?.fields.first { $0.name == "pubsub#access_model" }?.values.first ?? ""
                 sets.append((node, new))
@@ -156,6 +160,15 @@ struct ProfileAccessTests {
         let session = try connect(server)
         await #expect(throws: (any Error).self) { try await session.setSharesProfilePublicly(true) }
         #expect(!session.sharesProfilePublicly)
+    }
+
+    @Test func aRefusalOnOneNodeClosesTheOnesAlreadyOpened() async throws {
+        let server = ProfileServer([NS.avatarData: "presence", NS.avatarMetadata: "presence", NS.nick: "presence"])
+        server.failChanges(to: NS.nick, "forbidden", type: "auth")
+        let session = try connect(server)
+        await #expect(throws: (any Error).self) { try await session.setSharesProfilePublicly(true) }
+        #expect(!session.sharesProfilePublicly)
+        #expect(server.access.values.allSatisfy { $0 == "presence" })
     }
 
     @Test func aFailureThatCanPassKeepsTheSettingForTheNextConnect() async throws {

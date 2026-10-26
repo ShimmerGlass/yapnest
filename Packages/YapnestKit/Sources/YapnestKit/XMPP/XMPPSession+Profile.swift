@@ -27,6 +27,11 @@ extension XMPPSession {
         } catch {
             if passesByItself(error, "Couldn't change who reads the profile now") { return }
             try? database.setFlag(.sharesProfilePublicly, before)
+            // The nodes that did change would otherwise stay as the refused
+            // setting left them. This can fail as well, and the user is told
+            // of the first error, which is the one they can act on; what's
+            // left is put right at the next connect.
+            try? await applyProfileAccess()
             throw error
         }
     }
