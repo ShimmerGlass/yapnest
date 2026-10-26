@@ -33,6 +33,25 @@ enum Platform {
         if #available(iOS 26, *) { isMac } else { false }
     }
 
+    /// Whether any of the app's windows can be seen. On the Mac the app can
+    /// stay active with its window out of sight: the screen locked or asleep,
+    /// the window on another Space or covered whole. UIKit says nothing of
+    /// that, so this asks AppKit's occlusion state. iOS has its own window
+    /// in front whenever the app is active.
+    static var isWindowVisible: Bool {
+        #if targetEnvironment(macCatalyst)
+        guard let app = (NSClassFromString("NSApplication") as? NSObject.Type)?.value(forKey: "sharedApplication") as? NSObject,
+              let state = app.value(forKey: "occlusionState") as? UInt else { return true }
+        // NSApplication.OcclusionState.visible
+        return state & (1 << 1) != 0
+        #else
+        true
+        #endif
+    }
+
+    /// Posted when `isWindowVisible` may have changed. iOS never posts it.
+    static let windowVisibilityDidChange = Notification.Name("NSApplicationDidChangeOcclusionStateNotification")
+
     /// The page of the system's settings where `pane` ("Privacy_Microphone")
     /// is switched on or off. The Mac has panes of its own; elsewhere it is
     /// the app's page.

@@ -254,6 +254,10 @@ struct ConversationView: View {
         // On the Mac the window can lose focus while the app stays active.
         .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { _ in conversation.sceneActivated() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in conversation.appWillResignActive() }
+        // Or stay active with its window out of sight, as when the screen locks.
+        .onReceive(NotificationCenter.default.publisher(for: Platform.windowVisibilityDidChange)) { _ in
+            conversation.windowVisibilityChanged(Platform.isWindowVisible)
+        }
     }
 
     /// The list, reaching down under the composer so the messages show

@@ -36,6 +36,17 @@ struct ConversationReadTests {
         #expect(await stays { (try? unread(f)) == 5 })
     }
 
+    @Test func nothingIsReadWhileTheWindowIsOutOfSightAndTheRestOnceItShows() async throws {
+        let (f, messages) = try await openedWithUnread()
+        // The Mac with its screen locked: the app is still active.
+        f.model.windowVisibilityChanged(false)
+        f.model.visibleChanged(messages.map { $0.id! })
+        #expect(await stays { (try? unread(f)) == 5 })
+
+        f.model.windowVisibilityChanged(true)
+        await eventually("nothing was read once the window showed") { (try? unread(f)) == 0 }
+    }
+
     @Test func nothingIsReadWhileTheListIsStillBeingTakenToTheFirstUnread() async throws {
         let f = try ConversationFixture()
         try f.addMany(4)

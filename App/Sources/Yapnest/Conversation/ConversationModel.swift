@@ -346,6 +346,9 @@ final class ConversationModel {
     /// for the same reason.
     @ObservationIgnored private var lateReadRequested: Set<Int64> = []
     @ObservationIgnored private var isOnScreen = false
+    /// Whether the window can be seen, which on the Mac the app being active
+    /// doesn't promise (`Platform.isWindowVisible`).
+    @ObservationIgnored private var isWindowVisible = Platform.isWindowVisible
 
     // Chat states.
     /// What we last told the contact, so keystrokes don't ask the session
@@ -2716,12 +2719,13 @@ final class ConversationModel {
     }
 
     /// Reads what the user can see: up to the newest incoming message that's
-    /// mostly on screen, while this chat is in front and its window has focus.
+    /// mostly on screen, while this chat is in front and its window has focus
+    /// and can be seen.
     /// Messages below stay unread until they're scrolled to. Nothing is read
     /// while the list is still being taken to the first unread message, as
     /// the rows it reports then aren't the ones the user will see.
     func markVisibleRead() {
-        guard hasLoaded, isPositioned, isOnScreen, UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+        guard hasLoaded, isPositioned, isOnScreen, isWindowVisible, UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
               let message = newestVisibleUnread() else { return }
         if message.timestamp > (readRequestedThrough ?? .distantPast) {
             readRequestedThrough = message.timestamp
@@ -2782,6 +2786,11 @@ final class ConversationModel {
     }
 
     func sceneActivated() {
+        markVisibleRead()
+    }
+
+    func windowVisibilityChanged(_ visible: Bool) {
+        isWindowVisible = visible
         markVisibleRead()
     }
 
