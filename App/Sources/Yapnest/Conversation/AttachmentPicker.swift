@@ -318,12 +318,15 @@ enum QuickLookPresenter {
 
 /// The Mac's ways with a received or sent file: opened in the app the system
 /// picks for it, Preview for a picture, or saved where the user chooses.
+/// Only what `MacOpenPolicy` allows is opened that way; anything else goes to
+/// `fallback`, which previews it without launching an app.
 /// Both work on a copy under the attachment's own name, as the stored file
 /// has a random one, which Preview would show as the title and the save
 /// panel would offer.
 @MainActor
 enum MacFileActions {
     static func open(_ file: URL, named name: String, otherwise fallback: @escaping @MainActor @Sendable () -> Void) {
+        guard MacOpenPolicy.opensInDefaultApp(name: SafeFileName.make(name)) else { return fallback() }
         Task {
             guard let copy = await named(file, name) else { return fallback() }
             UIApplication.shared.open(copy) { opened in

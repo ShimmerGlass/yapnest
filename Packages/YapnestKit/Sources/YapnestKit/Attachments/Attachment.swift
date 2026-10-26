@@ -70,6 +70,11 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
 
     public static let databaseTableName = "attachment"
 
+    /// What the file is, from its name's extension. A type the sender gave
+    /// (a Jingle `media-type`, a server's `Content-Type`) never decides it:
+    /// "image/png" on `photo.terminal` would make a picture of a script, and
+    /// on the Mac a click on it would launch the app that owns `.terminal`.
+    /// The media type is only used when the name has no extension.
     public var type: UTType? {
         UTTypeLookup.type(mimeType: mimeType, filenameExtension: (name as NSString).pathExtension)
     }
@@ -151,7 +156,7 @@ private enum UTTypeLookup {
     static func type(mimeType: String?, filenameExtension: String) -> UTType? {
         let key = Key(mimeType: mimeType, filenameExtension: filenameExtension)
         if let known = cache.withLock({ $0[key] }) { return known }
-        let resolved = mimeType.flatMap { UTType(mimeType: $0) } ?? UTType(filenameExtension: filenameExtension)
+        let resolved = filenameExtension.isEmpty ? mimeType.flatMap { UTType(mimeType: $0) } : UTType(filenameExtension: filenameExtension)
         cache.withLock { $0[key] = .some(resolved) }
         return resolved
     }

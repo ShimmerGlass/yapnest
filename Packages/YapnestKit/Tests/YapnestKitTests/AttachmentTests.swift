@@ -460,12 +460,7 @@ struct AttachmentTests {
         #expect(photo.file.hasSuffix(".jpg"))
     }
 
-    @Test func typeIsResolvedFromMimeTypeThenExtensionAndRepeatsAgree() {
-        let png = Attachment(messageId: 1, url: nil, name: "x.bin", mimeType: "image/png", state: .ready)
-        #expect(png.type == .png)
-        #expect(png.type == png.type)
-        #expect(png.isImage)
-
+    @Test func typeComesFromTheExtensionAndRepeatsAgree() {
         let byExtension = Attachment(messageId: 2, url: nil, name: "clip.mp4", state: .ready)
         #expect(byExtension.type == byExtension.type)
         #expect(byExtension.isVideo)
@@ -473,5 +468,48 @@ struct AttachmentTests {
         let unknown = Attachment(messageId: 3, url: nil, name: "file", state: .ready)
         #expect(unknown.type == nil)
         #expect(unknown.type == nil)
+    }
+
+    @Test func mediaTypeIsOnlyUsedWhenTheNameHasNoExtension() {
+        #expect(Attachment(messageId: 1, url: nil, name: "pic", mimeType: "image/png", state: .ready).isImage)
+        #expect(!Attachment(messageId: 1, url: nil, name: "x.bin", mimeType: "image/png", state: .ready).isImage)
+    }
+
+    @Test func aSenderClaimOfAnImageDoesNotMakeAScriptOne() {
+        for name in ["photo.terminal", "photo.command", "photo.fileloc", "photo.pkg", "photo.shortcut", "photo.sh"] {
+            let offered = Attachment(messageId: 1, url: nil, name: name, mimeType: "image/png", state: .offered)
+            #expect(!offered.isImage, "\(name)")
+            #expect(!offered.isVideo, "\(name)")
+        }
+    }
+
+    @Test func aRealPictureWithoutAMediaTypeStaysAnImage() {
+        #expect(Attachment(messageId: 1, url: nil, name: "holiday.jpg", state: .remote).isImage)
+    }
+
+    @Test func downloadedHTTPAttachmentWithAnImageTypeButACommandNameIsNotAnImage() throws {
+        let link = try #require(AttachmentLink.parse(body: "https://example.org/up/photo.command", oob: "https://example.org/up/photo.command"))
+        let attachment = Attachment(messageId: 1, url: link.url.absoluteString, name: link.name, mimeType: "image/jpeg", state: .remote)
+        #expect(!attachment.isImage)
+    }
+
+    @Test func linkNamesLoseBidiControls() throws {
+        let body = "https://example.org/up/photo%E2%80%AEgnp.exe"
+        let link = try #require(AttachmentLink.parse(body: body, oob: body))
+        #expect(link.name == "photognp.exe")
+    }
+}
+
+struct MacOpenPolicyTests {
+    @Test func opensMediaAndPDF() {
+        for name in ["a.png", "a.JPG", "a.mov", "a.mp3", "a.pdf"] {
+            #expect(MacOpenPolicy.opensInDefaultApp(name: name), "\(name)")
+        }
+    }
+
+    @Test func refusesWhatLaunchesSomethingElse() {
+        for name in ["a.terminal", "a.command", "a.tool", "a.sh", "a.fileloc", "a.webloc", "a.inetloc", "a.scpt", "a.pkg", "a.shortcut", "a.app", "a.html", "a.svg", "a.txt", "a", "a.unknownext"] {
+            #expect(!MacOpenPolicy.opensInDefaultApp(name: name), "\(name)")
+        }
     }
 }

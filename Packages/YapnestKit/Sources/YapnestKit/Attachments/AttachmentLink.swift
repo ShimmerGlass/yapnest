@@ -15,7 +15,8 @@ enum AttachmentLink {
         case "http": guard allowsInsecure, oob == body else { return nil }
         default: return nil
         }
-        let name = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+        // The name is shown and saved as it is, so bidi controls that could disguise its extension go.
+        let name = SafeFileName.removingFormatCharacters(url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
         return (url, name.isEmpty || name == "/" ? "file" : name)
     }
 }

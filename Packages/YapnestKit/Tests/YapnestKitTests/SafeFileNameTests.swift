@@ -8,6 +8,14 @@ struct SafeFileNameTests {
         #expect(SafeFileName.make("日本語.pdf") == "日本語.pdf")
     }
 
+    @Test func removesFormatCharactersButKeepsOrdinaryUnicode() {
+        #expect(SafeFileName.make("photo\u{202E}gnp.exe") == "photognp.exe")
+        #expect(SafeFileName.make("a\u{200B}b.txt") == "ab.txt")
+        #expect(SafeFileName.make("Café été.pdf") == "Café été.pdf")
+        #expect(SafeFileName.make("日本語.pdf") == "日本語.pdf")
+        #expect(SafeFileName.make("می\u{200C}خواهم.txt") == "می\u{200C}خواهم.txt")
+    }
+
     @Test func keepsOnlyTheLastComponent() {
         #expect(SafeFileName.make("../../etc/passwd") == "passwd")
         #expect(SafeFileName.make("a/b/c.txt") == "c.txt")
