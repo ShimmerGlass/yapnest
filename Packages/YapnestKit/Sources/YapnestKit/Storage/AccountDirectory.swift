@@ -41,6 +41,7 @@ extension XMPPSession {
             avatars: directory.avatars, attachments: directory.attachments,
             mode: mode, pushRelay: pushRelay,
             fastTokens: KeychainFastTokenStore(client: Self.userAgentId(account: credentials.jid, resource: resource)),
+            signInRecords: KeychainSignInRecordStore(account: credentials.jid),
             callMedia: callMedia,
             identityKeys: identityKeys,
         )

@@ -217,7 +217,10 @@ extension XMPPSession {
                 },
             ))
         }
-        modules.register(SaslModule())
+        let sasl = SaslModule()
+        // The password goes out over no weaker mechanism than the session's.
+        sasl.signInRecord = signInRecords.load()
+        modules.register(sasl)
         modules.register(ResourceBinderModule())
         modules.register(SessionEstablishmentModule())
 

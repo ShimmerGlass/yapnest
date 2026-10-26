@@ -96,6 +96,13 @@ open class Sasl2Module: XmppModuleBase, XmppModule, Resetable {
     public var fastToken: FastToken?;
     /// A new token arrived (store it), or the server refused ours (nil).
     public var tokenChanged: ((FastToken?) -> Void)?;
+    /// The mechanism of the strongest sign-in that worked for this account
+    /// (`SignInPinning`). A sign-in below it is refused.
+    public var signInRecord: String?;
+    /// A sign-in stronger than the record worked: store its mechanism.
+    public var signInRecordChanged: ((String) -> Void)?;
+    /// Binding data to use in place of the connection's, for tests.
+    var channelBindingsOverride: ChannelBindings?;
 
     @Published
     public private(set) var state: AuthModule.AuthorizationStatus = .notAuthorized;
@@ -106,6 +113,8 @@ open class Sasl2Module: XmppModuleBase, XmppModule, Resetable {
     /// The mechanism the last sign-in used, for tests and diagnostics.
     open private(set) var lastMechanism: String?;
     private var usesFastToken = false;
+    /// The mechanism the token being requested with this sign-in is for.
+    private var requestedTokenMechanism: String?;
     private var outcome: Outcome?;
     /// Whether the server enabled message carbons while binding, so that no separate request is needed.
     open internal(set) var carbonsEnabledInline = false;
@@ -160,9 +169,16 @@ open class Sasl2Module: XmppModuleBase, XmppModule, Resetable {
         let fast = inline?.findChild(name: "fast", xmlns: Sasl2Module.FAST_XMLNS);
         let fastMechanisms = fast?.getChildren(name: "mechanism").compactMap({ $0.value }) ?? [];
 
+        let bindings = channelBindingsOverride ?? context.channelBindings;
         usesFastToken = false;
-        if let token = fastToken, token.expiry > Date(), fastMechanisms.contains(token.mechanism), token.mechanism == HTMechanism.sha256None, userAgent != nil, context.mayTransmitSecrets {
-            mechanism = HTMechanism(token: token.token);
+        requestedTokenMechanism = nil;
+        // The token signs in only as the mechanism it was issued for, and
+        // not below what worked before: then the password is used, over a
+        // stronger one.
+        if let token = fastToken, token.expiry > Date(), fastMechanisms.contains(token.mechanism), userAgent != nil,
+           SignInPinning.refusal(chosen: token.mechanism, recorded: signInRecord) == nil,
+           case let htMechanism = HTMechanism(token: token.token, mechanism: token.mechanism, bindings: bindings), htMechanism.isAllowedToUse(context) {
+            mechanism = htMechanism;
             usesFastToken = true;
         } else {
             let candidates: [SaslMechanism] = [
@@ -173,6 +189,13 @@ open class Sasl2Module: XmppModuleBase, XmppModule, Resetable {
         }
         guard let mechanism = mechanism else {
             state = .error(SaslError.invalid_mechanism);
+            return;
+        }
+        // Before anything is sent: a server (or someone in between) that
+        // offers less than it did must not be handed the password.
+        if let refusal = SignInPinning.refusal(chosen: mechanism.name, recorded: signInRecord) {
+            self.mechanism = nil;
+            state = .error(refusal);
             return;
         }
         lastMechanism = mechanism.name;
@@ -214,8 +237,9 @@ open class Sasl2Module: XmppModuleBase, XmppModule, Resetable {
             }
             if usesFastToken {
                 authenticate.addChild(Element(name: "fast", xmlns: Sasl2Module.FAST_XMLNS));
-            } else if fastMechanisms.contains(HTMechanism.sha256None), userAgent != nil {
-                authenticate.addChild(Element(name: "request-token", attributes: ["xmlns": Sasl2Module.FAST_XMLNS, "mechanism": HTMechanism.sha256None]));
+            } else if userAgent != nil, let tokenMechanism = HTMechanism.strongest(in: fastMechanisms, bindings: bindings) {
+                requestedTokenMechanism = tokenMechanism;
+                authenticate.addChild(Element(name: "request-token", attributes: ["xmlns": Sasl2Module.FAST_XMLNS, "mechanism": tokenMechanism]));
             }
             if state != .inProgress {
                 state = .inProgress;
@@ -272,10 +296,16 @@ open class Sasl2Module: XmppModuleBase, XmppModule, Resetable {
         }
 
         if let tokenEl = stanza.findChild(name: "token", xmlns: Sasl2Module.FAST_XMLNS), let token = tokenEl.getAttribute("token"),
-           let expiry = tokenEl.getAttribute("expiry").flatMap({ TimestampHelper.parse(timestamp: $0) }) {
-            let new = FastToken(mechanism: HTMechanism.sha256None, token: token, expiry: expiry);
+           let expiry = tokenEl.getAttribute("expiry").flatMap({ TimestampHelper.parse(timestamp: $0) }),
+           let tokenMechanism = usesFastToken ? mechanism.name : requestedTokenMechanism {
+            let new = FastToken(mechanism: tokenMechanism, token: token, expiry: expiry);
             fastToken = new;
             tokenChanged?(new);
+        }
+
+        if let recording = SignInPinning.recording(succeeded: mechanism.name, recorded: signInRecord) {
+            signInRecord = recording;
+            signInRecordChanged?(recording);
         }
 
         let usedToken = usesFastToken;

@@ -163,8 +163,8 @@ Each entry gives what went wrong for users, why, and what changed.
   separate stream management step.
 - *Fix:* `Sasl2Module` signs in with XEP-0388, binding (XEP-0386) and
   resuming or enabling stream management inline, and asks for a XEP-0484
-  token, which `HTMechanism` (HT-SHA-256-NONE) uses on the next sign-in
-  instead of the password. A refused token falls back to the password on
+  token, which `HTMechanism` (HT-SHA-256-NONE, -EXPR or -ENDP) uses on the
+  next sign-in instead of the password. A refused token falls back to the password on
   the same stream. `AuthModule` picks it when the server offers it, and
   `SocketSessionLogic` skips the stream restart and takes the binding or
   resumption from it. Servers without SASL2 go through the old path,
@@ -344,8 +344,24 @@ Each entry gives what went wrong for users, why, and what changed.
   -PLUS but with no type in common. A failed binding is a refused sign-in,
   never a quiet fallback. The same change gives SCRAM a 32-character nonce
   from the whole alphabet (it used only A to T) and escapes `,` and `=` in
-  the user name (RFC 5802's saslname). FAST tokens (`HT-SHA-256-NONE`) stay
-  unbound.
+  the user name (RFC 5802's saslname). FAST tokens are bound the same way
+  where the server lists `HT-SHA-256-EXPR` (tls-exporter) or
+  `HT-SHA-256-ENDP` (tls-server-end-point): both proofs then cover the
+  binding data, and the strongest variant the connection can bind is
+  requested. `HT-SHA-256-NONE` stays for servers that offer no other.
+
+**A server could hide the strong mechanisms and get the password**
+(new `SignInStrength.swift`; `SaslModule`, `Sasl2Module`)
+
+- *Cause:* the mechanism was whatever the server offered, down to PLAIN, so
+  someone in the connection with a certificate the device trusts could
+  offer only PLAIN and defeat SCRAM-PLUS.
+- *Fix:* the modules are given the mechanism of the strongest sign-in that
+  worked for the account (`signInRecord`, kept by the app) and refuse to
+  start one below it, with `WeakerSignInError`, before anything is sent.
+  The tiers are bound (SCRAM-*-PLUS, HT-SHA-256-EXPR/ENDP), SCRAM (without
+  binding, and HT-SHA-256-NONE) and PLAIN. A stored token is used only as
+  the mechanism it was issued for, and not below the record.
 
 **TLS stopped at 1.2, so TLS 1.3 only servers were out of reach**
 (`SocketConnectorNetwork`, new `StartTLSFramer` and `StartTLSPreamble`,

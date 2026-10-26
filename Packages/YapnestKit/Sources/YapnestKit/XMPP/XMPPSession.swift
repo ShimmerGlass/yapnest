@@ -121,6 +121,8 @@ public final class XMPPSession: @unchecked Sendable {
     let allowsInsecureTransfers: Bool
     /// This client's XEP-0484 token, for signing in without the password.
     let fastTokens: FastTokenStore
+    /// The strongest sign-in that has worked, which none may fall below.
+    let signInRecords: SignInRecordStore
     /// Where `setAway`'s presences go out, one after the other.
     let presenceQueue = DispatchQueue(label: "Yapnest.presence", qos: .userInitiated)
     /// Progress (0...1) of uploads and downloads under way, by message id.
@@ -394,12 +396,14 @@ public final class XMPPSession: @unchecked Sendable {
         mode: Mode = .app,
         pushRelay: JID = XMPPSession.defaultPushRelay,
         fastTokens: FastTokenStore = MemoryFastTokenStore(),
+        signInRecords: SignInRecordStore = MemorySignInRecordStore(),
         callMedia: (any CallMediaFactory)? = nil,
         identityKeys: (any IdentityKeyStore)? = nil,
     ) throws {
         try self.init(
             credentials: credentials, resource: resource, database: database, avatars: avatars, attachments: attachments,
-            mode: mode, policy: nil, pushRelay: pushRelay, fastTokens: fastTokens, callMedia: callMedia, identityKeys: identityKeys,
+            mode: mode, policy: nil, pushRelay: pushRelay, fastTokens: fastTokens, signInRecords: signInRecords,
+            callMedia: callMedia, identityKeys: identityKeys,
         )
     }
 
@@ -414,6 +418,7 @@ public final class XMPPSession: @unchecked Sendable {
         policy: Policy?,
         pushRelay: JID = XMPPSession.defaultPushRelay,
         fastTokens: FastTokenStore = MemoryFastTokenStore(),
+        signInRecords: SignInRecordStore = MemorySignInRecordStore(),
         callMedia: (any CallMediaFactory)? = nil,
         identityKeys: (any IdentityKeyStore)? = nil,
     ) throws {
@@ -424,6 +429,7 @@ public final class XMPPSession: @unchecked Sendable {
         self.policy = policy ?? mode.policy
         self.pushRelay = pushRelay
         self.fastTokens = fastTokens
+        self.signInRecords = signInRecords
         self.avatars = avatars
         self.attachments = attachments
         self.allowsInsecureTransfers = credentials.disableTLS
@@ -514,7 +520,9 @@ public final class XMPPSession: @unchecked Sendable {
         } else {
             modules.register(StreamFeaturesModule())
         }
-        modules.register(SaslModule())
+        let sasl = SaslModule()
+        sasl.signInRecordChanged = { [signInRecords] mechanism in Self.raise(signInRecords, to: mechanism) }
+        modules.register(sasl)
         // Signs in, binds and resumes in one round trip where the server
         // can (XEP-0388, XEP-0386), with a FAST token after the first time.
         let sasl2 = Sasl2Module()
@@ -522,6 +530,7 @@ public final class XMPPSession: @unchecked Sendable {
         sasl2.bindTag = "Yapnest"
         sasl2.enableCarbons = policy.enablesCarbons
         sasl2.tokenChanged = { [fastTokens] token in fastTokens.save(token) }
+        sasl2.signInRecordChanged = { [signInRecords] mechanism in Self.raise(signInRecords, to: mechanism) }
         modules.register(sasl2)
         modules.register(ResourceBinderModule())
         modules.register(SessionEstablishmentModule())
@@ -719,9 +728,19 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     /// With the latest FAST token: another session may have replaced it.
+    /// Another client of the account may have raised the record since this
+    /// one read it, so it is compared again with what is stored now.
+    static func raise(_ records: SignInRecordStore, to mechanism: String) {
+        if SignInPinning.recording(succeeded: mechanism, recorded: records.load()) != nil { records.save(mechanism) }
+    }
+
     private func login() {
         let token = fastTokens.load()
         client.module(.sasl2).fastToken = token
+        // Likewise the latest record: another client may have raised it.
+        let record = signInRecords.load()
+        client.module(.sasl2).signInRecord = record
+        client.module(.sasl).signInRecord = record
         let attempts = lock.withLock {
             $0.connectStartedAt = Date()
             return $0.reconnectAttempt
@@ -1514,6 +1533,9 @@ public final class XMPPSession: @unchecked Sendable {
             case "policy-violation": .transient("The server refused the connection.")
             case let condition: .transient("The server closed the connection (\(condition ?? "stream error")).")
             }
+        // Final, and shown as it is: no retry would change what the server
+        // offers, and signing in again is the user's to decide.
+        case .authenticationFailure(let weaker as WeakerSignInError): .fatal(weaker.localizedDescription)
         case .authenticationFailure(let error):
             switch error as? SaslError {
             case .not_authorized, .invalid_authzid: .fatal("Wrong address or password.")

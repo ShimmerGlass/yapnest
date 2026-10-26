@@ -27,11 +27,12 @@ extension LiveServer {
     /// A session over STARTTLS, which trusts the dev CA unless `trustingDevCA`
     /// is off. TLS is on for the sessions the other suites open with it off.
     static func makeTLSSession(
-        _ jid: YapnestKit.JID, resource: String, password: String = "password", fastTokens: FastTokenStore = MemoryFastTokenStore(), trustingDevCA: Bool = true,
+        _ jid: YapnestKit.JID, resource: String, password: String = "password", fastTokens: FastTokenStore = MemoryFastTokenStore(),
+        signInRecords: SignInRecordStore = MemorySignInRecordStore(), trustingDevCA: Bool = true,
     ) throws -> XMPPSession {
         let session = try XMPPSession(
             credentials: .init(jid: jid, password: password, host: "127.0.0.1", port: target.port, disableTLS: false),
-            resource: resource, database: try AppDatabase.inMemory(), fastTokens: fastTokens,
+            resource: resource, database: try AppDatabase.inMemory(), fastTokens: fastTokens, signInRecords: signInRecords,
         )
         if trustingDevCA { session.trustOnly([try devCA()]) }
         return session
@@ -88,9 +89,9 @@ extension LiveServer {
     struct FastSignInIntegrationTests {
         let alice = LiveServer.jid("alice")
 
-        private func session(resource: String, tokens: FastTokenStore, password: String = "password") async throws -> XMPPSession {
+        private func session(resource: String, tokens: FastTokenStore, password: String = "password", records: SignInRecordStore = MemorySignInRecordStore()) async throws -> XMPPSession {
             try await LiveServer.requireSASL2()
-            return try LiveServer.makeTLSSession(alice, resource: resource, password: password, fastTokens: tokens)
+            return try LiveServer.makeTLSSession(alice, resource: resource, password: password, fastTokens: tokens, signInRecords: records)
         }
 
         private func waitUntil(_ what: String, timeout: TimeInterval = 10, _ condition: () throws -> Bool) async throws {
@@ -111,7 +112,9 @@ extension LiveServer {
             // Bound while signing in: the server picked the resource from our tag.
             #expect(first.client.context.boundJid?.resource?.hasPrefix("Yapnest") == true)
             let token = try #require(tokens.load())
-            #expect(token.mechanism == "HT-SHA-256-NONE")
+            // The strongest variant the server offers and the connection can bind.
+            #expect(HTMechanism.variants.contains(token.mechanism), "token for \(token.mechanism)")
+            print("LIVE \(LiveServer.target.name): token mechanism \(token.mechanism), password sign-in \(first.client.module(.sasl2).lastMechanism ?? "?")")
             first.disconnect()
 
             let second = try await session(resource: resource, tokens: tokens)
@@ -119,6 +122,32 @@ extension LiveServer {
             defer { second.disconnect() }
             try await waitUntil("signing in with the token") { second.state.value == .connected(isSyncing: false) }
             #expect(second.client.module(.sasl2).signedInWithToken)
+        }
+
+        /// The record of the strongest sign-in must not lock out an ordinary
+        /// one: the next sign-in, with the token and then with the password
+        /// alone, is at least as strong on the same server.
+        @Test func aSecondSignInIsNotRefusedByTheRecord() async throws {
+            let tokens = MemoryFastTokenStore()
+            let records = MemorySignInRecordStore()
+            let resource = "pin-\(UUID().uuidString.prefix(6))"
+            let first = try await session(resource: resource, tokens: tokens, records: records)
+            first.connect()
+            try await waitUntil("the first sign-in") { first.state.value == .connected(isSyncing: false) }
+            first.disconnect()
+            let recorded = try #require(records.load())
+            print("LIVE \(LiveServer.target.name): recorded \(recorded)")
+
+            let second = try await session(resource: resource, tokens: tokens, records: records)
+            second.connect()
+            try await waitUntil("the token sign-in") { second.state.value == .connected(isSyncing: false) }
+            print("LIVE \(LiveServer.target.name): token sign-in \(second.client.module(.sasl2).lastMechanism ?? "?") signedInWithToken=\(second.client.module(.sasl2).signedInWithToken)")
+            second.disconnect()
+
+            let third = try await session(resource: resource, tokens: MemoryFastTokenStore(), records: records)
+            third.connect()
+            defer { third.disconnect() }
+            try await waitUntil("the password sign-in") { third.state.value == .connected(isSyncing: false) }
         }
 
         @Test func refusedTokenFallsBackToThePassword() async throws {

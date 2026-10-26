@@ -67,6 +67,11 @@ open class SaslModule: XmppModuleBase, XmppModule, Resetable {
     private var mechanismInUse: SaslMechanism?;
     /// The mechanism the last sign-in used, for tests and diagnostics.
     open private(set) var lastMechanism: String?;
+    /// The mechanism of the strongest sign-in that worked for this account
+    /// (`SignInPinning`). A sign-in below it is refused.
+    public var signInRecord: String?;
+    /// A sign-in stronger than the record worked: store its mechanism.
+    public var signInRecordChanged: ((String) -> Void)?;
     
     open var inProgress: Bool {
         return (mechanismInUse?.status ?? .new) == .completedExpected;
@@ -187,6 +192,12 @@ open class SaslModule: XmppModuleBase, XmppModule, Resetable {
             fire(SaslAuthFailedEvent(context: context!, error: SaslError.invalid_mechanism));
             return;
         }
+        // Before anything is sent: a server (or someone in between) that
+        // offers less than it did must not be handed the password.
+        if let refusal = SignInPinning.refusal(chosen: mechanism.name, recorded: signInRecord) {
+            self.state = .error(refusal);
+            return;
+        }
         self.mechanismInUse = mechanism;
         self.lastMechanism = mechanism.name;
         
@@ -222,6 +233,10 @@ open class SaslModule: XmppModuleBase, XmppModule, Resetable {
         
         if mechanism.status == .completed {
             logger.debug("Authenticated");
+            if let recording = SignInPinning.recording(succeeded: mechanism.name, recorded: signInRecord) {
+                signInRecord = recording;
+                signInRecordChanged?(recording);
+            }
             if state != .authorized {
                 self.state = .authorized;
             }

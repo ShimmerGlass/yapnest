@@ -71,9 +71,13 @@ enum SaslKind: String, DiagEnum {
 }
 
 enum AuthFailure: String, DiagEnum {
-    case notAuthorized, temporary, serverNotTrusted, mechanism, other
+    case notAuthorized, temporary, serverNotTrusted, mechanism, weakerMechanism, other
 
     init(_ error: Error) {
+        if error is WeakerSignInError {
+            self = .weakerMechanism
+            return
+        }
         switch error as? SaslError {
         case .not_authorized, .invalid_authzid: self = .notAuthorized
         case .temporary_auth_failure: self = .temporary
