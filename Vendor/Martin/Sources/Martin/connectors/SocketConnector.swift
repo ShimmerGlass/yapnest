@@ -207,7 +207,12 @@ open class SocketConnector : XMPPConnectorBase, Connector, NetworkDelegate {
         guard let idx = tmp.lastIndex(of: ":") else {
             return (tmp, nil);
         }
-        return (String(tmp[tmp.startIndex..<idx]), Int(tmp[tmp.index(after: idx)..<tmp.endIndex]));
+        // The address comes from the server, and a port that isn't one would
+        // trap where it's made a UInt16: the whole address is ignored instead.
+        guard let port = Int(tmp[tmp.index(after: idx)..<tmp.endIndex]), (1...65535).contains(port) else {
+            return nil;
+        }
+        return (String(tmp[tmp.startIndex..<idx]), port);
     }
     
     public func prepareEndpoint(withResumptionLocation location: String?) -> ConnectorEndpoint? {

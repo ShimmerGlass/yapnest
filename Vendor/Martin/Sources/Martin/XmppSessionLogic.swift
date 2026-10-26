@@ -267,7 +267,11 @@ open class SocketSessionLogic: XmppSessionLogic {
     }
         
     private func onStreamError(_ streamErrorEl: Element) -> Bool {
-        if let seeOtherHostEl = streamErrorEl.findChild(name: "see-other-host", xmlns: "urn:ietf:params:xml:ns:xmpp-streams"), let seeOtherHost = SocketConnector.preprocessConnectionDetails(string: seeOtherHostEl.value) {
+        // Before TLS anyone on the network path could send the redirect, so
+        // it's followed only on an encrypted stream, or on an account that
+        // never uses one.
+        if connector.activeFeatures.contains(.TLS) || connectionConfiguration.disableTLS,
+           let seeOtherHostEl = streamErrorEl.findChild(name: "see-other-host", xmlns: "urn:ietf:params:xml:ns:xmpp-streams"), let seeOtherHost = SocketConnector.preprocessConnectionDetails(string: seeOtherHostEl.value) {
             if let streamFeaturesWithPipelining = modulesManager.moduleOrNil(.streamFeatures) as? StreamFeaturesModuleWithPipelining {
                 streamFeaturesWithPipelining.connectionRestarted();
             }

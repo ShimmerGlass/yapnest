@@ -663,6 +663,17 @@ Each entry gives what went wrong for users, why, and what changed.
 - *Fix:* the domain is asked too, and listed first. Failing to list the items
   is only an error if the domain offers nothing either.
 
+**A server's redirect could crash the app on every launch**
+(`SocketConnector.preprocessConnectionDetails`, `SocketSessionLogic.onStreamError`)
+- *Symptom:* a `see-other-host` naming a port outside 1–65535 crashed the
+  app where the endpoint was made, and every launch met the same redirect.
+- *Cause:* the port was read as any `Int` and later made a `UInt16`. The
+  redirect was also followed before STARTTLS, where anyone on the network
+  path can write one.
+- *Fix:* an address whose port isn't one is ignored, as is a resumption
+  location of that kind, and a redirect is followed only on an encrypted
+  stream or an account that never uses one. Pinned by `SeeOtherHostTests`.
+
 ### MartinOMEMO
 
 **Logs named people publicly** (`OMEMOModule`)
