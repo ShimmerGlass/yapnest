@@ -17,7 +17,14 @@ company or a phone number.
 - **Groups.** Create private groups, invite people, and manage members,
   admins and the group's settings.
 - **Contact requests you control.** Accept or decline requests, block
-  people, and report spam where your server supports it.
+  people, and report spam where your server supports it. Only people you
+  added or approved can ring you, send you files, have their pictures
+  downloaded by themselves, invite you to groups, and get your receipts
+  and typing. Being in your contacts isn't enough, as some servers, such
+  as Openfire, add a stranger there without asking you. Someone you added
+  from another app or device, who accepted without adding you back, looks
+  the same to this device: they show as not in your contacts here until
+  you tap Add, or they add you back.
 - **Fast and reliable connections.** Quick sign-in on servers that support
   it, a dropped connection picks up where it left off, and push
   notifications arrive even when the app is closed.
@@ -126,7 +133,7 @@ What Yapnest implements, and where it stops short.
 | XEP-0198 | Stream Management | Full: acks and resumption, inline with SASL2. |
 | XEP-0199 | XMPP Ping | Full. Also confirms a sent message on a server without stream management. |
 | XEP-0203 | Delayed Delivery | Read. |
-| XEP-0215 | External Service Discovery | STUN and TURN servers are asked for from the account's server when a call starts or rings, and kept until their credentials run out (10 minutes when they don't say). Without any the call still tries a direct path. |
+| XEP-0215 | External Service Discovery | STUN and TURN servers are asked for from the account's server when a call starts or rings, and kept until their credentials run out (10 minutes when they don't say). Without any the call still tries a direct path; with Always Relay Calls on, a call goes only through the discovered relay and is refused before ringing if there is none. |
 | XEP-0223 | Persistent Storage of Private Data via PubSub | Used for bookmarks and read state, and for Yapnest's own settings (pins, archived chats, link preview and sound choices, GIF favorites, emoji usage and the like), in a node only the account can read, so they follow the user to their other devices. |
 | XEP-0234 | Jingle File Transfer | Receive and send file offers over in-band bytestreams, in 1:1 chats with contacts, unencrypted only. A file is sent this way only when the server's upload can't take it (no upload service, or the file is over its limit) and a device of the contact advertises it; encrypted chats and requests for a file aren't supported. A received offer is accepted at once up to 15 MB, and waits to be accepted above that. The file's SHA-256 is checked when given, and files over 1 GiB are declined. Offers end when the connection does. |
 | XEP-0245 | The /me Command | Display. |
