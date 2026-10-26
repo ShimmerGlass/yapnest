@@ -43,11 +43,14 @@ struct NewChatView: View {
                 if let typedAddress, !(contacts ?? []).contains(where: { $0.jid == typedAddress }) {
                     Section {
                         Button("Chat with \(typedAddress.description)", systemImage: "bubble.left") { onStart(typedAddress) }
+                            .labelStyle(.row)
                     }
                 }
                 Section {
                     Button("New Group", systemImage: "person.2", action: onNewGroup)
+                        .labelStyle(.row)
                     Button("Join a Group", systemImage: "number", action: onJoinGroup)
+                        .labelStyle(.row)
                 }
                 if !matches.isEmpty {
                     Section("Contacts") {
