@@ -1454,6 +1454,7 @@ extension XMPPSession {
         logger.info("Holding invitation to \(room, privacy: .private) from \(inviter, privacy: .private), vouched for: \(isVouched)")
         do {
             try database.recordGroupInvitation(room: room, inviter: inviter, reason: invitation.reason, password: invitation.password, isDirect: invitation.isDirect, isVouched: isVouched)
+            events.send(.invitationHeld)
         } catch {
             logger.error("Failed to store group invitation: \(error)")
         }

@@ -83,6 +83,8 @@ public final class XMPPSession: @unchecked Sendable {
         /// An incoming correction was applied to a message we hold.
         case editedMessage(Message)
         case chatState(JID, InboundMessage.ChatState)
+        /// A group invitation is waiting for the user's answer, to be notified about.
+        case invitationHeld
     }
 
     public let account: JID

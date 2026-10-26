@@ -5,7 +5,9 @@ extension AppDatabase {
     /// A newer invitation to the same room replaces the older one.
     func recordGroupInvitation(room: JID, inviter: JID, reason: String?, password: String? = nil, isDirect: Bool = false, isVouched: Bool = false, at date: Date = Date()) throws {
         try writer.write { db in
-            try GroupInvitation(room: room, inviter: inviter, reason: reason, password: password, receivedAt: date, isDirect: isDirect, isVouched: isVouched).save(db)
+            // A replacement is the same invitation again: the user was told once.
+            let isNotified = try GroupInvitation.fetchOne(db, key: room)?.isNotified ?? false
+            try GroupInvitation(room: room, inviter: inviter, reason: reason, password: password, receivedAt: date, isDirect: isDirect, isVouched: isVouched, isNotified: isNotified).save(db)
         }
     }
 

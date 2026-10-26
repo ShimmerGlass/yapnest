@@ -182,6 +182,11 @@ extension MessageNotification {
     /// delivered under the push's own identifier, so a correction can't find
     /// it by `requestIdentifier`.
     public static let messageIdKey = "messageId"
+    /// Where a held group invitation's notification keeps the group's address.
+    public static let invitationKey = "invitation"
+    /// The thread of every invitation's notification. They aren't a chat, so
+    /// `staleNotifications` must not read this thread as a read chat's.
+    public static let invitationsThread = "invitations"
 
     public func content(badge: Int?) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
@@ -189,8 +194,14 @@ extension MessageNotification {
         if let subtitle { content.subtitle = subtitle }
         content.body = body
         content.sound = NotificationSound.choice(kind: isGroup ? .groupchat : .chat, stored: sound, isQuiet: isQuiet).unSound
-        content.threadIdentifier = peer.description
-        content.userInfo = [Self.peerKey: peer.description, Self.messageIdKey: messageId]
+        if let invitationRoom {
+            // No peer: it isn't a chat to open, and the chat list shows the invitation.
+            content.threadIdentifier = Self.invitationsThread
+            content.userInfo = [Self.invitationKey: invitationRoom.description]
+        } else {
+            content.threadIdentifier = peer.description
+            content.userInfo = [Self.peerKey: peer.description, Self.messageIdKey: messageId]
+        }
         if isQuiet {
             content.interruptionLevel = .passive
             content.userInfo[Self.quietKey] = true
@@ -199,7 +210,20 @@ extension MessageNotification {
         return content
     }
 
-    public var requestIdentifier: String { "message-\(messageId)" }
+    public var requestIdentifier: String { invitationRoom.map { "invitation-\($0)" } ?? "message-\(messageId)" }
+
+    /// The delivered notifications of invitations that aren't held any more,
+    /// whether they were joined, declined or answered from another device.
+    /// The extension's is delivered under the push's identifier, so they're
+    /// found by what `userInfo` says.
+    public static func staleInvitationNotifications(
+        among delivered: [(identifier: String, userInfo: [AnyHashable: Any])], held: Set<JID>,
+    ) -> [String] {
+        delivered.compactMap { entry in
+            guard let room = (entry.userInfo[invitationKey] as? String).flatMap(JID.init(_:)), !held.contains(room) else { return nil }
+            return entry.identifier
+        }
+    }
 }
 
 extension UNNotificationContent {
@@ -219,6 +243,12 @@ extension UNNotification {
 }
 
 extension UNUserNotificationCenter {
+    /// Takes down the notifications of invitations no longer held.
+    public func removeStaleInvitationNotifications(held: Set<JID>) async {
+        let delivered = await deliveredNotifications().map { (identifier: $0.request.identifier, userInfo: $0.request.content.userInfo) }
+        removeDeliveredNotifications(withIdentifiers: MessageNotification.staleInvitationNotifications(among: delivered, held: held))
+    }
+
     /// Muted messages are shown silently by the notification extension, which
     /// takes them down again if it lives long enough. This clears the rest.
     public func removeQuietNotifications() async {

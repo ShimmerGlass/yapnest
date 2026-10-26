@@ -1,6 +1,8 @@
 import Foundation
 import GRDB
+import Combine
 import Martin
+import os
 import Testing
 @testable import YapnestKit
 
@@ -86,6 +88,14 @@ struct GroupInvitationSessionTests {
         let invitation = try #require(try database.groupInvitation(foreign))
         #expect(invitation.inviter == alice)
         #expect(invitation.reason == "Come along")
+    }
+
+    @Test func aHeldInvitationSaysSoToTheApp() throws {
+        let heard = OSAllocatedUnfairLock(initialState: 0)
+        let subscription = session.events.sink { if case .invitationHeld = $0 { heard.withLock { $0 += 1 } } }
+        session.invitationReceived(relayed())
+        #expect(heard.withLock { $0 } == 1)
+        subscription.cancel()
     }
 
     @Test func noReasonIsNone() throws {

@@ -31,6 +31,9 @@ public struct MessageNotification: Sendable, Equatable {
     public var heldCount: Int?
     /// The conversation's stored sound choice, as `NotificationSound` reads it.
     public var sound: String?
+    /// Set on the notification of a held group invitation, which has no
+    /// message: the group's address.
+    public var invitationRoom: JID?
 }
 
 extension AppDatabase {
@@ -89,9 +92,35 @@ extension AppDatabase {
                 .filter(incoming)
                 .order(Column("editedAt"), Column("id"))
                 .fetchAll(db)
+            // Claimed with the messages, in the same transaction, so that the
+            // app and the extension can't both show one.
+            let invitations = try Self.claimInvitations(db, notifies: notifies)
             return (
-                try messages.compactMap { try Self.notification(db, for: $0, claimedAt: notifies ? now : nil) },
+                try messages.compactMap { try Self.notification(db, for: $0, claimedAt: notifies ? now : nil) } + invitations,
                 try edits.compactMap { try Self.notification(db, for: $0) }.filter { !$0.isQuiet },
+            )
+        }
+    }
+
+    /// The held invitations nobody was notified about yet, marked as notified.
+    /// Not told for a claim whose notifications won't be shown, as the app's
+    /// while it's on screen: the invitation's row is in front of the user.
+    private static func claimInvitations(_ db: Database, notifies: Bool) throws -> [MessageNotification] {
+        let pending = try GroupInvitation.filter(Column("isNotified") == false).order(Column("receivedAt")).fetchAll(db)
+        guard !pending.isEmpty else { return [] }
+        try GroupInvitation.filter(Column("isNotified") == false).updateAll(db, Column("isNotified").set(to: true))
+        guard notifies else { return [] }
+        return try pending.map { invitation in
+            let inviter = try Contact.fetchOne(db, key: invitation.inviter)?.displayName ?? invitation.inviter.description
+            let group = try GroupChat.filter(Column("jid") == invitation.room).fetchOne(db)?.displayName ?? invitation.room.description
+            // A room on another server named the inviter itself, so it's
+            // the room that says so.
+            let body = invitation.isVouched
+                ? String(localized: "\(inviter) invited you to \(group)")
+                : String(localized: "\(group) says \(inviter) invited you")
+            return MessageNotification(
+                messageId: 0, peer: invitation.room, title: String(localized: "Group invitation"),
+                body: body, timestamp: invitation.receivedAt, isGroup: true, invitationRoom: invitation.room,
             )
         }
     }
@@ -291,7 +320,9 @@ extension AppDatabase {
     /// chat brings it back, and its new notification with it.
     public static func staleNotifications(threads: [(id: String, thread: String)], unread: [JID: Int]) -> [String] {
         let unreadThreads = Set(unread.filter { $0.value > 0 }.keys.map(\.description))
-        return threads.filter { !$0.thread.isEmpty && !unreadThreads.contains($0.thread) }.map(\.id)
+        // An invitation's notification is taken down when the invitation goes
+        // (`removeStaleInvitationNotifications`), not when no chat is unread.
+        return threads.filter { !$0.thread.isEmpty && $0.thread != MessageNotification.invitationsThread && !unreadThreads.contains($0.thread) }.map(\.id)
     }
 
     /// Tells this process's observers about changes another process made,

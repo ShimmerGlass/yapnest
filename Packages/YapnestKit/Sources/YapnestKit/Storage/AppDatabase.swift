@@ -683,6 +683,14 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v42-invitation-notified") { db in
+            // Invitations held before this were never notified about, and
+            // shouldn't be now, long after.
+            try db.alter(table: "groupInvitation") { t in
+                t.add(column: "isNotified", .boolean).notNull().defaults(to: true)
+            }
+        }
+
         return migrator
     }
 

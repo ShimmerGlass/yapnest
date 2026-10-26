@@ -127,10 +127,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
-        let peer = (response.notification.request.content.userInfo[MessageNotification.peerKey] as? String).flatMap(JID.init(_:))
+        let userInfo = response.notification.request.content.userInfo
+        let peer = (userInfo[MessageNotification.peerKey] as? String).flatMap(JID.init(_:))
+        let isInvitation = userInfo[MessageNotification.invitationKey] != nil
         // Delegate callbacks come on the main thread.
         MainActor.assumeIsolated {
-            if let peer { model.open(peer) }
+            if let peer { model.open(peer) } else if isInvitation { model.openChatList() }
         }
         completionHandler()
     }

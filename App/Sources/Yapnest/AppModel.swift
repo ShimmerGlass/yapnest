@@ -65,6 +65,8 @@ final class AppModel {
     private(set) var rooms: [JID: RoomStatus] = [:]
     /// A conversation to show, from a tapped notification.
     var requestedConversation: JID?
+    /// The chat list to show, from a tapped invitation notification.
+    var requestsChatList = false
     /// What the menu bar asks the chat list to present.
     var requestedSheet: ChatListSheet?
     /// An `xmpp:` link waiting for the chat list to act on it. Kept while
@@ -771,6 +773,10 @@ final class AppModel {
         requestedConversation = peer
     }
 
+    func openChatList() {
+        requestsChatList = true
+    }
+
     /// An `xmpp:` link from the system or from a message. Nothing is sent
     /// for it: the chat list asks the user first.
     func open(link url: URL) {
@@ -908,6 +914,8 @@ final class AppModel {
             if state == .composing { startTyping(peer) } else { stopTyping(peer) }
         case .editedMessage(let message):
             if message.direction == .incoming, let session { notifyInBackground(session) }
+        case .invitationHeld:
+            if let session { notifyInBackground(session) }
         case .newMessage(let message):
             if message.direction == .incoming, let session {
                 notifyInBackground(session)

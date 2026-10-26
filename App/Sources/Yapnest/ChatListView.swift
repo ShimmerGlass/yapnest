@@ -1,5 +1,6 @@
 import GRDB
 import SwiftUI
+import UserNotifications
 import YapnestKit
 
 /// The chats, and the open one: stacked on the iPhone, side by side where
@@ -136,6 +137,13 @@ struct ChatListView: View {
             // sheet is fine for the stack.
             sheet = nil
             show(peer)
+        }
+        // From a tapped invitation notification: the list has its row.
+        .onChange(of: model.requestsChatList, initial: true) { _, requested in
+            guard requested else { return }
+            model.requestsChatList = false
+            sheet = nil
+            path = []
         }
         // From an `xmpp:` link, which may have arrived before sign-in.
         .onChange(of: model.pendingLink, initial: true) { _, link in
@@ -642,6 +650,8 @@ private struct ChatListContent: View {
             guard !archived else { return }
             await session.database.forEachValue(of: session.database.observeGroupInvitations(), "Group invitation") { list in
                 if invitations == nil { invitations = list } else { withAnimation { invitations = list } }
+                let held = Set(list.map(\.room))
+                Task { await UNUserNotificationCenter.current().removeStaleInvitationNotifications(held: held) }
             }
         }
         .task(id: archived) {
