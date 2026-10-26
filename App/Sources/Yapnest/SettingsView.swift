@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var isChangingProfileAccess = false
     @State private var downloadsFromGroupMembers = true
     @State private var relaysCalls = false
+    @State private var includesMessagesInBackups = true
     @State private var gifsEnabled = true
     @State private var encryptsNewChats = true
     @State private var privacyError: String?
@@ -152,6 +153,13 @@ struct SettingsView: View {
                     }
                 } footer: {
                     Text("Loading a preview lets the linked site see your IP address and that you got the link.")
+                }
+                .disabled(!isLoaded)
+
+                Section {
+                    Toggle("Include Messages in Backups", isOn: Binding(get: { includesMessagesInBackups }, set: setIncludesMessagesInBackups))
+                } footer: {
+                    Text("With this off, your messages and files aren't in iCloud or computer backups. A phone restored from a backup then starts empty and gets its history back from your server; encrypted messages from before the restore can't be read again. With it on, backups include them, and iCloud Backup protects them end to end only with Advanced Data Protection. This applies to this device only.")
                 }
                 .disabled(!isLoaded)
 
@@ -292,6 +300,7 @@ struct SettingsView: View {
                         sharesProfilePublicly: session.sharesProfilePublicly,
                         downloadsFromGroupMembers: session.downloadsFromGroupMembers,
                         relaysCalls: session.relaysCalls,
+                        includesMessagesInBackups: BackupPolicy.includesMessages(),
                         gifsEnabled: session.database.flag(.gifs, default: true),
                         encryptsNewChats: session.database.flag(.encryptsNewChats, default: true),
                     )
@@ -308,6 +317,7 @@ struct SettingsView: View {
                 sharesProfilePublicly = saved.sharesProfilePublicly
                 downloadsFromGroupMembers = saved.downloadsFromGroupMembers
                 relaysCalls = saved.relaysCalls
+                includesMessagesInBackups = saved.includesMessagesInBackups
                 gifsEnabled = saved.gifsEnabled
                 encryptsNewChats = saved.encryptsNewChats
                 isLoaded = true
@@ -435,6 +445,10 @@ struct SettingsView: View {
 
     private func setRelaysCalls(_ on: Bool) {
         save({ [session] in try session.database.setFlag(.relaysCalls, on) }) { relaysCalls = on }
+    }
+
+    private func setIncludesMessagesInBackups(_ on: Bool) {
+        save({ BackupPolicy.setIncludesMessages(on) }) { includesMessagesInBackups = on }
     }
 
     private func setGifsEnabled(_ on: Bool) {

@@ -49,7 +49,11 @@ refers to travel unencrypted. An encrypted file is uploaded under a random name 
 extension), so the upload server doesn't learn what it was called; the
 people you send it to see that random name too, as OMEMO 0.3 has nowhere
 else to carry the real one. This device's encryption key stays on it: it's
-kept out of iCloud and computer backups.
+kept out of iCloud and computer backups. Your message history and files are
+not: they are in this device's backups (iCloud Backup, Finder and Time
+Machine) unless you turn off "Include Messages in Backups" in Settings, which
+leaves them out on this device. iCloud Backup protects them end to end only
+with Advanced Data Protection.
 
 Calls are encrypted separately (DTLS-SRTP), and their key isn't yet checked
 against OMEMO, so nothing confirms who is on the other end. The server sees

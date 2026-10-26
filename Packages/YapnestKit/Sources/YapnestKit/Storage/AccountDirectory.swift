@@ -16,7 +16,9 @@ public struct AccountDirectory: Sendable {
     public var databaseURL: URL { url.appending(path: "db.sqlite") }
 
     public func openDatabase() throws -> AppDatabase {
-        try AppDatabase.open(at: databaseURL)
+        let database = try AppDatabase.open(at: databaseURL)
+        BackupPolicy.apply(also: [url])
+        return database
     }
 
     public var avatars: AvatarStore { AvatarStore(directory: url.appending(path: "avatars")) }
