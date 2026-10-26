@@ -89,9 +89,11 @@ public final class AttachmentStore: Sendable {
     /// which the share extension can't afford: photos are scaled down by
     /// ImageIO straight into the store, and other files are copied. An
     /// animated image is copied too, since re-encoding would keep only its
-    /// first frame. Videos and images copied as they are lose their location,
-    /// as photos do, since they are sent on to people the user may not want to
-    /// tell where they were. Other files are copied untouched.
+    /// first frame. Videos and images copied as they are lose their location
+    /// and, for images, the camera and owner details too, as photos do (a
+    /// photo is rebuilt from its pixels, so nothing else comes along), since
+    /// they are sent on to people the user may not want to tell where they
+    /// were or what took them. Other files are copied untouched.
     func importFile(at url: URL, name: String, asPhoto: Bool) async throws -> Imported {
         try FileManager.default.createProtectedDirectory(at: directory)
         if asPhoto, let source = CGImageSourceCreateWithURL(url as CFURL, nil), CGImageSourceGetCount(source) == 1, let (width, height) = Self.pixelSize(of: source), width * height <= Self.maxImagePixels {
@@ -129,7 +131,7 @@ public final class AttachmentStore: Sendable {
             } else if Self.isImage(name: name) {
                 // Only images go to ImageIO, so a PDF or an archive isn't parsed by it.
                 // It does nothing to an image it can't read.
-                try Self.stripLocation(fromImageAt: destination)
+                try Self.stripMetadata(fromImageAt: destination)
             }
         } catch {
             try? FileManager.default.removeItem(at: destination)
@@ -147,31 +149,79 @@ public final class AttachmentStore: Sendable {
 
     struct MetadataError: Error {}
 
-    /// Rewrites the image at `url` without its GPS data, keeping every frame.
-    /// Images that carry none are left alone, so nothing is re-encoded for
-    /// no reason (and formats ImageIO can't write still go through).
-    static func stripLocation(fromImageAt url: URL) throws {
+    /// Rewrites the image at `url` without the metadata that says who took it
+    /// and where: location, camera make, model and serial, capture time,
+    /// software, owner and IPTC fields. Every frame is kept, and so are the
+    /// orientation and the colour profile, which the picture needs to be shown
+    /// right. Images that carry nothing to remove are left alone, so nothing is
+    /// re-encoded for no reason (and formats ImageIO can't write still go
+    /// through).
+    static func stripMetadata(fromImageAt url: URL) throws {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let type = CGImageSourceGetType(source) else { return }
         let count = CGImageSourceGetCount(source)
-        let hasLocation = (0..<count).contains { index in
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
-            return properties?[kCGImagePropertyGPSDictionary] != nil
-        }
-        guard hasLocation else { return }
+        guard (0..<count).contains(where: { hasRemovableMetadata(source, at: $0) }) else { return }
         let temporary = url.deletingLastPathComponent().appending(path: UUID().uuidString.lowercased() + "." + url.pathExtension)
         defer { try? FileManager.default.removeItem(at: temporary) }
         guard let output = CGImageDestinationCreateWithURL(temporary as CFURL, type, count, nil) else { throw MetadataError() }
         // The container's own properties (a GIF's loop count) go along.
         if let container = CGImageSourceCopyProperties(source, nil) { CGImageDestinationSetProperties(output, container) }
         for index in 0..<count {
-            CGImageDestinationAddImageFromSource(output, source, index, [kCGImageMetadataShouldExcludeGPS: true] as CFDictionary)
+            // An empty metadata block replaces the image's own, which is where
+            // XMP and the text a PNG keeps its author in live. The orientation
+            // is set apart because the TIFF dictionary it also sits in is
+            // dropped whole.
+            var options: [CFString: Any] = [
+                kCGImageMetadataShouldExcludeGPS: true,
+                kCGImageDestinationMetadata: CGImageMetadataCreateMutable(),
+                kCGImageDestinationMergeMetadata: false,
+            ]
+            for key in removableDictionaries { options[key] = kCFNull }
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+            if let orientation = properties?[kCGImagePropertyOrientation] { options[kCGImagePropertyOrientation] = orientation }
+            CGImageDestinationAddImageFromSource(output, source, index, options as CFDictionary)
         }
         guard CGImageDestinationFinalize(output) else { throw MetadataError() }
         // Only a copy that came out clean replaces the original.
         guard let written = CGImageSourceCreateWithURL(temporary as CFURL, nil), CGImageSourceGetCount(written) == count,
-              !(0..<count).contains(where: { (CGImageSourceCopyPropertiesAtIndex(written, $0, nil) as? [CFString: Any])?[kCGImagePropertyGPSDictionary] != nil })
+              !(0..<count).contains(where: { hasRemovableMetadata(written, at: $0) })
         else { throw MetadataError() }
         _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
+    }
+
+    /// The property dictionaries that describe the photographer or the camera
+    /// rather than the picture. The GIF and JFIF ones stay for the frame
+    /// timing and density they hold.
+    private static var removableDictionaries: [CFString] { [
+        kCGImagePropertyTIFFDictionary, kCGImagePropertyExifDictionary, kCGImagePropertyExifAuxDictionary,
+        kCGImagePropertyGPSDictionary, kCGImagePropertyIPTCDictionary, kCGImagePropertyPNGDictionary,
+        kCGImagePropertyMakerAppleDictionary, kCGImagePropertyMakerCanonDictionary, kCGImagePropertyMakerNikonDictionary,
+        kCGImagePropertyMakerFujiDictionary, kCGImagePropertyMakerMinoltaDictionary, kCGImagePropertyMakerOlympusDictionary,
+        kCGImagePropertyMakerPentaxDictionary, kCGImagePropertyCIFFDictionary, kCGImagePropertyDNGDictionary,
+        kCGImagePropertyRawDictionary,
+    ] }
+
+    /// Which entries of the dictionaries that hold both kinds are only about
+    /// how the picture is stored.
+    private static var structuralKeys: [CFString: Set<CFString>] { [
+        kCGImagePropertyTIFFDictionary: [
+            kCGImagePropertyTIFFOrientation, kCGImagePropertyTIFFCompression, kCGImagePropertyTIFFPhotometricInterpretation,
+            kCGImagePropertyTIFFResolutionUnit, kCGImagePropertyTIFFXResolution, kCGImagePropertyTIFFYResolution,
+            kCGImagePropertyTIFFTileWidth, kCGImagePropertyTIFFTileLength,
+        ],
+        kCGImagePropertyExifDictionary: [kCGImagePropertyExifPixelXDimension, kCGImagePropertyExifPixelYDimension, kCGImagePropertyExifColorSpace],
+        kCGImagePropertyPNGDictionary: [
+            kCGImagePropertyPNGInterlaceType, kCGImagePropertyPNGGamma, kCGImagePropertyPNGsRGBIntent,
+            kCGImagePropertyPNGXPixelsPerMeter, kCGImagePropertyPNGYPixelsPerMeter, kCGImagePropertyPNGChromaticities,
+        ],
+    ] }
+
+    private static func hasRemovableMetadata(_ source: CGImageSource, at index: Int) -> Bool {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] else { return false }
+        return removableDictionaries.contains { key in
+            guard let entries = properties[key] as? [CFString: Any] else { return false }
+            guard let structural = structuralKeys[key] else { return true }
+            return entries.keys.contains { !structural.contains($0) }
+        }
     }
 
     /// Re-exports the video at `url` without copying the streams, dropping

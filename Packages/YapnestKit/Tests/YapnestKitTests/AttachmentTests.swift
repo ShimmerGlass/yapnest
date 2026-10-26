@@ -238,6 +238,54 @@ struct AttachmentTests {
         #expect((imported.width, imported.height) == (40, 30))
     }
 
+    @Test func aPhotoSentAsAFileLosesItsCameraDetailsButKeepsItsOrientation() async throws {
+        let data = cameraImageData(.jpeg, withLocation: true)
+        try await withImportedFile(data, name: "IMG_3.jpg") { stored in
+            #expect(cameraDetails(inImageAt: stored) == [[]])
+            #expect(orientations(inImageAt: stored) == [6])
+        }
+    }
+
+    @Test func aPhotoWithoutALocationStillLosesItsCameraDetails() async throws {
+        let data = cameraImageData(.jpeg, withLocation: false)
+        #expect(cameraDetails(CGImageSourceCreateWithData(data as CFData, nil)!) == [["make", "model", "date", "software", "artist", "serial", "captured", "iptc"]])
+        try await withImportedFile(data, name: "IMG_4.jpg") { stored in
+            #expect(cameraDetails(inImageAt: stored) == [[]])
+            #expect(orientations(inImageAt: stored) == [6])
+        }
+    }
+
+    @Test func imageSequenceLosesItsCameraDetailsButKeepsItsFrames() async throws {
+        let data = cameraImageData(.tiff, frames: 2, withLocation: false)
+        try await withImportedFile(data, name: "scan.tiff") { stored in
+            #expect(cameraDetails(inImageAt: stored) == [[], []])
+            #expect(orientations(inImageAt: stored) == [6, 6])
+        }
+    }
+
+    @Test func anImageWithNothingToRemoveIsLeftAsItIs() async throws {
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, makeImage(width: 40, height: 30), nil)
+        #expect(CGImageDestinationFinalize(destination))
+        try await withImportedFile(data as Data, name: "plain.png") { stored in
+            let kept = try Data(contentsOf: stored)
+            #expect(kept == data as Data)
+        }
+    }
+
+    /// Imports `data` as a file and hands the stored copy to `inspect`.
+    private func withImportedFile(_ data: Data, name: String, inspect: (URL) throws -> Void) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "meta-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appending(path: name)
+        try data.write(to: source)
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        let imported = try await store.importFile(at: source, name: name, asPhoto: false)
+        try inspect(store.directory.appending(path: imported.file))
+    }
+
     @Test func setDownloadedKeepsTheKnownSizeWhenNothingWasMeasured() throws {
         let db = try AppDatabase.inMemory()
         let peer = JID("alice@example.org")!
@@ -307,6 +355,57 @@ struct AttachmentTests {
         }
         #expect(CGImageDestinationFinalize(destination))
         return data as Data
+    }
+
+    /// Frames tagged with what a camera writes, and optionally a location,
+    /// turned a quarter turn.
+    private func cameraImageData(_ type: UTType, frames: Int = 1, withLocation: Bool) -> Data {
+        var properties: [CFString: Any] = [
+            kCGImagePropertyOrientation: 6,
+            kCGImagePropertyTIFFDictionary: [
+                kCGImagePropertyTIFFMake: "Canon", kCGImagePropertyTIFFModel: "EOS R5", kCGImagePropertyTIFFDateTime: "2020:01:01 10:00:00",
+                kCGImagePropertyTIFFSoftware: "Camera Firmware 1.2", kCGImagePropertyTIFFArtist: "Jane Doe", kCGImagePropertyTIFFOrientation: 6,
+            ],
+            kCGImagePropertyExifDictionary: [kCGImagePropertyExifBodySerialNumber: "0123456789", kCGImagePropertyExifDateTimeOriginal: "2020:01:01 10:00:00"],
+            kCGImagePropertyIPTCDictionary: [kCGImagePropertyIPTCByline: ["Jane Doe"]],
+        ]
+        if withLocation {
+            properties[kCGImagePropertyGPSDictionary] = [kCGImagePropertyGPSLatitude: 48.85, kCGImagePropertyGPSLatitudeRef: "N",
+                                                         kCGImagePropertyGPSLongitude: 2.29, kCGImagePropertyGPSLongitudeRef: "E"]
+        }
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, frames, nil)!
+        for _ in 0..<frames { CGImageDestinationAddImage(destination, makeImage(width: 40, height: 30), properties as CFDictionary) }
+        #expect(CGImageDestinationFinalize(destination))
+        return data as Data
+    }
+
+    /// For each frame, the identifying entries it still carries.
+    private func cameraDetails(_ source: CGImageSource) -> [[String]] {
+        (0..<CGImageSourceGetCount(source)).map { index in
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] ?? [:]
+            let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
+            let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+            var found: [String] = []
+            for (key, value) in [("make", tiff[kCGImagePropertyTIFFMake]), ("model", tiff[kCGImagePropertyTIFFModel]),
+                                 ("date", tiff[kCGImagePropertyTIFFDateTime]), ("software", tiff[kCGImagePropertyTIFFSoftware]),
+                                 ("artist", tiff[kCGImagePropertyTIFFArtist]), ("serial", exif[kCGImagePropertyExifBodySerialNumber]),
+                                 ("captured", exif[kCGImagePropertyExifDateTimeOriginal]),
+                                 ("iptc", properties[kCGImagePropertyIPTCDictionary]), ("gps", properties[kCGImagePropertyGPSDictionary])]
+                where value != nil { found.append(key) }
+            return found
+        }
+    }
+
+    private func cameraDetails(inImageAt url: URL) -> [[String]] {
+        cameraDetails(CGImageSourceCreateWithURL(url as CFURL, nil)!)
+    }
+
+    private func orientations(inImageAt url: URL) -> [Int] {
+        let source = CGImageSourceCreateWithURL(url as CFURL, nil)!
+        return (0..<CGImageSourceGetCount(source)).map {
+            (CGImageSourceCopyPropertiesAtIndex(source, $0, nil) as? [CFString: Any])?[kCGImagePropertyOrientation] as? Int ?? 1
+        }
     }
 
     /// Whether each frame of the image carries a location.
