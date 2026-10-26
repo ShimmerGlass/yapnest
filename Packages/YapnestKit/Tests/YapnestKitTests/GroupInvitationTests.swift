@@ -110,6 +110,12 @@ struct GroupInvitationSessionTests {
         #expect(!invitation.isDirect)
     }
 
+    @Test func anotherUserOnTheirServerCantVouchForThem() throws {
+        let impostor = YapnestKit.JID("evil@example.org")!
+        session.invitationReceived(relayed(room: impostor.description, from: "alice@example.org"))
+        #expect(try database.groupInvitation(impostor)?.isVouched == false)
+    }
+
     @Test func aRoomThatCantVouchIsHeldAsUnvouched() throws {
         session.invitationReceived(relayed())
         #expect(try database.groupInvitation(foreign)?.isVouched == false)

@@ -1469,11 +1469,12 @@ extension XMPPSession {
         identities.contains { $0.category == "conference" && $0.type == "text" }
     }
 
-    /// Whether `room`'s server can speak for `inviter`: it's their server's
-    /// group chat service, say conference.example.org for example.org.
+    /// Whether `room`'s server can speak for `inviter`: it's a group chat
+    /// service of their server, say conference.example.org for example.org.
+    /// The server's own domain doesn't count: a room never lives there, so
+    /// that would be another of its users, who could name anyone.
     static func vouches(room: JID, for inviter: JID) -> Bool {
-        let service = room.domain.lowercased(), home = inviter.domain.lowercased()
-        return service == home || service.hasSuffix("." + home)
+        room.domain.lowercased().hasSuffix("." + inviter.domain.lowercased())
     }
 
     // MARK: Bookmarks

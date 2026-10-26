@@ -134,7 +134,6 @@ struct InvitationParsingTests {
 
 struct InvitationVouchingTests {
     @Test func theirOwnServersServicesVouch() {
-        #expect(XMPPSession.vouches(room: YapnestKit.JID("cake@example.org")!, for: alice))
         #expect(XMPPSession.vouches(room: room, for: alice))
         #expect(XMPPSession.vouches(room: YapnestKit.JID("cake@a.b.example.org")!, for: alice))
     }
@@ -143,6 +142,8 @@ struct InvitationVouchingTests {
         #expect(!XMPPSession.vouches(room: YapnestKit.JID("cake@rooms.other.org")!, for: alice))
         #expect(!XMPPSession.vouches(room: YapnestKit.JID("cake@evilexample.org")!, for: alice))
         #expect(!XMPPSession.vouches(room: YapnestKit.JID("cake@rooms.evilexample.org")!, for: alice))
+        // A room never lives on a user's own domain: that is another user, who could name anyone.
+        #expect(!XMPPSession.vouches(room: YapnestKit.JID("cake@example.org")!, for: alice))
         // A room's server can't speak for a parent domain.
         #expect(!XMPPSession.vouches(room: YapnestKit.JID("cake@example.org")!, for: YapnestKit.JID("bob@rooms.example.org")!))
     }
