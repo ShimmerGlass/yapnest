@@ -11,8 +11,8 @@ struct MessageRowView: View, Equatable {
     nonisolated static func == (a: MessageRowView, b: MessageRowView) -> Bool { a.row == b.row }
 
     @State private var swipe: CGFloat = 0
-    /// The pointer is on the row or on its toolbar, which is partly outside it.
-    @State private var rowHovered = false
+    /// The pointer is on the bubble or on its toolbar, which is partly outside it.
+    @State private var bubbleHovered = false
     @State private var barHovered = false
     /// The bar's More menu is open, with the pointer in it. Catalyst tells
     /// the menu's contents when they appear but not when they go, so this is
@@ -33,8 +33,10 @@ struct MessageRowView: View, Equatable {
     private static let barOverlap: CGFloat = 10
 
     private var showsHoverBar: Bool {
-        Platform.isMac && (rowHovered || barHovered || menuOpen) && model.hoveredRow == row.id
+        Platform.isMac && (bubbleHovered || barHovered || menuOpen) && model.hoveredRow == row.id
     }
+
+    private var rowSpace: String { "messageRow-\(row.id)" }
 
     private var reactionTooltip: String {
         model.reactionChoices(for: row.id).map { "\($0.emoji) \($0.names)" }.joined(separator: "\n")
@@ -80,6 +82,26 @@ struct MessageRowView: View, Equatable {
     private var bubbleRow: some View {
         let reactions = row.item.reactions
         return RowBubble(row: row, model: model)
+            // On the bubble rather than the row, so the bar is for the message
+            // under the pointer, not the empty width beside it. Measured
+            // across the row, which the bar is laid out in.
+            .onContinuousHover(coordinateSpace: .named(rowSpace)) { phase in
+                switch phase {
+                case .active(let location):
+                    // A bubble that missed its end (around the More menu) is
+                    // still hovered, so also enter when another row has the bar.
+                    guard !bubbleHovered || (Platform.isMac && model.hoveredRow != row.id) else { return }
+                    bubbleHovered = true
+                    // An iPad's pointer hovers too, but has no bar to show.
+                    if Platform.isMac {
+                        pointerX = location.x
+                        menuOpen = false
+                        model.hoveredRow = row.id
+                    }
+                case .ended:
+                    bubbleHovered = false
+                }
+            }
             .padding(.bottom, reactions.isEmpty ? 0 : chipClearance)
             .overlay(alignment: row.isOutgoing ? .bottomLeading : .bottomTrailing) {
                 if !reactions.isEmpty {
@@ -105,25 +127,8 @@ struct MessageRowView: View, Equatable {
                     hoverBar
                 }
             }
-            .background { if Platform.isMac, rowHovered { Color.primary.opacity(0.04) } }
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let location):
-                    // A row that missed its end (around the More menu) is still
-                    // hovered, so also enter when another row has the bar.
-                    guard !rowHovered || (Platform.isMac && model.hoveredRow != row.id) else { return }
-                    rowHovered = true
-                    // An iPad's pointer hovers too, but has no bar to show.
-                    if Platform.isMac {
-                        pointerX = location.x
-                        menuOpen = false
-                        model.hoveredRow = row.id
-                    }
-                case .ended:
-                    rowHovered = false
-                }
-            }
-            .modifier(ClearsHoverWhenMenuCloses(conversation: model, menuOpen: $menuOpen, rowHovered: $rowHovered))
+            .coordinateSpace(.named(rowSpace))
+            .modifier(ClearsHoverWhenMenuCloses(conversation: model, menuOpen: $menuOpen, bubbleHovered: $bubbleHovered))
             .gesture(SwipeToReply(offset: $swipe, threshold: Self.swipeThreshold) { model.reply(to: row.id) })
             .accessibilityElement(children: .combine)
             .accessibilityLabel(row.content.accessibilityLabel)
@@ -185,15 +190,15 @@ private struct UnreadDivider: View {
 private struct ClearsHoverWhenMenuCloses: ViewModifier {
     let conversation: ConversationModel
     @Binding var menuOpen: Bool
-    @Binding var rowHovered: Bool
+    @Binding var bubbleHovered: Bool
 
     func body(content: Content) -> some View {
         if Platform.isMac {
             content.onReceive(NotificationCenter.default.publisher(for: .hoverMenuClosed, object: conversation)) { _ in
                 menuOpen = false
-                // Clears a hover tint whose end was missed; the next move over
-                // the row enters it again.
-                rowHovered = false
+                // Clears a hover whose end was missed; the next move over the
+                // bubble enters it again.
+                bubbleHovered = false
             }
         } else {
             content
