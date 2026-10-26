@@ -118,6 +118,9 @@ extension XMPPSession {
         // every device, set by a stranger. The roster name stays the user's.
         try await addContactAndWait(jid)
         try database.clearContactRequest(from: jid)
+        // Only now: asking a stranger's server for their avatar tells it that
+        // we exist and are online, which the user hasn't agreed to before this.
+        fetchAvatar(of: jid)
     }
 
     /// Befriends someone the user starts a chat with. A request of theirs is
@@ -157,11 +160,11 @@ extension XMPPSession {
     }
 
     /// A stranger's request. The name they give is their own claim, so it's
-    /// cleaned like any other remote name.
+    /// cleaned like any other remote name. Their avatar isn't fetched: the
+    /// request would show it, but asking for it tells their server that we
+    /// are online and run this app. The row shows initials until it's accepted.
     func recordContactRequest(from jid: JID, nickname: String?) throws {
-        let isNew = (try database.contact(jid))?.subscriptionRequestedAt == nil
         try database.recordContactRequest(from: jid, nickname: Self.normalizedNickname(nickname))
-        if isNew { fetchAvatar(of: jid) }
     }
 
     func subscriptionChanged(_ change: PresenceModule.SubscriptionChange) {

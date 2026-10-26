@@ -83,6 +83,35 @@ struct ContactRequestTests {
         #expect(try db.contact(alice)?.isAddedByUser == true)
     }
 
+    private func avatarRequests(_ wire: FakeWire, to jid: YapnestKit.JID) -> [Iq] {
+        let pubsub = "http://jabber.org/protocol/pubsub"
+        let address = jid.description
+        return wire.written.compactMap { $0 as? Iq }.filter { iq in
+            iq.type == .get && iq.to?.bareJid.description == address && iq.firstChild(name: "pubsub", xmlns: pubsub) != nil
+        }
+    }
+
+    @Test func aStrangersRequestDoesNotFetchTheirAvatar() async throws {
+        let session = try makeSession(JID("me@example.org")!, database: db)
+        let wire = FakeWire()
+        session.connectForTesting(wire)
+        wire.answer { FakeWire.result(to: $0) }
+        try session.recordContactRequest(from: stranger, nickname: "Stranger")
+        try session.recordContactRequest(from: stranger, nickname: "Stranger")
+        #expect(try db.contact(stranger)?.hasContactRequest == true)
+        #expect(avatarRequests(wire, to: stranger).isEmpty)
+    }
+
+    @Test func acceptingARequestFetchesTheirAvatar() async throws {
+        let session = try makeSession(JID("me@example.org")!, database: db)
+        let wire = FakeWire()
+        session.connectForTesting(wire)
+        wire.answer { FakeWire.result(to: $0) }
+        try session.recordContactRequest(from: stranger, nickname: nil)
+        try await session.acceptContactRequest(from: stranger)
+        #expect(avatarRequests(wire, to: stranger).count == 1)
+    }
+
     @Test func addingAndWaitingFailsWhenTheRosterRefuses() async throws {
         let session = try makeSession(JID("me@example.org")!, database: db)
         let wire = FakeWire()
