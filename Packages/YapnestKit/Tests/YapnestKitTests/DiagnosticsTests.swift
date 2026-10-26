@@ -139,6 +139,57 @@ struct DiagnosticsTests {
         }
     }
 
+    @Test func resettingDeletesEveryProcessesLogsAndWritingAfterwardsWorks() throws {
+        let dir = makeDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = DiagnosticsStore(directory: dir, process: .app, maxFileBytes: 2_000, flushInterval: 60)
+        DiagLog.write(.info, .send, "before", [], to: store)
+        store.flush()
+        // Another process's files, as the extensions leave them.
+        try Data("x\n".utf8).write(to: dir.appending(path: "nse.log"))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == ["app.log", "nse.log"])
+        // Still buffered when the reset comes.
+        DiagLog.write(.info, .send, "buffered", [], to: store)
+
+        store.reset()
+        #expect(!FileManager.default.fileExists(atPath: dir.path))
+
+        DiagLog.write(.info, .send, "after", [], to: store)
+        store.flush()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["app.log"])
+        let all = try lines(of: store.currentFile)
+        #expect(all.count == 1 && all[0].hasSuffix("after"))
+    }
+
+    @Test func resettingAnEmptyStoreIsHarmless() {
+        let store = DiagnosticsStore(directory: makeDirectory(), process: .app, flushInterval: 60)
+        store.reset()
+        DiagLog.write(.info, .send, "after", [], to: store)
+        store.flush()
+        #expect((try? lines(of: store.currentFile).count) == 1)
+        try? FileManager.default.removeItem(at: store.directory)
+    }
+
+    @Test func aResetKeyIsMadeAgainAndDiffers() async throws {
+        try await withKeyDirectory { (directory: URL) async throws -> Void in
+            let suite = "key-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suite)!
+            // An old install's key in the defaults would otherwise come back.
+            defaults.set(Data(repeating: 7, count: 32), forKey: Redacted.defaultsKey)
+            let before = Redacted.loadKey(in: directory, defaults: defaults)
+
+            Redacted.reset(in: directory, defaults: defaults)
+            #expect(!FileManager.default.fileExists(atPath: directory.appending(path: Redacted.keyFileName).path))
+            #expect(defaults.data(forKey: Redacted.defaultsKey) == nil)
+
+            let after = Redacted.loadKey(in: directory, defaults: defaults)
+            #expect(after.withUnsafeBytes { Data($0) } != before.withUnsafeBytes { Data($0) })
+            #expect(Redacted.id("alice@example.org", key: after) != Redacted.id("alice@example.org", key: before))
+            // And it stays put once made.
+            #expect(Redacted.loadKey(in: directory, defaults: defaults).withUnsafeBytes { Data($0) } == after.withUnsafeBytes { Data($0) })
+        }
+    }
+
     @Test func redactedIdsAreStableShortAndKeyed() {
         let key = SymmetricKey(data: Data(repeating: 1, count: 32))
         let other = SymmetricKey(data: Data(repeating: 2, count: 32))

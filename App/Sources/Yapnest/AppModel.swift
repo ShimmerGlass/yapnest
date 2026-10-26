@@ -132,6 +132,9 @@ final class AppModel {
             ShareSuggestions.removeAll()
             DraftWriter.shared.forgetAll()
         }
+        /// The diagnostic log and the key its ids are hashed with, which hold
+        /// nothing of the next account's.
+        var forgetDiagnostics: @MainActor () -> Void = { DiagLog.reset() }
     }
 
     @ObservationIgnored private let environment: Environment
@@ -451,6 +454,8 @@ final class AppModel {
                 UNUserNotificationCenter.current().removeAllDeliveredNotifications()
                 try? await UNUserNotificationCenter.current().setBadgeCount(0)
             }
+            // Last, so nothing the steps above log lands in the next account's log.
+            environment.forgetDiagnostics()
         }
         signingOut = task
         Task {

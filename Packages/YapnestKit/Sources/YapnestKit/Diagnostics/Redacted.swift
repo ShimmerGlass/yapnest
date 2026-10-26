@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 
 /// An identifier (an address, a message id, a room) as a short keyed hash:
 /// the same value gives the same id within this install, so lines can be
@@ -27,7 +28,31 @@ public struct Redacted: Sendable, Equatable {
 
     /// The app and both extensions share one key, in a file of the app group.
     /// Whoever gets there first publishes it whole and the rest read that one.
-    static let installKey: SymmetricKey = loadKey(in: SharedContainer.url, defaults: SharedContainer.defaults)
+    static var installKey: SymmetricKey {
+        cachedKey.withLock { cached in
+            if let cached { return cached }
+            let key = loadKey(in: SharedContainer.url, defaults: SharedContainer.defaults)
+            cached = key
+            return key
+        }
+    }
+
+    private static let cachedKey = OSAllocatedUnfairLock<SymmetricKey?>(initialState: nil)
+
+    /// Forgets the key, here and on disk, so the next id is hashed with a new
+    /// one and can't be matched to a line logged before. Signing out does
+    /// this along with deleting the log. A process that already holds the old
+    /// key keeps using it until it exits, which for the extensions is soon.
+    public static func reset() {
+        reset(in: SharedContainer.url, defaults: SharedContainer.defaults)
+        cachedKey.withLock { $0 = nil }
+    }
+
+    /// The defaults entry goes too: `loadKey` would carry it over as the new key.
+    static func reset(in directory: URL, defaults: UserDefaults) {
+        defaults.removeObject(forKey: defaultsKey)
+        try? FileManager.default.removeItem(at: directory.appending(path: keyFileName))
+    }
 
     static let keyFileName = "redaction.key"
 

@@ -63,6 +63,21 @@ public final class DiagnosticsStore: @unchecked Sendable {
         queue.async { self.writeBuffer() }
     }
 
+    /// Forgets what's buffered and deletes the whole log directory, which
+    /// holds the other processes' files too. The next line starts a fresh file.
+    /// A process still writing into the deleted folder keeps its open file,
+    /// now unlinked, so its lines are lost rather than a crash, until it
+    /// rotates or reopens and makes the folder again.
+    public func reset() {
+        queue.sync {
+            buffer = Data()
+            try? handle?.close()
+            handle = nil
+            size = 0
+            try? FileManager.default.removeItem(at: directory)
+        }
+    }
+
     private func writeBuffer() {
         guard !buffer.isEmpty else { return }
         let data = buffer

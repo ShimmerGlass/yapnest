@@ -21,6 +21,12 @@ public enum DiagLog {
         override.withLock { $0 = store }
     }
 
+    /// Deletes the log and the key its ids are hashed with, for signing out.
+    public static func reset() {
+        store.reset()
+        Redacted.reset()
+    }
+
     public static func debug(_ category: DiagCategory, _ message: StaticString, _ fields: DiagField...) {
         debug(category, message, fields: fields)
     }

@@ -53,6 +53,17 @@ struct AppModelSessionTests {
         }
     }
 
+    @Test func signingOutDeletesTheDiagnosticLogLast() async throws {
+        let fixture = AppModelFixture()
+        let model = fixture.model!
+        try await model.signIn(fixture.credentialsToSignIn)
+        #expect(fixture.diagnosticsWipes == 0)
+
+        model.signOut()
+
+        await eventually("the log is deleted") { fixture.diagnosticsWipes == 1 }
+    }
+
     @Test func aLinkOpenedBeforeSignInWaitsForIt() async throws {
         let fixture = AppModelFixture()
         let model = fixture.model!

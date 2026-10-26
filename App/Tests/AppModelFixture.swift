@@ -56,6 +56,7 @@ final class AppModelFixture {
     /// What stops a verification before the server answers; nil lets it answer.
     var passwordVerificationError: Error?
     private(set) var fastTokenWipes = 0
+    private(set) var diagnosticsWipes = 0
 
     init(
         lockTimeout: TimeInterval = 0.2, suspendDelay: Duration = .milliseconds(100), slowStatusDelay: Duration = .milliseconds(150),
@@ -75,6 +76,7 @@ final class AppModelFixture {
         environment.registersForNotifications = false
         environment.managesBadge = false
         environment.forgetSharedState = {}
+        environment.forgetDiagnostics = { [unowned self] in diagnosticsWipes += 1 }
         environment.forgetFastTokens = { [unowned self] in fastTokenWipes += 1 }
         environment.changePassword = { [unowned self] _, new, current in
             passwordChanges.append((new, current))
