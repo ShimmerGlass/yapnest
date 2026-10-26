@@ -1,9 +1,9 @@
 import SwiftUI
 import YapnestKit
 
-/// A group a contact seems to have invited us to, but whose server can't
-/// vouch for them, at the top of the chat list. Nothing is joined until
-/// Join is confirmed, after the warning about what can't be known.
+/// A group a contact invited us to, at the top of the chat list. Nothing is
+/// joined until Join is confirmed. When the group's server can't vouch for
+/// the inviter the confirmation warns about what can't be known.
 struct GroupInvitationRow: View {
     let session: XMPPSession
     let invitation: GroupInvitation
@@ -23,7 +23,9 @@ struct GroupInvitationRow: View {
                 Text(invitation.room.description)
                     .font(.headline)
                     .lineLimit(1)
-                Text("Invited by \(inviterName) (\(invitation.inviter.description)), unconfirmed")
+                Text(invitation.isVouched
+                     ? "Invited by \(inviterName) (\(invitation.inviter.description))"
+                     : "Invited by \(inviterName) (\(invitation.inviter.description)), unconfirmed")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -64,7 +66,11 @@ struct GroupInvitationRow: View {
             Button("Join", action: join)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("\(invitation.room.description) says \(inviterName) invited you. This can't be confirmed: the group is on a different server than \(inviterName)'s, and that server could name anyone as the inviter.\n\nJoining shows the group your nickname and that you're online, and adds the group to all your devices. If you're unsure, ask \(inviterName) first.")
+            if invitation.isVouched {
+                Text("\(inviterName) invited you to \(invitation.room.description).\n\nJoining shows the group your nickname and that you're online, and adds the group to all your devices.")
+            } else {
+                Text("\(invitation.room.description) says \(inviterName) invited you. This can't be confirmed: the group is on a different server than \(inviterName)'s, and that server could name anyone as the inviter.\n\nJoining shows the group your nickname and that you're online, and adds the group to all your devices. If you're unsure, ask \(inviterName) first.")
+            }
         }
         .actionAlert("Couldn't join", joining)
         .errorAlert("Couldn't decline", $declineError)

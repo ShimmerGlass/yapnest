@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import Martin
 import Testing
 @testable import YapnestKit
@@ -92,9 +93,44 @@ struct GroupInvitationSessionTests {
         #expect(try database.groupInvitation(foreign)?.reason == nil)
     }
 
-    @Test func aRoomOnTheirServerIsNotHeld() throws {
+    @Test func aRoomOnTheirServerIsHeldAsVouchedFor() throws {
         session.invitationReceived(relayed(room: "club@conference.example.org"))
+        let invitation = try #require(try database.groupInvitation(YapnestKit.JID("club@conference.example.org")!))
+        #expect(invitation.isVouched)
+        #expect(!invitation.isDirect)
+    }
+
+    @Test func aRoomThatCantVouchIsHeldAsUnvouched() throws {
+        session.invitationReceived(relayed())
+        #expect(try database.groupInvitation(foreign)?.isVouched == false)
+    }
+
+    @Test func aDirectInvitationFromAContactIsHeld() throws {
+        let xml = "<message from='alice@example.org/phone' to='me@example.org'><x xmlns='jabber:x:conference' jid='club@groups.example.net' password='pw'/></message>"
+        session.invitationReceived(Stanza.from(element: Element.from(string: xml)!) as! Martin.Message)
+        let invitation = try #require(try database.groupInvitation(foreign))
+        #expect(invitation.isDirect)
+        #expect(invitation.isVouched)
+        #expect(invitation.inviter == alice)
+        #expect(invitation.password == "pw")
+    }
+
+    @Test func aDirectInvitationFromAStrangerIsDropped() throws {
+        let xml = "<message from='mallory@example.net/x' to='me@example.org'><x xmlns='jabber:x:conference' jid='club@groups.example.net'/></message>"
+        session.invitationReceived(Stanza.from(element: Element.from(string: xml)!) as! Martin.Message)
         #expect(try database.reader.read(AppDatabase.groupInvitations).isEmpty)
+    }
+
+    @Test func migrationMarksStoredInvitationsAsRelayedAndUnvouched() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v40-notification-interval")
+        try queue.write { db in
+            try db.execute(sql: "INSERT INTO groupInvitation (room, inviter, receivedAt) VALUES ('x@rooms.example.org', 'a@example.org', 0)")
+        }
+        try AppDatabase.migrator.migrate(queue)
+        let stored = try queue.read { try GroupInvitation.fetchAll($0) }
+        #expect(stored.map(\.isDirect) == [false])
+        #expect(stored.map(\.isVouched) == [false])
     }
 
     @Test func strangersAreDropped() throws {

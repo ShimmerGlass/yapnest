@@ -1426,10 +1426,10 @@ extension XMPPSession {
         text.flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    /// Joins groups our contacts invite us to, unless a room relayed the
-    /// invitation and can't vouch for the inviter: those wait for the user.
-    /// Invitations from strangers are dropped rather than letting anyone add
-    /// us to anything.
+    /// Holds the invitations our contacts send for the user's answer: joining
+    /// shows the group our nickname and presence and adds it to every device,
+    /// which an invitation alone doesn't entitle anyone to. Invitations from
+    /// strangers are dropped rather than letting anyone add us to anything.
     func invitationReceived(_ stanza: Martin.Message) {
         // Someone we invited said no. Nothing is shown for it, but it isn't
         // an invitation either.
@@ -1449,30 +1449,13 @@ extension XMPPSession {
         if let group = try? database.groupChat(room), !group.hasLeft { return }
         // A room relaying an invitation names the inviter itself, so it could
         // name anyone. It can only speak for its own server's users; for any
-        // other the user decides, knowing that.
-        if !invitation.isDirect, !Self.vouches(room: room, for: inviter) {
-            logger.info("Holding invitation to \(room, privacy: .private) for \(inviter, privacy: .private): the room can't speak for them")
-            do {
-                try database.recordGroupInvitation(room: room, inviter: inviter, reason: invitation.reason, password: invitation.password)
-            } catch {
-                logger.error("Failed to store group invitation: \(error)")
-            }
-            return
-        }
-        Task { [self] in
-            do {
-                // Vouching only holds if the sender really is a room on that
-                // server, rather than something else at that address.
-                // A direct one names any address its sender likes. If the room
-                // can't be looked up it isn't joined: joining would create it.
-                if try await !isGroupChatRoom(room) {
-                    logger.info("Ignoring invitation to \(room, privacy: .private), which isn't a group chat")
-                    return
-                }
-                try await joinGroup(room, mayCreate: false, password: invitation.password)
-            } catch {
-                logger.warning("Couldn't accept invitation to \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
-            }
+        // other the user is told that.
+        let isVouched = invitation.isDirect || Self.vouches(room: room, for: inviter)
+        logger.info("Holding invitation to \(room, privacy: .private) from \(inviter, privacy: .private), vouched for: \(isVouched)")
+        do {
+            try database.recordGroupInvitation(room: room, inviter: inviter, reason: invitation.reason, password: invitation.password, isDirect: invitation.isDirect, isVouched: isVouched)
+        } catch {
+            logger.error("Failed to store group invitation: \(error)")
         }
     }
 
@@ -1721,8 +1704,8 @@ extension XMPPSession {
         if let joined = try database.groupChat(room) { publishBookmark(joined) }
     }
 
-    /// Joins a group we were invited to without knowing who invited us, once
-    /// the user has decided to. The invitation stays if the room refuses.
+    /// Joins a group we were invited to, once the user has decided to. The
+    /// invitation stays if the room refuses.
     public func acceptGroupInvitation(_ room: JID) async throws {
         // The address came from a stranger's stanza: it must be a room already.
         guard try await isGroupChatRoom(room) else { throw GroupError.joinFailed(String(localized: "This group doesn't exist.")) }
@@ -1744,10 +1727,10 @@ extension XMPPSession {
     }
 
     /// Whether declining `invitation` is told to its inviter: only when
-    /// they're a contact we have a subscription with. Every stored invitation
-    /// was relayed through the room, as direct ones are joined at once.
+    /// they're a contact we have a subscription with, and the invitation was
+    /// relayed through the room: a direct one (XEP-0249) has no decline.
     static func sendsDecline(for invitation: GroupInvitation, inviter: Contact?) -> Bool {
-        guard let inviter, inviter.isInRoster else { return false }
+        guard !invitation.isDirect, let inviter, inviter.isInRoster else { return false }
         return inviter.subscription != .none
     }
 

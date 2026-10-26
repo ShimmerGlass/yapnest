@@ -849,16 +849,22 @@ struct RoomDetailTests {
         #expect(XMPPSession.invitation(in: plain)?.password == nil)
     }
 
-    @Test func anInvitationToAPasswordRoomJoinsWithTheInvitersPassword() async throws {
+    @Test func aDirectInvitationToAPasswordRoomIsHeldAndJoinedWithTheInvitersPasswordOnAccept() async throws {
         let friend = YapnestKit.JID("friend@example.org")!
         try database.updateRosterItem(jid: friend, name: nil, subscription: .both, isPending: false)
         wire.answer { iq in
             isQuery(iq, "http://jabber.org/protocol/disco#info") ? FakeWire.discoInfo(to: iq, category: "conference", type: "text") : nil
         }
         session.invitationReceived(parseStanza("<message from='friend@example.org/phone'><x xmlns='jabber:x:conference' jid='book@rooms.example.org' password='s3cret'/></message>") as Martin.Message)
+        let book = YapnestKit.JID("book@rooms.example.org")!
+        #expect(try database.groupInvitation(book)?.password == "s3cret")
+        #expect(joinPresences(wire).isEmpty)
 
+        let session = self.session
+        let accepting = Task { try await session.acceptGroupInvitation(book) }
         #expect(await eventually { !joinPresences(wire).isEmpty })
         let join = joinPresences(wire).first?.firstChild(name: "x", xmlns: "http://jabber.org/protocol/muc")
         #expect(join?.firstChild(name: "password")?.value == "s3cret")
+        accepting.cancel()
     }
 }

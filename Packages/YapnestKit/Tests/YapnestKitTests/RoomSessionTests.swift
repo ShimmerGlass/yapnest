@@ -357,54 +357,84 @@ struct InvitationFlowTests {
         wire.written.contains { $0 is Martin.Presence && $0.to?.bareJid == room.martin }
     }
 
-    /// Waits for the lookup, then for the join that may follow it.
-    private func invited(by xml: String) async -> Bool {
+    private func invite(_ xml: String) {
         session.invitationReceived(parseStanza(xml) as Martin.Message)
-        _ = await eventually { lookups >= 1 }
-        return await eventually(timeout: 0.5) { joinWasSent }
     }
 
-    @Test func aRelayedInvitationFromATextRoomIsJoined() async throws {
+    /// Accepts the held invitation, waiting for the lookup and the join that may follow it.
+    private func accepted() async -> Bool {
+        let session = self.session
+        let accepting = Task { try await session.acceptGroupInvitation(room) }
+        _ = await eventually { lookups >= 1 }
+        let joined = await eventually(timeout: 0.5) { joinWasSent }
+        accepting.cancel()
+        return joined
+    }
+
+    @Test func aRelayedInvitationIsHeldNotJoined() async throws {
         disco([("conference", "text")])
-        #expect(await invited(by: relayed))
+        invite(relayed)
+        let held = try #require(try database.groupInvitation(room))
+        #expect(!held.isDirect)
+        // The room is on a subdomain of the inviter's server.
+        #expect(held.isVouched)
+        #expect(lookups == 0)
+        #expect(!joinWasSent)
+        #expect(session.roomStatus(room) == nil)
+    }
+
+    @Test func aDirectInvitationIsHeldNotJoined() async throws {
+        disco([("conference", "text")])
+        invite(direct)
+        let held = try #require(try database.groupInvitation(room))
+        #expect(held.isDirect)
+        #expect(held.isVouched)
+        #expect(lookups == 0)
+        #expect(!joinWasSent)
+        #expect(session.roomStatus(room) == nil)
+    }
+
+    @Test func aHeldRelayedInvitationIsJoinedOnAccept() async throws {
+        disco([("conference", "text")])
+        invite(relayed)
+        #expect(await accepted())
         #expect(session.roomStatus(room)?.phase == .joining)
     }
 
-    @Test func aRelayedInvitationFromSomethingThatIsNotARoomIsNotJoined() async throws {
-        disco([("account", "registered")])
-        #expect(await !invited(by: relayed))
-        #expect(session.roomStatus(room) == nil)
-        #expect(try database.groupChat(room) == nil)
+    @Test func aHeldDirectInvitationIsJoinedOnAccept() async throws {
+        disco([("conference", "text")])
+        invite(direct)
+        #expect(await accepted())
+        #expect(session.roomStatus(room)?.phase == .joining)
     }
 
-    @Test func aDirectInvitationToSomethingThatIsNotARoomIsNotJoined() async throws {
+    @Test func aHeldInvitationToSomethingThatIsNotARoomIsNotJoined() async throws {
         disco([("conference", "irc")])
-        #expect(await !invited(by: direct))
+        invite(direct)
+        #expect(await !accepted())
         #expect(session.roomStatus(room) == nil)
         #expect(try database.groupChat(room) == nil)
     }
 
-    @Test func aDirectInvitationToAnAddressThatCannotBeLookedUpIsNotJoined() async throws {
+    @Test func aHeldInvitationToAnAddressThatCannotBeLookedUpIsNotJoined() async throws {
         disco([nil])
-        #expect(await !invited(by: direct))
+        invite(direct)
+        #expect(await !accepted())
         // It stopped at the failed lookup, rather than going on to join.
         #expect(lookups == 1)
         #expect(session.roomStatus(room) == nil)
         #expect(try database.groupChat(room) == nil)
     }
 
-    @Test func aDirectInvitationToATextRoomIsJoined() async throws {
-        disco([("conference", "text")])
-        #expect(await invited(by: direct))
-        #expect(session.roomStatus(room)?.phase == .joining)
-    }
-
     @Test func aRoomThatVanishesBetweenTheLookupAndTheJoinIsNotCreated() async throws {
         // The first lookup finds it; joining looks it up again and it's gone.
         disco([("conference", "text"), nil])
-        session.invitationReceived(parseStanza(direct) as Martin.Message)
+        invite(direct)
+        let session = self.session
+        let accepting = Task { try await session.acceptGroupInvitation(room) }
         _ = await eventually { lookups >= 2 }
         #expect(await !eventually(timeout: 0.5) { joinWasSent })
+        accepting.cancel()
         // Whatever the join left behind is cleaned up.
         #expect(await eventually { (try? database.groupChat(room)) == nil })
     }

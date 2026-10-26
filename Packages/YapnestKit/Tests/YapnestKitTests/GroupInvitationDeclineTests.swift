@@ -103,4 +103,20 @@ struct GroupInvitationDeclineTests {
     @Test func aDeclineFromAnOccupantIsAForgery() {
         #expect(XMPPSession.decline(in: relayedDecline(from: "club@groups.example.net/mallory")) == nil)
     }
+
+    @Test func aDirectInvitationIsForgottenWithoutAnswer() throws {
+        try database.updateRosterItem(jid: alice, name: "Alice", subscription: .both, isPending: false)
+        try database.recordGroupInvitation(room: room, inviter: alice, reason: nil, isDirect: true, isVouched: true)
+        try session.declineGroupInvitation(room)
+        #expect(try database.groupInvitation(room) == nil)
+        #expect(declines.isEmpty)
+        #expect(wire.messages.isEmpty)
+    }
+
+    @Test func aRelayedInvitationFromAVouchedRoomIsStillDeclined() throws {
+        try database.updateRosterItem(jid: alice, name: "Alice", subscription: .both, isPending: false)
+        try database.recordGroupInvitation(room: room, inviter: alice, reason: nil, isVouched: true)
+        try session.declineGroupInvitation(room)
+        #expect(declines.count == 1)
+    }
 }
