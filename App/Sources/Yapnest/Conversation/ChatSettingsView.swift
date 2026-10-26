@@ -144,11 +144,15 @@ struct ChatSettingsView: View {
                         dismiss()
                     }
                 }
+                .padding(.top, 8)
             }
             .frame(maxWidth: .infinity)
             .avatarHeaderRow()
         }
         .listRowBackground(Color.clear)
+        // The buttons belong with the header; the first section shouldn't sit
+        // a full section's gap away from them.
+        .listSectionSpacing(.compact)
     }
 
     var body: some View {
@@ -175,7 +179,15 @@ struct ChatSettingsView: View {
                             LabeledContent {
                                 Text(contact?.name ?? "None")
                             } label: {
-                                BusyLabel(title: "Nickname", systemImage: "pencil", isBusy: rename.isBusy)
+                                // Not `.row`: its label inside LabeledContent made
+                                // the row several times its height. The tint
+                                // keeps the name and title primary; the icon is
+                                // coloured here instead.
+                                Label {
+                                    Text("Nickname")
+                                } icon: {
+                                    if rename.isBusy { ProgressView() } else { Image(systemName: "pencil").foregroundStyle(Color.accentColor) }
+                                }
                             }
                         }
                         .tint(.primary)
@@ -262,6 +274,7 @@ struct ChatSettingsView: View {
                     Section {
                         Button(role: .destructive) { confirmsLeave = true } label: {
                             BusyLabel(title: "Leave Group", systemImage: "rectangle.portrait.and.arrow.right", isBusy: leave.isBusy)
+                                .labelStyle(.destructiveRow)
                         }
                         .disabled(leave.isBusy)
                     }
@@ -271,6 +284,7 @@ struct ChatSettingsView: View {
                     Section {
                         Button(role: .destructive) { confirmsDestroy = true } label: {
                             BusyLabel(title: "Delete Group", systemImage: "trash", isBusy: destroy.isBusy)
+                                .labelStyle(.destructiveRow)
                         }
                         .disabled(destroy.isBusy)
                     }
@@ -281,10 +295,12 @@ struct ChatSettingsView: View {
                         if contact?.isInRoster == true {
                             Button(role: .destructive) { confirmsRemove = true } label: {
                                 BusyLabel(title: "Remove from Contacts", systemImage: "person.badge.minus", isBusy: remove.isBusy)
+                                    .labelStyle(.destructiveRow)
                             }
                             .disabled(remove.isBusy)
                         } else if contact?.hasContactRequest != true {
                             AddContactButton(session: session, peer: peer)
+                                .labelStyle(.row)
                         }
                     }
                 }
@@ -296,10 +312,12 @@ struct ChatSettingsView: View {
                                 unblock.run { try await session.unblock(peer) }
                             } label: {
                                 BusyLabel(title: "Unblock", systemImage: "hand.raised.slash", isBusy: unblock.isBusy)
+                                    .labelStyle(.row)
                             }
                             .disabled(unblock.isBusy)
                         } else {
                             Button("Block", systemImage: "hand.raised", role: .destructive) { confirmsBlock = true }
+                                .labelStyle(.destructiveRow)
                         }
                     } footer: {
                         if contact?.isBlocked == true {
@@ -500,6 +518,7 @@ struct ChatSettingsView: View {
         Section {
             if room?.isJoined == true, group.isMembersOnly || room?.canInvite == true {
                 Button("Add Members", systemImage: "person.badge.plus") { showsInvite = true }
+                    .labelStyle(.row)
             }
             if room?.canSeeBans == true {
                 NavigationLink {

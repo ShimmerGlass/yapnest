@@ -70,10 +70,12 @@ struct SettingsView: View {
                     }
                     PhotosPicker(selection: $photo, matching: .images) {
                         Label("Choose Photo", systemImage: "photo")
+                            .labelStyle(.row)
                     }
                     .disabled(profileAction.isBusy)
                     if me?.avatarHash != nil {
                         Button("Remove Photo", systemImage: "trash", role: .destructive, action: removeAvatar)
+                            .labelStyle(.destructiveRow)
                             .disabled(profileAction.isBusy)
                     }
                 } header: {
@@ -159,13 +161,13 @@ struct SettingsView: View {
 
                 Section {
                     if let url = AppLinks.terms {
-                        Link(destination: url) { Label("Terms of Use", systemImage: "doc.text") }
+                        Link(destination: url) { Label("Terms of Use", systemImage: "doc.text").labelStyle(.row) }
                     }
                     if let url = AppLinks.privacyPolicy {
-                        Link(destination: url) { Label("Privacy Policy", systemImage: "hand.raised") }
+                        Link(destination: url) { Label("Privacy Policy", systemImage: "hand.raised").labelStyle(.row) }
                     }
                     if let url = AppLinks.support {
-                        Link(destination: url) { Label("Contact Support", systemImage: "envelope") }
+                        Link(destination: url) { Label("Contact Support", systemImage: "envelope").labelStyle(.row) }
                     }
                     NavigationLink {
                         LicencesView()
@@ -184,6 +186,7 @@ struct SettingsView: View {
                     } label: {
                         HStack {
                             Label("Export Logs", systemImage: "doc.text.magnifyingglass")
+                                .labelStyle(.row)
                             if diagnostics.isExporting {
                                 Spacer()
                                 ProgressView()
@@ -214,6 +217,7 @@ struct SettingsView: View {
                     Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
                         confirmsSignOut = true
                     }
+                    .labelStyle(.destructiveRow)
                 }
             }
             .dismissesKeyboardOnTap()

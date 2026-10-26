@@ -53,7 +53,7 @@ struct LicencesView: View {
             Section {
                 Text("Yapnest is free software, released under the GNU Affero General Public License, version 3 or later. You can read, change and share its source code.")
                 if let url = AppLinks.sourceCode {
-                    Link(destination: url) { Label("Source Code", systemImage: "chevron.left.forwardslash.chevron.right") }
+                    Link(destination: url) { Label("Source Code", systemImage: "chevron.left.forwardslash.chevron.right").labelStyle(.row) }
                 }
                 if let own = Self.licences?.yapnest {
                     NavigationLink("Yapnest") {
