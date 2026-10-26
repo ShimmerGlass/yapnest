@@ -735,12 +735,14 @@ final class AppModel {
         guard environment.managesBadge else { return }
         unreadObservation = Task {
             var last: [JID: Int]?
-            await session.database.forEachValue(of: session.database.observeUnreadCounts(), "Unread") { counts in
+            await session.database.forEachValue(of: session.database.observeUnreadBadge(), "Unread") { badge in
                 let center = UNUserNotificationCenter.current()
                 // Every time: the notification extension sets the badge as
                 // well, and a message it counted can be read before this
                 // sees the count go up, so the counts alone may not change.
-                try? await center.setBadgeCount(counts.values.reduce(0, +))
+                try? await center.setBadgeCount(badge.count)
+                DockBadge.showDot(badge.showsDot)
+                let counts = badge.counts
                 guard counts != last else { return }
                 last = counts
                 // Archived and deleted chats aren't in the counts at all, so

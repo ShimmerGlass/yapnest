@@ -46,7 +46,7 @@ struct MainThreadAccessTests {
     @Test @MainActor func observationsFirstFetchIsOffTheMainThread() async throws {
         let db = try open()
         let hits = try await count {
-            let counts = db.observeUnreadCounts()
+            let counts = db.observeUnreadBadge()
             for try await _ in counts.values(in: db.reader, bufferingPolicy: .bufferingNewest(1)) { break }
         }
         #expect(hits == 0)

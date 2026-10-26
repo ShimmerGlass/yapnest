@@ -209,6 +209,16 @@ private enum AppKit {
     }
 }
 
+/// The Dock icon's badge, which UIKit only sets to a number.
+enum DockBadge {
+    /// Discord's dot, for what's unread but doesn't notify. Set after the
+    /// badge count, which replaces the label.
+    @MainActor static func showDot(_ dot: Bool) {
+        let tile = AppKit.object(of: "NSApplication", "sharedApplication")?.value(forKey: "dockTile") as? NSObject
+        tile?.perform(NSSelectorFromString("setBadgeLabel:"), with: dot ? "•" : nil)
+    }
+}
+
 /// AppKit's cursors.
 enum MacCursor {
     nonisolated(unsafe) static let pointingHand = cursor("pointingHandCursor")
@@ -246,6 +256,11 @@ enum CharacterPalette {
 #else
 enum CharacterPalette {
     static func show() {}
+}
+
+/// iOS draws a badge as a number only, so there's no dot on the home screen.
+enum DockBadge {
+    static func showDot(_ dot: Bool) {}
 }
 #endif
 

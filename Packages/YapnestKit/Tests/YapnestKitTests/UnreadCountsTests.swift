@@ -19,9 +19,13 @@ struct UnreadCountsTests {
         return id
     }
 
+    private func badge() async throws -> UnreadBadge {
+        for try await value in db.observeUnreadBadge().values(in: db.reader, bufferingPolicy: .bufferingNewest(1)) { return value }
+        return UnreadBadge(counts: [:], hasUnread: false)
+    }
+
     private func counts() async throws -> [JID: Int] {
-        for try await value in db.observeUnreadCounts().values(in: db.reader, bufferingPolicy: .bufferingNewest(1)) { return value }
-        return [:]
+        try await badge().counts
     }
 
     @Test func archivedAndDeletedChatsAreLeftOut() async throws {
@@ -126,5 +130,37 @@ struct UnreadCountsTests {
         try db.setArchived(true, conversationId: id)
         #expect(try await counts()[room] == nil)
         #expect(try db.unreadCount() == 0)
+    }
+
+    @Test func aQuietGroupGetsADotOnlyWhenNothingIsCounted() async throws {
+        let room = JID("cake@rooms.example.org")!
+        let group = try db.joinGroupChat(room, nickname: "me")
+        try db.updateGroupChat(room) { $0.notify = .never }
+        #expect(try await badge().showsDot == false)
+
+        try db.insert(Message(conversationId: group.conversationId, direction: .incoming, sender: alice, body: "hi", remoteId: "g1"))
+        #expect(try await badge().count == 0)
+        #expect(try await badge().showsDot)
+
+        _ = try unread(1, from: bob)
+        #expect(try await badge().count == 1)
+        #expect(try await badge().showsDot == false)
+    }
+
+    @Test func aMentionOnlyGroupWithoutMentionsGetsADot() async throws {
+        let room = JID("cake@rooms.example.org")!
+        let group = try db.joinGroupChat(room, nickname: "me")
+        try db.updateGroupChat(room) { $0.notify = .onMention }
+        try db.insert(Message(conversationId: group.conversationId, direction: .incoming, sender: alice, body: "nothing", remoteId: "g1"))
+        #expect(try await badge().showsDot)
+    }
+
+    @Test func anArchivedQuietGroupGetsNoDot() async throws {
+        let room = JID("cake@rooms.example.org")!
+        let group = try db.joinGroupChat(room, nickname: "me")
+        try db.updateGroupChat(room) { $0.notify = .never }
+        try db.insert(Message(conversationId: group.conversationId, direction: .incoming, sender: alice, body: "hi", remoteId: "g1"))
+        try db.setArchived(true, conversationId: group.conversationId)
+        #expect(try await badge().showsDot == false)
     }
 }

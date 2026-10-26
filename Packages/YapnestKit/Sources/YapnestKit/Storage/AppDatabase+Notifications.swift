@@ -178,11 +178,17 @@ extension AppDatabase {
     }
 
     /// Each conversation's unread count, for clearing its notifications once
-    /// it's read here or on another device. Counts the same messages as
-    /// `unreadCount()`: groups that never notify count none, and those that
-    /// notify for mentions count only the mentions.
-    public func observeUnreadCounts() -> ValueObservation<ValueReducers.Fetch<[JID: Int]>> {
-        ValueObservation.tracking { db in try Self.badgeCounts(db) }
+    /// it's read here or on another device, and the app's badge. Counts the
+    /// same messages as `unreadCount()`: groups that never notify count none,
+    /// and those that notify for mentions count only the mentions.
+    public func observeUnreadBadge() -> ValueObservation<ValueReducers.Fetch<UnreadBadge>> {
+        ValueObservation.tracking { db in
+            let hasUnread = try Message
+                .filter(Column("isRead") == false)
+                .joining(required: Message.conversation.filter(Column("isArchived") == false))
+                .isEmpty(db) == false
+            return UnreadBadge(counts: try Self.badgeCounts(db), hasUnread: hasUnread)
+        }
         // Not deduplicated: the notification extension sets the badge too,
         // so a write that leaves the counts as they were can still follow a
         // badge the app has to put right. Callers skip the costly work
@@ -256,4 +262,19 @@ extension AppDatabase {
     public func notifyExternalChanges() throws {
         try writer.write { db in try db.notifyChanges(in: .fullDatabase) }
     }
+}
+
+/// What the app's badge shows.
+public struct UnreadBadge: Equatable, Sendable {
+    /// What notifies, per peer, as `badgeCounts` has it.
+    public var counts: [JID: Int]
+    /// Anything is unread outside archived chats, notifying or not.
+    public var hasUnread: Bool
+
+    public var count: Int { counts.values.reduce(0, +) }
+
+    /// Unread messages that don't notify, as in a quiet group, get a dot
+    /// where the chat list draws one, unless something counted takes the
+    /// badge. A count would promise messages the user wasn't told about.
+    public var showsDot: Bool { count == 0 && hasUnread }
 }
