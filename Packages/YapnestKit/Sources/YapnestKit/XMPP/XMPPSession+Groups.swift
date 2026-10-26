@@ -2097,7 +2097,14 @@ extension XMPPSession {
     private func configurePrivateRoom(_ room: JID, name: String) async throws {
         let form = try await ownerForm(of: room)
         let offered = Set(form?.filterChildren(name: "field", xmlns: nil).compactMap { $0.getAttribute("var") } ?? [])
-        let wanted: [String: [String]] = [
+        let fields = Self.privateRoomFields(name: name, offered: offered)
+        try await submitOwnerForm(fields, to: room)
+    }
+
+    /// The owner form fields to submit for a private room, out of those the form offers.
+    static func privateRoomFields(name: String, offered: Set<String>) -> [String: [String]] {
+        let archiveFields = ["muc#roomconfig_enablearchiving", "mam"]
+        var wanted: [String: [String]] = [
             RoomConfiguration.Field.name: [name],
             "muc#roomconfig_persistentroom": ["1"],
             RoomConfiguration.Field.membersOnly: ["1"],
@@ -2109,10 +2116,14 @@ extension XMPPSession {
             // Prosody and ejabberd name archiving differently.
             "muc#roomconfig_enablearchiving": ["1"],
             "mam": ["1"],
-            // Openfire's archive only keeps what a room logs.
-            "muc#roomconfig_enablelogging": ["1"],
         ]
-        try await submitOwnerForm(wanted.filter { offered.contains($0.key) }, to: room)
+        // Openfire's archive only keeps what a room logs, but elsewhere (ejabberd's mod_muc_log)
+        // this writes the conversation to a file a server may publish over HTTP, so it is
+        // only for a server that offers no other archive option.
+        if !archiveFields.contains(where: offered.contains) {
+            wanted["muc#roomconfig_enablelogging"] = ["1"]
+        }
+        return wanted.filter { offered.contains($0.key) }
     }
 
     /// The configuration form the room offers its owner.
