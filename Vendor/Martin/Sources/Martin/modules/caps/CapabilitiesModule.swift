@@ -83,6 +83,8 @@ open class CapabilitiesModule: XmppModuleBase, XmppModule, EventHandler {
     private var discoModule: DiscoveryModule!;
     private let dispatcher = QueueDispatcher(label: "capsInProgressSynchronizer");
     private var inProgress: [String] = [];
+    /// node#ver whose answer didn't hash to it, not asked about again.
+    private var unverifiable: Set<String> = [];
     
     public let additionalFeatures: [AdditionalFeatures];
     
@@ -143,12 +145,13 @@ open class CapabilitiesModule: XmppModuleBase, XmppModule, EventHandler {
             return;
         }
         
-        guard let nodeName = e.presence.capsNode else {
+        guard let nodeName = e.presence.capsNode, let c = e.presence.element.findChild(name: "c", xmlns: "http://jabber.org/protocol/caps") else {
             return;
         }
+        let ver = c.getAttribute("ver"), hash = c.getAttribute("hash");
         
         dispatcher.async {
-            guard !self.inProgress.contains(nodeName) else {
+            guard !self.inProgress.contains(nodeName), !self.unverifiable.contains(nodeName) else {
                 return;
             }
             self.cache.isCached(node: nodeName) { cached in
@@ -161,19 +164,31 @@ open class CapabilitiesModule: XmppModuleBase, XmppModule, EventHandler {
                     }
                     self.inProgress.append(nodeName);
                     self.logger.debug("\(self.context) - caps disco#info send for: \(nodeName, privacy: .public) to: \(from, privacy: .auto(mask: .hash))");
-                    self.discoModule.getInfo(for: from, node: nodeName, completionHandler: { result in
+                    self.discoModule.getInfo(for: from, node: nodeName, errorDecoder: XMPPError.from(stanza:), completionHandler: { (result: Result<Iq, XMPPError>) in
                         self.dispatcher.async {
                             if let idx = self.inProgress.firstIndex(of: nodeName) {
                                 self.inProgress.remove(at: idx);
                                 self.logger.debug("\(self.context) - caps disco#info received from: \(from, privacy: .private(mask: .hash)) result: \(result, privacy: .private(mask: .hash))");
                             }
-                            switch result {
-                            case .success(let info):
-                                let identity = info.identities.first;
-                                self.cache.store(node: nodeName, identity: identity, features: info.features);
-                            default:
-                                break;
+                            guard case .success(let iq) = result, let query = iq.findChild(name: "query", xmlns: DiscoveryModule.INFO_XMLNS) else {
+                                return;
                             }
+                            // The answer is cached for everyone who shows this
+                            // node#ver, so it's only taken if it hashes to it:
+                            // anyone can claim a popular client's and answer for it.
+                            guard let ver, CapabilitiesModule.verificationString(of: query, hash: hash) == ver else {
+                                self.logger.debug("\(self.context) - caps answer doesn't match its hash: \(nodeName, privacy: .public)");
+                                self.unverifiable.insert(nodeName);
+                                return;
+                            }
+                            let identity = query.firstChild(where: { $0.name == "identity" }).flatMap { e -> DiscoveryModule.Identity? in
+                                guard let category = e.getAttribute("category"), let type = e.getAttribute("type") else {
+                                    return nil;
+                                }
+                                return DiscoveryModule.Identity(category: category, type: type, name: e.getAttribute("name"));
+                            };
+                            let features = query.getChildren(name: "feature").compactMap { $0.getAttribute("var") };
+                            self.cache.store(node: nodeName, identity: identity, features: features);
                         }
                     });
                 }
@@ -238,6 +253,74 @@ open class CapabilitiesModule: XmppModuleBase, XmppModule, EventHandler {
      - parameter features: available feature for client
      - returns: verification string
      */
+    /// XEP-0115 §5.1's verification string of a disco#info answer, with the
+    /// hash the presence named; nil for one we can't check, or an answer the
+    /// spec says not to cache (§5.4: a repeated identity or feature, or a
+    /// form whose FORM_TYPE isn't one hidden value).
+    static func verificationString(of query: Element, hash: String?) -> String? {
+        let digest: Digest;
+        switch hash?.lowercased() {
+        case "sha-1": digest = .sha1;
+        case "sha-256": digest = .sha256;
+        default: return nil;
+        }
+        // i;octet: by the bytes of the UTF-8.
+        func ordered(_ lhs: String, _ rhs: String) -> Bool {
+            return Array(lhs.utf8).lexicographicallyPrecedes(Array(rhs.utf8));
+        }
+        let identities = query.getChildren(name: "identity").map { e in
+            [e.getAttribute("category") ?? "", e.getAttribute("type") ?? "", e.getAttribute("xml:lang") ?? "", e.getAttribute("name") ?? ""]
+        };
+        let features = query.getChildren(name: "feature").compactMap { $0.getAttribute("var") };
+        guard Set(identities).count == identities.count, Set(features).count == features.count else {
+            return nil;
+        }
+        var string = "";
+        for identity in identities.sorted(by: { lhs, rhs in
+            // Category, then type, then language; the name breaks no tie.
+            let l = lhs[0..<3].joined(separator: "/"), r = rhs[0..<3].joined(separator: "/");
+            return l == r ? ordered(lhs[3], rhs[3]) : ordered(l, r);
+        }) {
+            string += identity.joined(separator: "/") + "<";
+        }
+        for feature in features.sorted(by: ordered) {
+            string += feature + "<";
+        }
+        var forms: [(type: String, fields: [(name: String, values: [String])])] = [];
+        for form in query.getChildren(name: "x", xmlns: "jabber:x:data") {
+            let fields = form.getChildren(name: "field");
+            let typeFields = fields.filter { $0.getAttribute("var") == "FORM_TYPE" };
+            // A form without a FORM_TYPE is left out of the hash.
+            guard !typeFields.isEmpty else {
+                continue;
+            }
+            let typeValues = typeFields.first!.getChildren(name: "value").compactMap { $0.value };
+            guard typeFields.count == 1, typeFields.first!.getAttribute("type") == "hidden", typeValues.count == 1 else {
+                return nil;
+            }
+            let others = fields.compactMap { field -> (name: String, values: [String])? in
+                guard let name = field.getAttribute("var"), name != "FORM_TYPE" else {
+                    return nil;
+                }
+                return (name, field.getChildren(name: "value").map { $0.value ?? "" }.sorted(by: ordered));
+            };
+            forms.append((typeValues[0], others.sorted(by: { ordered($0.name, $1.name) })));
+        }
+        guard Set(forms.map(\.type)).count == forms.count else {
+            return nil;
+        }
+        for form in forms.sorted(by: { ordered($0.type, $1.type) }) {
+            string += form.type + "<";
+            for field in form.fields {
+                string += field.name + "<";
+                for value in field.values {
+                    string += value + "<";
+                }
+            }
+        }
+        return digest.digest(toBase64: string.data(using: .utf8));
+    }
+
     func generateVerificationString(_ identities: [String], features availableFeatures: [String]) -> String? {
         let features = availableFeatures.sorted();
         var string: String = "";

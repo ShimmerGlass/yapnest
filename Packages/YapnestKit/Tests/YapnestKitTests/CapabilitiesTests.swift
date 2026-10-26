@@ -48,6 +48,42 @@ struct CapabilitiesTests {
         return wire.written.count > before
     }
 
+    /// A peer's presence naming `ver`, answered with `features`.
+    private func meet(ver: String, answering features: [String]) {
+        wire.answer { iq in
+            guard iq.firstChild(name: "query", xmlns: DiscoveryModule.INFO_XMLNS) != nil else { return nil }
+            return FakeWire.discoInfo(to: iq, category: "client", type: "phone", features: features)
+        }
+        let presence = Presence()
+        presence.from = JID("peer@example.org/phone")
+        presence.addChild(Element(name: "c", attributes: ["xmlns": "http://jabber.org/protocol/caps", "hash": "sha-1", "node": "https://example.org/client", "ver": ver]))
+        caps.onReceivedPresence(event: PresenceModule.ContactPresenceChanged(context: client, presence: presence, availabilityChanged: true))
+    }
+
+    private func asked() -> Bool {
+        wire.written.contains { ($0 as? Iq)?.firstChild(name: "query", xmlns: DiscoveryModule.INFO_XMLNS) != nil }
+    }
+
+    /// Anyone can claim a popular client's ver; what they answer would then
+    /// stand for every contact on that client.
+    @Test func anAnswerThatDoesntHashToItsVerIsNotCached() async throws {
+        meet(ver: "QgayPKawpkPSDYmwT/WM94uAlu0=", answering: ["urn:xmpp:jingle-message:0"])
+        await eventually("the lookup") { asked() }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(caps.cache.getFeatures(for: "https://example.org/client#QgayPKawpkPSDYmwT/WM94uAlu0=") == nil)
+    }
+
+    @Test func anAnswerThatHashesToItsVerIsCached() async throws {
+        let features = ["urn:xmpp:jingle-message:0", "urn:xmpp:jingle:apps:rtp:audio"]
+        let answer = Element(name: "query", xmlns: DiscoveryModule.INFO_XMLNS)
+        answer.addChild(Element(name: "identity", attributes: ["category": "client", "type": "phone", "name": "x"]))
+        for feature in features { answer.addChild(Element(name: "feature", attributes: ["var": feature])) }
+        let ver = try #require(CapabilitiesModule.verificationString(of: answer, hash: "sha-1"))
+        meet(ver: ver, answering: features)
+        await eventually("the answer to be cached") { caps.cache.getFeatures(for: "https://example.org/client#" + ver) != nil }
+        #expect(Set(caps.cache.getFeatures(for: "https://example.org/client#" + ver) ?? []) == Set(features))
+    }
+
     @Test func aChangeOfFeaturesLeavesOnlyTheCurrentHashAnswering() throws {
         let first = try advertised()
         #expect(try answers(first))

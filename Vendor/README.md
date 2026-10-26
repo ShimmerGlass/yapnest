@@ -685,6 +685,19 @@ Each entry gives what went wrong for users, why, and what changed.
   is ignored: a service notifies from its bare address. Pinned by
   `PubSubEventSourceTests`.
 
+**Anyone could say what a popular client can do** (`CapabilitiesModule.onReceivedPresence`)
+- *Symptom:* a presence claiming another client's caps `ver`, answered with
+  a made-up feature list, could hide the call buttons, or change how files
+  are sent, for every contact on that client until the app restarted.
+- *Cause:* the answer was cached under the claimed `node#ver` without
+  working out its hash (XEP-0115 §5.4), and that entry stands for everyone
+  who shows the same `ver`.
+- *Fix:* the answer's verification string is computed (SHA-1 or SHA-256,
+  with identities, features and extended forms as §5.1 orders them) and the
+  answer is cached only if it matches; a `node#ver` that didn't isn't asked
+  about again. Pinned by `CapsVerificationTests`, on the XEP's own examples,
+  and `CapabilitiesTests`.
+
 ### MartinOMEMO
 
 **Logs named people publicly** (`OMEMOModule`)
