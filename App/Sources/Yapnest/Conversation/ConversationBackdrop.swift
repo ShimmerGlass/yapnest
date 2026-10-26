@@ -33,50 +33,10 @@ struct ConversationBackdrop: View {
 
 extension Color {
     /// The branches' grey mauve, faint against either background.
-    static func backdropInk(_ scheme: ColorScheme, strength: Double = 1) -> Color {
+    static func backdropInk(_ scheme: ColorScheme) -> Color {
         scheme == .dark
-            ? Color(red: 0xB8 / 255, green: 0x9C / 255, blue: 0xCC / 255).opacity(0.12 * strength)
-            : Color(red: 0x7A / 255, green: 0x5A / 255, blue: 0x8E / 255).opacity(0.12 * strength)
-    }
-}
-
-/// A few faint branches reaching in out of the chat list's mauve wash, with a
-/// couple of birds perched on them, fading with the wash.
-struct ChatListBranches: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    /// Laid out for a phone 393 points wide: one bough in from each side,
-    /// below the title and search field, and a thinner one hanging from the
-    /// top.
-    private static let tree = LowPolyTree([
-        .init(at: CGPoint(x: -12, y: 150), heading: 0.42, length: 300, width: 16, curl: -0.0016, seed: 3),
-        .init(at: CGPoint(x: 405, y: 215), heading: .pi - 0.38, length: 250, width: 13, curl: 0.0018, seed: 8),
-        .init(at: CGPoint(x: 300, y: -10), heading: 1.9, length: 150, width: 8, curl: -0.002, seed: 5),
-    ])
-
-    /// Which of the level spots the birds take, and which way each faces:
-    /// apart from each other and clear of the twigs.
-    private static let birds: [(perch: Int, faces: CGFloat)] = [(2, 1), (10, -1)]
-
-    var body: some View {
-        Canvas { context, size in
-            var lines = Self.tree.lines
-            for bird in Self.birds {
-                lines.addPath(LowPolyTree.bird(on: Self.tree.perches[bird.perch], faces: bird.faces))
-            }
-            let scale = size.width / 393
-            // Stronger than a chat's, as the fade takes most of it away.
-            context.stroke(lines.applying(CGAffineTransform(scaleX: scale, y: scale)), with: .color(.backdropInk(colorScheme, strength: 1.8)), style: StrokeStyle(lineWidth: 0.9, lineJoin: .round))
-        }
-        .mask {
-            LinearGradient(stops: [
-                .init(color: .black, location: 0),
-                .init(color: .black, location: 0.3),
-                .init(color: .clear, location: 0.7),
-            ], startPoint: .top, endPoint: .bottom)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+            ? Color(red: 0xB8 / 255, green: 0x9C / 255, blue: 0xCC / 255).opacity(0.12)
+            : Color(red: 0x7A / 255, green: 0x5A / 255, blue: 0x8E / 255).opacity(0.12)
     }
 }
 

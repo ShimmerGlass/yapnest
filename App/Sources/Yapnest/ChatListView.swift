@@ -728,8 +728,7 @@ private struct ChatListContent: View {
 }
 
 /// A soft mauve wash behind the chats: strongest under the title, gone by
-/// the middle of the screen, with branches reaching in out of it, and a
-/// faint rose glow in the bottom corner so the end of the list isn't flat.
+/// the middle of the screen, and a faint rose glow in the bottom corner so the end of the list isn't flat.
 private struct ChatListBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -749,7 +748,6 @@ private struct ChatListBackdrop: View {
                 endPoint: .bottom,
             )
             RadialGradient(colors: [rose.opacity(isDark ? 0.20 : 0.16), rose.opacity(0)], center: .bottomTrailing, startRadius: 0, endRadius: 460)
-            ChatListBranches()
         }
         .ignoresSafeArea()
     }
