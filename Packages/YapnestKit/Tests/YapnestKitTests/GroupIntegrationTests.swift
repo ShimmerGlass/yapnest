@@ -68,6 +68,7 @@ extension LiveServer {
             try await befriend(a, b)
 
             let room = try await a.createGroup(name: "Old news \(UUID().uuidString.prefix(4))", inviting: [bob])
+            try await LiveServer.accept(invitationTo: room, on: b)
             try await waitUntil("bob to join") { b.roomStatus(room)?.isJoined == true && b.roomStatus(room)?.isSyncing == false }
             try a.setEncrypted(false, with: room)
             let tag = UUID().uuidString.prefix(6)
@@ -111,7 +112,8 @@ extension LiveServer {
                 #expect(group.isBookmarked)
             }
 
-            // Bob joins on his own when his contact invites him.
+            // Bob accepts his contact's invitation.
+            try await LiveServer.accept(invitationTo: room, on: b)
             try await waitUntil("bob to join") { b.roomStatus(room)?.isJoined == true && b.roomStatus(room)?.isSyncing == false }
             try await waitUntil("alice to see bob as a member") { a.groupRecipients(room) == [bob] }
 
@@ -214,6 +216,7 @@ extension LiveServer {
             try await LiveServer.require("urn:xmpp:bookmarks:1#compat", "urn:xmpp:bookmarks:1#compat-pep", of: a, "a new device finds its groups in the XEP-0402 bookmarks")
             try await befriend(a, b)
             let room = try await a.createGroup(name: "Read club \(UUID().uuidString.prefix(4))", inviting: [bob])
+            try await LiveServer.accept(invitationTo: room, on: b)
             try await waitUntil("bob to join") { b.roomStatus(room)?.isJoined == true && b.roomStatus(room)?.isSyncing == false }
             try a.setEncrypted(false, with: room)
             let read = "read this \(UUID().uuidString.prefix(6))"
@@ -276,6 +279,8 @@ extension LiveServer {
 
             // Each needs membership of its own: Prosody applies one item per request.
             let room = try await a.createGroup(name: "Three", inviting: [bob, LiveServer.jid("carol")])
+            try await LiveServer.accept(invitationTo: room, on: b)
+            try await LiveServer.accept(invitationTo: room, on: c)
             try await waitUntil("bob to join") { b.roomStatus(room)?.isJoined == true }
             try await waitUntil("carol to join") { c.roomStatus(room)?.isJoined == true }
             try await a.leaveGroup(room)

@@ -103,6 +103,7 @@ extension LiveServer {
             while try !(app.database.isInRoster(bob) && bobSession.database.isInRoster(alice)) { try await Task.sleep(for: .milliseconds(100)) }
 
             let room = try await app.createGroup(name: "Share \(UUID().uuidString.prefix(4))", inviting: [bob])
+            try await LiveServer.accept(invitationTo: room, on: bobSession)
             while bobSession.roomStatus(room)?.isJoined != true || bobSession.roomStatus(room)?.isSyncing != false {
                 try await Task.sleep(for: .milliseconds(100))
             }

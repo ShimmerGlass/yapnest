@@ -22,6 +22,7 @@ extension LiveServer {
         private func makeGroup(_ owner: XMPPSession, with others: XMPPSession...) async throws -> JID {
             let room = try await owner.createGroup(name: "Moderation \(UUID().uuidString.prefix(4))", inviting: others.map(\.account))
             for other in others {
+                try await LiveServer.accept(invitationTo: room, on: other)
                 try await waitUntil("\(other.account) to join") { other.roomStatus(room)?.isJoined == true && other.roomStatus(room)?.isSyncing == false }
             }
             // A room without XEP-0425 never offers moderation; that is the server's gap, not a failure.
@@ -216,6 +217,7 @@ extension LiveServer {
             #expect(a.roomStatus(room)?.banned.contains(bob) != true)
             // A members-only room still wants him invited again.
             try await a.invite([bob], to: room)
+            try await LiveServer.accept(invitationTo: room, on: b)
             try await waitUntil("bob to be back in") { b.roomStatus(room)?.isJoined == true }
             try await a.leaveGroup(room)
         }

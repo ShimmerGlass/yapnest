@@ -462,6 +462,7 @@ struct SeedGroup {
         print("seed: created \(room)")
         for friend in [bob, carol] {
             do {
+                try await LiveServer.accept(invitationTo: room, on: friend)
                 try await wait("\(friend.account) to join") { friend.roomStatus(room)?.isJoined == true && friend.roomStatus(room)?.isSyncing == false }
             } catch {
                 print("seed: \(friend.account) status \(String(describing: friend.roomStatus(room))) group \(String(describing: try friend.database.groupChat(room))) roster \(try friend.database.isInRoster(alice.account))")

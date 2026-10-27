@@ -152,6 +152,7 @@ extension LiveServer {
             b.addContact(alice)
             try await waitUntil("each other in the roster") { try a.database.isInRoster(bob) && b.database.isInRoster(alice) }
             let room = try await a.createGroup(name: "Night owls", inviting: [bob])
+            try await LiveServer.accept(invitationTo: room, on: b)
             try await waitUntil("bob to join") { b.roomStatus(room)?.isJoined == true && b.roomStatus(room)?.isSyncing == false }
             try await waitUntil("alice to see bob as a member") { a.groupRecipients(room) == [bob] }
             _ = try a.database.claimNotifications()

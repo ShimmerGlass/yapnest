@@ -294,6 +294,7 @@ extension LiveServer {
             try await waitUntil("each other in the roster") { try first.database.isInRoster(bob) && bobSession.database.isInRoster(alice) }
 
             let room = try await first.createGroup(name: "Bare \(UUID().uuidString.prefix(4))", inviting: [bob])
+            try await LiveServer.accept(invitationTo: room, on: bobSession)
             try await waitUntil("bob to join") { bobSession.roomStatus(room)?.isJoined == true }
             // Plain, so the proxy can see the bodies go by.
             try first.setEncrypted(false, with: room)

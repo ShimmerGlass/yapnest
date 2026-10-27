@@ -124,6 +124,13 @@ extension LiveServer {
         }
     }
 
+    /// Accepts the invitation to `room` once it arrives. Invitations wait for
+    /// the user's answer, as joining shows the group our address.
+    static func accept(invitationTo room: JID, on session: XMPPSession) async throws {
+        try await waitUntil("\(session.account)'s invitation to \(room)") { try session.database.groupInvitation(room) != nil }
+        try await session.acceptGroupInvitation(room)
+    }
+
     /// Connects the sessions one after the other and waits for each to finish
     /// syncing, and with `encryptionReady` to have published its OMEMO device.
     static func connected(_ sessions: XMPPSession..., encryptionReady: Bool = false, timeout: TimeInterval = 30) async throws {
