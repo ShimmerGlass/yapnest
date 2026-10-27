@@ -481,25 +481,30 @@ struct CallSessionOutgoingTests {
 }
 
 struct CallSessionIncomingTests {
-    /// Openfire makes a roster item, subscription `to`, for a stranger's
-    /// unsolicited `subscribed`, so the roster alone can't decide who rings.
-    @Test func aRosterItemTheServerMadeDoesNotRing() throws {
+    @Test func aRosterItemWithoutASubscriptionDoesNotRing() throws {
         let h = try CallSessionHarness()
-        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .none, isPending: false)
         h.receive(h.propose())
         #expect(h.session.callState.value == nil)
         #expect(h.sentSignals.isEmpty)
     }
 
-    @Test func aContactTheUserAddedRingsBeforeTheyAnswer() throws {
+    @Test func someoneWeSubscribedToRingsBeforeTheyAnswer() throws {
         let h = try CallSessionHarness()
         try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        h.receive(h.propose())
+        #expect(h.phase == .incoming)
+    }
+
+    @Test func aContactTheUserAddedRingsBeforeTheyAnswer() throws {
+        let h = try CallSessionHarness()
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .none, isPending: false)
         try h.database.markAddedByUser(alice)
         h.receive(h.propose())
         #expect(h.phase == .incoming)
     }
 
-    @Test func aRosterItemTheServerMadeGetsNoReceiptAndAnApprovedOneDoes() async throws {
+    @Test func aRosterItemWithoutASubscriptionGetsNoReceiptAndASubscribedOneDoes() async throws {
         let h = try CallSessionHarness()
         func xml(_ id: String) -> String {
             "<message from='alice@example.org/phone' to='me@example.org' type='chat' id='\(id)'><body>hi</body><request xmlns='urn:xmpp:receipts'/></message>"
@@ -507,9 +512,9 @@ struct CallSessionIncomingTests {
         func receipts() -> [String] {
             h.wire.messages.compactMap { $0.element.firstChild(name: "received", xmlns: "urn:xmpp:receipts")?.getAttribute("id") }
         }
-        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .none, isPending: false)
         h.receive(xml("m1"))
-        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
         h.receive(xml("m2"))
         await eventually("the approved contact's receipt") { !receipts().isEmpty }
         #expect(receipts() == ["m2"])

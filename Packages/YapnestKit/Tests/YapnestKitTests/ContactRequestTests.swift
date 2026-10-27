@@ -137,16 +137,26 @@ struct ContactRequestTests {
         #expect(try db.contact(alice) == nil)
     }
 
-    @Test func befriendingAStrangerTheServerPutOnTheRosterAddsThem() async throws {
+    @Test func befriendingAnUnsubscribedRosterItemAddsThem() async throws {
         let session = try makeSession(JID("me@example.org")!, database: db)
         let wire = FakeWire()
         session.connectForTesting(wire)
         wire.answer { FakeWire.result(to: $0) }
-        try db.updateRosterItem(jid: stranger, name: nil, subscription: .to, isPending: false)
+        try db.updateRosterItem(jid: stranger, name: nil, subscription: .none, isPending: false)
         #expect(try !db.hasConsented(stranger))
         await session.befriendForNewChat(stranger)
         #expect(try db.contact(stranger)?.isAddedByUser == true)
         #expect(wire.written.contains { ($0 as? Presence)?.type == .subscribe })
+    }
+
+    @Test func befriendingSomeoneWeSubscribedToDoesNothingMore() async throws {
+        let session = try makeSession(JID("me@example.org")!, database: db)
+        let wire = FakeWire()
+        session.connectForTesting(wire)
+        wire.answer { FakeWire.result(to: $0) }
+        try db.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        await session.befriendForNewChat(alice)
+        #expect(!wire.written.contains { ($0 as? Presence)?.type == .subscribe })
     }
 
     @Test func befriendingSomeoneTheUserAddedDoesNothingMore() async throws {
@@ -154,7 +164,7 @@ struct ContactRequestTests {
         let wire = FakeWire()
         session.connectForTesting(wire)
         wire.answer { FakeWire.result(to: $0) }
-        try db.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        try db.updateRosterItem(jid: alice, name: nil, subscription: .none, isPending: false)
         try db.markAddedByUser(alice)
         await session.befriendForNewChat(alice)
         #expect(!wire.written.contains { ($0 as? Presence)?.type == .subscribe })
@@ -188,8 +198,8 @@ struct ContactRequestTests {
 }
 
 /// Whether a `subscribe` is answered by itself or waits for the user.
-/// Being in the roster is no consent: Openfire puts a stranger there when
-/// they send `subscribed` unasked.
+/// Being in the roster is no consent by itself: a subscription of ours,
+/// or one we approved, is.
 struct SubscribeConsentTests {
     let db: AppDatabase
     let session: XMPPSession
@@ -215,19 +225,29 @@ struct SubscribeConsentTests {
     }
 
     @Test func onlyWhatTheUserDidOrApprovedIsConsent() {
-        // Openfire's roster item for a stranger's unsolicited `subscribed`.
-        #expect(!Contact(jid: carol, subscription: .to, isInRoster: true).hasConsent)
         #expect(!Contact(jid: carol, subscription: .none, isInRoster: true).hasConsent)
         // Their request, which we haven't answered, isn't consent either.
-        #expect(!Contact(jid: carol, subscription: .to, isInRoster: true, subscriptionRequestedAt: Date()).hasConsent)
-        #expect(Contact(jid: carol, subscription: .to, isInRoster: true, isAddedByUser: true).hasConsent)
+        #expect(!Contact(jid: carol, subscription: .none, isInRoster: true, subscriptionRequestedAt: Date()).hasConsent)
+        // Our subscription to them only exists because we asked for it,
+        // from here or from another app.
+        #expect(Contact(jid: carol, subscription: .to, isInRoster: true).hasConsent)
+        #expect(Contact(jid: carol, subscription: .none, isInRoster: true, isAddedByUser: true).hasConsent)
         #expect(Contact(jid: carol, subscription: .none, isSubscriptionPending: true, isInRoster: true).hasConsent)
         #expect(Contact(jid: carol, subscription: .from, isInRoster: true).hasConsent)
         #expect(Contact(jid: carol, subscription: .both, isInRoster: true).hasConsent)
     }
 
+    @Test func aPublishedNameStandsForSomeoneWeSubscribedToButNotForARosterItem() {
+        let subscribed = Contact(jid: carol, subscription: .to, isInRoster: true, nickname: "Carol C")
+        #expect(subscribed.isKnown)
+        #expect(subscribed.displayName == "Carol C")
+        let unsubscribed = Contact(jid: carol, subscription: .none, isInRoster: true, nickname: "Mom")
+        #expect(!unsubscribed.isKnown)
+        #expect(unsubscribed.displayName == carol.shortName)
+    }
+
     @Test func anUnansweredRequestStaysUnconsentedUntilTheUserAccepts() throws {
-        try db.updateRosterItem(jid: carol, name: nil, subscription: .to, isPending: false)
+        try db.updateRosterItem(jid: carol, name: nil, subscription: .none, isPending: false)
         try subscribe(from: carol)
         #expect(try !db.hasConsented(carol))
         // What accepting does first (`addContactAndWait`).
@@ -247,14 +267,19 @@ struct SubscribeConsentTests {
         #expect(trusts(privateGroup: true, groupSetting: false, trusted: true))
     }
 
-    @Test func aRosterItemTheServerMadeIsNotConsent() throws {
-        for subscription in [Contact.Subscription.to, .none] {
-            try db.updateRosterItem(jid: carol, name: nil, subscription: subscription, isPending: false)
-            try subscribe(from: carol)
-            #expect(approvals.isEmpty)
-            #expect(try db.contact(carol)?.hasContactRequest == true)
-            try db.clearContactRequest(from: carol)
-        }
+    @Test func aRosterItemWithoutASubscriptionIsNotConsent() throws {
+        try db.updateRosterItem(jid: carol, name: nil, subscription: .none, isPending: false)
+        try subscribe(from: carol)
+        #expect(approvals.isEmpty)
+        #expect(try db.contact(carol)?.hasContactRequest == true)
+    }
+
+    @Test func someoneWeSubscribedToIsApproved() throws {
+        try db.updateRosterItem(jid: carol, name: nil, subscription: .to, isPending: false)
+        #expect(try db.contact(carol)?.isAddedByUser == false)
+        try subscribe(from: carol)
+        #expect(approvals.count == 1)
+        #expect(try db.contact(carol)?.hasContactRequest == false)
     }
 
     @Test func someoneTheUserAddedIsApproved() throws {
@@ -282,14 +307,6 @@ struct SubscribeConsentTests {
         try subscribe(from: carol)
         #expect(approvals.count == 1)
         #expect(try db.contact(carol)?.hasContactRequest == false)
-    }
-
-    @Test func subscriptionToWithoutAskOrFlagIsARequest() throws {
-        try db.updateRosterItem(jid: carol, name: nil, subscription: .to, isPending: false)
-        #expect(try db.contact(carol)?.isAddedByUser == false)
-        try subscribe(from: carol)
-        #expect(approvals.isEmpty)
-        #expect(try db.contact(carol)?.hasContactRequest == true)
     }
 
     @Test func someoneNotInTheRosterIsARequest() throws {

@@ -93,7 +93,7 @@ extension AppDatabase {
                 SELECT attachment.*, message.direction = 'outgoing' AS isOutgoing, message.isWrittenHere AS isWrittenHere,
                        conversation.kind = 'groupchat' AS isGroup,
                        COALESCE(groupChat.isMembersOnly AND groupChat.isNonAnonymous, 0) AS isPrivateGroup,
-                       COALESCE(contact.isAddedByUser OR contact.isSubscriptionPending OR contact.subscription IN ('from', 'both'), 0) AS hasConsent
+                       COALESCE(contact.isAddedByUser OR contact.isSubscriptionPending OR contact.subscription IN ('to', 'from', 'both'), 0) AS hasConsent
                 FROM attachment
                 JOIN message ON message.id = attachment.messageId
                 JOIN conversation ON conversation.id = message.conversationId

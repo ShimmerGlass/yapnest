@@ -75,4 +75,16 @@ struct PresenceLimitTests {
         receive("alice@example.org/phone", photo)
         #expect(vCardRequests == 1)
     }
+
+    @Test func aPhotoFromSomeoneWeSubscribedToIsFetched() throws {
+        try session.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        receive("alice@example.org/phone", photo)
+        #expect(vCardRequests == 1)
+    }
+
+    @Test func aPhotoFromARosterItemWithoutASubscriptionIsNotFetched() throws {
+        try session.database.updateRosterItem(jid: alice, name: nil, subscription: .none, isPending: false)
+        receive("alice@example.org/phone", photo)
+        #expect(vCardRequests == 0)
+    }
 }

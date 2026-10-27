@@ -335,19 +335,17 @@ struct FileTransferReceivingTests {
         try turnedDown(h.offer(from: "room@conference.example.org/alice", size: 10), reason: "decline")
     }
 
-    /// Openfire makes a roster item, subscription `to`, for a stranger's
-    /// unsolicited `subscribed`: being in the roster is no reason to take a file.
-    @Test func aRosterItemTheServerMadeIsNotAContact() throws {
+    @Test func aRosterItemWithoutASubscriptionIsNotAContact() throws {
         let h = try TransferHarness()
-        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .none, isPending: false)
         try h.harness.receive(iq: h.offer(size: 10))
         #expect(h.sent.contains { $0.action == "session-terminate" && $0.reason == "decline" })
         #expect(h.sentAction("session-accept") == nil)
         #expect(h.incomingRows.isEmpty)
     }
 
-    @Test(arguments: [Contact.Subscription.from, .both])
-    func anApprovedContactsOfferIsTaken(subscription: Contact.Subscription) throws {
+    @Test(arguments: [Contact.Subscription.to, .from, .both])
+    func anApprovedOrSubscribedContactsOfferIsTaken(subscription: Contact.Subscription) throws {
         let h = try TransferHarness()
         try h.database.updateRosterItem(jid: alice, name: nil, subscription: subscription, isPending: false)
         try h.harness.receive(iq: h.offer(size: 10))
@@ -356,7 +354,7 @@ struct FileTransferReceivingTests {
 
     @Test func aContactTheUserAddedIsTakenEvenBeforeTheyAnswer() throws {
         let h = try TransferHarness()
-        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .to, isPending: false)
+        try h.database.updateRosterItem(jid: alice, name: nil, subscription: .none, isPending: false)
         try h.database.markAddedByUser(alice)
         try h.harness.receive(iq: h.offer(size: 10))
         #expect(h.sentAction("session-accept") != nil)

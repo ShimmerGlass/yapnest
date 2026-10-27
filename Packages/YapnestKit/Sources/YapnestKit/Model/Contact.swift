@@ -13,10 +13,9 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
     /// We asked for a subscription and are waiting for an answer.
     public var isSubscriptionPending: Bool
     public var isInRoster: Bool
-    /// The user added this contact on this device (`addContact`). The server
-    /// can put people in the roster the user never added: Openfire answers a
-    /// stranger's unsolicited `subscribed` with a roster item. So being in the
-    /// roster doesn't show that the user wants them to see our presence.
+    /// The user added this contact on this device (`addContact`). It covers
+    /// the time before the server confirms the subscription, or if it drops
+    /// our request.
     public var isAddedByUser: Bool
     public var isBlocked: Bool
     /// SHA-1 (hex) of the contact's avatar image, cached by `AvatarStore`.
@@ -78,15 +77,16 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
     public var isKnown: Bool { isInRoster && hasConsent }
 
     /// Whether the user added or approved them: they added them here, asked
-    /// them and are waiting for the answer (the server's `ask`), or approved
-    /// them so they see our presence. A roster item alone is not consent, as
-    /// the server can create one for a stranger, so everything a stranger
-    /// mustn't get (a ringing phone, receipts, automatic downloads, being
-    /// told our presence or last seen) hangs on this, never on `isInRoster`.
-    /// A request from them we haven't answered doesn't count either.
+    /// them and are waiting for the answer (the server's `ask`), subscribed
+    /// to their presence (`to`, which only exists because our account asked
+    /// for it, from here or another app), or approved them so they see ours.
+    /// A roster item with no subscription is not consent, nor is a request
+    /// from them we haven't answered. Everything a stranger mustn't get (a
+    /// ringing phone, receipts, automatic downloads, being told our presence
+    /// or last seen) hangs on this, never on `isInRoster`.
     /// `AppDatabase.missedImages` repeats this in SQL.
     public var hasConsent: Bool {
-        isAddedByUser || isSubscriptionPending || subscription == .from || subscription == .both
+        isAddedByUser || isSubscriptionPending || subscription != .none
     }
 
     /// The roster name, else the name they publish if the user added them,

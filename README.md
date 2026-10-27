@@ -20,11 +20,7 @@ company or a phone number.
   people, and report spam where your server supports it. Only people you
   added or approved can ring you, send you files, have their pictures
   downloaded by themselves, invite you to groups, and get your receipts
-  and typing. Being in your contacts isn't enough, as some servers, such
-  as Openfire, add a stranger there without asking you. Someone you added
-  from another app or device, who accepted without adding you back, looks
-  the same to this device: they show as not in your contacts here until
-  you tap Add, or they add you back.
+  and typing.
 - **Fast and reliable connections.** Quick sign-in on servers that support
   it, a dropped connection picks up where it left off, and push
   notifications arrive even when the app is closed.
@@ -91,6 +87,8 @@ failing: its option is simply hidden.
 | Openfire | Partial. Chats, groups and file upload work, but see the gaps below. | The Monitoring (archive), Push Notification and HTTP File Upload plugins. |
 
 Yapnest's settings name your contacts, so before publishing them it reads the node's configuration back and only syncs if the server keeps it readable by nobody else (`whitelist`); it sets it right once, and otherwise syncs nothing that session. It never deletes the node.
+
+Openfire adds anyone who sends it an unrequested approval of your presence to your contacts, where Prosody and ejabberd ignore it (RFC 6121 §3.1.6), so there such a stranger is treated as a contact.
 
 Openfire's gaps:
 - It adds no stanza-id to messages, so read state syncing, spam reports and matching messages against the archive work less well or not at all.
