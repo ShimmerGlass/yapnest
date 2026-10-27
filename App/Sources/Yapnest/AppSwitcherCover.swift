@@ -46,24 +46,39 @@ final class AppSwitcherCover {
                     self?.uncover(scene)
                 }
             },
+            center.addObserver(forName: UIScene.didDisconnectNotification, object: nil, queue: nil) { [weak self] note in
+                nonisolated(unsafe) let scene = note.object as? UIScene
+                MainActor.assumeIsolated {
+                    guard let scene else { return }
+                    self?.windows.removeValue(forKey: ObjectIdentifier(scene))
+                }
+            },
         ]
     }
 
     private func cover(_ scene: UIWindowScene) {
         let id = ObjectIdentifier(scene)
-        guard windows[id] == nil else { return }
+        let window = windows[id] ?? makeWindow(in: scene)
+        windows[id] = window
+        guard window.isHidden else { return }
+        window.isHidden = false
+        shownCount += 1
+    }
+
+    /// Built once per scene and then only shown and hidden, as the cover goes
+    /// up on every trip to the app switcher.
+    private func makeWindow(in scene: UIWindowScene) -> UIWindow {
         let window = UIWindow(windowScene: scene)
         window.windowLevel = UIWindow.Level(rawValue: .greatestFiniteMagnitude)
         let host = UIHostingController(rootView: AppSwitcherCoverView())
         host.view.backgroundColor = .systemBackground
         window.rootViewController = host
-        window.isHidden = false
-        windows[id] = window
-        shownCount += 1
+        window.isHidden = true
+        return window
     }
 
     private func uncover(_ scene: UIScene) {
-        windows.removeValue(forKey: ObjectIdentifier(scene))?.isHidden = true
+        windows[ObjectIdentifier(scene)]?.isHidden = true
     }
 }
 
@@ -71,11 +86,7 @@ private struct AppSwitcherCoverView: View {
     var body: some View {
         ZStack {
             Color(uiColor: .systemBackground)
-            Image("LoginIcon")
-                .resizable()
-                .frame(width: 120, height: 120)
-                .clipShape(RoundedRectangle(cornerRadius: 120 * 0.22, style: .continuous))
-                .accessibilityHidden(true)
+            AppIconImage(size: 120)
         }
         .ignoresSafeArea()
         .accessibilityElement(children: .ignore)

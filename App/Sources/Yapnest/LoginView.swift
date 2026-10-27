@@ -36,12 +36,8 @@ struct LoginView: View {
             Form {
                 Section {
                     VStack(spacing: 8) {
-                        Image("LoginIcon")
-                            .resizable()
-                            .frame(width: 88, height: 88)
-                            .clipShape(RoundedRectangle(cornerRadius: 88 * 0.22, style: .continuous))
+                        AppIconImage(size: 88)
                             .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
-                            .accessibilityHidden(true)
                         Text("Yapnest")
                             .font(.largeTitle.bold())
                         Text("Sign in with your XMPP account.")
@@ -152,4 +148,17 @@ struct LoginView: View {
 
 #Preview {
     LoginView().environment(AppModel())
+}
+
+/// The app's icon, rounded the way the system rounds it.
+struct AppIconImage: View {
+    let size: CGFloat
+
+    var body: some View {
+        Image("LoginIcon")
+            .resizable()
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+            .accessibilityHidden(true)
+    }
 }
