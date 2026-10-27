@@ -61,6 +61,12 @@ extension LiveServer {
         func reconfiguresANodeThatDoesNotMatchTheSetting(sharesPublicly: Bool, left: String, expected: String) async throws {
             let session = try await connectedSession()
             defer { session.disconnect() }
+            try await LiveServer.forgettingSyncedSettings(of: session) {
+                try await reconfigures(session, sharesPublicly: sharesPublicly, left: left, expected: expected)
+            }
+        }
+
+        private func reconfigures(_ session: XMPPSession, sharesPublicly: Bool, left: String, expected: String) async throws {
             await deleteNode(session)
             try session.database.setFlag(.sharesProfilePublicly, sharesPublicly)
 

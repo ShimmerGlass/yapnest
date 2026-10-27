@@ -30,6 +30,10 @@ extension LiveServer {
             let caller = try await device(alice, forceRelay: callerForcesRelay)
             let callee = try await device(bob, forceRelay: false)
             defer { caller.disconnect(); callee.disconnect() }
+            try await LiveServer.forgettingSyncedSettings(of: caller) { try await call(caller, callee, forcesRelay: callerForcesRelay) }
+        }
+
+        private func call(_ caller: XMPPSession, _ callee: XMPPSession, forcesRelay callerForcesRelay: Bool) async throws {
             try await LiveServer.befriend(caller, callee)
             try await LiveServer.waitUntil("alice to be able to call bob") { caller.canCall(bob) }
             if callerForcesRelay {

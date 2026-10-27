@@ -40,6 +40,10 @@ extension LiveServer {
         @Test func theNodeIsPrivateAndAChangeReachesTheOtherDevice() async throws {
             let a = try await device("settings-a")
             defer { a.disconnect() }
+            try await LiveServer.forgettingSyncedSettings(of: a) { try await aChangeReachesTheOtherDevice(from: a) }
+        }
+
+        private func aChangeReachesTheOtherDevice(from a: XMPPSession) async throws {
             try await startFromNoNode(a)
             #expect(try await accessModel(a) == "whitelist")
 
@@ -61,6 +65,10 @@ extension LiveServer {
         @Test func changesMadeOfflineOnBothDevicesConverge() async throws {
             let a = try await device("settings-a")
             defer { a.disconnect() }
+            try await LiveServer.forgettingSyncedSettings(of: a) { try await offlineChangesConverge(from: a) }
+        }
+
+        private func offlineChangesConverge(from a: XMPPSession) async throws {
             try await startFromNoNode(a)
             let b = try await device("settings-b")
             defer { b.disconnect() }

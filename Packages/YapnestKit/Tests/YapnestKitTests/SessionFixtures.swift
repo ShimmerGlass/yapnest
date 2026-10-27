@@ -124,6 +124,26 @@ extension LiveServer {
         }
     }
 
+    /// Runs `body`, then deletes the account's synced settings whether it
+    /// passed or not. Every new device of the account takes on what the node
+    /// holds, so a setting one test changed would otherwise reach every test
+    /// after it, such as Always Relay Calls holding back every call.
+    static func forgettingSyncedSettings(of session: XMPPSession, _ body: () async throws -> Void) async throws {
+        do {
+            try await body()
+        } catch {
+            await forgetSyncedSettings(of: session)
+            throw error
+        }
+        await forgetSyncedSettings(of: session)
+    }
+
+    private static func forgetSyncedSettings(of session: XMPPSession) async {
+        await withCheckedContinuation { continuation in
+            session.client.module(.pubsub).deleteNode(from: session.account.martin, node: NS.settings) { _ in continuation.resume() }
+        }
+    }
+
     /// Accepts the invitation to `room` once it arrives. Invitations wait for
     /// the user's answer, as joining shows the group our address.
     static func accept(invitationTo room: JID, on session: XMPPSession) async throws {
