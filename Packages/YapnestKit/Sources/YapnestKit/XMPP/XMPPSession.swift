@@ -1834,6 +1834,12 @@ public final class XMPPSession: @unchecked Sendable {
     /// Our longest accepted status from a contact, as anyone can send any.
     static let maxContactStatusLength = 500
 
+    /// Anyone can send presence, from as many resources and addresses as
+    /// they like. Past these limits, a sender's oldest resource makes way for
+    /// a new one, and a new sender is only taken if we're subscribed to them.
+    static let maxResourcesPerSender = 16
+    static let maxPresenceSenders = 2000
+
     func presenceChanged(_ presence: Presence) {
         guard let from = presence.from, let jid = JID(from), jid != account else { return }
         if isGroup(jid) {
@@ -1841,14 +1847,35 @@ public final class XMPPSession: @unchecked Sendable {
             return
         }
         let resource = from.resource ?? ""
+        let isAvailable = presence.type == nil || presence.type == .available
+        // The roster is only read when the table is full, so a contact whose
+        // presence beats the roster at sign-in is never turned away for it.
+        let isFull = isAvailable && lock.withLock { $0.resources[jid] == nil && $0.resources.count >= Self.maxPresenceSenders }
+        let subscribed = isFull ? Set(((try? database.roster()) ?? []).filter(\.seesPresence).map(\.jid)) : []
+        if isFull, !subscribed.contains(jid) { return }
         presencesPublishLock.lock()
         let wasOnline = presences.value[jid] != nil
-        let (combined, combinedStatuses): ([JID: ContactPresence], [JID: String]) = lock.withLock { state in
+        // What changed, if anything: the sender's best resource, and the
+        // stranger who made way for them.
+        let change = lock.withLock { state -> (best: ResourcePresence?, evicted: JID?)? in
+            var evicted: JID?
             var resources = state.resources[jid] ?? [:]
             switch presence.type {
             case .unavailable, .error:
                 resources[resource] = nil
             case nil, .available:
+                if isFull {
+                    // Everyone kept is a contact: there's no room for another.
+                    guard let stranger = state.resources.filter({ !subscribed.contains($0.key) })
+                        .min(by: { ($0.value.values.map(\.order).max() ?? 0) < ($1.value.values.map(\.order).max() ?? 0) })?.key
+                    else { return nil }
+                    state.resources[stranger] = nil
+                    evicted = stranger
+                }
+                if resources[resource] == nil, resources.count >= Self.maxResourcesPerSender,
+                   let oldest = resources.min(by: { $0.value.order < $1.value.order })?.key {
+                    resources[oldest] = nil
+                }
                 state.presenceCounter += 1
                 let availability: ContactPresence = switch presence.show {
                 case .dnd: .busy
@@ -1861,11 +1888,20 @@ public final class XMPPSession: @unchecked Sendable {
                     order: state.presenceCounter,
                 )
             default:
-                return Self.summary(of: state.resources)
+                return nil
             }
             state.resources[jid] = resources.isEmpty ? nil : resources
-            return Self.summary(of: state.resources)
+            // Only this sender's summary changes; recounting everyone's made
+            // a flood of resources cost the square of its size.
+            return (Self.best(of: resources), evicted)
         }
+        guard let change else {
+            presencesPublishLock.unlock()
+            return
+        }
+        var combined = presences.value, combinedStatuses = statuses.value
+        if let evicted = change.evicted { (combined[evicted], combinedStatuses[evicted]) = (nil, nil) }
+        (combined[jid], combinedStatuses[jid]) = (change.best?.availability, change.best?.status)
         if presences.value != combined { presences.send(combined) }
         if statuses.value != combinedStatuses { statuses.send(combinedStatuses) }
         presencesPublishLock.unlock()
@@ -1885,17 +1921,10 @@ public final class XMPPSession: @unchecked Sendable {
         }
     }
 
-    /// Each contact's availability and status, those of their most available
+    /// A contact's availability and status are those of their most available
     /// resource.
-    private static func summary(of resources: [JID: [String: ResourcePresence]]) -> ([JID: ContactPresence], [JID: String]) {
-        var availabilities: [JID: ContactPresence] = [:]
-        var statuses: [JID: String] = [:]
-        for (jid, byResource) in resources {
-            guard let best = byResource.values.max(by: { ($0.availability, $0.order) < ($1.availability, $1.order) }) else { continue }
-            availabilities[jid] = best.availability
-            if let status = best.status { statuses[jid] = status }
-        }
-        return (availabilities, statuses)
+    private static func best(of resources: [String: ResourcePresence]) -> ResourcePresence? {
+        resources.values.max(by: { ($0.availability, $0.order) < ($1.availability, $1.order) })
     }
 
     func clearPresences() {
@@ -1934,7 +1963,9 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     func vCardAvatarAnnounced(_ jid: JID, hash: String) {
-        guard AvatarStore.isValidHash(hash), (try? database.contact(jid))??.avatarHash != hash else { return }
+        // Fetching it tells their server we're online, which only those the
+        // user added or approved may learn.
+        guard AvatarStore.isValidHash(hash), let contact = (try? database.contact(jid)) ?? nil, contact.hasConsent, contact.avatarHash != hash else { return }
         if avatars.contains(hash) {
             try? database.setAvatarHash(hash, for: jid)
             return
