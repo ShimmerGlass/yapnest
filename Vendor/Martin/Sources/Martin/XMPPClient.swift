@@ -195,6 +195,9 @@ open class XMPPClient: Context {
             let timer = Timer(timeInterval: keepaliveTimeout, repeats: true, block: { [weak self] timer in
                 self?.keepalive();
             })
+            // A keepalive that comes some seconds late keeps the connection
+            // as alive; the tolerance lets the system batch the wakeup.
+            timer.tolerance = min(15.0, keepaliveTimeout / 10);
             DispatchQueue.main.async {
                 RunLoop.main.add(timer, forMode: .common);
             }

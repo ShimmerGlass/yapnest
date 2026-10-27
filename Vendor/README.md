@@ -698,6 +698,16 @@ Each entry gives what went wrong for users, why, and what changed.
   about again. Pinned by `CapsVerificationTests`, on the XEP's own examples,
   and `CapabilitiesTests`.
 
+**Two repeating timers wake the main thread at exact times**
+(`ResponseManager.start`, `XMPPClient.scheduleKeepAlive`)
+- *Symptom:* a connected app, the Mac's always, woke the main thread every
+  30 s for the response sweep and every 175 s for the keepalive, at moments
+  the system couldn't batch with other work, which costs battery.
+- *Cause:* both `Timer`s had no tolerance.
+- *Fix:* the sweep has a tolerance of 5 s (each request also checks itself
+  when its timeout is up) and the keepalive a tenth of its interval, at most
+  15 s. Not covered by a test: a timer's tolerance can't be observed.
+
 ### MartinOMEMO
 
 **Logs named people publicly** (`OMEMOModule`)

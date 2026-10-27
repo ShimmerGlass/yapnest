@@ -132,6 +132,9 @@ open class ResponseManager {
         let timer = Timer(timeInterval: 30.0, repeats: true, block: { [weak self] timer in
             self?.checkTimeouts();
         })
+        // Each request also checks itself when its timeout is up, so this
+        // sweep may be late; letting the system batch it saves wakeups.
+        timer.tolerance = 5.0;
         DispatchQueue.main.async {
             RunLoop.current.add(timer, forMode: .common);
         }
