@@ -256,12 +256,18 @@ struct RoomResendTests {
     }
 
     @Test func roomsWithAnArchiveResendWhatDidNotComeBack() {
-        let resent = XMPPSession.roomResends(hasArchive: true, unconfirmed: [message(1), message(2)], pending: [message(2), message(3)])
+        let resent = XMPPSession.roomResends(hasArchive: true, reachedEnd: true, unconfirmed: [message(1), message(2)], pending: [message(2), message(3)])
         #expect(resent.map(\.id) == [3, 1, 2])
     }
 
     @Test func roomsWithoutAnArchiveResendOnlyWhatWasNeverSent() {
-        let resent = XMPPSession.roomResends(hasArchive: false, unconfirmed: [message(1), message(2)], pending: [message(2), message(3)])
+        let resent = XMPPSession.roomResends(hasArchive: false, reachedEnd: true, unconfirmed: [message(1), message(2)], pending: [message(2), message(3)])
+        #expect(resent.map(\.id) == [2, 3])
+    }
+
+    /// The echo may be in what's left of the archive.
+    @Test func aCatchUpThatStoppedShortResendsOnlyWhatWasNeverSent() {
+        let resent = XMPPSession.roomResends(hasArchive: true, reachedEnd: false, unconfirmed: [message(1), message(2)], pending: [message(2), message(3)])
         #expect(resent.map(\.id) == [2, 3])
     }
 }

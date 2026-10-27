@@ -212,6 +212,11 @@ struct RoomCatchUpTests {
         // don't move it past.
         #expect(session.roomStatus(room)?.catchUpReachedEnd == false)
         #expect(try cursor?.hasPrefix("old+") == true)
+        // The user is told, and a Retry that stops short again leaves it so.
+        let key = "room-history:\(room)"
+        #expect(session.warnings.current.contains { $0.key == key })
+        #expect(await session.warnings.retry(key) == false)
+        #expect(session.warnings.current.contains { $0.key == key })
     }
 
     @Test func anArchiveWhoseCursorDoesNotMoveIsReadOnce() throws {

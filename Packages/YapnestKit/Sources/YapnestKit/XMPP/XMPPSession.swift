@@ -1917,14 +1917,17 @@ public final class XMPPSession: @unchecked Sendable {
         // full recount checks every online contact's capabilities.
         scheduleCallableUpdate()
 
-        if combined[jid] != nil {
+        if change.best != nil {
             lock.withLock { $0.lastSeenSchedule.sawArriving(jid) }
         } else if wasOnline, presence.type == .unavailable {
             contactWentOffline(jid)
         }
 
         // XEP-0153: an avatar hash in presence for clients without PEP avatars.
-        if presence.type == nil || presence.type == .available, let hash = presence.vcardTempPhoto, !hash.isEmpty {
+        // Fetching it tells their server we're online, which only those the
+        // user added or approved may learn.
+        if presence.type == nil || presence.type == .available, let hash = presence.vcardTempPhoto, !hash.isEmpty,
+           (try? database.hasConsented(jid)) == true {
             vCardAvatarAnnounced(jid, hash: hash.lowercased())
         }
     }
@@ -1981,9 +1984,7 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     func vCardAvatarAnnounced(_ jid: JID, hash: String) {
-        // Fetching it tells their server we're online, which only those the
-        // user added or approved may learn.
-        guard AvatarStore.isValidHash(hash), let contact = (try? database.contact(jid)) ?? nil, contact.hasConsent, contact.avatarHash != hash else { return }
+        guard AvatarStore.isValidHash(hash), (try? database.contact(jid))??.avatarHash != hash else { return }
         if avatars.contains(hash) {
             try? database.setAvatarHash(hash, for: jid)
             return

@@ -6,9 +6,6 @@ extension AppDatabase {
         try reader.read { db in try Contact.fetchOne(db, key: jid)?.isInRoster ?? false }
     }
 
-    /// Whether the user added or approved `jid` (`Contact.hasConsent`): what
-    /// a `subscribe` needs to be answered without asking, and what every
-    /// other trust decision about a contact asks.
     /// Whether we're subscribed to `jid`'s presence.
     func seesPresence(of jid: JID) throws -> Bool {
         try reader.read { db in try Contact.fetchOne(db, key: jid).map { $0.isInRoster && $0.seesPresence } ?? false }
@@ -21,6 +18,9 @@ extension AppDatabase {
         }
     }
 
+    /// Whether the user added or approved `jid` (`Contact.hasConsent`): what
+    /// a `subscribe` needs to be answered without asking, and what every
+    /// other trust decision about a contact asks.
     func hasConsented(_ jid: JID) throws -> Bool {
         try reader.read { db in try Contact.fetchOne(db, key: jid)?.hasConsent ?? false }
     }

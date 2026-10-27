@@ -154,6 +154,8 @@ public enum GroupError: Error, LocalizedError {
     case lookupFailed(ServerError)
     /// What the group's archive sent couldn't be saved on this device.
     case notStored
+    /// The group's archive kept saying there was more, past what one read takes.
+    case historyIncomplete
 
     public var errorDescription: String? {
         switch self {
@@ -167,6 +169,7 @@ public enum GroupError: Error, LocalizedError {
         case .refused(let reason): String(localized: "The group refused it: \(reason)")
         case .lookupFailed(let error): error.describe(String(localized: "Couldn't look up your server's group chat service"))
         case .notStored: String(localized: "Couldn't save the group's history on this device.")
+        case .historyIncomplete: String(localized: "The group has more earlier messages than were fetched this time.")
         case .notPrivate: String(localized: "Only private groups, where members see each other's addresses, can be encrypted.")
         }
     }
@@ -1050,8 +1053,10 @@ extension XMPPSession {
         switch Self.nextRoomArchivePage(after: after, last: page.rsm?.last, complete: onePage || page.complete, pagesRead: pagesRead) {
         case .end: finishRoomCatchUp(room, visit, reachedEnd: true)
         // Live messages mustn't move the cursor past what's left; the next
-        // visit reads on from it.
-        case .stop: finishRoomCatchUp(room, visit, reachedEnd: false)
+        // visit, or the warning's Retry, reads on from it.
+        case .stop:
+            warnOfMissingHistory(room, GroupError.historyIncomplete)
+            finishRoomCatchUp(room, visit, reachedEnd: false)
         case .after(let last): fetchRoomArchivePage(room, rsm: RSM.Query(after: last, max: 100), after: last, visit, pagesRead: pagesRead)
         }
     }
@@ -1159,8 +1164,8 @@ extension XMPPSession {
             pagesRead += 1
             switch Self.nextRoomArchivePage(after: after, last: page.rsm?.last, complete: onePage || page.complete, pagesRead: pagesRead) {
             case .end: break paging
-            // Read on from the cursor at the next visit, or Retry.
-            case .stop: return
+            // The warning stays, as there's more to read.
+            case .stop: throw GroupError.historyIncomplete
             case .after(let last):
                 after = last
                 rsm = RSM.Query(after: last, max: 100)
@@ -1260,9 +1265,11 @@ extension XMPPSession {
     ///
     /// Without an archive nothing says what was lost: a room that keeps none
     /// doesn't stamp its echoes either, so sent messages would look
-    /// unconfirmed for good and go out again on every visit.
-    static func roomResends(hasArchive: Bool, unconfirmed: [Message], pending: [Message]) -> [Message] {
-        guard hasArchive else { return pending }
+    /// unconfirmed for good and go out again on every visit. Nor does a
+    /// catch-up that stopped short of the archive's end: an echo not read
+    /// yet isn't one lost.
+    static func roomResends(hasArchive: Bool, reachedEnd: Bool, unconfirmed: [Message], pending: [Message]) -> [Message] {
+        guard hasArchive, reachedEnd else { return pending }
         return pending.filter { message in !unconfirmed.contains { $0.id == message.id } } + unconfirmed
     }
 
@@ -1290,7 +1297,7 @@ extension XMPPSession {
             conversationId: group.conversationId, before: status.joinedAt, since: status.joinedAt.addingTimeInterval(-Self.initialSyncWindow),
         )) ?? []
         let pending = (try? database.pendingOutgoing(conversationId: group.conversationId)) ?? []
-        let resends = Self.roomResends(hasArchive: status.hasArchive, unconfirmed: unconfirmed, pending: pending)
+        let resends = Self.roomResends(hasArchive: status.hasArchive, reachedEnd: reachedEnd, unconfirmed: unconfirmed, pending: pending)
         // As in `sendUnclaimedPending`: the room's join and catch-up are acknowledged first.
         if !resends.isEmpty {
             requestAcknowledgement()

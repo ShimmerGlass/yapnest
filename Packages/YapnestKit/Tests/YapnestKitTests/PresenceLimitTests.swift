@@ -64,6 +64,12 @@ struct PresenceLimitTests {
         #expect(vCardRequests == 0)
     }
 
+    /// A group's picture is announced in its info, not by a contact.
+    @Test func aGroupsPictureIsFetched() {
+        session.vCardAvatarAnnounced(YapnestKit.JID("cake@rooms.example.org")!, hash: String(repeating: "b", count: 40))
+        #expect(vCardRequests == 1)
+    }
+
     @Test func aContactsPhotoIsFetched() throws {
         try session.database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
         receive("alice@example.org/phone", photo)
