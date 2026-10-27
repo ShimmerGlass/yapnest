@@ -22,7 +22,8 @@ struct RenderedText: Equatable {
     var segments: [Segment]
     /// The links found in the body, in order, for the message menu to offer
     /// without detecting them again on the main thread. A cut-short body
-    /// still has all of its links.
+    /// still has all of its links, those in code blocks too, which stay
+    /// untappable in the bubble.
     var links: [URL] = []
     /// Only the start of a long body is here; `MessageText.collapsedLineLimit` says why.
     var isCollapsed = false
@@ -174,7 +175,9 @@ enum MessageText {
             let native = NSMutableAttributedString(string: block.text, attributes: [.font: font.uiFont])
             #endif
             if block.isPreformatted {
-                // Verbatim means no links to tap and no spans either.
+                // Verbatim means no links to tap and no spans either, but the
+                // menu still offers the addresses a code block holds.
+                found += LinkDetector.links(in: block.text).map(\.url)
                 text.font = font.swiftUI.monospaced()
                 var segment = RenderedText.Segment(id: index, depth: block.depth, isPreformatted: true, text: text)
                 #if targetEnvironment(macCatalyst)

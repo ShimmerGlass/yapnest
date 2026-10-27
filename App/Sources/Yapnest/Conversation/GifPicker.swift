@@ -351,10 +351,19 @@ private struct GifStill: View {
             }
         }
         .task(id: url) {
-            guard let data = await GifPreviewCache.data(for: url) else { return }
+            let data = await GifPreviewCache.data(for: url)
+            // The task is cancelled when the URL changes, and a late answer
+            // for the old one must not replace the new one's.
+            guard !Task.isCancelled else { return }
+            guard let data else {
+                image = nil
+                return
+            }
             // Decoded here rather than when first drawn, which would be on
             // the main thread.
-            image = await Task.detached(priority: .userInitiated) { UIImage(data: data)?.preparingForDisplay() }.value
+            let decoded = await Task.detached(priority: .userInitiated) { UIImage(data: data)?.preparingForDisplay() }.value
+            guard !Task.isCancelled else { return }
+            image = decoded
         }
     }
 }
