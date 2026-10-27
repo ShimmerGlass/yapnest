@@ -238,8 +238,11 @@ extension LiveServer {
             let laptop = try session(bob, device: "laptop-\(UUID().uuidString.prefix(4))", fresh: true)
             laptop.connect()
             defer { laptop.disconnect() }
-            try await waitUntil("the laptop to get the history") {
+            // The read states are read once the account's own sync ends, which
+            // with a long history can be after the group's catch-up.
+            try await waitUntil("the laptop to get the history and finish its sync") {
                 try message(unread, in: laptop) != nil && laptop.roomStatus(room)?.isSyncing == false
+                    && laptop.state.value == .connected(isSyncing: false)
             }
             #expect(try message(read, in: laptop)?.isRead == true)
             #expect(try message(unread, in: laptop)?.isRead == false)
