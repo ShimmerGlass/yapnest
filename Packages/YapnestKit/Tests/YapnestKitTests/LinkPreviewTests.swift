@@ -497,9 +497,10 @@ struct LinkPreviewerFetchTests {
         #expect(await eventually { stub.requested.count == 1 })
 
         stub.serve(url, .init(headers: ["Content-Type": "text/html"], body: Data(#"<head><meta property="og:title" content="Back"></head>"#.utf8)))
-        // Asked again as the message shows again, until the earlier run is done.
+        // Asked again once the wait after a failure is over, until the earlier run is done.
+        let later = Date().addingTimeInterval(LinkPreviewer.retryAfter + 1)
         let found = await eventually {
-            previewer.fetchIfNeeded(URL(string: url)!)
+            previewer.fetchIfNeeded(URL(string: url)!, now: later)
             return (try? await stored(url)) != nil
         }
         #expect(found)
