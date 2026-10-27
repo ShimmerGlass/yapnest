@@ -99,6 +99,14 @@ struct PresenceLimitTests {
         #expect(vCardRequests == 2)
     }
 
+    @Test func aPhotoThatFailedToArriveIsAskedForAgain() throws {
+        try session.database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        wire.answer { FakeWire.error(to: $0, condition: "remote-server-timeout") }
+        receive("alice@example.org/phone", photo)
+        receive("alice@example.org/laptop", photo)
+        #expect(vCardRequests == 2)
+    }
+
     private var avatarRequests: Int {
         wire.written.filter { ($0 as? Iq)?.findChild(name: "pubsub")?.firstChild(name: "items")?.attribute("node") == "urn:xmpp:avatar:metadata" }.count
     }
@@ -112,5 +120,20 @@ struct PresenceLimitTests {
         #expect(avatarRequests == 1)
         session.refreshAvatars(now: start.addingTimeInterval(XMPPSession.avatarRefreshInterval + 1))
         #expect(avatarRequests == 2)
+    }
+
+    @Test func aChatBegunAfterTheDailyRefreshAsksForItsAvatarOnce() throws {
+        session.refreshAvatars(now: Date())
+        #expect(avatarRequests == 0)
+        try session.send("hello", to: alice)
+        #expect(avatarRequests == 1)
+        try session.send("again", to: alice)
+        #expect(avatarRequests == 1)
+    }
+
+    @Test func aChatWithPresenceDoesNotAskForItsAvatarAtStart() throws {
+        try session.database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        try session.send("hello", to: alice)
+        #expect(avatarRequests == 0)
     }
 }

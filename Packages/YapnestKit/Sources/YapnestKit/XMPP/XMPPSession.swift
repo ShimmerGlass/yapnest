@@ -263,6 +263,8 @@ public final class XMPPSession: @unchecked Sendable {
         /// The (address, hash) pairs of photos asked for with a vCard, kept
         /// whether or not the answer was usable.
         var vCardAvatarAttempts: Set<String> = []
+        /// The chats whose avatar was asked for because they began today.
+        var avatarsAskedAtStart: Set<JID> = []
         /// Each contact's connected resources and what they say.
         var resources: [JID: [String: ResourcePresence]] = [:]
         /// Orders resources' presences, so of equally available ones the
@@ -1680,6 +1682,7 @@ public final class XMPPSession: @unchecked Sendable {
         if let message = result.editedMessage { events.send(.editedMessage(message)) }
         if let message = result.newMessage {
             events.send(.newMessage(message))
+            if !inbound.isOutgoing { fetchAvatarIfFirstContact(inbound.peer) }
             // Fetching reveals our IP address to the sender's upload
             // server, so only for people we know.
             if let attachment = result.newAttachment, Self.trustsForAutoDownload(
@@ -2023,8 +2026,14 @@ public final class XMPPSession: @unchecked Sendable {
         // this session.
         guard lock.withLock({ $0.vCardAvatarAttempts.insert("\(jid)#\(hash)").inserted }) else { return }
         client.module(.vcardTemp).retrieveVCard(from: Martin.JID(jid.martin)) { [weak self] result in
-            guard let self, case .success(let vcard) = result,
-                  let binval = vcard.photos.first?.binval,
+            guard let self else { return }
+            // Only an answer that arrived and was unusable is final; a
+            // failure may pass, and the next presence should ask again.
+            guard case .success(let vcard) = result else {
+                self.lock.withLock { _ = $0.vCardAvatarAttempts.remove("\(jid)#\(hash)") }
+                return
+            }
+            guard let binval = vcard.photos.first?.binval,
                   let data = AvatarStore.data(fromBase64: binval),
                   self.avatars.save(data, hash: hash) else { return }
             try? self.database.setAvatarHash(hash, for: jid)
@@ -2044,6 +2053,17 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     static let avatarRefreshInterval: TimeInterval = 24 * 3600
+
+    /// The daily refresh has come and gone by the time a chat with someone
+    /// whose presence we don't receive begins, so their avatar is asked for
+    /// once, here.
+    func fetchAvatarIfFirstContact(_ peer: JID) {
+        let contact = (try? database.contact(peer)) ?? nil
+        guard !isGroup(peer), contact?.seesPresence != true,
+              contact?.avatarHash == nil,
+              lock.withLock({ $0.avatarsAskedAtStart.insert(peer).inserted }) else { return }
+        fetchAvatar(of: peer)
+    }
 
     func fetchAvatar(of jid: JID) {
         client.module(.pepUserAvatar).retrieveAvatarMetadata(from: jid.martin, fireEvents: false) { [weak self] result in
@@ -2366,6 +2386,7 @@ public final class XMPPSession: @unchecked Sendable {
         }
         let message = try outgoingMessages.stage([.text(text, reply: reply)], to: peer)[0]
         donateSuggestion(for: peer)
+        fetchAvatarIfFirstContact(peer)
         transmit(message, to: peer)
         return message
     }
@@ -2501,11 +2522,12 @@ public final class XMPPSession: @unchecked Sendable {
         let peer = route.peer
         let to = route.isGroup ? original?.nick.map { "\(peer)/\($0)" } : author.description
         // A file's link holds its key, so the quote describes the file instead.
-        var raw = original.map { $0.isRetracted ? "" : $0.body } ?? message.replyFallback ?? ""
-        // The text of an encrypted message must not reach the servers in the
-        // clear, which a quote in an unencrypted reply would do.
-        if original?.encryption == .omemo && message.encryption != .omemo { raw = "" }
-        let text = Attachment.quoteSummary(text: raw, attachment: attachment) ?? raw
+        let raw = original.map { $0.isRetracted ? "" : $0.body } ?? message.replyFallback ?? ""
+        // What an encrypted message holds, its text and its file's name too,
+        // must not reach the servers in the clear, which a quote in an
+        // unencrypted reply would do.
+        let hidden = original?.encryption == .omemo && message.encryption != .omemo
+        let text = hidden ? "" : Attachment.quoteSummary(text: raw, attachment: attachment) ?? raw
         return .init(id: replyId, author: to ?? peer.description, text: text)
     }
 

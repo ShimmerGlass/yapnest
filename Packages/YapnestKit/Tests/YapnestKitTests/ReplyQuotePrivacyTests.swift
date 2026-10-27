@@ -32,6 +32,19 @@ struct ReplyQuotePrivacyTests {
         #expect(wired.firstChild(name: "reply", xmlns: NS.reply)?.attribute("id") == "in1")
     }
 
+    @Test func anEncryptedFilesNameIsNotQuotedInTheClearEither() throws {
+        let file = try original(.omemo)
+        try database.writer.write { db in
+            try YapnestKit.Attachment(messageId: file.id!, url: "aesgcm://files.example.org/x#key", name: "tax-return.pdf", state: .remote).insert(db)
+        }
+        let sent = try session.send("ok", to: alice, replyingTo: file)
+        session.drainSendQueue(alice)
+        let wired = try #require(wire.messages.first { $0.id == sent.remoteId })
+        #expect(wired.body == "ok")
+        #expect(wired.firstChild(name: "fallback", xmlns: NS.fallback) == nil)
+        #expect(!wired.description.contains("tax-return"))
+    }
+
     @Test func anUnencryptedMessageIsStillQuoted() throws {
         let sent = try session.send("ok", to: alice, replyingTo: original(.none))
         session.drainSendQueue(alice)
