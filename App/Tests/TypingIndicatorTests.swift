@@ -65,7 +65,7 @@ struct TypingIndicatorTests {
         let session = try await signedIn(fixture)
         let model: AppModel = fixture.model
         nonisolated(unsafe) var invalidated = false
-        withObservationTracking { _ = model.typing } onChange: { invalidated = true }
+        withObservationTracking { _ = model.live.peer(peer).isTyping } onChange: { invalidated = true }
 
         session.events.send(.chatState(peer, .active))
 
@@ -78,7 +78,7 @@ struct TypingIndicatorTests {
         let model: AppModel = fixture.model
         await startTyping(session, model)
         nonisolated(unsafe) var invalidated = false
-        withObservationTracking { _ = model.typing } onChange: { invalidated = true }
+        withObservationTracking { _ = model.live.peer(peer).isTyping } onChange: { invalidated = true }
 
         session.events.send(.chatState(peer, .composing))
 

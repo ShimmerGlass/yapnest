@@ -660,6 +660,9 @@ extension XMPPSession {
         // comes after, and applies those first.
         guard isSelf else {
             updateOccupants(room) { status in
+                var occupant = occupant
+                // A change of show or role is the same stay.
+                occupant.presenceSession = status?.occupants[nick]?.presenceSession ?? .random(in: 1...Int64.max)
                 status?.occupants[nick] = occupant
                 if let jid = occupant.jid { status?.setAffiliation(occupant.affiliation, of: jid) }
             }

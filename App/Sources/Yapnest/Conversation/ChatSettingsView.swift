@@ -591,7 +591,7 @@ struct ChatSettingsView: View {
         let (changes, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         // Read and armed with nothing in between, so no change goes unseen.
         func arm() -> RoomStatus? {
-            withObservationTracking { _ = model.rooms[peer] } onChange: { signal.yield() }
+            withObservationTracking { _ = model.live.room(peer).status } onChange: { signal.yield() }
             return room
         }
         var last = arm()

@@ -75,6 +75,17 @@ struct PresenceSessionTests {
         #expect(try stored("g1").body == "hi all")
     }
 
+    @Test func aMessageRightAfterItsSendersPresenceIsPlacedInTheirStay() throws {
+        // The window stays open, so only reading the room can apply the presence.
+        session.occupantWindow = 60
+        session.roomPresence(presence("Alice"), room: room)
+        say("g1")
+        #expect(try stored("g1").presenceSession != nil)
+        session.roomPresence(presence("Alice", show: "away"), room: room)
+        say("g2", correction)
+        #expect(try stored("g1").body == "pwned")
+    }
+
     @Test func aMessageFromSomeoneNotInTheRoomIsNotPlacedInAStay() throws {
         say("g1")
         #expect(try stored("g1").presenceSession == nil)
