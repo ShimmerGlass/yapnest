@@ -1,6 +1,7 @@
 import Foundation
 import GRDB
 import Martin
+import Synchronization
 import Testing
 @testable import Martin
 @testable import YapnestKit
@@ -185,6 +186,55 @@ struct RoomCatchUpTests {
         session.handleRoomStanza(liveMessage(id: "l1", stanzaId: "r6"), source: .live)
         #expect(try messageCount(database) == 1)
         #expect(try cursor == "old")
+    }
+
+    /// Answers every archive query with an incomplete page, ending at the
+    /// cursor `last` gives for the page asked after.
+    final class Queries: Sendable {
+        let count = Mutex(0)
+    }
+
+    private func endlessArchive(last: @escaping @Sendable (String?) -> String) -> Queries {
+        let queries = Queries()
+        wire.answer { request in
+            guard let query = request.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") else { return nil }
+            queries.count.withLock { $0 += 1 }
+            let after = query.firstChild(name: "set", xmlns: "http://jabber.org/protocol/rsm")?.firstChild(name: "after")?.value
+            let fin = Element(name: "fin", xmlns: "urn:xmpp:mam:2")
+            fin.addChild(Element(name: "set", xmlns: "http://jabber.org/protocol/rsm", children: [Element(name: "last", cdata: last(after))]))
+            return FakeWire.result(to: request, fin)
+        }
+        return queries
+    }
+
+    @Test func anArchiveThatNeverEndsIsReadAPageLimitAtATime() async throws {
+        wire.answersLater = true
+        let queries = endlessArchive { after in "\(after ?? "")+" }
+        session.roomPresence(selfPresence(), room: room)
+
+        #expect(await eventually(timeout: 10) { session.roomStatus(room)?.isSyncing == false })
+        #expect(queries.count.withLock { $0 } == XMPPSession.roomArchivePageLimit)
+        // What's left is read from the cursor next time, so live messages
+        // don't move it past.
+        #expect(session.roomStatus(room)?.catchUpReachedEnd == false)
+        #expect(try cursor?.hasPrefix("old+") == true)
+    }
+
+    @Test func anArchiveWhoseCursorDoesNotMoveIsReadOnce() throws {
+        let queries = endlessArchive { after in after ?? "old" }
+        session.roomPresence(selfPresence(), room: room)
+
+        #expect(queries.count.withLock { $0 } == 1)
+        #expect(session.roomStatus(room)?.isSyncing == false)
+        #expect(session.roomStatus(room)?.catchUpReachedEnd == false)
+    }
+
+    @Test func whatFollowsAPage() {
+        #expect(XMPPSession.nextRoomArchivePage(after: "a", last: "b", complete: false, pagesRead: 1) == .after("b"))
+        #expect(XMPPSession.nextRoomArchivePage(after: "a", last: "b", complete: true, pagesRead: 1) == .end)
+        #expect(XMPPSession.nextRoomArchivePage(after: "a", last: nil, complete: false, pagesRead: 1) == .end)
+        #expect(XMPPSession.nextRoomArchivePage(after: "a", last: "a", complete: false, pagesRead: 1) == .stop)
+        #expect(XMPPSession.nextRoomArchivePage(after: "a", last: "b", complete: false, pagesRead: XMPPSession.roomArchivePageLimit) == .stop)
     }
 
     @Test func aPageTheArchiveRefusedLeavesTheCursorForLiveMessagesToo() throws {

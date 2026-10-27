@@ -991,7 +991,7 @@ extension XMPPSession {
         }
         omemo.module.mamSyncStarted(for: group.jid.martin)
         if let after = group.lastArchiveId {
-            fetchRoomArchivePage(group.jid, rsm: RSM.Query(after: after, max: 100), visit)
+            fetchRoomArchivePage(group.jid, rsm: RSM.Query(after: after, max: 100), after: after, visit)
         } else {
             // Somewhere to start from for a group new to this device.
             fetchRoomArchivePage(group.jid, rsm: RSM.Query(lastItems: 50), visit, onePage: true)
@@ -1021,7 +1021,7 @@ extension XMPPSession {
         }
     }
 
-    private func fetchRoomArchivePage(_ room: JID, rsm: RSM.Query, _ visit: RoomCatchUp, onePage: Bool = false) {
+    private func fetchRoomArchivePage(_ room: JID, rsm: RSM.Query, after: String? = nil, _ visit: RoomCatchUp, onePage: Bool = false, pagesRead: Int = 0) {
         // The room's archive, which discovery found speaks MAM 2.
         let queryId = UUID().uuidString
         client.module(.mam).queryItems(version: .MAM2, componentJid: Martin.JID(room.martin), queryId: queryId, rsm: rsm) { [weak self] result in
@@ -1029,14 +1029,14 @@ extension XMPPSession {
             let stored = self.flushArchive(query: queryId)
             guard self.roomCatchUpMayProceed(room, visit) else { return }
             switch result {
-            case .success(let page): self.roomArchivePageRead(room, page, stored: stored, visit, onePage: onePage)
-            case .failure(let error): self.roomArchivePageFailed(room, rsm: rsm, error, visit, onePage: onePage)
+            case .success(let page): self.roomArchivePageRead(room, page, stored: stored, after: after, visit, onePage: onePage, pagesRead: pagesRead)
+            case .failure(let error): self.roomArchivePageFailed(room, rsm: rsm, after: after, error, visit, onePage: onePage, pagesRead: pagesRead)
             }
         }
     }
 
     private func roomArchivePageRead(
-        _ room: JID, _ page: MessageArchiveManagementModule.QueryResult, stored: Bool, _ visit: RoomCatchUp, onePage: Bool,
+        _ room: JID, _ page: MessageArchiveManagementModule.QueryResult, stored: Bool, after: String?, _ visit: RoomCatchUp, onePage: Bool, pagesRead: Int,
     ) {
         guard stored else {
             // Going on would move the cursor past the page that was lost.
@@ -1046,10 +1046,12 @@ extension XMPPSession {
         if let last = page.rsm?.last {
             try? database.updateGroupChat(room) { $0.lastArchiveId = last }
         }
-        if onePage || page.complete || page.rsm?.last == nil {
-            finishRoomCatchUp(room, visit, reachedEnd: true)
-        } else {
-            fetchRoomArchivePage(room, rsm: RSM.Query(after: page.rsm?.last, max: 100), visit)
+        switch Self.nextRoomArchivePage(after: after, last: page.rsm?.last, complete: onePage || page.complete, pagesRead: pagesRead + 1) {
+        case .end: finishRoomCatchUp(room, visit, reachedEnd: true)
+        // Live messages mustn't move the cursor past what's left; the next
+        // visit reads on from it.
+        case .stop: finishRoomCatchUp(room, visit, reachedEnd: false)
+        case .after(let last): fetchRoomArchivePage(room, rsm: RSM.Query(after: last, max: 100), after: last, visit, pagesRead: pagesRead + 1)
         }
     }
 
@@ -1057,7 +1059,7 @@ extension XMPPSession {
     /// that doesn't ends the catch-up with the cursor where the last page left
     /// it, so what the room sends live doesn't move it past the gap, and the
     /// user is told that messages may be missing.
-    private func roomArchivePageFailed(_ room: JID, rsm: RSM.Query, _ error: XMPPError, _ visit: RoomCatchUp, onePage: Bool) {
+    private func roomArchivePageFailed(_ room: JID, rsm: RSM.Query, after: String?, _ error: XMPPError, _ visit: RoomCatchUp, onePage: Bool, pagesRead: Int) {
         // An archive that no longer knows our cursor is read from its newest
         // page. Not when it was the newest page that failed: asking for it
         // again would never end.
@@ -1083,7 +1085,7 @@ extension XMPPSession {
                     return try await queryRoomArchive(room, rsm)
                 }
                 guard roomCatchUpMayProceed(room, visit) else { return }
-                roomArchivePageRead(room, read.page, stored: read.stored, visit, onePage: onePage)
+                roomArchivePageRead(room, read.page, stored: read.stored, after: after, visit, onePage: onePage, pagesRead: pagesRead)
             } catch {
                 guard roomCatchUpMayProceed(room, visit) else { return }
                 archiveGaveUp(room, error, visit)
@@ -1135,9 +1137,11 @@ extension XMPPSession {
         guard isConnected, roomStatus(room)?.isJoined == true, let group = try database.groupChat(room) else { throw GroupError.notConnected }
         omemo.module.mamSyncStarted(for: room.martin)
         defer { omemo.module.mamSyncFinished(for: room.martin) }
-        var rsm = group.lastArchiveId.map { RSM.Query(after: $0, max: 100) } ?? RSM.Query(lastItems: 50)
-        var onePage = group.lastArchiveId == nil
-        while true {
+        var after = group.lastArchiveId
+        var rsm = after.map { RSM.Query(after: $0, max: 100) } ?? RSM.Query(lastItems: 50)
+        var onePage = after == nil
+        var pagesRead = 0
+        paging: while true {
             let page: MessageArchiveManagementModule.QueryResult
             do {
                 let read = try await retryingPassingErrors { try await queryRoomArchive(room, rsm) }
@@ -1145,13 +1149,21 @@ extension XMPPSession {
                 page = read.page
             } catch XMPPError.item_not_found where hasArchiveCursor(room) {
                 try database.updateGroupChat(room) { $0.lastArchiveId = nil }
+                after = nil
                 rsm = RSM.Query(lastItems: 50)
                 onePage = true
                 continue
             }
             if let last = page.rsm?.last { try database.updateGroupChat(room) { $0.lastArchiveId = last } }
-            if onePage || page.complete || page.rsm?.last == nil { break }
-            rsm = RSM.Query(after: page.rsm?.last, max: 100)
+            pagesRead += 1
+            switch Self.nextRoomArchivePage(after: after, last: page.rsm?.last, complete: onePage || page.complete, pagesRead: pagesRead) {
+            case .end: break paging
+            // Read on from the cursor at the next visit, or Retry.
+            case .stop: return
+            case .after(let last):
+                after = last
+                rsm = RSM.Query(after: last, max: 100)
+            }
         }
         updateRoom(room) { $0?.catchUpReachedEnd = true }
     }
@@ -1223,6 +1235,23 @@ extension XMPPSession {
                 self.fetchRoomArchiveForNotifications(room, after: last, since: nil, pagesLeft: pagesLeft - 1, done: done)
             }
         }
+    }
+
+    /// A visit reads at most this many pages of a room's archive, 10,000
+    /// messages. A room on any server can say there is always more, or
+    /// answer every page with the same cursor, and would otherwise be read
+    /// from forever.
+    static let roomArchivePageLimit = 100
+
+    enum RoomArchivePage: Equatable {
+        case end, stop, after(String)
+    }
+
+    /// What follows a page of a room's archive read from `after`.
+    static func nextRoomArchivePage(after: String?, last: String?, complete: Bool, pagesRead: Int) -> RoomArchivePage {
+        guard !complete, let last else { return .end }
+        guard last != after, pagesRead < roomArchivePageLimit else { return .stop }
+        return .after(last)
     }
 
     /// What to send into a room after its catch-up: the never-sent messages
