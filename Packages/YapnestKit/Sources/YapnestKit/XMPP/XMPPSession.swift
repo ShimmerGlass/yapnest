@@ -303,6 +303,9 @@ public final class XMPPSession: @unchecked Sendable {
         /// Whether the user is looking at the app (XEP-0352). A new session
         /// starts active on the server's side.
         var isActive = true
+        /// Whether the Mac's screen is locked. Only the client state looks at
+        /// it: the Mac is "active" otherwise, whatever the window is doing.
+        var isScreenLocked = false
         /// When the user left the app (XEP-0012's idle time); nil while in it.
         var idleSince: Date?
         /// What the server may be holding back while we're inactive.
@@ -984,6 +987,20 @@ public final class XMPPSession: @unchecked Sendable {
         if active, Self.recheckRooms(afterAbsence: away) { selfPingRooms() }
     }
 
+    /// Tells the server the user can't be looking at the app while the Mac's
+    /// screen is locked (XEP-0352), so it holds back what only a person at
+    /// the screen needs, and active again on unlock. Only the client state
+    /// follows this: `isActive`, and with it everything that keys on being in
+    /// the app, is unchanged.
+    public func setScreenLocked(_ locked: Bool) {
+        let changed = lock.withLock { state in
+            defer { state.isScreenLocked = locked }
+            return state.isScreenLocked != locked
+        }
+        guard changed, isConnected else { return }
+        reportClientState()
+    }
+
     /// How long the app is away before coming back is worth asking every
     /// room whether we are still in it. A banner, Control Center, Face ID or
     /// a Cmd-Tab on the Mac takes seconds and the stream is untouched; rooms
@@ -1009,9 +1026,9 @@ public final class XMPPSession: @unchecked Sendable {
     private func reportClientState() {
         guard policy.reportsClientState, isConnected else { return }
         let refresh: HeldNotifications.Refresh? = clientStateLock.withLock {
-            let (isActive, syncing) = lock.withLock { ($0.isActive, $0.isSyncing) }
+            let (isActive, locked, syncing) = lock.withLock { ($0.isActive, $0.isScreenLocked, $0.isSyncing) }
             guard !syncing else { return nil }
-            let active = isActive || !policy.reportsInactive
+            let active = (isActive || !policy.reportsInactive) && !locked
             // A server without CSI holds nothing.
             guard client.module(.csi).setState(active) else { return nil }
             return lock.withLock { $0.held.sent(active: active) }
@@ -1038,7 +1055,7 @@ public final class XMPPSession: @unchecked Sendable {
             DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, self.isConnected else { return }
                 let due = self.lock.withLock { state in
-                    (state.isActive || !self.policy.reportsInactive) ? state.held.takeSlow(generation: generation) : []
+                    ((state.isActive || !self.policy.reportsInactive) && !state.isScreenLocked) ? state.held.takeSlow(generation: generation) : []
                 }
                 if !due.isEmpty { self.refreshSlowNodes(due, generation: generation) }
             }

@@ -4,6 +4,7 @@ import Foundation
 import YapnestKit
 
 /// Shows the Mac's session away while the Mac is idle or locked (`IdleRules`),
+/// tells the server (XEP-0352) it is inactive while the screen is locked,
 /// and gives it the Mac's idle time for last seen. The app never suspends
 /// there, so leaving it says nothing about whether the user is at the Mac.
 @MainActor
@@ -22,6 +23,7 @@ final class IdleWatch {
             observers.append(center.addObserver(forName: .init(name), object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     self?.screenLocked = locked
+                    self?.session.setScreenLocked(locked)
                     self?.check()
                 }
             })
@@ -40,6 +42,7 @@ final class IdleWatch {
         observers = []
         session.setIdleSource(nil)
         session.setAway(false)
+        session.setScreenLocked(false)
     }
 
     @discardableResult
