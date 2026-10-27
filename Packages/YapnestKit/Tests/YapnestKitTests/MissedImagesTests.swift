@@ -86,6 +86,16 @@ struct MissedImagesTests {
         #expect(try f.missed() == [subscribed])
     }
 
+    @Test func someoneBlockedIsNotTrusted() throws {
+        var f = Fixture()
+        try f.db.writer.write { try Contact(jid: alice, subscription: .both, isInRoster: true, isBlocked: true).save($0) }
+        _ = try f.add(in: alice, from: alice)
+        #expect(try f.missed().isEmpty)
+        #expect(try f.db.hasConsented(alice) == false)
+        try f.db.setBlocked(false, alice)
+        #expect(try f.db.hasConsented(alice))
+    }
+
     @Test func groupsTrustPrivateRoomsOrRosterSenders() throws {
         var f = Fixture()
         try f.group(private: false)

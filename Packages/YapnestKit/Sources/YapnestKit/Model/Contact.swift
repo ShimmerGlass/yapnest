@@ -84,7 +84,8 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
     /// from them we haven't answered. Everything a stranger mustn't get (a
     /// ringing phone, receipts, automatic downloads, being told our presence
     /// or last seen) hangs on this, never on `isInRoster`.
-    /// `AppDatabase.missedImages` repeats this in SQL.
+    /// `AppDatabase.missedImages` repeats this in SQL, and it and
+    /// `AppDatabase.hasConsented` also leave out someone blocked.
     public var hasConsent: Bool {
         isAddedByUser || isSubscriptionPending || subscription != .none
     }
