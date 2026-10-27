@@ -1718,7 +1718,7 @@ public final class XMPPSession: @unchecked Sendable {
         if let message = result.editedMessage { events.send(.editedMessage(message)) }
         if let message = result.newMessage {
             events.send(.newMessage(message))
-            if !inbound.isOutgoing { fetchAvatarIfFirstContact(inbound.peer) }
+            if !inbound.isOutgoing { askAvatarIfFirstContact(inbound.peer) }
             // Fetching reveals our IP address to the sender's upload
             // server, so only for people we know.
             if let attachment = result.newAttachment, Self.trustsForAutoDownload(
@@ -2097,6 +2097,11 @@ public final class XMPPSession: @unchecked Sendable {
     /// Opening a chat before anyone has written asks too, or its avatar would
     /// stay missing until the next daily refresh.
     public func fetchAvatarIfFirstContact(_ peer: JID) {
+        // The app calls it as a chat opens, on the main thread.
+        Task.detached(priority: .utility) { [self] in askAvatarIfFirstContact(peer) }
+    }
+
+    func askAvatarIfFirstContact(_ peer: JID) {
         let contact = (try? database.contact(peer)) ?? nil
         guard !isGroup(peer), contact?.seesPresence != true,
               contact?.avatarHash == nil,
@@ -2425,7 +2430,7 @@ public final class XMPPSession: @unchecked Sendable {
         }
         let message = try outgoingMessages.stage([.text(text, reply: reply)], to: peer)[0]
         donateSuggestion(for: peer)
-        fetchAvatarIfFirstContact(peer)
+        askAvatarIfFirstContact(peer)
         transmit(message, to: peer)
         return message
     }

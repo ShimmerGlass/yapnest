@@ -140,9 +140,9 @@ struct PresenceLimitTests {
     @Test func openingAChatBeforeAnyMessageAsksForItsAvatarOnce() throws {
         session.refreshAvatars(now: Date())
         _ = try session.database.conversation(with: alice)
-        session.fetchAvatarIfFirstContact(alice)
+        session.askAvatarIfFirstContact(alice)
         #expect(avatarRequests == 1)
-        session.fetchAvatarIfFirstContact(alice)
+        session.askAvatarIfFirstContact(alice)
         #expect(avatarRequests == 1)
         try session.send("hello", to: alice)
         #expect(avatarRequests == 1)
@@ -150,7 +150,7 @@ struct PresenceLimitTests {
 
     @Test func openingAChatWithAnAvatarDoesNotAsk() throws {
         try session.database.setAvatarHash(String(repeating: "d", count: 40), for: alice)
-        session.fetchAvatarIfFirstContact(alice)
+        session.askAvatarIfFirstContact(alice)
         #expect(avatarRequests == 0)
     }
 }

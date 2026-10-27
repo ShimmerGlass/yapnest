@@ -65,6 +65,17 @@ struct MainThreadAccessTests {
         #expect(hits == 0)
     }
 
+    /// Called as a chat opens, which reads whether the contact has an avatar yet.
+    @Test @MainActor func openingAChatIsOffTheMainThread() async throws {
+        let db = try open()
+        let session = try XMPPSession(credentials: .init(jid: JID("me@example.org")!, password: "x"), resource: "t", database: db, identityKeys: testIdentityKeys(for: db))
+        let hits = try await count {
+            session.fetchAvatarIfFirstContact(JID("alice@example.org")!)
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        #expect(hits == 0)
+    }
+
     @Test func switchedOffByDefault() throws {
         let db = try open()
         #expect(!AppDatabase.trapsMainThreadAccess)
