@@ -88,6 +88,12 @@ struct SnapshotDiskCache: Sendable {
         trim()
     }
 
+    /// Signing out deletes what the account left on the device, and a
+    /// snapshot shows a place someone shared.
+    func removeAll() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
     func trim() {
         let keys: [URLResourceKey] = [.contentModificationDateKey]
         guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys),

@@ -457,7 +457,10 @@ final class AppModel {
             await environment.disablePush(session)
             teardown(session)
             // The folder holds the database and every attachment.
-            await offMain { try? FileManager.default.removeItem(at: folder) }
+            await offMain {
+                try? FileManager.default.removeItem(at: folder)
+                SnapshotDiskCache.standard.removeAll()
+            }
             if environment.managesBadge {
                 UNUserNotificationCenter.current().removeAllDeliveredNotifications()
                 try? await UNUserNotificationCenter.current().setBadgeCount(0)
