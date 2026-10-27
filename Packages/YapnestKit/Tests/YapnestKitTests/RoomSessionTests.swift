@@ -49,6 +49,15 @@ struct RoomFailureTests {
         session.cancelAllRejoins()
     }
 
+    @Test func liveMessagesFromARoomWeLeftAreDropped() throws {
+        try session.database.updateGroupChat(room) { $0.hasLeft = true }
+        session.handleRoomStanza(liveMessage(id: "l1", stanzaId: "r6"), source: .live)
+        #expect(try messageCount(session.database) == 0)
+        try session.database.updateGroupChat(room) { $0.hasLeft = false }
+        session.handleRoomStanza(liveMessage(id: "l2", stanzaId: "r7"), source: .live)
+        #expect(try messageCount(session.database) == 1)
+    }
+
     @Test func beingKickedFailsTheRoomAndStaysOut() {
         status(.joined)
         session.roomPresence(selfPresence(type: "unavailable", statuses: [110, 307]), room: room)

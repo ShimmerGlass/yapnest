@@ -1311,6 +1311,9 @@ extension XMPPSession {
     func handleRoomStanza(_ stanza: Martin.Message, source: InboundMessage.Source, isHistory: Bool = false, query: String = "") {
         guard let room = stanza.from.flatMap({ JID($0) }), let group = try? database.groupChat(room) else { return }
         if routeBounce(stanza) { return }
+        // Leaving was the user's decision, which a room's service can't undo
+        // by going on sending. Paging its archive is the user's own request.
+        if case .live = source, group.hasLeft { return }
         reportSubjectOutcome(of: stanza, in: room)
         if stanza.type == .groupchat, stanza.from?.resource == nil {
             // The room itself: status code 104 announces a configuration change.
