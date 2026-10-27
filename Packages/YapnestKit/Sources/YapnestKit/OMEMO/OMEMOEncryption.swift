@@ -68,7 +68,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         // it fails however often the session is rebuilt, and each message
         // would start another rebuild.
         let device = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
-            .getAttribute("sid").flatMap { Int32($0) }
+            .getAttribute("sid").flatMap { UInt32($0) }.map { Int32(bitPattern: $0) }
         // Whatever becomes of the message, it shows the device exists and is
         // in use. Recorded on the way out, after decoding, which is where a
         // new device's identity is first stored.
@@ -221,7 +221,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         }
         guard case .successMessage(let result, _) = encoded,
               let encrypted = result.firstChild(name: "encrypted", xmlns: NS.omemoLegacy),
-              encrypted.firstChild(name: "header")?.filterChildren(name: "key", xmlns: nil).contains(where: { $0.getAttribute("rid") == String(device) }) == true,
+              encrypted.firstChild(name: "header")?.filterChildren(name: "key", xmlns: nil).contains(where: { $0.getAttribute("rid") == String(UInt32(bitPattern: device)) }) == true,
               encrypted.firstChild(name: "payload") != nil else { return .failure(.setupFailed) }
         result.removeChild(encrypted)
         return .success(encrypted)
@@ -244,7 +244,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         case .decrypted(nil, _), .ignore, .ownCopy:
             return .failure(.undecryptable)
         case .failed:
-            let device = encrypted.firstChild(name: "header")?.getAttribute("sid").flatMap { Int32($0) }
+            let device = encrypted.firstChild(name: "header")?.getAttribute("sid").flatMap { UInt32($0) }.map { Int32(bitPattern: $0) }
             if let device, store.status(forName: sender.description, deviceId: device)?.trust == .compromised { return .failure(.compromisedDevice) }
             return .failure(.undecryptable)
         }
@@ -293,7 +293,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         let keys = Set(message.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
             .filterChildren(name: "key", xmlns: nil).compactMap { $0.getAttribute("rid") } ?? [])
         for recipient in recipients {
-            let devices = addresses.filter { $0.name == recipient.description }.map { String($0.deviceId) }
+            let devices = addresses.filter { $0.name == recipient.description }.map { String(UInt32(bitPattern: $0.deviceId)) }
             guard devices.contains(where: keys.contains) else { return .failure(.setupFailed(recipient)) }
         }
         return .success((message, verified ? .verified : .trusted))

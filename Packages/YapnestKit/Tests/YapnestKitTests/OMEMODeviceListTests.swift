@@ -27,9 +27,11 @@ struct OMEMODeviceListTests {
             && iq.firstChild(name: "pubsub")?.firstChild(name: "items")?.getAttribute("node") == OMEMOModule.DEVICES_LIST_NODE
     }
 
+    static func list(_ ids: Int32..., to iq: Iq) -> Iq { list(ids, to: iq) }
+
     static func list(_ ids: [Int32], to iq: Iq) -> Iq {
         let element = Element(name: "list", xmlns: OMEMOModule.XMLNS)
-        for id in ids { element.addChild(Element(name: "device", attributes: ["id": String(id)])) }
+        for id in ids { element.addChild(Element(name: "device", attributes: ["id": String(UInt32(bitPattern: id))])) }
         let item = Element(name: "item", attributes: ["id": "current"])
         item.addChild(element)
         let items = Element(name: "items", attributes: ["node": OMEMOModule.DEVICES_LIST_NODE])
@@ -82,5 +84,46 @@ struct OMEMODeviceListTests {
         let change = try #require(heard.all.first { $0.jid == jid })
         #expect(change.activeDevices == [7, 8])
         #expect(change.readFromServer)
+    }
+
+    /// Ids are unsigned 32-bit numbers; this one is over Int32.max.
+    private static let high: UInt32 = 3_000_000_000
+
+    @Test(.timeLimit(.minutes(1))) func aDeviceWithAnIdOver2To31IsKeptAndItsBundleAskedFor() async throws {
+        let wire = FakeWire()
+        wire.answer { [alice] iq in self.isListRequest(iq, of: alice) ? Self.list(Int32(bitPattern: Self.high), to: iq) : FakeWire.error(to: iq) }
+        let (encryption, client) = try setUp(wire)
+        let heard = Heard()
+        let subscription = encryption.module.activeDevicesPublisher.sink { heard.add($0) }
+        defer { subscription.cancel(); withExtendedLifetime(client) {} }
+        let module = encryption.module, jid = BareJID(alice.description)
+        let found = await withCheckedContinuation { (continuation: CheckedContinuation<[Int32], Never>) in
+            module.addresses(for: [jid]) { continuation.resume(returning: ((try? $0.get()) ?? []).map(\.deviceId)) }
+        }
+        #expect(found == [Int32(bitPattern: Self.high)])
+        #expect(heard.all.first { $0.jid == jid }?.activeDevices == [Int32(bitPattern: Self.high)])
+        let asked = wire.written.compactMap { $0 as? Iq }.compactMap { $0.firstChild(name: "pubsub")?.firstChild(name: "items")?.getAttribute("node") }
+        #expect(asked.contains("eu.siacs.conversations.axolotl.bundles:\(Self.high)"), "\(asked)")
+    }
+
+    @Test func aMessageFromADeviceOver2To31IsMatchedToItsStoredIdentity() throws {
+        let wire = FakeWire()
+        let (encryption, client) = try setUp(wire)
+        defer { withExtendedLifetime(client) {} }
+        let device = Int32(bitPattern: Self.high)
+        let address = SignalAddress(name: alice.description, deviceId: device)
+        #expect(encryption.store.save(identity: address, publicKeyData: Data([0x05] + Array(repeating: 1, count: 32))))
+        #expect(encryption.store.setStatus(.compromisedActive, forIdentity: address))
+        let header = Element(name: "header", attributes: ["sid": String(Self.high)])
+        let key = Element(name: "key", attributes: ["rid": "1"])
+        key.value = "AAAA"
+        header.addChild(key)
+        let payload = Element(name: "payload")
+        payload.value = "AAAA"
+        let encrypted = Element(name: "encrypted", xmlns: "eu.siacs.conversations.axolotl", children: [header, payload])
+        let stanza = Martin.Message()
+        stanza.addChild(encrypted)
+        guard case .failed(let reason) = encryption.decrypt(stanza, from: alice, ownCopy: false) else { Issue.record("not refused"); return }
+        #expect(reason == "sent from a device marked compromised")
     }
 }

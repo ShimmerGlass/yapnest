@@ -721,6 +721,17 @@ Each entry gives what went wrong for users, why, and what changed.
   encrypting). The policy (at most 64 devices: those in use first, then new
   ones, then those gone quiet) is in YapnestKit's `OMEMOStore.limited`.
 
+**Device ids from 2³¹ up were dropped** (`checkAndPublishDevicesListIfNeeded`,
+`addresses(for:)`, the `rid` of a key)
+- *Symptom:* a device whose id has the top bit set, which is half of all
+  random ids, never appeared in a parsed device list, so nothing was
+  encrypted to it.
+- *Cause:* ids were read with `Int32(String)`, which fails above 2³¹ − 1,
+  though the protocol's ids are unsigned 32-bit and we store their bit
+  pattern.
+- *Fix:* ids are read as `UInt32` and converted with `Int32(bitPattern:)`,
+  and a key's `rid` is written as the unsigned number.
+
 **Logs named people publicly** (`OMEMOModule`)
 - *Symptom:* the system log held the addresses whose device lists or bundles
   failed, readable by anyone who collects a sysdiagnose.
