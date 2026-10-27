@@ -24,10 +24,12 @@ extension XMPPSession {
                     return batch
                 }
                 if batch.isEmpty { return }
-                do {
-                    for (name, ids) in batch { try self.database.noteDeviceList(of: name, ids: ids) }
-                } catch {
-                    DiagLog.error(.omemo, "Device list not recorded", .error(error))
+                for (name, ids) in batch {
+                    do { try self.database.noteDeviceList(of: name, ids: ids) } catch {
+                        // Heard again later, it is tried again.
+                        _ = self.lock.withLock { $0.deviceListsNoted.remove(name) }
+                        DiagLog.error(.omemo, "Device list not recorded", .error(error))
+                    }
                 }
             }
         }
