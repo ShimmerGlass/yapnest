@@ -110,8 +110,9 @@ final class ConversationScrollingUITests: XCTestCase {
             let from = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
             let to = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
             from.press(forDuration: 0.01, thenDragTo: to, withVelocity: XCUIGestureVelocity(rawValue: 5000), thenHoldForDuration: 0)
-            // Lets the flick coast: the next one would stop it.
-            settle(1.2)
+            // XCUITest returns only once the coast has stopped; this is the
+            // recorder's publish delay.
+            settle(0.2)
             flicks += 1
         }
         waitForStillness()

@@ -128,7 +128,9 @@ class FuzzScrollingTestCase: XCTestCase {
         var lastTop = driver.recorder()["top"] ?? 0
         while flicks < 80 {
             driver.flickTowardsOlder()
-            driver.settle(1.2)
+            // XCUITest returns only once the coast has stopped; this is the
+            // recorder's publish delay.
+            driver.settle(0.2)
             flicks += 1
             driver.assertNotBlank("after flick \(flicks) towards older messages")
             let top = driver.recorder()["top"] ?? 0
