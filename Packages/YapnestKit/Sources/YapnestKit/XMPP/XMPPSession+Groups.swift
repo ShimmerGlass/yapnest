@@ -1177,7 +1177,12 @@ extension XMPPSession {
     /// For the notification extension: what arrived in our groups since we
     /// last caught up, from their archives, without joining. Members of a
     /// private group may read its archive; a few pages are enough to notify.
-    func catchUpRoomArchives(then done: @escaping @Sendable () -> Void) {
+    ///
+    /// A room that doesn't answer within `timeout` counts as done for this
+    /// push, and its cursor stays where it was: Martin would wait 30 seconds
+    /// for it, which holds the push, and the catch-up still has to count as
+    /// completed for the next push's decision.
+    func catchUpRoomArchives(timeout: TimeInterval = 5, then done: @escaping @Sendable () -> Void) {
         let pending = DispatchGroup()
         let groups = Self.roomsToCatchUpForNotifications((try? database.groupChats()) ?? [])
         // A room with nothing archived yet: from when it last had news
@@ -1189,7 +1194,9 @@ extension XMPPSession {
         for (group, lastActivity) in zip(groups, lastActivities) {
             let since = lastActivity.flatMap { $0 > .distantPast ? $0 : nil }
             pending.enter()
-            fetchRoomArchiveForNotifications(group.jid, after: group.lastArchiveId, since: since, pagesLeft: 3) { pending.leave() }
+            let deadline = RoomDeadline { pending.leave() }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { deadline.finish() }
+            fetchRoomArchiveForNotifications(group.jid, after: group.lastArchiveId, since: since, pagesLeft: 3, deadline: deadline)
         }
         pending.notify(queue: .global(), execute: done)
     }
@@ -1222,7 +1229,22 @@ extension XMPPSession {
         return since == nil ? .newest : .forward
     }
 
-    private func fetchRoomArchiveForNotifications(_ room: JID, after: String?, since: Date?, pagesLeft: Int, done: @escaping @Sendable () -> Void) {
+    /// Ends one room's read once, by its answer or by the time running out.
+    final class RoomDeadline: Sendable {
+        private let finished = OSAllocatedUnfairLock(initialState: false)
+        private let onFinish: @Sendable () -> Void
+
+        init(onFinish: @escaping @Sendable () -> Void) { self.onFinish = onFinish }
+
+        var isFinished: Bool { finished.withLock { $0 } }
+
+        func finish() {
+            if finished.withLock({ let first = !$0; $0 = true; return first }) { onFinish() }
+        }
+    }
+
+    private func fetchRoomArchiveForNotifications(_ room: JID, after: String?, since: Date?, pagesLeft: Int, deadline: RoomDeadline) {
+        let done = { deadline.finish() }
         omemo.module.mamSyncStarted(for: room.martin)
         // Without a cursor or a date the newest page, as the app reads on
         // joining; from the start it would be the room's oldest messages.
@@ -1234,6 +1256,8 @@ extension XMPPSession {
             guard let self else { return done() }
             let stored = self.flushArchive(query: queryId)
             self.omemo.module.mamSyncFinished(for: room.martin)
+            // Too late: the push went on without this room.
+            guard !deadline.isFinished else { return }
             guard stored, case .success(let page) = result, let last = page.rsm?.last else {
                 if case .failure(let error) = result {
                     self.logger.info("Couldn't read the archive of \(room, privacy: .private): \(error)")
@@ -1244,7 +1268,7 @@ extension XMPPSession {
             if page.complete || pagesLeft <= 1 {
                 done()
             } else {
-                self.fetchRoomArchiveForNotifications(room, after: last, since: nil, pagesLeft: pagesLeft - 1, done: done)
+                self.fetchRoomArchiveForNotifications(room, after: last, since: nil, pagesLeft: pagesLeft - 1, deadline: deadline)
             }
         }
     }

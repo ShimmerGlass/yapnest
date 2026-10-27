@@ -99,6 +99,25 @@ struct NotificationCatchUpRoomsTests {
     }
 }
 
+struct NotificationRoomTimeoutTests {
+    @Test func aRoomThatNeverAnswersDoesNotHoldThePushOrMoveItsCursor() async throws {
+        let room = JID("a@rooms.example.org")!
+        let database = try AppDatabase.inMemory()
+        let session = try makeSession(JID("me@example.org")!, database: database)
+        let wire = FakeWire()
+        session.connectForTesting(wire)
+        try database.joinGroupChat(room, nickname: "me", name: "A")
+        try database.updateGroupChat(room) { $0.lastArchiveId = "cursor" }
+
+        let started = Date()
+        await withCheckedContinuation { continuation in
+            session.catchUpRoomArchives(timeout: 0.2) { continuation.resume() }
+        }
+        #expect(Date().timeIntervalSince(started) < 5)
+        #expect(try database.groupChat(room)?.lastArchiveId == "cursor")
+    }
+}
+
 struct NotificationPageTests {
     @Test func aCursorReadsOnFromIt() {
         #expect(XMPPSession.notificationPage(after: "a", since: nil) == .after("a"))
