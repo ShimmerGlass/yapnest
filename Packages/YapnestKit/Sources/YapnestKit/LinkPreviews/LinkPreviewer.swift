@@ -79,6 +79,12 @@ public final class LinkPreviewer: Sendable {
         }
     }
 
+    /// Lets `url` be asked for again at once, for when the connection is back:
+    /// a failure that was only the missing network says nothing about the link.
+    public func clearBackOff(for url: URL) {
+        _ = failures.withLock { $0.removeValue(forKey: url.absoluteString) }
+    }
+
     func isBackedOff(_ key: String, now: Date) -> Bool {
         failures.withLock { failures in
             guard let failedAt = failures[key] else { return false }

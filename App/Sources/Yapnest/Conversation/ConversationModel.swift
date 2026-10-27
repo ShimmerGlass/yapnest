@@ -1325,7 +1325,9 @@ final class ConversationModel {
 
     private func retryMissingPreviews() {
         for item in items.values where item.preview == nil {
-            if let string = item.message.link { requestedLinks.remove(string) }
+            guard let string = item.message.link else { continue }
+            requestedLinks.remove(string)
+            if let link = URL(string: string) { previews?.clearBackOff(for: link) }
         }
         fetchMissingPreviews()
     }
