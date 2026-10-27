@@ -306,6 +306,12 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         lastRequestTimestamp = Date();
     }
     
+    /// Forgets where the server asked to resume, so the next attempt goes to the normal host, and keeps
+    /// the resumption id and the counters so it can still resume there.
+    open func clearResumptionLocation() {
+        _resumptionLocation = nil;
+    }
+    
     /// Reset all internal variables
     open func reset() {
         enablingHandler = nil;

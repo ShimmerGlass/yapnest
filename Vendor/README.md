@@ -1043,6 +1043,20 @@ three or four, and encryption didn't work on ejabberd at all. With them, 8
 fresh runs on Prosody and 6 on ejabberd all passed. Run the tests on both
 servers after touching anything here.
 
+**An aborted sign-in forgot the stream** (`XmppSessionLogic`, `StreamManagementModule.clearResumptionLocation`)
+- *Symptom:* when the app dropped a sign-in in progress because the network
+  changed, the next attempt started a new session, though the server still
+  held the old one and would have resumed it. 18 of 44 fresh connections on
+  a phone were this.
+- *Cause:* `ConnectorState`'s `==` compares only the case, so the check for
+  "no route" or "timeout" during a sign-in was true for every disconnect
+  then, and it reset stream management: id, counters and queue.
+- *Fix:* the reason is matched. Only those two forget the resumption
+  location, which stops a dead location being retried; the id and counters
+  stay, so the session resumes at the normal host. Any other disconnect
+  leaves stream management alone. Pinned by `ResumptionKeptOnAbortTests` and,
+  on a server, `StreamManagementIntegrationTests.aResumeWeAbortIsTriedAgain`.
+
 ## Working with these copies
 
 - **Where things point:** `Packages/YapnestKit/Package.swift` depends on

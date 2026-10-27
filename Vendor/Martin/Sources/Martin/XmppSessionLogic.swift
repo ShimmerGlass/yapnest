@@ -143,8 +143,16 @@ open class SocketSessionLogic: XmppSessionLogic {
                         return;
                     }
                 }
-                if that.state == .connecting && (newState == .disconnected(.noRouteToServer) || newState == .disconnected(.timeout)) {
-                    that.modulesManager.moduleOrNil(.streamManagement)?.reset(scopes: [.stream,.session]);
+                // ConnectorState's == ignores the reason, so it is matched here. Only an endpoint that
+                // could not be reached gives up the resumption location; the session itself stays
+                // resumable at the normal host. Our own abort of an attempt must not touch it.
+                if that.state == .connecting {
+                    switch reason {
+                    case .noRouteToServer, .timeout:
+                        that.modulesManager.moduleOrNil(.streamManagement)?.clearResumptionLocation();
+                    default:
+                        break;
+                    }
                 }
                 that.state = .disconnected(reason.clientDisconnectionReason);
             }

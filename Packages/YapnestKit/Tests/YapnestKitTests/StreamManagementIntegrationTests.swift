@@ -344,6 +344,35 @@ extension LiveServer {
             }
         }
 
+        // MARK: Aborted sign-in
+
+        /// iOS reports a path update with an identical path when the app returns, and the session then drops
+        /// the attempt it has in flight. Martin took that drop for an unreachable server and forgot the
+        /// stream, so the next attempt started a new session although the server still held the old one.
+        /// The server's answers are held back so the abort lands while the resume is waiting for its answer.
+        @Test(.timeLimit(.minutes(3))) func aResumeWeAbortIsTriedAgain() async throws {
+            let proxy = try await StreamProxy(to: UInt16(LiveServer.target.port))
+            defer { proxy.stop() }
+            let a = try session(alice, device: "sm-abort-alice", port: proxy.port)
+            try await LiveServer.connected(a, timeout: 60)
+            defer { a.disconnect() }
+            try await LiveServer.waitUntil("stream management", timeout: 60) { a.client.module(.streamManagement).resumptionEnabled }
+            let enabledBefore = proxy.serverSent("<enabled")
+
+            proxy.serverDelay = 5
+            proxy.cut()
+            let dropped = Date().addingTimeInterval(10)
+            while a.isConnected, Date() < dropped { await Task.yield() }
+            a.pathBecameSatisfied()
+            try await LiveServer.waitUntil("the resume to be written", timeout: 30) { proxy.clientSent("<resume ") > 0 }
+            #expect(a.state.value != .connected(isSyncing: false))
+
+            a.pathBecameSatisfied()
+            proxy.serverDelay = 0
+            try await LiveServer.waitUntil("the stream to resume", timeout: 60) { proxy.resumptions >= 1 && a.state.value == .connected(isSyncing: false) }
+            #expect(proxy.serverSent("<enabled") == enabledBefore, "the abort started a new session")
+        }
+
         // MARK: Silent links
 
         /// Martin pings the server every `keepaliveTimeout` seconds, and drops
