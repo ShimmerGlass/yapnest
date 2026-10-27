@@ -30,16 +30,19 @@ extension AppDatabase {
             }
             if var group = try GroupChat.fetchOne(db, key: conversation.id) {
                 group.hasLeft = false
+                let renamed = group.nickname != nickname
                 group.nickname = nickname
                 if let name { group.name = name }
                 if let isBookmarked { group.isBookmarked = isBookmarked }
                 try group.update(db)
+                if renamed { try Self.refreshAddressesMe(db, conversationId: group.conversationId, nickname: nickname) }
                 return group
             }
             // Encryption waits until we know the room is private.
             try Conversation.filter(key: conversation.id).updateAll(db, Column("isEncrypted").set(to: false))
             let group = GroupChat(conversationId: conversation.id!, jid: jid, nickname: nickname, name: name, isBookmarked: isBookmarked ?? false)
             try group.insert(db)
+            try Self.refreshAddressesMe(db, conversationId: group.conversationId, nickname: nickname)
             return group
         }
     }
@@ -51,6 +54,11 @@ extension AppDatabase {
             let before = group
             change(&group)
             if group != before { try group.update(db) }
+            // Mention-only groups count by the stored decision, which has to
+            // follow the nickname in use now.
+            if group.nickname != before.nickname {
+                try Self.refreshAddressesMe(db, conversationId: group.conversationId, nickname: group.nickname)
+            }
         }
     }
 

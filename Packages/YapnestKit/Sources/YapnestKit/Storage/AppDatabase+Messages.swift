@@ -51,6 +51,7 @@ extension AppDatabase {
         if let existing = try duplicate(of: message, db) {
             return (try confirm(existing, serverId: message.serverId, db), false)
         }
+        try refreshAddressesMe(db, &message)
         try message.insert(db)
         // Older history leaves a chat where it is in the list, so it only
         // moves one that has no place yet: one restored from the archive.

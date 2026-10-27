@@ -743,6 +743,18 @@ public final class AppDatabase: Sendable {
             try db.execute(sql: "UPDATE omemoSignedPreKey SET createdAt = ?", arguments: [Date()])
         }
 
+        migrator.registerMigration("v47-addresses-me") { db in
+            try db.alter(table: "message") { t in
+                t.add(column: "addressesMe", .boolean).notNull().defaults(to: false)
+            }
+            // Decided here for what can still count, and from then on when a
+            // message is stored or our nickname changes.
+            let groups = try Row.fetchAll(db, sql: "SELECT conversationId, nickname FROM groupChat")
+            for group in groups {
+                try AppDatabase.refreshAddressesMe(db, conversationId: group["conversationId"], nickname: group["nickname"])
+            }
+        }
+
         return migrator
     }
 

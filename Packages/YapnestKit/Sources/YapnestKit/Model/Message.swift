@@ -91,6 +91,10 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
     public var isModerated = false
     /// A group message that names us in a XEP-0372 mention.
     public var mentionsMe = false
+    /// A group message that is for us: it mentions us, says our nickname in
+    /// the room, or replies to one of ours. Decided when it is stored and
+    /// again if our nickname changes, so counting never reads bodies.
+    public var addressesMe = false
     /// An incoming message whose sender asked to know when we've read it
     /// (XEP-0333). Only those get a displayed marker.
     public var isMarkable = false

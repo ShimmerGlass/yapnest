@@ -166,7 +166,7 @@ extension AppDatabase {
                     // to the millisecond.
                     let elapsed = conversation.lastLoudNotificationAt.map { now.timeIntervalSince($0) }
                     if let elapsed, elapsed > -1, elapsed < TimeInterval(minutes) * 60 {
-                        isQuiet = try !isMention(db, message, nickname: group.nickname)
+                        isQuiet = !message.addressesMe
                         if isQuiet {
                             // Everything unread counts, as in the badge: a
                             // group that notifies for every message has no
@@ -181,7 +181,7 @@ extension AppDatabase {
                     }
                 }
             case .onMention:
-                if let group { isQuiet = try !isMention(db, message, nickname: group.nickname) }
+                if group != nil { isQuiet = !message.addressesMe }
             case .never: isQuiet = true
             }
             let contact = message.sender == conversation.peer ? nil : try Contact.fetchOne(db, key: message.sender)
@@ -210,12 +210,15 @@ extension AppDatabase {
     }
 
     /// Whether a group message is for us: it mentions us (XEP-0372), says
-    /// our nickname as a word of its own, or replies to one of ours.
+    /// our nickname as a word of its own, or replies to one of ours. Decided
+    /// once, when the message is stored or our nickname changes, and kept in
+    /// `Message.addressesMe`, so that counting what notifies never reads a body.
     static func isMention(_ db: Database, _ message: Message, nickname: String, word: NSRegularExpression? = nil) throws -> Bool {
         if message.mentionsMe { return true }
-        // Most group messages don't contain the nickname at all, so only
-        // those that do pay for a regex.
-        if nickname.isEmpty || message.body.range(of: nickname, options: .caseInsensitive) != nil {
+        // An empty nickname has no text to look for. Most group messages
+        // don't contain the nickname at all, so only those that do pay for
+        // a regex.
+        if !nickname.isEmpty, message.body.range(of: nickname, options: .caseInsensitive) != nil {
             if let regex = word ?? nicknameRegex(nickname),
                regex.firstMatch(in: message.body, range: NSRange(message.body.startIndex..., in: message.body)) != nil {
                 return true
@@ -225,6 +228,27 @@ extension AppDatabase {
         // Rooms reference messages by their stanza-id; some clients by ours.
         return try referenceRequest(conversationId: message.conversationId, id: replyId, direction: .outgoing)
             .isEmpty(db) == false
+    }
+
+    /// Sets `addressesMe` on a message about to be stored or changed. Only a
+    /// message in a room we have a nickname in can address us.
+    static func refreshAddressesMe(_ db: Database, _ message: inout Message) throws {
+        let nickname = try String.fetchOne(db, GroupChat.filter(Column("conversationId") == message.conversationId).select(Column("nickname")))
+        guard let nickname else { message.addressesMe = false; return }
+        message.addressesMe = try isMention(db, message, nickname: nickname)
+    }
+
+    /// Decides again which of a room's unread messages address us, after our
+    /// nickname there changed or the room was first recorded. Read messages
+    /// no longer count for anything, so they keep the decision they had.
+    static func refreshAddressesMe(_ db: Database, conversationId: Int64, nickname: String) throws {
+        let word = nicknameRegex(nickname)
+        for message in try Message.filter(Column("conversationId") == conversationId && Column("isRead") == false).fetchAll(db) {
+            let mention = try isMention(db, message, nickname: nickname, word: word)
+            if mention != message.addressesMe {
+                try Message.filter(key: message.id).updateAll(db, Column("addressesMe").set(to: mention))
+            }
+        }
     }
 
     private static func nicknameRegex(_ nickname: String) -> NSRegularExpression? {
@@ -274,14 +298,13 @@ extension AppDatabase {
     /// and the chat list can't disagree. Each conversation of the archived or
     /// the unarchived set appears, with 0 when nothing notifying is unread.
     static func notifyingCounts(_ db: Database, archived: Bool) throws -> [(id: Int64, peer: JID, count: Int)] {
-        // SQL counts everything but the mention-only groups, whose messages
-        // need a closer look.
+        // A mention-only group counts the messages stored as addressing us.
         let rows = try Row.fetchAll(db, sql: """
-            SELECT conversation.id, conversation.peer, groupChat.notify, groupChat.nickname, COUNT(message.id) AS unread
+            SELECT conversation.id, conversation.peer, COUNT(message.id) AS unread
             FROM conversation
             LEFT JOIN groupChat ON groupChat.conversationId = conversation.id
             LEFT JOIN message ON message.conversationId = conversation.id AND message.isRead = 0
-                AND IFNULL(groupChat.notify, '') NOT IN (?, ?)
+                AND CASE groupChat.notify WHEN ? THEN 0 WHEN ? THEN message.addressesMe ELSE 1 END
             WHERE conversation.isArchived = ?
             GROUP BY conversation.id
             """, arguments: [GroupChat.Notify.never.rawValue, GroupChat.Notify.onMention.rawValue, archived])
@@ -289,30 +312,10 @@ extension AppDatabase {
         for row in rows {
             guard let peer = JID(row["peer"] as String) else { continue }
             let id: Int64 = row["id"]
-            var unread: Int = row["unread"]
-            if (row["notify"] as String?) == GroupChat.Notify.onMention.rawValue, let nickname = row["nickname"] as String? {
-                unread = try unreadMentions(db, conversationId: id, nickname: nickname)
-            }
+            let unread: Int = row["unread"]
             counts.append((id, peer, unread))
         }
         return counts
-    }
-
-    /// A busy room can have thousands of unread messages and most mention
-    /// nobody, so SQL narrows them to those that might, and `isMention`, the
-    /// rule notifications use, decides.
-    private static func unreadMentions(_ db: Database, conversationId: Int64, nickname: String) throws -> Int {
-        // An empty nickname has no text to look for, so nothing narrows it.
-        let mightMention: SQLExpression = nickname.isEmpty
-            ? true.sqlExpression
-            : Column("mentionsMe") == true || Column("replyToId") != nil
-                || SQL("instr(lower(body), lower(\(nickname))) > 0").sqlExpression
-        let candidates = try Message
-            .filter(Column("conversationId") == conversationId && Column("isRead") == false)
-            .filter(mightMention)
-            .fetchAll(db)
-        let word = nicknameRegex(nickname)
-        return try candidates.count(where: { try isMention(db, $0, nickname: nickname, word: word) })
     }
 
     /// The delivered notifications to take down, given the chat each one is

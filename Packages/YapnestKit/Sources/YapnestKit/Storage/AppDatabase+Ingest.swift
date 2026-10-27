@@ -311,6 +311,7 @@ extension AppDatabase {
         // in flight keeps its pending id: it has its own.
         original.actionError = nil
         original.mentionsMe = mentionsMe
+        try refreshAddressesMe(db, &original)
         // The offer is the correcting message's, which may make none.
         // Actions already chosen stay chosen if the correction still offers them.
         original.quickResponses = quickResponses.map { offer in
