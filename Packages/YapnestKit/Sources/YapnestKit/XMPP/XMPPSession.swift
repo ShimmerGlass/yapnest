@@ -1963,6 +1963,9 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     func pepAvatarChanged(_ jid: JID, info: [PEPUserAvatarModule.Info]) {
+        // Any server can push these at us, and each would add a contact row
+        // and a file nothing ever removes.
+        guard jid == account || (try? database.isKnownPeer(jid)) == true else { return }
         // An empty metadata item means they removed their avatar.
         guard !info.isEmpty else {
             try? database.setAvatarHash(nil, for: jid)

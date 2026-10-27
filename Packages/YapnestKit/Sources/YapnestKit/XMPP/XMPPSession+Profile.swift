@@ -357,6 +357,8 @@ extension XMPPSession {
     /// another of our devices.
     func nicknameChanged(_ jid: JID, to nickname: String?) {
         let nickname = Self.normalizedNickname(nickname)
+        // A stranger's event would add a contact row for them.
+        guard jid == account || (try? database.isKnownPeer(jid)) == true else { return }
         do {
             if jid == account {
                 try database.setSetting(.nickname, nickname)

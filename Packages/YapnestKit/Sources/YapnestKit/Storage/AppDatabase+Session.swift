@@ -87,6 +87,17 @@ extension AppDatabase {
         try reader.read { db in try JID.fetchAll(db, sql: "SELECT peer FROM conversation WHERE kind = 'chat'") }
     }
 
+    /// Whether `jid` is someone we added or have a chat with, as opposed to
+    /// a stranger whose server pushes things at us.
+    func isKnownPeer(_ jid: JID) throws -> Bool {
+        try reader.read { db in
+            try Bool.fetchOne(db, sql: """
+                SELECT EXISTS(SELECT 1 FROM contact WHERE jid = ? AND (isInRoster OR isAddedByUser))
+                    OR EXISTS(SELECT 1 FROM conversation WHERE peer = ?)
+                """, arguments: [jid, jid]) ?? false
+        }
+    }
+
     /// Peers of the chats that hold a message.
     func peersWithMessages() throws -> Set<JID> {
         try reader.read { db in

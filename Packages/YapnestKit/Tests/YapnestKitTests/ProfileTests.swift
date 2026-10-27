@@ -116,6 +116,7 @@ struct ProfileTests {
         #expect(XMPPSession.normalizedNickname("\u{202E}\u{200B}") == nil)
         #expect(XMPPSession.normalizedNickname(" Ada\nL. ") == "Ada L.")
         #expect(XMPPSession.normalizedNickname("Zoë 🙂") == "Zoë 🙂")
+        try session.database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
         session.nicknameChanged(alice, to: "\u{202E}Mom")
         #expect(try session.database.contact(alice)?.nickname == "Mom")
     }
@@ -142,12 +143,20 @@ struct ProfileTests {
         #expect(session.nickname == nil)
     }
 
+    @Test func aStrangersProfileEventsStoreNothing() throws {
+        let stranger = YapnestKit.JID("stranger@example.net")!
+        session.nicknameChanged(stranger, to: "Mom")
+        session.pepAvatarChanged(stranger, info: [])
+        #expect(try session.database.contact(stranger) == nil)
+        _ = try session.database.conversation(with: stranger)
+        session.nicknameChanged(stranger, to: "Mom")
+        #expect(try session.database.contact(stranger)?.nickname == "Mom")
+    }
+
     @Test func publishedNamesShowOnlyWithoutARosterName() throws {
         let database = session.database
-        session.nicknameChanged(alice, to: "Alice P.")
-        // Anyone can publish a name; only someone the user added is shown by it.
-        #expect(try database.contact(alice)?.displayName == "alice")
         try database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        session.nicknameChanged(alice, to: "Alice P.")
         #expect(try database.contact(alice)?.displayName == "Alice P.")
 
         // The roster's name wins, and a later nickname doesn't replace it.
