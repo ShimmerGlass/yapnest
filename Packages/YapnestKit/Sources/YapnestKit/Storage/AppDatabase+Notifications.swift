@@ -233,6 +233,8 @@ extension AppDatabase {
     /// Sets `addressesMe` on a message about to be stored or changed. Only a
     /// message in a room we have a nickname in can address us.
     static func refreshAddressesMe(_ db: Database, _ message: inout Message) throws {
+        // Our own messages never notify, so they need no look at the room.
+        if message.direction == .outgoing { message.addressesMe = false; return }
         let nickname = try String.fetchOne(db, GroupChat.filter(Column("conversationId") == message.conversationId).select(Column("nickname")))
         guard let nickname else { message.addressesMe = false; return }
         message.addressesMe = try isMention(db, message, nickname: nickname)
