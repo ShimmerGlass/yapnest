@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import os
 import Testing
 @testable import YapnestKit
 
@@ -32,6 +33,21 @@ struct DownloadRedirectTests {
         // Nothing asked the second address.
         try await Task.sleep(for: .milliseconds(200))
         #expect(server.requests.count == 1)
+    }
+
+    @Test func progressIsReportedInHalfPercentSteps() {
+        let reports = OSAllocatedUnfairLock<[Double]>(initialState: [])
+        let delegate = ProgressDelegate(policy: DownloadPolicy(allowsInsecure: false)) { value in reports.withLock { $0.append(value) } }
+        let session = URLSession(configuration: .ephemeral)
+        let task = session.downloadTask(with: URL(string: "https://example.org/a")!)
+        // A chunk at a time, a thousand of them.
+        for written in stride(from: 1, through: 1000, by: 1) {
+            delegate.urlSession(session, downloadTask: task, didWriteData: 1, totalBytesWritten: Int64(written), totalBytesExpectedToWrite: 1000)
+        }
+        let seen = reports.withLock { $0 }
+        #expect(seen.count <= 201)
+        #expect(seen.last == 1)
+        #expect(zip(seen, seen.dropFirst()).allSatisfy { $1 > $0 })
     }
 
     @Test func aDevelopmentServerMayRedirectAnywhere() async throws {

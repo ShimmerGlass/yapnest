@@ -125,6 +125,60 @@ struct MissedImagesTests {
         #expect(try f.missed() == [failed])
     }
 
+    @Test func aFailureThatWontPassIsNotSweptAgain() throws {
+        var f = Fixture()
+        try f.contact(alice, inRoster: true)
+        let gone = try f.add(in: alice, from: alice, state: .downloadFailed)
+        try f.db.setDownloadFailed(messageId: gone, automatic: true, isFinal: true)
+        #expect(try f.missed().isEmpty)
+        // Still there for the user's tap.
+        #expect(try f.db.attachment(messageId: gone)?.state == .downloadFailed)
+    }
+
+    @Test func aTransientFailureIsSweptAgainUntilTheLimit() throws {
+        var f = Fixture()
+        try f.contact(alice, inRoster: true)
+        let flaky = try f.add(in: alice, from: alice)
+        for _ in 1..<XMPPSession.autoDownloadAttemptLimit {
+            try f.db.setDownloadFailed(messageId: flaky, automatic: true, isFinal: false)
+            #expect(try f.missed() == [flaky])
+        }
+        try f.db.setDownloadFailed(messageId: flaky, automatic: true, isFinal: false)
+        #expect(try f.db.autoDownloadAttempts(messageId: flaky) == XMPPSession.autoDownloadAttemptLimit)
+        #expect(try f.missed().isEmpty)
+    }
+
+    @Test func aFailedTapDoesNotCountAgainstTheSweeps() throws {
+        var f = Fixture()
+        try f.contact(alice, inRoster: true)
+        let id = try f.add(in: alice, from: alice)
+        try f.db.setDownloadFailed(messageId: id, automatic: false, isFinal: true)
+        #expect(try f.db.autoDownloadAttempts(messageId: id) == 0)
+        #expect(try f.missed() == [id])
+    }
+
+    @Test func aPictureOfUnknownSizeThatTurnedOutTooLargeIsNotSweptAgain() throws {
+        var f = Fixture()
+        try f.contact(alice, inRoster: true)
+        let id = try f.add(in: alice, from: alice)
+        try f.db.setTooLarge(messageId: id, size: nil)
+        #expect(try f.missed().isEmpty)
+    }
+
+    @Test func onlyAFailureThatSaysTheSameAgainIsFinal() {
+        #expect(XMPPSession.isFinalDownloadFailure(HTTPStatusError(status: 404)))
+        #expect(XMPPSession.isFinalDownloadFailure(HTTPStatusError(status: 410)))
+        #expect(XMPPSession.isFinalDownloadFailure(FileCrypto.Failure.decryptionFailed))
+        #expect(XMPPSession.isFinalDownloadFailure(FetchError.refused("address is local")))
+        #expect(XMPPSession.isFinalDownloadFailure(TooLarge(size: 1)))
+        #expect(!XMPPSession.isFinalDownloadFailure(HTTPStatusError(status: 503)))
+        #expect(!XMPPSession.isFinalDownloadFailure(HTTPStatusError(status: 429)))
+        #expect(!XMPPSession.isFinalDownloadFailure(HTTPStatusError(status: 408)))
+        #expect(!XMPPSession.isFinalDownloadFailure(URLError(.timedOut)))
+        #expect(!XMPPSession.isFinalDownloadFailure(URLError(.notConnectedToInternet)))
+        #expect(!XMPPSession.isFinalDownloadFailure(FetchError.timedOut))
+    }
+
     @Test func tooLargeIsSkippedButStaysDownloadable() throws {
         var f = Fixture()
         try f.contact(alice, inRoster: true)

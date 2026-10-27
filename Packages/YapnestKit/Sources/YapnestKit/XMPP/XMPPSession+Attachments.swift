@@ -23,6 +23,11 @@ extension XMPPSession {
     static let sweepAge: TimeInterval = 7 * 24 * 60 * 60
     /// ...and starts at most this many downloads.
     static let sweepLimit = 50
+    /// A picture whose automatic downloads failed this many times, or once
+    /// for a reason that won't pass, is left for the user to tap. Sweeps run
+    /// on every new session and every chat opened, so without a limit a dead
+    /// link would be fetched again and again.
+    static let autoDownloadAttemptLimit = 3
 
     public enum AttachmentError: Error, LocalizedError {
         case unreadable
@@ -223,7 +228,7 @@ extension XMPPSession {
             acceptFileOffer(attachment)
             return
         }
-        download(attachment, limit: Self.maxDownloadSize)
+        download(attachment, limit: Self.maxDownloadSize, automatic: false)
     }
 
     /// Whether a picture from someone in a private group we haven't added
@@ -264,10 +269,31 @@ extension XMPPSession {
     func autoDownload(_ attachment: Attachment) {
         // The notification extension has neither the time nor the memory.
         guard attachment.isImage, policy.fetchesImages else { return }
-        download(attachment, limit: Self.autoDownloadSize)
+        download(attachment, limit: Self.autoDownloadSize, automatic: true)
     }
 
-    private func download(_ attachment: Attachment, limit: Int64) {
+    /// Whether a failed download is worth repeating by itself. An answer
+    /// that says no (4xx other than a timeout or throttling), a file that
+    /// doesn't decrypt, an address the policy refuses or a link that isn't
+    /// one will say the same next time; a network error, a timeout or a
+    /// 5xx may not.
+    static func isFinalDownloadFailure(_ error: Error) -> Bool {
+        switch error {
+        case let error as HTTPStatusError: (400..<500).contains(error.status) && ![408, 425, 429].contains(error.status)
+        case is FileCrypto.Failure, is TooLarge: true
+        case let error as FetchError: !error.isRetryable
+        case let error as URLError: error.code == .unsupportedURL || error.code == .badURL
+        default: false
+        }
+    }
+
+    /// Whether Low Data Mode stopped the request, which says nothing about
+    /// the file: it is tried again when the user leaves that mode.
+    static func isHeldBackByLowDataMode(_ error: Error) -> Bool {
+        (error as? URLError)?.networkUnavailableReason == .constrained
+    }
+
+    private func download(_ attachment: Attachment, limit: Int64, automatic: Bool) {
         let messageId = attachment.messageId
         guard let string = attachment.url, let url = URL(string: string), beginTransfer(messageId) else { return }
         let transferId = Redacted.id(string)
@@ -288,9 +314,13 @@ extension XMPPSession {
 
                 let progress = ProgressDelegate(limit: limit, policy: policy) { [weak self] progress in self?.setProgress(progress, for: messageId) }
                 delegate = progress
-                let (file, response) = try await Self.transferSession.download(from: source, delegate: progress)
+                var request = URLRequest(url: source)
+                // A picture nobody asked for isn't worth the user's data in Low Data Mode.
+                if automatic { request.allowsConstrainedNetworkAccess = false }
+                let (file, response) = try await Self.transferSession.download(for: request, delegate: progress)
                 defer { try? FileManager.default.removeItem(at: file) }
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+                guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                guard (200..<300).contains(http.statusCode) else { throw HTTPStatusError(status: http.statusCode) }
                 var data = try Data(contentsOf: file, options: .mappedIfSafe)
                 guard data.count <= limit else { throw TooLarge(size: Int64(data.count)) }
                 if let fragment { data = try FileCrypto.decrypt(data, fragment: fragment) }
@@ -311,8 +341,9 @@ extension XMPPSession {
                     try? database.setTooLarge(messageId: messageId, size: size > 0 ? size : nil)
                     return
                 }
+                if automatic, Self.isHeldBackByLowDataMode(error) { return }
                 DiagLog.error(.receive, "Download failed", .id("file", transferId), .error(error), .duration("took", since: started))
-                try? database.setAttachmentState(.downloadFailed, messageId: messageId)
+                try? database.setDownloadFailed(messageId: messageId, automatic: automatic, isFinal: Self.isFinalDownloadFailure(error))
             }
         }
     }
@@ -343,8 +374,12 @@ extension XMPPSession {
     }
 }
 
-private struct TooLarge: Error {
+struct TooLarge: Error {
     var size: Int64
+}
+
+struct HTTPStatusError: Error {
+    var status: Int
 }
 
 /// Reports a transfer's progress, and cancels downloads that turn out too big.
@@ -353,6 +388,7 @@ final class ProgressDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownlo
     private let policy: DownloadPolicy
     private let report: @Sendable (Double) -> Void
     private let exceeded = OSAllocatedUnfairLock<Int64?>(initialState: nil)
+    private let lastReported = OSAllocatedUnfairLock<Double>(initialState: -1)
 
     /// Set once a download was cancelled for being over the limit: its size
     /// if the server said, else 0.
@@ -366,7 +402,7 @@ final class ProgressDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownlo
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
         guard totalBytesExpectedToSend > 0 else { return }
-        report(Double(totalBytesSent) / Double(totalBytesExpectedToSend))
+        publish(Double(totalBytesSent) / Double(totalBytesExpectedToSend))
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
@@ -376,7 +412,19 @@ final class ProgressDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownlo
             return
         }
         guard totalBytesExpectedToWrite > 0 else { return }
-        report(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+        publish(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+    }
+
+    /// Reports only when progress has moved half a percent (as a Jingle
+    /// transfer does): the delegate is called per chunk, and every report
+    /// redraws the views that watch the transfers.
+    private func publish(_ value: Double) {
+        let due = lastReported.withLock { last in
+            guard value - last >= 0.005 || (value >= 1 && last < 1) else { return false }
+            last = value
+            return true
+        }
+        if due { report(value) }
     }
 
     /// A redirect is a new request to wherever the server says, so it gets the

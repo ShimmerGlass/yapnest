@@ -690,6 +690,12 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v43-auto-download-attempts") { db in
+            try db.alter(table: "attachment") { t in
+                t.add(column: "autoDownloadAttempts", .integer).notNull().defaults(to: 0)
+            }
+        }
+
         return migrator
     }
 

@@ -69,15 +69,33 @@ extension AppDatabase {
         }
     }
 
+    /// Records a failed download. An automatic one counts towards the limit
+    /// after which sweeps leave the file alone, or uses it up at once if it
+    /// `isFinal`. A tap that fails changes neither: only a tap can retry it.
+    func setDownloadFailed(messageId: Int64, automatic: Bool, isFinal: Bool) throws {
+        try writer.write { db in
+            try db.execute(sql: """
+                UPDATE attachment SET state = 'downloadFailed',
+                    autoDownloadAttempts = CASE WHEN ? = 0 THEN autoDownloadAttempts WHEN ? THEN ? ELSE autoDownloadAttempts + 1 END
+                WHERE messageId = ?
+                """, arguments: [automatic, isFinal, XMPPSession.autoDownloadAttemptLimit, messageId])
+        }
+    }
+
+    func autoDownloadAttempts(messageId: Int64) throws -> Int {
+        try reader.read { try Int.fetchOne($0, sql: "SELECT autoDownloadAttempts FROM attachment WHERE messageId = ?", arguments: [messageId]) ?? 0 }
+    }
+
     /// Records that a download stopped for being over its limit. That isn't
     /// a failure: the file is there to fetch by hand, and its size is worth
-    /// showing.
+    /// showing. Sweeps leave it alone even when its size is unknown.
     func setTooLarge(messageId: Int64, size: Int64?) throws {
         try writer.write { db in
             guard var attachment = try Attachment.fetchOne(db, key: messageId) else { return }
             if let size { attachment.size = size }
             attachment.state = .remote
             try attachment.update(db)
+            try db.execute(sql: "UPDATE attachment SET autoDownloadAttempts = ? WHERE messageId = ?", arguments: [XMPPSession.autoDownloadAttemptLimit, messageId])
         }
     }
 
@@ -101,10 +119,11 @@ extension AppDatabase {
                 LEFT JOIN contact ON contact.jid = CASE conversation.kind WHEN 'chat' THEN conversation.peer ELSE message.sender END
                 WHERE attachment.state IN ('remote', 'downloadFailed') AND attachment.url IS NOT NULL
                   AND (attachment.size IS NULL OR attachment.size <= ?)
+                  AND attachment.autoDownloadAttempts < ?
                   AND message.timestamp >= ? AND NOT message.isRetracted
                   AND (? IS NULL OR conversation.peer = ?)
                 ORDER BY message.timestamp DESC
-                """, arguments: [maxSize, since, peer, peer])
+                """, arguments: [maxSize, XMPPSession.autoDownloadAttemptLimit, since, peer, peer])
             var found: [Attachment] = []
             while found.count < limit, let row = try rows.next() {
                 let attachment = try Attachment(row: row)
