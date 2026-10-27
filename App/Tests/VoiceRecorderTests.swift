@@ -207,6 +207,42 @@ struct VoiceRecorderTests {
         #expect(s.recorder.phase == .locked)
     }
 
+    @Test func aRecordingThatBeginsWhileAClipLoadsKeepsTheSession() async throws {
+        let s = make()
+        let session = try #require(s.audio.session as? VoicePlaybackTests.FakeSession)
+        let clip = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".caf")
+        try InteractionsFixture.writeSound(to: clip, seconds: 2, amplitude: 0)
+        let blocker = DispatchSemaphore(value: 0)
+        let entered = VoicePlaybackTests.Flag()
+        let hold = Task { try await s.audio.perform { entered.value = true; blocker.wait() } }
+        await eventually("queue held") { entered.value }
+        let clipStart = Task { await s.audio.toggle(id: 1, file: clip) }
+        await eventually("begin queued") { s.audio.isStarting }
+
+        s.recorder.press(locked: true)
+        blocker.signal()
+
+        #expect(await clipStart.value == .refusedWhileRecording)
+        try await hold.value
+        await s.audio.settled()
+        #expect(s.audio.current == nil)
+        #expect(session.ended == 0, "the recording owns the session")
+    }
+
+    @Test func aClipEndingDuringARecordingLeavesTheSession() async throws {
+        let s = make()
+        let session = try #require(s.audio.session as? VoicePlaybackTests.FakeSession)
+        let clip = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".caf")
+        try InteractionsFixture.writeSound(to: clip, seconds: 2, amplitude: 0)
+        #expect(await s.audio.toggle(id: 1, file: clip) == .started)
+        s.recorder.press(locked: true)
+        await started(s.recorder)
+
+        s.audio.stop()
+        await s.audio.settled()
+        #expect(session.ended == 0)
+    }
+
     @Test func theRecordingEngineLeavesTheSessionAloneDuringACall() async {
         for (inCall, releases) in [(true, 0), (false, 1)] {
             let session = VoicePlaybackTests.FakeSession()

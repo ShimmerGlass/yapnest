@@ -27,7 +27,9 @@ struct MessageTextTests {
 
     @Test func theRenderedTextKeepsItsLinksForTheMenu() {
         let rendered = MessageText.render("see https://example.com/a and\n> https://example.org/b\n```\nhttps://example.net/c\n```", kind: .normal)
-        #expect(rendered.links.map(\.absoluteString) == ["https://example.com/a", "https://example.org/b"])
+        #expect(rendered.links.map(\.absoluteString) == ["https://example.com/a", "https://example.org/b", "https://example.net/c"])
+        // In the bubble the code block's address stays text.
+        #expect(rendered.segments.last?.text.runs.allSatisfy { $0.link == nil } == true)
     }
 
     private func styled(_ body: String, _ font: Font) -> [String] {

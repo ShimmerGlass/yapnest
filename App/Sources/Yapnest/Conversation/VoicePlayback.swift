@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Observation
+import os
 
 /// What playing and recording do to the app's one audio session. Not tied to
 /// the main actor: setting the session up can take a while, and recording does
@@ -62,6 +63,25 @@ final class SystemVoiceAudioSession: VoiceAudioSession, @unchecked Sendable {
     }
 }
 
+/// Tells work queued for the audio session whether a call has taken it since.
+/// Work that touches the session runs under its lock, so the call's claim
+/// either lands before the work and stops it, or after it has finished and
+/// can abandon what it left.
+private final class CallGate: Sendable {
+    struct InCall: Error {}
+    private let closed = OSAllocatedUnfairLock(initialState: false)
+
+    func close() { closed.withLock { $0 = true } }
+    func open() { closed.withLock { $0 = false } }
+
+    func run<T>(_ work: () throws -> T) throws -> T {
+        try closed.withLockUnchecked { closed in
+            guard !closed else { throw InCall() }
+            return try work()
+        }
+    }
+}
+
 /// Plays the sound of one voice message at a time, and owns what voice
 /// recording and playback share: the audio session, and whether a call has it.
 /// It is shared, so starting a clip stops the one before it, in this chat or
@@ -89,6 +109,7 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
     /// stops the clip and the recording, and leaves the session as the call has it.
     @ObservationIgnored var isInCall = false {
         didSet {
+            if isInCall { gate.close() } else { gate.open() }
             guard isInCall, !oldValue else { return }
             stop()
             activeRecorder?.cancel()
@@ -110,6 +131,7 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
     private static let fractionSteps = 64.0
 
     @ObservationIgnored let session: VoiceAudioSession
+    @ObservationIgnored private let gate = CallGate()
     @ObservationIgnored private var player: AVAudioPlayer?
     @ObservationIgnored private var timer: Timer?
 
@@ -155,7 +177,7 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
     /// run on this queue, in order: an end queued by one clip's stop must not
     /// land after the next clip's begin.
     @ObservationIgnored private let audioQueue = DispatchQueue(label: "fr.yapnest.voice-playback", qos: .userInitiated)
-    @ObservationIgnored private var isStarting = false
+    @ObservationIgnored private(set) var isStarting = false
     @ObservationIgnored private var startCancelled = false
 
     /// Runs `work` on the audio queue, behind whatever is queued there.
@@ -190,16 +212,19 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
         isPlaying = false
         stopClock()
         // A paused clip shouldn't keep other apps' sound off.
-        releaseSession()
+        releasePlaybackSession()
     }
 
     private func resume() async -> Result {
         guard let player else { return .failed }
         guard !isInCall else { return .refusedInCall }
-        let session = session
-        guard (try? await beginning({ try session.beginPlayback() })) != nil else { return .failed }
+        guard !isRecording else { return .refusedWhileRecording }
+        let (session, gate) = (session, gate)
+        guard (try? await beginning({ try gate.run { try session.beginPlayback() } })) != nil else { return .failed }
+        // A recording that began while the session was being taken owns it now.
+        guard !isRecording else { return .refusedWhileRecording }
         guard !startCancelled, !isInCall, self.player === player else {
-            releaseSession()
+            releasePlaybackSession()
             return .failed
         }
         player.play()
@@ -212,8 +237,8 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
         var player: AVAudioPlayer
     }
 
-    private nonisolated static func prepare(_ session: VoiceAudioSession, file: URL, at fraction: Double) throws -> Prepared {
-        try session.beginPlayback()
+    private nonisolated static func prepare(_ session: VoiceAudioSession, gate: CallGate, file: URL, at fraction: Double) throws -> Prepared {
+        try gate.run { try session.beginPlayback() }
         do {
             let player = try AVAudioPlayer(contentsOf: file)
             guard player.prepareToPlay() else { throw PlaybackError.unplayable }
@@ -221,7 +246,7 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
             return Prepared(player: player)
         } catch {
             // The session was taken for a clip that isn't playing.
-            session.end()
+            try? gate.run { session.end() }
             throw error
         }
     }
@@ -233,22 +258,24 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
         // switch it to `.playback`, and the clip's end would deactivate it
         // under the recorder.
         guard activeRecorder.map({ $0.phase == .idle }) ?? true else { return .refusedWhileRecording }
-        let session = session
+        let (session, gate) = (session, gate)
         let prepared: Prepared
         do {
-            prepared = try await beginning { try Self.prepare(session, file: file, at: fraction) }
+            prepared = try await beginning { try Self.prepare(session, gate: gate, file: file, at: fraction) }
         } catch {
             return .failed
         }
+        // A recording that began while the clip loaded owns the session now.
+        guard !isRecording else { return .refusedWhileRecording }
         // Stopped, or a call began, while it loaded.
         guard !startCancelled, !isInCall else {
-            releaseSession()
+            releasePlaybackSession()
             return .failed
         }
         let player = prepared.player
         player.delegate = self
         guard player.play() else {
-            releaseSession()
+            releasePlaybackSession()
             return .failed
         }
         self.player = player
@@ -267,15 +294,26 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
         seconds = 0
         playedFraction = 0
         // Whatever was playing before (music) goes on.
-        releaseSession()
+        releasePlaybackSession()
     }
 
     /// Gives the session back, unless a call has it. Queued behind the begin
-    /// of whatever started before, so it can't land after the next one's.
+    /// of whatever started before, so it can't land after the next one's, and
+    /// checked again when it runs, as a call may have come in meanwhile.
     func releaseSession() {
         guard !isInCall else { return }
-        let session = session
-        audioQueue.async { session.end() }
+        let (session, gate) = (session, gate)
+        audioQueue.async { try? gate.run { session.end() } }
+    }
+
+    private var isRecording: Bool {
+        !(activeRecorder.map { $0.phase == .idle } ?? true)
+    }
+
+    /// A clip's end: the session is a recording's if there is one.
+    private func releasePlaybackSession() {
+        guard !isRecording else { return }
+        releaseSession()
     }
 
     /// Only what the bubble draws is published: the raw time changes every tick.

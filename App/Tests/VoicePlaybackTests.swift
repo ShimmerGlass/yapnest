@@ -133,4 +133,32 @@ struct VoicePlaybackTests {
         #expect(!playback.isPlaying)
         #expect(session.ended == 1)
     }
+
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var raised = false
+        var value: Bool { get { lock.withLock { raised } } set { lock.withLock { raised = newValue } } }
+    }
+
+    @Test func aCallComingInBeforeTheQueuedBeginRunsKeepsTheSessionUntouched() async throws {
+        let session = FakeSession()
+        let playback = VoicePlayback(session: session)
+        let clip = try sound()
+        let blocker = DispatchSemaphore(value: 0)
+        let entered = Flag()
+        let hold = Task { try await playback.perform { entered.value = true; blocker.wait() } }
+        await eventually("queue held") { entered.value }
+        let start = Task { await playback.toggle(id: 1, file: clip) }
+        await eventually("begin queued") { playback.isStarting }
+
+        playback.isInCall = true
+        blocker.signal()
+
+        #expect(await start.value == .failed)
+        try await hold.value
+        await playback.settled()
+        #expect(session.began == 0, "the category would change under the call")
+        #expect(session.ended == 0)
+        #expect(playback.current == nil)
+    }
 }
