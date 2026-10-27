@@ -65,6 +65,34 @@ struct InboundParsingTests {
         #expect(m.reply?.fallback == "Anna wrote:\nWe should bake a cake 🎂")
     }
 
+    @Test func aReplyNamesOnlyThePeerOrUsInADirectChat() throws {
+        func replying(to address: String) throws -> InboundMessage.Reply? {
+            try #require(parse("""
+                <message from='alice@example.org/phone' type='chat' id='m2'><body>&gt; fake\nok</body>
+                  <reply to='\(address)' id='m0' xmlns='urn:xmpp:reply:0'/>
+                  <fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:reply:0'><body start='0' end='7'/></fallback>
+                </message>
+                """)).reply
+        }
+        #expect(try replying(to: "alice@example.org/phone")?.to == "alice@example.org/phone")
+        #expect(try replying(to: "me@example.org")?.to == "me@example.org")
+        let forged = try replying(to: "mom@example.org")
+        #expect(forged?.to == nil)
+        #expect(forged?.fallback == "fake")
+    }
+
+    @Test func aRoomMemberCannotNameWhoTheirReplyIsTo() throws {
+        let room = RoomContext(jid: YapnestKit.JID("room@muc.example.org")!, nickname: "me")
+        let m = try #require(InboundMessage(groupchat: stanza("""
+            <message from='room@muc.example.org/bob' type='groupchat' id='g1'><body>&gt; fake\nok</body>
+              <reply to='room@muc.example.org/anna' id='m0' xmlns='urn:xmpp:reply:0'/>
+              <fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:reply:0'><body start='0' end='7'/></fallback>
+            </message>
+            """), room: room, account: me, source: .live))
+        #expect(m.reply?.id == "m0")
+        #expect(m.reply?.to == nil)
+    }
+
     @Test func reactions() throws {
         let m = try #require(parse("""
             <message from='alice@example.org/phone' type='chat' id='r1'>

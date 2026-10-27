@@ -225,6 +225,9 @@ extension InboundMessage {
                   stampedBy: room.jid, account: account, source: source, encryption: encryption, now: now)
         self.occupantId = occupantId
         self.isGroupChat = true
+        // A room member's `to` is their own claim: the replied-to message is
+        // named only when it is found in the room's history.
+        if !isOutgoing { reply?.to = nil }
         // By our address, or as an occupant of the room.
         let us = ["xmpp:\(account)", "xmpp:\(room.jid)/\(room.nickname)"]
         self.mentionsMe = !isOutgoing && mentions.contains { uri in us.contains { $0.caseInsensitiveCompare(uri) == .orderedSame } }
@@ -317,7 +320,13 @@ extension InboundMessage {
         if let replyEl = stanza.firstChild(name: "reply", xmlns: NS.reply), let replyId = replyEl.getAttribute("id") {
             let (body, fallback) = Self.strip(fallbackFor: NS.reply, from: stanza, encrypted: encryption == .omemo)
             self.body = body.map { Self.capped(Self.withoutSearchMarkers($0)) }
-            self.reply = Reply(id: replyId, to: replyEl.getAttribute("to"), fallback: fallback.map(Self.capped))
+            // The sender writes `to` as freely as the quote, and a name beside
+            // it reads as verified. Only the two people in a 1:1 chat can be
+            // replied to, or whoever our own device wrote for.
+            let named = replyEl.getAttribute("to").flatMap { address in
+                JID(address).flatMap { isOutgoing || $0 == peer || $0 == account ? address : nil }
+            }
+            self.reply = Reply(id: replyId, to: named, fallback: fallback.map(Self.capped))
         } else {
             self.body = stanza.body.map { Self.capped(Self.withoutSearchMarkers($0)) }
             self.reply = nil
