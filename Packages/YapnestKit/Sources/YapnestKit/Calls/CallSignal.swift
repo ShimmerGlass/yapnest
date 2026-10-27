@@ -17,6 +17,8 @@ public enum CallReason: String, Sendable, Equatable {
     case expired
     /// A propose whose media we can't take, such as video without audio.
     case unsupportedApplications = "unsupported-applications"
+    /// The peer's media could not be vouched for as the call needs.
+    case securityError = "security-error"
 
     /// The same condition as Martin names it, written out so that a case
     /// added to one side doesn't silently become another.
@@ -33,6 +35,7 @@ public enum CallReason: String, Sendable, Equatable {
         case .gone: .gone
         case .expired: .expired
         case .unsupportedApplications: .unsupportedApplications
+        case .securityError: .securityError
         }
     }
 }
@@ -79,6 +82,9 @@ struct CallSignal: Sendable, Equatable {
     /// a call the other way (XEP-0353 §4.1), so the call carries on under the
     /// other one and this one is nobody's to log.
     var isTieBreak = false
+    /// The OMEMO device a `proceed` names for the call's fingerprints to be
+    /// encrypted to (`CallFingerprints`).
+    var omemoDevice: Int32?
 
     /// The other party of the call as the conversation holds it, or nil for a
     /// message we addressed to ourselves (the `accept` that stops our other
@@ -118,6 +124,7 @@ struct CallSignal: Sendable, Equatable {
         self.from = from?.stringValue
         self.isFromAccount = isFromAccount
         isTieBreak = element.name != "propose" && element.firstChild(name: "tie-break") != nil
+        if case .proceed = action { omemoDevice = CallFingerprints.device(in: element) }
         self.timestamp = source.archivedAt ?? InboundMessage.trustedDelay(in: stanza, stamper: account, account: account, now: now)
     }
 
@@ -146,8 +153,7 @@ struct CallSignal: Sendable, Equatable {
         }
     }
 
-    /// The first condition we know. Others, and the `<device>` of Conversations'
-    /// `proceed` (the DTLS verification of a later stage), are left alone.
+    /// The first condition we know. Others are left alone.
     static func reason(in element: Element) -> CallReason? {
         element.firstChild(name: "reason")?.children.lazy.compactMap { CallReason(rawValue: $0.name) }.first
     }

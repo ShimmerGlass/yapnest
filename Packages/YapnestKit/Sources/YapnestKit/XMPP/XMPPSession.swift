@@ -134,6 +134,9 @@ public final class XMPPSession: @unchecked Sendable {
     public let callState = CurrentValueSubject<CallState?, Never>(nil)
     /// Makes the media of each call. Without it, the session offers no calls.
     let callMedia: (any CallMediaFactory)?
+    /// What encrypts and decrypts a call's fingerprints, in place of OMEMO's
+    /// when a test wants to supply the keys.
+    var callCipherForTesting: CallFingerprintCipher?
 
     let client = XMPPClient()
     let omemo: OMEMOEncryption

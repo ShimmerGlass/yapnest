@@ -19,6 +19,8 @@ final class CallRun: @unchecked Sendable {
     private var pending: [CallCandidate] = []
     private var remoteNegotiation: CallJingle.Negotiation?
     private var contents: [Jingle.Content] = []
+    private var verifiedState: (device: Int32, verification: CallVerification)?
+    private var encryptedDevice: Int32?
 
     /// The candidates seen, for the log of how a call connected.
     let candidates = CallCandidateTally()
@@ -34,6 +36,24 @@ final class CallRun: @unchecked Sendable {
     var remote: CallJingle.Negotiation? {
         get { lock.withLock { remoteNegotiation } }
         set { lock.withLock { remoteNegotiation = newValue } }
+    }
+
+    /// The peer's device that vouched for the call's fingerprint, and how far,
+    /// once a `session-initiate` or `session-accept` of theirs came with it
+    /// encrypted.
+    var verified: (device: Int32, verification: CallVerification)? {
+        get { lock.withLock { verifiedState } }
+        set { lock.withLock { verifiedState = newValue } }
+    }
+
+    var verification: CallVerification { lock.withLock { verifiedState?.verification ?? .unverified } }
+
+    /// The device our own encrypted fingerprints went to. The answer has to
+    /// come back encrypted from that device: a plain one is a server that
+    /// stripped it.
+    var encryptedTo: Int32? {
+        get { lock.withLock { encryptedDevice } }
+        set { lock.withLock { encryptedDevice = newValue } }
     }
 
     /// The contents' names in the order of the media's sections, and the ICE

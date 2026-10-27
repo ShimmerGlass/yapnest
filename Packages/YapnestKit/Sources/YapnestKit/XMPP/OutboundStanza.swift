@@ -368,7 +368,10 @@ extension OutboundStanza {
     static let proposeIdPrefix = "jm-propose-"
     static let proceedIdPrefix = "jm-proceed-"
 
-    static func call(_ call: CallMessage, sid: String) -> Martin.Message {
+    /// With `omemoDevice`, a `proceed` names our OMEMO device, which tells the
+    /// caller that the call's fingerprints can be encrypted to it
+    /// (`CallFingerprints`).
+    static func call(_ call: CallMessage, sid: String, omemoDevice: UInt32? = nil) -> Martin.Message {
         let message = Martin.Message()
         message.type = .chat
         message.to = Martin.JID(call.recipient)
@@ -386,6 +389,11 @@ extension OutboundStanza {
         switch call {
         case .retract(_, _, true), .reject(_, _, true): children.append(Element(name: "tie-break"))
         default: break
+        }
+        if case .proceed = call, let omemoDevice {
+            let device = Element(name: "device", xmlns: CallFingerprints.namespace)
+            device.setAttribute("id", value: String(omemoDevice))
+            children.append(device)
         }
         let element = Element(name: call.elementName, xmlns: CallSignal.namespace, children: children)
         element.setAttribute("id", value: sid)

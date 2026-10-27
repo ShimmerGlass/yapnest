@@ -50,6 +50,9 @@ extension XMPPSession {
             jingle.supportsMessageInitiation = true
             jingle.register(description: Jingle.RTP.Description.self, features: CallJingle.descriptionFeatures)
             jingle.register(transport: Jingle.Transport.ICEUDPTransport.self, features: CallJingle.transportFeatures)
+            jingle.fingerprints = { [weak self] jid, sid, initiating, element in
+                self?.openCallFingerprints(from: jid, sid: sid, initiating: initiating, in: element) ?? true
+            }
             jingle.terminated = { [weak self] jid, sid, reason in
                 guard let self, self.call(sid: sid, peer: jid) != nil else { return false }
                 self.callStep(.sessionTerminate(from: jid.stringValue, reason: reason), sid: sid)
@@ -514,9 +517,9 @@ extension XMPPSession {
         case .prepareMedia:
             prepareMedia(run: run, sid: sid, video: machine.wantsVideo)
         case .startSession(let device):
-            startSession(with: device, run: run, sid: sid)
+            startSession(with: device, omemoDevice: machine.peerOmemoDevice, peer: machine.peer, run: run, sid: sid)
         case .answerSession:
-            answerSession(with: machine.peerDevice, run: run, sid: sid)
+            answerSession(with: machine.peerDevice, peer: machine.peer, run: run, sid: sid)
         case .applyAnswer:
             applyAnswer(run: run, sid: sid)
         case .terminateSession(let device, let reason):
@@ -551,7 +554,7 @@ extension XMPPSession {
     /// other devices with it, until their own timers. A proposal or an answer
     /// is of no use late, and is dropped.
     func writeCall(_ message: CallMessage, sid: String) {
-        let stanza = OutboundStanza.call(message, sid: sid)
+        let stanza = OutboundStanza.call(message, sid: sid, omemoDevice: omemoDevice(toVerify: message))
         guard message.endsACall else {
             write(stanza)
             return
@@ -563,6 +566,16 @@ extension XMPPSession {
         client.context.writer.write(stanza) { [weak self] result in
             if case .failure = result { self?.keepForReconnect(message, sid: sid, since: Date()) }
         }
+    }
+
+    /// Our OMEMO device, for a `proceed` in a chat that is encrypted: it tells
+    /// the caller to encrypt the call's fingerprints to it. A chat that isn't
+    /// encrypted is not asked to be.
+    private func omemoDevice(toVerify message: CallMessage) -> UInt32? {
+        guard case .proceed(let to) = message, isEncryptionReady,
+              let peer = JID(Martin.JID(to).bareJid.stringValue),
+              (try? database.isEncrypted(with: peer)) == true else { return nil }
+        return omemo.deviceId
     }
 
     /// How long a message that ends a call waits for the stream. Past it the
@@ -676,22 +689,36 @@ extension XMPPSession {
         DiagLog.error(.calls, "Call message refused", fields: callFields(sid: sid) + [.value("action", action), .error(error)])
     }
 
-    private func startSession(with device: String, run: CallRun, sid: String) {
+    private func startSession(with device: String, omemoDevice: Int32?, peer: JID, run: CallRun, sid: String) {
         run.enqueue({ [weak self] in
-            guard let self, let jingle = self.jingle else { throw CallRunError.closed }
+            guard let self, let jingle = self.jingle as? CallJingleModule else { throw CallRunError.closed }
             let media = try await run.readyMedia()
             let offer = try await media.makeOffer()
             guard let negotiation = CallJingle.negotiation(fromSDP: offer, localRole: .initiator) else { throw CallRunError.badDescription }
             run.learnContents(negotiation.contents)
-            try await jingle.initiateSession(to: Martin.JID(device), sid: sid, contents: negotiation.contents, bundle: negotiation.bundle)
+            // Only in a chat that is encrypted, and to the device the peer named.
+            let encryption = omemoDevice.flatMap { device -> CallJingleModule.FingerprintEncryption? in
+                (try? self.database.isEncrypted(with: peer)) == true ? .init(peer: peer, device: device, cipher: self.callCipher) : nil
+            }
+            // Set before sending, as the answer can come back before the send returns.
+            run.encryptedTo = encryption?.device
+            do {
+                try await jingle.sendSession(initiating: true, to: Martin.JID(device), sid: sid, contents: negotiation.contents, bundle: negotiation.bundle, encryption: encryption)
+            } catch let error as CallFingerprintError {
+                // A call goes ahead unverified, as with a peer that doesn't
+                // do this; the screen says so.
+                DiagLog.notice(.calls, "Call fingerprint sent plain", fields: self.callFields(sid: sid) + [.value("reason", error)])
+                run.encryptedTo = nil
+                try await jingle.sendSession(initiating: true, to: Martin.JID(device), sid: sid, contents: negotiation.contents, bundle: negotiation.bundle, encryption: nil)
+            }
             run.openGate { self.sendLocalCandidate($0, run: run, sid: sid) }
         }, failed: { [weak self] in self?.failCall(sid) })
     }
 
-    private func answerSession(with device: String?, run: CallRun, sid: String) {
+    private func answerSession(with device: String?, peer: JID, run: CallRun, sid: String) {
         guard let device else { return }
         run.enqueue({ [weak self] in
-            guard let self, let jingle = self.jingle, let remote = run.remote,
+            guard let self, let jingle = self.jingle as? CallJingleModule, let remote = run.remote,
                   let offer = CallJingle.sdp(from: remote, localRole: .responder) else { throw CallRunError.badDescription }
             self.logRemoteCandidates(in: remote, run: run)
             let media = try await run.readyMedia()
@@ -701,9 +728,69 @@ extension XMPPSession {
                 throw CallRunError.badDescription
             }
             run.learnContents(negotiation.contents)
-            try await jingle.acceptSession(with: Martin.JID(device), sid: sid, contents: negotiation.contents, bundle: negotiation.bundle)
+            // The caller's fingerprint came encrypted, so it expects ours so.
+            // Sent plain, it would be refused there, and sending it would
+            // only show the call as unverified here.
+            let encryption = run.verified.map { CallJingleModule.FingerprintEncryption(peer: peer, device: $0.device, cipher: self.callCipher) }
+            do {
+                try await jingle.sendSession(initiating: false, to: Martin.JID(device), sid: sid, contents: negotiation.contents, bundle: negotiation.bundle, encryption: encryption)
+            } catch let error as CallFingerprintError {
+                self.failCallVerification(error, sid: sid)
+                return
+            }
             run.openGate { self.sendLocalCandidate($0, run: run, sid: sid) }
         }, failed: { [weak self] in self?.failCall(sid) })
+    }
+
+    // MARK: Verification
+
+    var callCipher: CallFingerprintCipher { callCipherForTesting ?? omemo.callCipher }
+
+    /// Reads the fingerprints of the peer's `session-initiate` or `session-accept`
+    /// (`CallFingerprints`), before the call sees the session. Returns false if
+    /// the call ends over them. A call that isn't ours, or isn't with this
+    /// device, is left for the module to refuse.
+    func openCallFingerprints(from jid: Martin.JID, sid: String, initiating: Bool, in jingle: Element) -> Bool {
+        guard let run = call(sid: sid, peer: jid)?.run else { return true }
+        guard let sender = JID(jid.bareJid.stringValue) else { return true }
+        switch CallFingerprints.open(jingle, from: sender, with: callCipher) {
+        case .failure(let error):
+            failCallVerification(error, sid: sid)
+            return false
+        case .success(.plain):
+            // We sent ours encrypted, so a plain answer is one that something
+            // took the encryption off.
+            if !initiating, run.encryptedTo != nil {
+                failCallVerification(.downgraded, sid: sid)
+                return false
+            }
+            DiagLog.info(.calls, "Call fingerprint plain", fields: callFields(sid: sid))
+            return true
+        case .success(.encrypted(let device, let trust)):
+            if !initiating, let expected = run.encryptedTo, expected != device {
+                failCallVerification(.wrongDevice, sid: sid)
+                return false
+            }
+            run.verified = (device, CallVerification(trust))
+            DiagLog.info(.calls, "Call fingerprint verified", fields: callFields(sid: sid) + [.value("verification", CallVerification(trust))])
+            updateCallRun { _ in }
+            return true
+        }
+    }
+
+    /// Ends the call over a fingerprint that can't be vouched for, and says so.
+    func failCallVerification(_ error: CallFingerprintError, sid: String) {
+        DiagLog.notice(.calls, "Call fingerprint refused", fields: callFields(sid: sid) + [.value("reason", error)])
+        let detail = switch error {
+        case .compromisedDevice:
+            String(localized: "The call came from a device you marked as blocked, so it was ended.")
+        case .downgraded:
+            String(localized: "The call was meant to be checked against the other side's encryption keys, but its check was left out on the way. That is what someone tampering with the call would do, so it was ended.")
+        default:
+            String(localized: "The call couldn't be checked against the other side's encryption keys, so it was ended. If this keeps happening, check the devices in the chat's settings.")
+        }
+        warnings.post("call-verification", title: String(localized: "Call couldn't be verified"), detail: detail)
+        callStep(.verificationFailed, sid: sid)
     }
 
     private func applyAnswer(run: CallRun, sid: String) {

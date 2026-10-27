@@ -113,6 +113,9 @@ struct CallMachine: Sendable, Equatable {
         /// which was asked for before anything was signalled. Only sent when
         /// the setting is on.
         case relayChecked(Bool)
+        /// The peer's session message carried a fingerprint that couldn't be
+        /// vouched for as the call needs (`CallFingerprints`).
+        case verificationFailed
     }
 
     enum Effect: Sendable, Equatable {
@@ -150,6 +153,9 @@ struct CallMachine: Sendable, Equatable {
     /// The peer's device that answered, or the caller's that proposed: the one
     /// the Jingle session is with.
     private(set) var peerDevice: String?
+    /// The OMEMO device the peer's `proceed` named, which the fingerprints
+    /// of our `session-initiate` are encrypted to.
+    private(set) var peerOmemoDevice: Int32?
     let proposedAt: Date
     let wantsVideo: Bool
     private(set) var answeredAt: Date?
@@ -272,6 +278,9 @@ struct CallMachine: Sendable, Equatable {
             isConnectionLost = false
             connectionToken += 1
             return []
+        case .verificationFailed:
+            guard phase == .accepted || phase == .connecting else { return [] }
+            return leaveSession(.securityError) + end(.failed)
         case .connectionTimer(let token):
             return token == connectionToken && isConnectionLost ? lostConnection() : []
         case .media(let state):
@@ -302,6 +311,7 @@ struct CallMachine: Sendable, Equatable {
             guard phase.isAwaitingAnswer, let device = signal.from, device.contains("/") else { return [] }
             phase = .accepted
             peerDevice = device
+            peerOmemoDevice = signal.omemoDevice
             answeredAt = now
             return [arm(Self.setupWindow), .startSession(to: device)]
         case (.outgoing, .reject(let reason)) where fromPeer:

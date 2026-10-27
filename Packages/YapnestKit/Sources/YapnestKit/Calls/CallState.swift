@@ -22,14 +22,18 @@ public struct CallState: Sendable, Equatable {
     public var isVideo: Bool
     /// Whether the camera is sending. True for a video call until turned off.
     public var isCameraOn: Bool
+    /// Whether one of the peer's OMEMO devices vouched for the call's media.
+    /// Known once the Jingle session is up.
+    public var verification: CallVerification
 
     public var isOver: Bool { phase.isEnded }
 
     /// For previews and tests: the session builds the real ones.
     public init(
         sid: String, peer: JID, direction: Message.Direction, phase: CallPhase, activeSince: Date? = nil,
-        isMuted: Bool = false, isVideo: Bool = false, isCameraOn: Bool = false
+        isMuted: Bool = false, isVideo: Bool = false, isCameraOn: Bool = false, verification: CallVerification = .unverified
     ) {
+        self.verification = verification
         self.sid = sid
         self.peer = peer
         self.direction = direction
@@ -49,5 +53,6 @@ public struct CallState: Sendable, Equatable {
         isVideo = machine.wantsVideo
         isCameraOn = machine.wantsVideo && run.isCameraOn
         isMuted = run.isMuted
+        verification = run.verification
     }
 }

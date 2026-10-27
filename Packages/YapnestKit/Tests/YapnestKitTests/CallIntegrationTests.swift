@@ -81,6 +81,32 @@ extension LiveServer {
             #expect(try rows(bobSession, sid).first?.remoteId == rows(aliceSession, sid).first?.remoteId)
         }
 
+        /// The call's DTLS fingerprint goes through OMEMO both ways, between real
+        /// devices with real sessions, and each side shows the call as vouched
+        /// for by a device it trusts (new devices are trusted on first sight).
+        @Test func aCallIsVerifiedThroughOMEMO() async throws {
+            let (a, bobs) = try await callers()
+            let (aliceSession, aliceMedia) = a
+            let (bobSession, bobMedia) = bobs[0]
+            defer { aliceSession.disconnect(); bobSession.disconnect() }
+            try await LiveServer.waitUntil("both to have published their OMEMO keys") { aliceSession.isEncryptionReady && bobSession.isEncryptionReady }
+
+            try aliceSession.startCall(to: bob)
+            try await LiveServer.waitUntil("bob to ring") { bobSession.callState.value?.phase == .incoming }
+            bobSession.answerCall()
+            try await LiveServer.waitUntil("bob's media to answer") { bobMedia.last?.answeredOffers.count == 1 }
+            try await LiveServer.waitUntil("alice's media to be answered") { aliceMedia.last?.answersSet.count == 1 }
+
+            #expect(aliceSession.callState.value?.verification == .trusted)
+            #expect(bobSession.callState.value?.verification == .trusted)
+            // Each side's media got the other's fingerprint, out of the OMEMO message.
+            let fingerprint = "a=fingerprint:sha-256 AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+            #expect(bobMedia.last?.answeredOffers.first?.contains(fingerprint) == true)
+            #expect(aliceMedia.last?.answersSet.first?.contains(fingerprint) == true)
+
+            aliceSession.hangUpCall()
+        }
+
         @Test func aDeclinedCallEndsForTheCaller() async throws {
             let (a, bobs) = try await callers()
             let aliceSession = a.0, bobSession = bobs[0].0

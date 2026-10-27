@@ -49,6 +49,9 @@ struct CallView: View {
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .padding(.top, 8)
+            CallSecurity(state: state)
+                .font(.footnote)
+                .padding(.top, 4)
             Spacer()
             activeControls
                 .padding(.bottom, 40)
@@ -143,6 +146,8 @@ extension CallView {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+            CallSecurity(state: state)
+                .font(.caption)
         }
         .foregroundStyle(.white)
         .shadow(radius: 4)
@@ -303,6 +308,29 @@ private struct CallButtonBackground: ViewModifier {
             content.glassEffect(.regular.tint(glassTint).interactive(), in: .circle)
         } else {
             content.background(fill, in: Circle())
+        }
+    }
+}
+
+/// Whether one of the peer's OMEMO devices vouched for the call's media, in
+/// the words and symbols the messages use for their devices. Shown once the
+/// session is up, which is when it becomes known.
+struct CallSecurity: View {
+    let state: CallState
+
+    var body: some View {
+        switch state.phase {
+        case .connecting, .active:
+            switch state.verification {
+            case .verified:
+                Label("Verified device", systemImage: "lock.badge.checkmark.fill").foregroundStyle(.secondary)
+            case .trusted:
+                Label("Trusted device", systemImage: "lock.fill").foregroundStyle(.secondary)
+            case .unverified:
+                Label("Not verified", systemImage: "lock.open.fill").foregroundStyle(.orange)
+            }
+        default:
+            EmptyView()
         }
     }
 }

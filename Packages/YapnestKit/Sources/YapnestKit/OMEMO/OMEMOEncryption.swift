@@ -178,6 +178,79 @@ final class OMEMOEncryption: @unchecked Sendable {
         return encode(stanza, for: usable + own, verified: allVerified, checking: recipients)
     }
 
+    // MARK: Calls
+
+    /// A call's DTLS fingerprint as an OMEMO message for one device of the
+    /// peer: the element that goes into the Jingle session. Unlike a chat
+    /// message it is not held back for an undecided device, as the fingerprint
+    /// is no secret and the point is for the peer to check it; only a device
+    /// marked compromised is refused.
+    func encryptCallFingerprint(_ fingerprint: String, to peer: JID, device: Int32) async -> Result<Element, CallFingerprintError> {
+        let module = module
+        let name = peer.description
+        let listed: [Int32]?
+        do {
+            listed = try await withTimeout(setupTimeout) {
+                await withCheckedContinuation { continuation in
+                    module.addresses(for: [peer.martin]) { result in
+                        continuation.resume(returning: (try? result.get())?.filter { $0.name == name }.map(\.deviceId))
+                    }
+                }
+            }
+        } catch {
+            return .failure(.setupFailed)
+        }
+        // The peer's own list, from which sessions are built: a device the
+        // peer's caller names that isn't on it is not theirs to vouch with.
+        let address = SignalAddress(name: name, deviceId: device)
+        guard listed?.contains(device) == true, store.containsSessionRecord(forAddress: address) else { return .failure(.noSession) }
+        guard let status = store.status(forName: address.name, deviceId: device), status.isActive else { return .failure(.noSession) }
+        if status.trust == .compromised { return .failure(.compromisedDevice) }
+
+        let message = Martin.Message()
+        message.body = fingerprint
+        nonisolated(unsafe) var encoded: EncryptionResult<Martin.Message, SignalError> = .failure(.unknown)
+        encodeLock.withLock {
+            module.encode(message: message, forAddresses: [address], withStoreHint: false, forSelf: false) { encoded = $0 }
+        }
+        guard case .successMessage(let result, _) = encoded,
+              let encrypted = result.firstChild(name: "encrypted", xmlns: NS.omemoLegacy),
+              encrypted.firstChild(name: "header")?.filterChildren(name: "key", xmlns: nil).contains(where: { $0.getAttribute("rid") == String(device) }) == true,
+              encrypted.firstChild(name: "payload") != nil else { return .failure(.setupFailed) }
+        result.removeChild(encrypted)
+        return .success(encrypted)
+    }
+
+    /// The fingerprint in a call's `<encrypted>` element, with the device that
+    /// sent it and how far we trust it. A device marked compromised, and
+    /// anything that doesn't decrypt, is refused.
+    func decryptCallFingerprint(_ encrypted: Element, from sender: JID) -> Result<CallFingerprintCipher.Opened, CallFingerprintError> {
+        let message = Martin.Message()
+        message.type = .chat
+        message.addChild(Element(element: encrypted))
+        // Marked as history so a failure starts no session repair: a repair
+        // is for messages that came through the server and will come again,
+        // and a call's fingerprint doesn't.
+        switch decrypt(message, from: sender, ownCopy: false, isHistory: true) {
+        case .decrypted(let device?, let trust):
+            guard let text = message.body, !text.isEmpty else { return .failure(.undecryptable) }
+            return .success(.init(fingerprint: text, device: device, trust: trust ?? .undecided))
+        case .decrypted(nil, _), .ignore, .ownCopy:
+            return .failure(.undecryptable)
+        case .failed:
+            let device = encrypted.firstChild(name: "header")?.getAttribute("sid").flatMap { Int32($0) }
+            if let device, store.status(forName: sender.description, deviceId: device)?.trust == .compromised { return .failure(.compromisedDevice) }
+            return .failure(.undecryptable)
+        }
+    }
+
+    var callCipher: CallFingerprintCipher {
+        CallFingerprintCipher(
+            encrypt: { [self] fingerprint, peer, device in await encryptCallFingerprint(fingerprint, to: peer, device: device) },
+            decrypt: { [self] encrypted, sender in decryptCallFingerprint(encrypted, from: sender) },
+        )
+    }
+
     /// Why `recipient` has no devices to encrypt to. A list kept from
     /// strangers is not a lack of OMEMO, and nor is a server that failed or
     /// didn't answer: only a list that isn't there, or a server without

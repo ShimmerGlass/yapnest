@@ -62,9 +62,13 @@ Machine) unless you turn off "Include Messages in Backups" in Settings, which
 leaves them out on this device. iCloud Backup protects them end to end only
 with Advanced Data Protection.
 
-Calls are encrypted separately (DTLS-SRTP), and their key isn't yet checked
-against OMEMO, so nothing confirms who is on the other end. The server sees
-who calls whom and when.
+Calls are encrypted separately (DTLS-SRTP). The key exchange is checked
+against a fingerprint, and Yapnest has the other side send it encrypted with
+OMEMO when both are in an encrypted chat, as Conversations and Dino do, so a
+server can't swap it to listen in. The call screen then says the call is with
+a verified or trusted device; a call with a client that doesn't do this, or
+from a device you haven't decided on, says "Not verified". A device you have
+marked as blocked ends the call. The server sees who calls whom and when.
 
 ## Requirements
 
@@ -147,7 +151,7 @@ What Yapnest implements, and where it stops short.
 | XEP-0300 | Use of Cryptographic Hash Functions in XMPP | A SHA-256 hash is sent with a picture's or a sound file's metadata, in unencrypted chats only; received hashes there are not checked. A Jingle file transfer (XEP-0234) carries one in both directions, and a received file is checked against it. |
 | XEP-0308 | Last Message Correction | Full. |
 | XEP-0313 | Message Archive Management | Full, for the account and for rooms. |
-| XEP-0320 | Use of DTLS-SRTP in Jingle Sessions | Audio and video calls: the fingerprint is sent and read, but not yet verified against OMEMO. |
+| XEP-0320 | Use of DTLS-SRTP in Jingle Sessions | Audio and video calls: the fingerprint is sent and read. In an encrypted chat it is sent OMEMO-encrypted instead (see XEP-0384). |
 | XEP-0333 | Chat Markers | Partial: `displayed` only, sent and read; can be turned off. |
 | XEP-0334 | Message Processing Hints | `<store/>` only. |
 | XEP-0338 | Jingle Grouping Framework | Calls: the BUNDLE group is sent and read, so a video call's audio and video share one transport. Not advertised as a feature. |
@@ -160,7 +164,7 @@ What Yapnest implements, and where it stops short.
 | XEP-0372 | References | Mentions only. |
 | XEP-0377 | Spam Reporting | Full, where the server offers it. |
 | XEP-0379 | Pre-Authenticated Roster Subscription | Send: a `preauth` token in an `xmpp:` link goes with the subscription request. Account registration (`ibr=y`) isn't done. |
-| XEP-0384 | OMEMO Encryption | Legacy 0.3 (`eu.siacs.conversations.axolotl`) only, in 1:1 chats and private groups; not OMEMO 2. |
+| XEP-0384 | OMEMO Encryption | Legacy 0.3 (`eu.siacs.conversations.axolotl`) only, in 1:1 chats and private groups; not OMEMO 2. Also verifies a call's DTLS fingerprint, as the draft "OMEMO verification of RTP sessions" Conversations and Dino use: the `proceed` names our device, and the `session-initiate` and `session-accept` carry each content's fingerprint as an OMEMO message for one device. A plain fingerprint still gives a working call, shown as not verified; an encrypted one that fails to decrypt, comes from a blocked device or from another than the device named, or a plain answer to an encrypted offer, ends the call. |
 | XEP-0386 | Bind 2 | Full, where the server offers it. |
 | XEP-0388 | Extensible SASL Profile | Full, falling back to SASL. |
 | XEP-0393 | Message Styling | Yes: bold, italic, strikethrough, code, quotes and preformatted blocks. |
