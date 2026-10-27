@@ -1179,7 +1179,7 @@ extension XMPPSession {
     /// private group may read its archive; a few pages are enough to notify.
     func catchUpRoomArchives(then done: @escaping @Sendable () -> Void) {
         let pending = DispatchGroup()
-        let groups = ((try? database.groupChats()) ?? []).filter { !$0.hasLeft }
+        let groups = Self.roomsToCatchUpForNotifications((try? database.groupChats()) ?? [])
         // A room with nothing archived yet: from when it last had news
         // here, if ever. A new conversation's placeholder date isn't one,
         // and ejabberd refuses it.
@@ -1192,6 +1192,12 @@ extension XMPPSession {
             fetchRoomArchiveForNotifications(group.jid, after: group.lastArchiveId, since: since, pagesLeft: 3) { pending.leave() }
         }
         pending.notify(queue: .global(), execute: done)
+    }
+
+    /// The rooms whose archive a push reads. A room set to never notify
+    /// can't produce a notification, and the app reads it when it opens.
+    static func roomsToCatchUpForNotifications(_ groups: [GroupChat]) -> [GroupChat] {
+        groups.filter { !$0.hasLeft && $0.notify != .never }
     }
 
     /// Which page of a room's archive the notification extension reads.

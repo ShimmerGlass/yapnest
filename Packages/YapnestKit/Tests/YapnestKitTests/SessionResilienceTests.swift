@@ -88,6 +88,17 @@ struct InvitationJoinTests {
     }
 }
 
+struct NotificationCatchUpRoomsTests {
+    @Test func aRoomThatNeverNotifiesIsNotReadForAPush() {
+        let loud = GroupChat(conversationId: 1, jid: JID("a@rooms.example.org")!, nickname: "me")
+        let mentions = GroupChat(conversationId: 2, jid: JID("b@rooms.example.org")!, nickname: "me", notify: .onMention)
+        let muted = GroupChat(conversationId: 3, jid: JID("c@rooms.example.org")!, nickname: "me", notify: .never)
+        let left = GroupChat(conversationId: 4, jid: JID("d@rooms.example.org")!, nickname: "me", hasLeft: true)
+        let rooms = XMPPSession.roomsToCatchUpForNotifications([loud, mentions, muted, left])
+        #expect(rooms.map(\.conversationId) == [1, 2])
+    }
+}
+
 struct NotificationPageTests {
     @Test func aCursorReadsOnFromIt() {
         #expect(XMPPSession.notificationPage(after: "a", since: nil) == .after("a"))
