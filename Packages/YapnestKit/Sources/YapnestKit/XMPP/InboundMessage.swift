@@ -134,10 +134,9 @@ public struct RoomContext: Sendable {
     public var jid: JID
     /// Our nickname there.
     public var nickname: String
-    /// Real addresses of current occupants, by nickname, if the room shows them.
-    public var occupants: [String: JID]
-    /// Each present occupant's presence session, by nickname.
-    public var presenceSessions: [String: Int64]
+    /// The current occupants by nickname, kept as the room has them so that
+    /// building a context per message copies nothing.
+    var occupants: [String: RoomOccupant]
     /// Whether the room vouches for XEP-0421 occupant ids; without that,
     /// they're the sender's say-so and ignored.
     public var trustsOccupantIds: Bool
@@ -148,10 +147,19 @@ public struct RoomContext: Sendable {
     public var isNonAnonymous: Bool
 
     public init(jid: JID, nickname: String, occupants: [String: JID] = [:], presenceSessions: [String: Int64] = [:], trustsOccupantIds: Bool = false, ownOccupantId: String? = nil, isNonAnonymous: Bool = false) {
+        var present: [String: RoomOccupant] = [:]
+        for nick in Set(occupants.keys).union(presenceSessions.keys) {
+            var occupant = RoomOccupant(nick: nick, jid: occupants[nick], affiliation: .none)
+            occupant.presenceSession = presenceSessions[nick]
+            present[nick] = occupant
+        }
+        self.init(jid: jid, nickname: nickname, present: present, trustsOccupantIds: trustsOccupantIds, ownOccupantId: ownOccupantId, isNonAnonymous: isNonAnonymous)
+    }
+
+    init(jid: JID, nickname: String, present: [String: RoomOccupant], trustsOccupantIds: Bool, ownOccupantId: String?, isNonAnonymous: Bool) {
         self.jid = jid
         self.nickname = nickname
-        self.occupants = occupants
-        self.presenceSessions = presenceSessions
+        self.occupants = present
         self.trustsOccupantIds = trustsOccupantIds
         self.ownOccupantId = ownOccupantId
         self.isNonAnonymous = isNonAnonymous
@@ -216,7 +224,7 @@ extension InboundMessage {
         let isArchived = if case .archive = source { true } else { false }
         // Current occupants say nothing about who wrote an archived message,
         // and anyone may have held our nick before we joined.
-        let real = Self.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous) ?? (isArchived ? nil : room.occupants[nick])
+        let real = Self.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous) ?? (isArchived ? nil : room.occupants[nick]?.jid)
         let occupantId = room.trustsOccupantIds ? Self.occupantId(in: stanza.element) : nil
         let isOutgoing = if let real {
             real == account
@@ -232,7 +240,7 @@ extension InboundMessage {
         // Only a live message from the present holder of a nickname can be
         // placed in a stay, and only where nothing else says who it is.
         if case .live = source, !isOutgoing, sender == room.jid, occupantId == nil {
-            self.presenceSession = room.presenceSessions[nick]
+            self.presenceSession = room.occupants[nick]?.presenceSession
         }
         self.isGroupChat = true
         // A room member's `to` is their own claim: the replied-to message is

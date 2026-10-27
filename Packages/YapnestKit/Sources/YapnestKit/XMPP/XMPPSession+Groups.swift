@@ -974,7 +974,7 @@ extension XMPPSession {
     /// only by the occupant id the room gave us.
     static func encryptedSender(of stanza: Martin.Message, nick: String, in room: RoomContext, account: JID, source: InboundMessage.Source) -> JID? {
         if let real = InboundMessage.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous) { return real }
-        guard case .archive = source else { return room.occupants[nick] ?? (nick == room.nickname ? account : nil) }
+        guard case .archive = source else { return room.occupants[nick]?.jid ?? (nick == room.nickname ? account : nil) }
         guard room.trustsOccupantIds, let own = room.ownOccupantId, InboundMessage.occupantId(in: stanza.element) == own else { return nil }
         return account
     }
@@ -1452,8 +1452,7 @@ extension XMPPSession {
         let context = RoomContext(
             jid: room,
             nickname: status?.nickname ?? group.nickname,
-            occupants: (status?.occupants ?? [:]).compactMapValues(\.jid),
-            presenceSessions: (status?.occupants ?? [:]).compactMapValues(\.presenceSession),
+            present: status?.occupants ?? [:],
             trustsOccupantIds: group.hasOccupantIds,
             ownOccupantId: status?.occupantId,
             isNonAnonymous: group.isNonAnonymous,
