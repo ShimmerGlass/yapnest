@@ -965,6 +965,26 @@ Each entry gives what went wrong for users, why, and what changed.
   (`publishDeviceBundleIfNeeded(afterPreKeyUse:)`). Pinned by
   `ExtensionOMEMOPublishTests`.
 
+**A used prekey stayed usable and published until a flush that might not come**
+(`reset`, `registerDevice`, `signedPreKeyRotationDue`)
+- *Symptom:* a one-time prekey used during a catch-up, or in an extension
+  that ended before it, could be used again, and after a reset of the
+  session it stayed in our published bundle for good. The signed prekey was
+  never replaced.
+- *Cause:* the store only marks a prekey deleted, and the module removes it
+  and republishes after a prekey message, or when the catch-up ends if the
+  session was held back. A reset forgets what was held back, and an
+  extension that dies never gets there.
+- *Fix:* the store treats a prekey marked deleted as gone (several messages
+  built from one prekey still decrypt, as libsignal sets the session up from
+  the first and recognizes the rest by their base key). A reset of the stream
+  or session flushes and republishes if sessions were held back, and
+  registering flushes what is left marked, so the bundle is rebuilt without
+  it. `signedPreKeyRotationDue` is a hook asked whenever the bundle is
+  checked; true makes a new signed prekey with the next id. Yapnest's store
+  rotates it weekly and keeps the replaced one for four weeks. Pinned by
+  `OMEMOPreKeyTests`.
+
 **The Signal wrappers leaked libsignal objects and cached keys unsafely**
 (`SignalPreKey`, `SignalSignedPreKey`, `generatePreKeys`,
 `SignalIdentityKeyPair`, `SignalIdentityKey`, `SignalContext`)

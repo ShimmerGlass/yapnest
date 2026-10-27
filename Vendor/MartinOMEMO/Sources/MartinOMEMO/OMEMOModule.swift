@@ -197,6 +197,11 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             // next catch-up or message repairs what is still broken.
             self.devicesQueue.async {
                 self.mamSyncsInProgress.removeAll();
+                // The prekeys those sessions used are still published. Taking
+                // them out is not left for a sync that will never finish.
+                if self.postponedSessions.values.contains(where: { !$0.isEmpty }) && self.storage.preKeyStore.flushDeletedPreKeys() {
+                    self.publishDeviceBundleIfNeeded(completionHandler: nil, afterPreKeyUse: true);
+                }
                 self.postponedSessions.removeAll();
                 self.postponedHealing.removeAll();
                 self.healing.reset();
@@ -1054,6 +1059,9 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         guard publishesKeys else {
             return;
         }
+        // Prekeys used while a catch-up was cut short, or in an extension that
+        // ended first, are only marked deleted; the bundle then still has them.
+        _ = storage.preKeyStore.flushDeletedPreKeys();
         publishDeviceBundleIfNeeded(completionHandler: nil, registration: true);
         scheduleRegistrationRetry();
     }
@@ -1372,10 +1380,16 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         }
     }
     
+    /// Asked whenever the bundle is checked: whether the signed prekey in use
+    /// is due for replacing. The schedule, and what becomes of the old key,
+    /// are the app's; the new key gets the next id, and the old one stays in
+    /// the store until the app deletes it.
+    public var signedPreKeyRotationDue: (() -> Bool)? = nil;
+
     fileprivate func signedPreKey(regenerate: Bool = false) -> SignalSignedPreKey? {
         let signedPreKeyId = storage.signedPreKeyStore.countSignedPreKeys();
         var signedPreKey: SignalSignedPreKey? = nil;
-        if (!regenerate) && (signedPreKeyId != 0) {
+        if (!regenerate) && (signedPreKeyId != 0) && !(signedPreKeyRotationDue?() ?? false) {
             if let data = signalContext.storage.signedPreKeyStore.loadSignedPreKey(withId: UInt32(signedPreKeyId)) {
                 signedPreKey = SignalSignedPreKey(fromSerializedData: data);
             }

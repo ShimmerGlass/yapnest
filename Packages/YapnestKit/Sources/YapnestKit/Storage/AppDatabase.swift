@@ -181,8 +181,7 @@ public final class AppDatabase: Sendable {
             }
 
             // Our own one-time and signed prekeys. Used one-time prekeys are only
-            // marked deleted until the archive catch-up ends, since several
-            // archived messages may have been built from the same prekey.
+            // marked deleted until the bundle is republished.
             try db.create(table: "omemoPreKey") { t in
                 t.primaryKey("id", .integer)
                 t.column("data", .blob).notNull()
@@ -733,6 +732,15 @@ public final class AppDatabase: Sendable {
             try db.alter(table: "pendingEdit") { t in
                 t.add(column: "presenceSession", .integer)
             }
+        }
+
+        migrator.registerMigration("v46-signed-prekey-date") { db in
+            // The signed prekey is replaced weekly. The ones kept from before
+            // start their week now.
+            try db.alter(table: "omemoSignedPreKey") { t in
+                t.add(column: "createdAt", .datetime)
+            }
+            try db.execute(sql: "UPDATE omemoSignedPreKey SET createdAt = ?", arguments: [Date()])
         }
 
         return migrator

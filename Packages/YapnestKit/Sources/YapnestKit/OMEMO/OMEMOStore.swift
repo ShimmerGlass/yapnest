@@ -183,8 +183,13 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         (read { db in try UInt32.fetchOne(db, sql: "SELECT MAX(id) FROM omemoPreKey") } ?? nil) ?? 0
     }
 
+    /// A prekey libsignal has deleted is gone, though its row stays until
+    /// `flushDeletedPreKeys`: that waits for a catch-up to end, and for an
+    /// extension that dies first it may never come. Several messages built
+    /// from one prekey still decrypt, as libsignal sets the session up from
+    /// the first and recognizes the rest by their base key without loading it.
     func loadPreKey(withId id: UInt32) -> Data? {
-        read { db in try Data.fetchOne(db, sql: "SELECT data FROM omemoPreKey WHERE id = ?", arguments: [id]) } ?? nil
+        read { db in try Data.fetchOne(db, sql: "SELECT data FROM omemoPreKey WHERE id = ? AND isDeleted = 0", arguments: [id]) } ?? nil
     }
 
     func storePreKey(_ data: Data, withId id: UInt32) -> Bool {
@@ -194,7 +199,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func containsPreKey(withId id: UInt32) -> Bool {
-        read { db in try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM omemoPreKey WHERE id = ?)", arguments: [id]) } == true
+        read { db in try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM omemoPreKey WHERE id = ? AND isDeleted = 0)", arguments: [id]) } == true
     }
 
     func deletePreKey(withId id: UInt32) -> Bool {
@@ -212,8 +217,33 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
 
     // MARK: Signed prekeys
 
+    /// How long a signed prekey is published before the next one replaces it.
+    static let signedPreKeyLifetime: TimeInterval = 7 * 24 * 3600
+    /// How long a replaced one stays, for sessions started from the bundle it
+    /// was in. Counted from when it was replaced.
+    static let signedPreKeyGrace: TimeInterval = 28 * 24 * 3600
+
+    /// The id of the newest one, which the module takes as its count to pick
+    /// the next id. Not a count: old ones are deleted, and ids must not repeat.
     func countSignedPreKeys() -> Int {
-        (read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM omemoSignedPreKey") } ?? nil) ?? 0
+        (read { db in try Int.fetchOne(db, sql: "SELECT MAX(id) FROM omemoSignedPreKey") } ?? nil) ?? 0
+    }
+
+    /// Whether the newest signed prekey has been published for its lifetime.
+    /// Also deletes the replaced ones that have outlived the grace period.
+    func signedPreKeyRotationDue() -> Bool {
+        var due = false
+        _ = write { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT id, createdAt FROM omemoSignedPreKey ORDER BY id")
+            let now = now()
+            let dates = rows.map { ($0["id"] as Int64, ($0["createdAt"] as Date?) ?? now) }
+            // A key is replaced when the next one is made.
+            for (index, entry) in dates.dropLast().enumerated() where now.timeIntervalSince(dates[index + 1].1) >= Self.signedPreKeyGrace {
+                try db.execute(sql: "DELETE FROM omemoSignedPreKey WHERE id = ?", arguments: [entry.0])
+            }
+            if let newest = dates.last { due = now.timeIntervalSince(newest.1) >= Self.signedPreKeyLifetime }
+        }
+        return due
     }
 
     func loadSignedPreKey(withId id: UInt32) -> Data? {
@@ -221,7 +251,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func storeSignedPreKey(_ data: Data, withId id: UInt32) -> Bool {
-        write { db in try db.execute(sql: "INSERT OR REPLACE INTO omemoSignedPreKey (id, data) VALUES (?, ?)", arguments: [id, data]) }
+        write { db in try db.execute(sql: "INSERT OR REPLACE INTO omemoSignedPreKey (id, data, createdAt) VALUES (?, ?, ?)", arguments: [id, data, now()]) }
     }
 
     func containsSignedPreKey(withId id: UInt32) -> Bool {
