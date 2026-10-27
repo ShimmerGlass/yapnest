@@ -102,14 +102,9 @@ final class AnimatedUIImageView: UIView {
             self, selector: #selector(occlusionChanged),
             name: Platform.windowVisibilityDidChange, object: nil,
         )
-        center.addObserver(
-            self, selector: #selector(sceneStateChanged(_:)),
-            name: UIScene.didEnterBackgroundNotification, object: nil,
-        )
-        center.addObserver(
-            self, selector: #selector(sceneStateChanged(_:)),
-            name: UIScene.willEnterForegroundNotification, object: nil,
-        )
+        for name in [UIScene.didEnterBackgroundNotification, UIScene.willEnterForegroundNotification] {
+            center.addObserver(self, selector: #selector(sceneStateChanged(_:)), name: name, object: nil)
+        }
     }
 
     @available(*, unavailable)
@@ -132,8 +127,7 @@ final class AnimatedUIImageView: UIView {
     }
 
     @objc private func reduceMotionChanged() {
-        gate.reducesMotion = UIAccessibility.isReduceMotionEnabled
-        restart()
+        update { $0.reducesMotion = UIAccessibility.isReduceMotionEnabled }
     }
 
     @objc private func occlusionChanged() {
