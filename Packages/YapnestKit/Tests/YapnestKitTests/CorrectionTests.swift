@@ -26,8 +26,8 @@ struct CorrectionTests {
     }
 
     @discardableResult
-    private func ingestGroup(_ xml: String, occupants: [String: YapnestKit.JID] = [:], trustsOccupantIds: Bool = false, source: InboundMessage.Source = .live) throws -> IngestResult {
-        let context = RoomContext(jid: room, nickname: "me", occupants: occupants, trustsOccupantIds: trustsOccupantIds)
+    private func ingestGroup(_ xml: String, occupants: [String: YapnestKit.JID] = [:], sessions: [String: Int64] = [:], trustsOccupantIds: Bool = false, source: InboundMessage.Source = .live) throws -> IngestResult {
+        let context = RoomContext(jid: room, nickname: "me", occupants: occupants, presenceSessions: sessions, trustsOccupantIds: trustsOccupantIds)
         return try db.ingest(try #require(InboundMessage(groupchat: stanza(xml), room: context, account: me, source: source)))
     }
 
@@ -130,12 +130,122 @@ struct CorrectionTests {
 
     @Test func groupCorrectionsNeedTheSameOccupant() throws {
         try db.joinGroupChat(room, nickname: "me")
-        try ingestGroup("<message from='cake@rooms.example.org/anna' type='groupchat' id='g1'><body>hi all</body></message>")
+        let sessions: [String: Int64] = ["anna": 1, "mallory": 2]
+        try ingestGroup("<message from='cake@rooms.example.org/anna' type='groupchat' id='g1'><body>hi all</body></message>", sessions: sessions)
         // Someone else, in an anonymous room: a different nickname.
-        try ingestGroup("<message from='cake@rooms.example.org/mallory' type='groupchat' id='g2'><body>pwned</body><replace xmlns='urn:xmpp:message-correct:0' id='g1'/></message>")
+        try ingestGroup("<message from='cake@rooms.example.org/mallory' type='groupchat' id='g2'><body>pwned</body><replace xmlns='urn:xmpp:message-correct:0' id='g1'/></message>", sessions: sessions)
         #expect(try messages().first { $0.remoteId == "g1" }?.body == "hi all")
-        try ingestGroup("<message from='cake@rooms.example.org/anna' type='groupchat' id='g3'><body>hi everyone</body><replace xmlns='urn:xmpp:message-correct:0' id='g1'/></message>")
+        try ingestGroup("<message from='cake@rooms.example.org/anna' type='groupchat' id='g3'><body>hi everyone</body><replace xmlns='urn:xmpp:message-correct:0' id='g1'/></message>", sessions: sessions)
         #expect(try messages().first { $0.remoteId == "g1" }?.body == "hi everyone")
+    }
+
+    // MARK: Nicknames taken over in rooms that tell no one apart
+
+    private func say(_ id: String, _ extra: String = "<body>hi all</body>", as nick: String = "anna", sessions: [String: Int64], source: InboundMessage.Source = .live) throws {
+        try ingestGroup("<message from='cake@rooms.example.org/\(nick)' type='groupchat' id='\(id)'>\(extra)</message>", sessions: sessions, source: source)
+    }
+
+    private func correction(of id: String, to body: String = "pwned") -> String {
+        "<body>\(body)</body><replace xmlns='urn:xmpp:message-correct:0' id='\(id)'/>"
+    }
+
+    private func retraction(of id: String) -> String {
+        "<retract id='\(id)' xmlns='urn:xmpp:message-retract:1'/>"
+    }
+
+    private func stored(_ id: String) throws -> YapnestKit.Message {
+        try #require(try messages().first { $0.remoteId == id })
+    }
+
+    @Test func aNicknameTakenAfterItsHolderLeftCannotCorrect() throws {
+        try db.joinGroupChat(room, nickname: "me")
+        try say("g1", sessions: ["anna": 1])
+        try say("g2", correction(of: "g1"), sessions: ["anna": 2])
+        #expect(try stored("g1").body == "hi all")
+        #expect(try messages().count == 1)
+    }
+
+    @Test func aNicknameTakenAfterItsHolderLeftCannotRetract() throws {
+        try db.joinGroupChat(room, nickname: "me")
+        try say("g1", sessions: ["anna": 1])
+        try say("g2", retraction(of: "g1"), sessions: ["anna": 2])
+        #expect(try stored("g1").isRetracted == false)
+        #expect(try messages().count == 1)
+    }
+
+    @Test func theSamePresenceSessionMayCorrectAndRetract() throws {
+        try db.joinGroupChat(room, nickname: "me")
+        try say("g1", sessions: ["anna": 1])
+        try say("g2", correction(of: "g1", to: "fixed"), sessions: ["anna": 1])
+        #expect(try stored("g1").body == "fixed")
+        try say("g3", retraction(of: "g1"), sessions: ["anna": 1])
+        #expect(try stored("g1").isRetracted)
+    }
+
+    @Test func anOriginalFromTheArchiveCannotBeEdited() throws {
+        try db.joinGroupChat(room, nickname: "me")
+        try say("g1", sessions: ["anna": 1], source: .archive(serverId: "s1", timestamp: Date(timeIntervalSince1970: 50)))
+        try say("g2", correction(of: "g1"), sessions: ["anna": 1])
+        try say("g3", retraction(of: "g1"), sessions: ["anna": 1])
+        #expect(try stored("g1").body == "hi all")
+        #expect(try stored("g1").isRetracted == false)
+        #expect(try stored("g1").presenceSession == nil)
+    }
+
+    @Test func anEditFromTheArchiveCannotChangeALiveOriginal() throws {
+        try db.joinGroupChat(room, nickname: "me")
+        try say("g1", sessions: ["anna": 1])
+        try say("g2", correction(of: "g1"), sessions: ["anna": 1], source: .archive(serverId: "s2", timestamp: Date(timeIntervalSince1970: 60)))
+        #expect(try stored("g1").body == "hi all")
+    }
+
+    /// What the room adds to a message it replays, which dates it, so an edit
+    /// can come before its original and still not be older than it.
+    private func stamp(_ date: String) -> String {
+        "<delay xmlns='urn:xmpp:delay' from='cake@rooms.example.org' stamp='\(date)'/>"
+    }
+
+    @Test func aPendingCorrectionObeysTheSamePresenceRule() throws {
+        try db.joinGroupChat(room, nickname: "me")
+        try say("g2", correction(of: "g1") + stamp("2020-01-02T00:00:00Z"), sessions: ["anna": 2])
+        try say("g1", "<body>hi all</body>" + stamp("2020-01-01T00:00:00Z"), sessions: ["anna": 1])
+        #expect(try stored("g1").body == "hi all")
+        #expect(try stored("g1").editedAt == nil)
+    }
+
+    @Test func aPendingRetractionObeysTheSamePresenceRule() throws {
+        try db.joinGroupChat(room, nickname: "me")
+        try say("g2", retraction(of: "g1") + stamp("2020-01-02T00:00:00Z"), sessions: ["anna": 2])
+        try say("g1", "<body>hi all</body>" + stamp("2020-01-01T00:00:00Z"), sessions: ["anna": 1])
+        #expect(try stored("g1").isRetracted == false)
+    }
+
+    @Test func pendingEditsFromTheSamePresenceSessionStillApply() throws {
+        try db.joinGroupChat(room, nickname: "me")
+        try say("g2", correction(of: "g1", to: "fixed") + stamp("2020-01-02T00:00:00Z"), sessions: ["anna": 1])
+        try say("g1", "<body>hi all</body>" + stamp("2020-01-01T00:00:00Z"), sessions: ["anna": 1])
+        #expect(try stored("g1").body == "fixed")
+        try say("g4", retraction(of: "g3") + stamp("2020-01-02T00:00:00Z"), sessions: ["anna": 1])
+        try say("g3", "<body>hi all</body>" + stamp("2020-01-01T00:00:00Z"), sessions: ["anna": 1])
+        #expect(try stored("g3").isRetracted)
+    }
+
+    @Test func rejoiningStillAllowsEditsWhereOccupantIdsTellPeopleApart() throws {
+        try db.joinGroupChat(room, nickname: "me")
+        let id = "<occupant-id xmlns='urn:xmpp:occupant-id:0' id='occ-anna'/>"
+        try ingestGroup("<message from='cake@rooms.example.org/anna' type='groupchat' id='g1'><body>hi</body>\(id)</message>", sessions: ["anna": 1], trustsOccupantIds: true)
+        try ingestGroup("<message from='cake@rooms.example.org/anna' type='groupchat' id='g2'><body>fixed</body><replace xmlns='urn:xmpp:message-correct:0' id='g1'/>\(id)</message>", sessions: ["anna": 2], trustsOccupantIds: true)
+        #expect(try stored("g1").body == "fixed")
+        #expect(try stored("g1").presenceSession == nil)
+    }
+
+    @Test func rejoiningStillAllowsEditsWhereAddressesAreShown() throws {
+        try db.joinGroupChat(room, nickname: "me")
+        let shown = ["anna": alice]
+        try ingestGroup("<message from='cake@rooms.example.org/anna' type='groupchat' id='g1'><body>hi</body></message>", occupants: shown, sessions: ["anna": 1])
+        try ingestGroup("<message from='cake@rooms.example.org/anna' type='groupchat' id='g2'><body>fixed</body><replace xmlns='urn:xmpp:message-correct:0' id='g1'/></message>", occupants: shown, sessions: ["anna": 2])
+        #expect(try stored("g1").body == "fixed")
+        #expect(try stored("g1").presenceSession == nil)
     }
 
     @Test func groupCorrectionsFollowTheOccupantId() throws {

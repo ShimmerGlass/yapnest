@@ -45,6 +45,9 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
     public var nick: String?
     /// In rooms that vouch for XEP-0421 ids: the sender's.
     public var occupantId: String?
+    /// In group chats that give neither addresses nor occupant ids: which stay
+    /// of the nickname's holder wrote it. See `Author.presenceSession`.
+    public var presenceSession: Int64?
     public var body: String
     public var timestamp: Date
     public var status: Status
@@ -195,7 +198,7 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
         isOutgoing && (isWrittenHere || !inGroup)
     }
 
-    public var author: Author { Author(jid: sender, nick: nick, occupantId: occupantId) }
+    public var author: Author { Author(jid: sender, nick: nick, occupantId: occupantId, presenceSession: presenceSession) }
 
     /// What a "/me" message (XEP-0245) says its author does, to show after
     /// their name, as in "/me waves" for "Alice waves".

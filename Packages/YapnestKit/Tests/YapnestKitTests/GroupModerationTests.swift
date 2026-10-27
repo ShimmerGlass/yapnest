@@ -129,6 +129,11 @@ struct ModeratedRetractionTests {
     }
 
     private func store(_ body: String, from nick: String, stanzaId: String) throws {
+        // An author's own retraction counts only from the stay the message came
+        // from, so the nickname is in the room, as it is when a room sends.
+        if session.roomStatus(room)?.occupants[nick] == nil {
+            session.roomPresence(parseStanza("<presence from='cake@rooms.example.org/\(nick)'><x xmlns='http://jabber.org/protocol/muc#user'><item affiliation='member' role='participant'/></x></presence>"), room: room)
+        }
         let xml = "<message from='cake@rooms.example.org/\(nick)' type='groupchat' id='m-\(stanzaId)'><body>\(body)</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='\(stanzaId)'/></message>"
         session.handleRoomStanza(parseStanza(xml), source: .live)
     }

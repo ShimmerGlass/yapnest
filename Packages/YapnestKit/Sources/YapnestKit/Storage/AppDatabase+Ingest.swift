@@ -161,6 +161,7 @@ extension AppDatabase {
                 message.direction = .outgoing
                 message.sender = ours.sender
             }
+            message.presenceSession = inbound.presenceSession
             // A correction of something we never got stands in for it.
             if inbound.correctionOf != nil { message.editedAt = timestamp }
             message.mentionsMe = inbound.mentionsMe

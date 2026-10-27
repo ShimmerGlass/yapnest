@@ -723,6 +723,18 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v45-presence-session") { db in
+            // Which stay of a nickname's holder wrote a message, in rooms with
+            // no addresses or occupant ids, so that whoever takes the nickname
+            // later can't edit what its earlier holder wrote.
+            try db.alter(table: "message") { t in
+                t.add(column: "presenceSession", .integer)
+            }
+            try db.alter(table: "pendingEdit") { t in
+                t.add(column: "presenceSession", .integer)
+            }
+        }
+
         return migrator
     }
 

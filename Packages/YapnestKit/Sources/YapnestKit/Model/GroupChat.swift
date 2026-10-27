@@ -99,18 +99,28 @@ public struct Author: Hashable, Sendable {
     /// XEP-0421: the room's stable id for the occupant, when the room
     /// vouches for it. Survives nickname changes, unlike `nick`.
     public var occupantId: String?
+    /// Which stay of the nickname's holder in the room a live message came
+    /// from, where the room gives neither an address nor an occupant id.
+    /// See `RoomOccupant.presenceSession`.
+    public var presenceSession: Int64?
 
-    public init(jid: JID, nick: String? = nil, occupantId: String? = nil) {
+    public init(jid: JID, nick: String? = nil, occupantId: String? = nil, presenceSession: Int64? = nil) {
         self.jid = jid
         self.nick = nick
         self.occupantId = occupantId
+        self.presenceSession = presenceSession
     }
 
     /// Whether `other` is the same person: by occupant id where both have
-    /// one, else by address, and by nickname where the address is the room's.
+    /// one, else by address. Where the address is the room's, a nickname
+    /// says nothing once its holder has left and someone else took it, so
+    /// both must also come from one presence session. Where that can't be
+    /// told, as for anything from the archive, they are not the same.
     func isSame(as other: Author, room: JID?) -> Bool {
         if let mine = occupantId, let theirs = other.occupantId { return mine == theirs }
         guard jid == other.jid else { return false }
-        return jid != room || nick == other.nick
+        guard jid == room else { return true }
+        guard nick == other.nick, let session = presenceSession else { return false }
+        return session == other.presenceSession
     }
 }

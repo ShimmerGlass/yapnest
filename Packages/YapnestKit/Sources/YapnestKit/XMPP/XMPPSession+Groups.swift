@@ -19,6 +19,12 @@ public struct RoomOccupant: Hashable, Sendable {
     public var role: String
     /// XEP-0421, if the room vouches for them.
     public var occupantId: String?
+    /// Names this occupant's stay under this nickname, from their available
+    /// presence until their unavailable one. Random, so that one handed out
+    /// before a restart is never handed out again. It is what tells a
+    /// nickname's holder from whoever takes it later in a room that shows
+    /// neither addresses nor occupant ids.
+    var presenceSession: Int64?
 
     public init(nick: String, jid: JID?, affiliation: RoomAffiliation, role: String = "participant", occupantId: String? = nil) {
         self.nick = nick
@@ -563,6 +569,9 @@ extension XMPPSession {
                 }
                 if statuses.contains(303), let newNick = item?.getAttribute("nick"), var occupant {
                     occupant.nick = newNick
+                    // The stay under the old nickname ended; its presence under
+                    // the new one starts another.
+                    occupant.presenceSession = nil
                     status?.occupants[newNick] = occupant
                     if isSelf { status?.nickname = newNick }
                 }
@@ -585,6 +594,9 @@ extension XMPPSession {
             occupantId: trustsOccupantIds ? claimedId : nil,
         )
         let joinedNow = updateRoom(room) { status in
+            var occupant = occupant
+            // A change of show or role is the same stay.
+            occupant.presenceSession = status?.occupants[nick]?.presenceSession ?? .random(in: 1...Int64.max)
             status?.occupants[nick] = occupant
             if let jid = occupant.jid { status?.setAffiliation(occupant.affiliation, of: jid) }
             guard isSelf else { return }
@@ -1368,6 +1380,7 @@ extension XMPPSession {
             jid: room,
             nickname: status?.nickname ?? group.nickname,
             occupants: (status?.occupants ?? [:]).compactMapValues(\.jid),
+            presenceSessions: (status?.occupants ?? [:]).compactMapValues(\.presenceSession),
             trustsOccupantIds: group.hasOccupantIds,
             ownOccupantId: status?.occupantId,
             isNonAnonymous: group.isNonAnonymous,
@@ -1410,6 +1423,8 @@ extension XMPPSession {
         inbound.omemoDevice = device?.id ?? nil
         inbound.omemoTrust = device?.trust
         inbound.isHistory = isHistory
+        // Replayed on joining, it came from a stay we may not have seen.
+        if isHistory || Self.isDelayed(stanza) { inbound.presenceSession = nil }
         let isPrivate = group.isPrivate
         if case .archive = source {
             bufferArchived(inbound, query: query) { [weak self, inbound] result in

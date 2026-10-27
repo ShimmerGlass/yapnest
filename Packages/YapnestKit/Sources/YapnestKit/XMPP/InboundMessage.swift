@@ -59,6 +59,8 @@ public struct InboundMessage: Sendable, Equatable {
     public var nick: String?
     /// XEP-0421: the sender's occupant id, from rooms that vouch for it.
     public var occupantId: String?
+    /// See `Author.presenceSession`.
+    public var presenceSession: Int64?
     public var type: String?
     public var timestamp: Date
     /// The timestamp came from a `<delay>` rather than from now. A live
@@ -134,6 +136,8 @@ public struct RoomContext: Sendable {
     public var nickname: String
     /// Real addresses of current occupants, by nickname, if the room shows them.
     public var occupants: [String: JID]
+    /// Each present occupant's presence session, by nickname.
+    public var presenceSessions: [String: Int64]
     /// Whether the room vouches for XEP-0421 occupant ids; without that,
     /// they're the sender's say-so and ignored.
     public var trustsOccupantIds: Bool
@@ -143,10 +147,11 @@ public struct RoomContext: Sendable {
     /// each message.
     public var isNonAnonymous: Bool
 
-    public init(jid: JID, nickname: String, occupants: [String: JID] = [:], trustsOccupantIds: Bool = false, ownOccupantId: String? = nil, isNonAnonymous: Bool = false) {
+    public init(jid: JID, nickname: String, occupants: [String: JID] = [:], presenceSessions: [String: Int64] = [:], trustsOccupantIds: Bool = false, ownOccupantId: String? = nil, isNonAnonymous: Bool = false) {
         self.jid = jid
         self.nickname = nickname
         self.occupants = occupants
+        self.presenceSessions = presenceSessions
         self.trustsOccupantIds = trustsOccupantIds
         self.ownOccupantId = ownOccupantId
         self.isNonAnonymous = isNonAnonymous
@@ -224,6 +229,11 @@ extension InboundMessage {
         self.init(stanza, peer: room.jid, isOutgoing: isOutgoing, sender: isOutgoing ? account : real ?? room.jid, nick: nick,
                   stampedBy: room.jid, account: account, source: source, encryption: encryption, now: now)
         self.occupantId = occupantId
+        // Only a live message from the present holder of a nickname can be
+        // placed in a stay, and only where nothing else says who it is.
+        if case .live = source, !isOutgoing, sender == room.jid, occupantId == nil {
+            self.presenceSession = room.presenceSessions[nick]
+        }
         self.isGroupChat = true
         // A room member's `to` is their own claim: the replied-to message is
         // named only when it is found in the room's history.
@@ -236,7 +246,7 @@ extension InboundMessage {
         }
     }
 
-    var author: Author { Author(jid: sender, nick: nick, occupantId: occupantId) }
+    var author: Author { Author(jid: sender, nick: nick, occupantId: occupantId, presenceSession: presenceSession) }
 
     /// Names a file announcement by the one who sent it, so that no one else
     /// can have their link take another's metadata.

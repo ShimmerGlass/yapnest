@@ -23,6 +23,7 @@ struct PendingEdit: Codable, FetchableRecord, MutablePersistableRecord {
     var sender: JID
     var nick: String?
     var occupantId: String?
+    var presenceSession: Int64?
     var encryption: Message.Encryption
     var createdAt: Date
     /// When the edit was made, which no message it names can be after.
@@ -30,7 +31,7 @@ struct PendingEdit: Codable, FetchableRecord, MutablePersistableRecord {
     /// For a correction, the message that stands in for its missing original.
     var standInId: Int64?
 
-    var author: Author { Author(jid: sender, nick: nick, occupantId: occupantId) }
+    var author: Author { Author(jid: sender, nick: nick, occupantId: occupantId, presenceSession: presenceSession) }
 
     mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
@@ -47,6 +48,7 @@ extension AppDatabase {
         var edit = PendingEdit(
             conversationId: conversationId, ref: ref, kind: kind, outgoing: inbound.isOutgoing,
             sender: inbound.author.jid, nick: inbound.author.nick, occupantId: inbound.author.occupantId,
+            presenceSession: inbound.author.presenceSession,
             encryption: inbound.encryption, createdAt: now, editedAt: inbound.timestamp, standInId: standInId,
         )
         try edit.insert(db)
