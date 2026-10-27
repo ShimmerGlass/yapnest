@@ -80,3 +80,17 @@ open class SignalAddress: Hashable, CustomStringConvertible {
         self.init(from: &addr);
     }
 }
+
+extension Int32 {
+    /// A device id as the protocol writes it: an unsigned 32-bit number,
+    /// which is kept as its bit pattern in an `Int32`.
+    public init?(omemoId: String) {
+        guard let id = UInt32(omemoId) else { return nil }
+        self.init(bitPattern: id)
+    }
+
+    /// The id as the protocol writes it.
+    public var omemoId: String {
+        String(UInt32(bitPattern: self))
+    }
+}

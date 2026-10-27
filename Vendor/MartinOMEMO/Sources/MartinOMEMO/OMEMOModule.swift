@@ -464,7 +464,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                     }
                     return;
                 }
-                let listedDevices: [Int32] = listEl.mapChildren(transform: { $0.getAttribute("id") }).compactMap({ UInt32($0) }).map({ Int32(bitPattern: $0) });
+                let listedDevices: [Int32] = listEl.mapChildren(transform: { $0.getAttribute("id") }).compactMap({ Int32(omemoId: $0) });
                 let knownActiveDevices = self.limitDevices?(jid, listedDevices) ?? listedDevices;
                 self.activeDevicesPublisher.send(AvailabilityChanged(jid: jid, activeDevices: knownActiveDevices, readFromServer: true));
                 let allDevices = self.storage.sessionStore.allDevices(for: jid.stringValue, activeAndTrusted: true);
@@ -649,7 +649,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 switch result {
                 case .success(let key):
                     let keyEl = Element(name: "key", cdata: key.key.base64EncodedString());
-                    keyEl.setAttribute("rid", value: String(UInt32(bitPattern: key.deviceId)));
+                    keyEl.setAttribute("rid", value: key.deviceId.omemoId);
                     if key.prekey {
                         keyEl.setAttribute("prekey", value: "true");
                     }
@@ -810,7 +810,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 return nil;
             }
             // Ids are unsigned 32-bit numbers in the protocol; stored as their bit pattern.
-            return UInt32(id).map { Int32(bitPattern: $0) };
+            return Int32(omemoId: id);
         });
         let knownActiveDevices = limitDevices?(jid, listedDevices) ?? listedDevices;
         

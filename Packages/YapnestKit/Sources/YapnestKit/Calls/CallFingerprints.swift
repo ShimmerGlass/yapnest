@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import Martin
+@preconcurrency import MartinOMEMO
 
 /// How far a call's media is vouched for. WebRTC always encrypts the media
 /// (DTLS-SRTP), but the key exchange is checked against a fingerprint that
@@ -78,7 +79,7 @@ enum CallFingerprints {
 
     /// The `<device>` a `proceed` names.
     static func device(in proceed: Element) -> Int32? {
-        proceed.firstChild(name: "device", xmlns: namespace)?.getAttribute("id").flatMap { UInt32($0) }.map { Int32(bitPattern: $0) }
+        proceed.firstChild(name: "device", xmlns: namespace)?.getAttribute("id").flatMap { Int32(omemoId: $0) }
     }
 
     /// Replaces each transport's plain fingerprint with its encrypted form.
