@@ -45,6 +45,22 @@ struct AnimatedImageView: UIViewRepresentable {
     }
 }
 
+/// Whether a GIF should be running. A scene that is merely inactive, such as
+/// a Mac window that lost focus, keeps playing; one that is in the background
+/// or can't be seen (the screen locked or asleep, the app covered whole) has
+/// no use for frames, and the frame loop is timed by sleeping, so nothing else
+/// would slow it down.
+struct AnimatedPlaybackGate: Equatable {
+    var inWindow = false
+    var sceneInBackground = false
+    var occluded = false
+    var reducesMotion = false
+
+    /// Whether frames are decoded at all. Reduce motion still shows the first.
+    var showsFrames: Bool { inWindow && !sceneInBackground && !occluded }
+    var animates: Bool { showsFrames && !reducesMotion }
+}
+
 final class AnimatedUIImageView: UIView {
     var source: AnimatedImageView.Source? {
         didSet {
@@ -61,8 +77,10 @@ final class AnimatedUIImageView: UIView {
     private var player: Task<Void, Never>?
     var isAnimating: Bool { player != nil }
     var image: UIImage? { imageView.image }
-    private var reducesMotion = UIAccessibility.isReduceMotionEnabled
-    private var isInBackground = false
+    private(set) var gate = AnimatedPlaybackGate(
+        occluded: !Platform.isWindowVisible,
+        reducesMotion: UIAccessibility.isReduceMotionEnabled,
+    )
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -79,9 +97,19 @@ final class AnimatedUIImageView: UIView {
             self, selector: #selector(reduceMotionChanged),
             name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil,
         )
-        for name in [UIScene.didEnterBackgroundNotification, UIScene.willEnterForegroundNotification] {
-            NotificationCenter.default.addObserver(self, selector: #selector(sceneChanged(_:)), name: name, object: nil)
-        }
+        let center = NotificationCenter.default
+        center.addObserver(
+            self, selector: #selector(occlusionChanged),
+            name: Platform.windowVisibilityDidChange, object: nil,
+        )
+        center.addObserver(
+            self, selector: #selector(sceneStateChanged(_:)),
+            name: UIScene.didEnterBackgroundNotification, object: nil,
+        )
+        center.addObserver(
+            self, selector: #selector(sceneStateChanged(_:)),
+            name: UIScene.willEnterForegroundNotification, object: nil,
+        )
     }
 
     @available(*, unavailable)
@@ -89,23 +117,39 @@ final class AnimatedUIImageView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        isInBackground = window?.windowScene?.activationState == .background
+        gate.inWindow = window != nil
+        gate.sceneInBackground = window?.windowScene?.activationState == .background
         restart()
     }
 
     /// Only a backgrounded scene stops the animation. An inactive one is
     /// still visible, such as a Mac window that lost focus.
-    @objc private func sceneChanged(_ notification: Notification) {
+    @objc private func sceneStateChanged(_ notification: Notification) {
         guard let scene = notification.object as? UIScene, scene === window?.windowScene else { return }
         // Tracked from the notifications: on the way back the scene's state
         // still says background when `willEnterForeground` is posted.
-        isInBackground = notification.name == UIScene.didEnterBackgroundNotification
-        restart()
+        update { $0.sceneInBackground = notification.name == UIScene.didEnterBackgroundNotification }
     }
 
     @objc private func reduceMotionChanged() {
-        reducesMotion = UIAccessibility.isReduceMotionEnabled
+        gate.reducesMotion = UIAccessibility.isReduceMotionEnabled
         restart()
+    }
+
+    @objc private func occlusionChanged() {
+        setOccluded(!Platform.isWindowVisible)
+    }
+
+    func setOccluded(_ occluded: Bool) {
+        update { $0.occluded = occluded }
+    }
+
+    /// Restarts only when the answer changes, so a notification that repeats
+    /// what is already known doesn't restart a running GIF from its first frame.
+    private func update(_ change: (inout AnimatedPlaybackGate) -> Void) {
+        let before = gate
+        change(&gate)
+        if gate != before { restart() }
     }
 
     /// Reading a header opens the file, and `restart()` runs each time a row
@@ -129,7 +173,8 @@ final class AnimatedUIImageView: UIView {
     private func restart() {
         player?.cancel()
         player = nil
-        guard window != nil, !isInBackground else { return }
+        // Pausing leaves the frame on show; resuming starts the loop again.
+        guard gate.showsFrames else { return }
         guard let source else {
             imageView.image = nil
             return
@@ -145,7 +190,7 @@ final class AnimatedUIImageView: UIView {
         let side = bounds.isEmpty
             ? AnimatedImages.downsampledSide
             : Int((max(bounds.width, bounds.height) * traitCollection.displayScale).rounded(.up))
-        let stillOnly = reducesMotion
+        let stillOnly = !gate.animates
         player = Task.detached(priority: .userInitiated) { [weak self] in
             let playable: Bool
             if let known {

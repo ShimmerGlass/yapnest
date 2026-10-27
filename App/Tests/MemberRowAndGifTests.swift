@@ -120,4 +120,59 @@ struct AnimatedImageViewTests {
         view.removeFromSuperview()
         #expect(!view.isAnimating)
     }
+
+    @Test func aGifPausesWhenTheAppCantBeSeenAndResumesWhenItCan() async throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let view = AnimatedUIImageView(frame: window.bounds)
+        window.addSubview(view)
+        view.source = .data(try animatedGif())
+        #expect(view.isAnimating)
+
+        view.setOccluded(true)
+        #expect(!view.isAnimating)
+        view.setOccluded(true)
+        #expect(!view.isAnimating)
+
+        view.setOccluded(false)
+        #expect(view.isAnimating)
+    }
+
+    @Test func theOcclusionNotificationLeavesAVisibleGifPlaying() async throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let view = AnimatedUIImageView(frame: window.bounds)
+        window.addSubview(view)
+        view.source = .data(try animatedGif())
+
+        // The simulator and a test host in front are always visible.
+        NotificationCenter.default.post(name: Platform.windowVisibilityDidChange, object: nil)
+        #expect(view.gate.occluded == !Platform.isWindowVisible)
+        #expect(view.isAnimating == Platform.isWindowVisible)
+    }
+}
+
+struct AnimatedPlaybackGateTests {
+    @Test func aVisibleActiveWindowPlays() {
+        #expect(AnimatedPlaybackGate(inWindow: true).animates)
+    }
+
+    @Test func anOccludedWindowPausesAndResumesWhenVisibleAgain() {
+        var gate = AnimatedPlaybackGate(inWindow: true)
+        gate.occluded = true
+        #expect(!gate.showsFrames && !gate.animates)
+        gate.occluded = false
+        #expect(gate.animates)
+    }
+
+    @Test func aSceneInTheBackgroundPauses() {
+        #expect(!AnimatedPlaybackGate(inWindow: true, sceneInBackground: true).showsFrames)
+    }
+
+    @Test func aViewOutsideAWindowDoesNotPlay() {
+        #expect(!AnimatedPlaybackGate(inWindow: false).showsFrames)
+    }
+
+    @Test func reduceMotionShowsAFrameButDoesNotAnimate() {
+        let gate = AnimatedPlaybackGate(inWindow: true, reducesMotion: true)
+        #expect(gate.showsFrames && !gate.animates)
+    }
 }
