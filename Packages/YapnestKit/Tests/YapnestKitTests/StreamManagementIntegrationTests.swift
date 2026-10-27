@@ -349,7 +349,9 @@ extension LiveServer {
         /// iOS reports a path update with an identical path when the app returns, and the session then drops
         /// the attempt it has in flight. Martin took that drop for an unreachable server and forgot the
         /// stream, so the next attempt started a new session although the server still held the old one.
-        /// The server's answers are held back so the abort lands while the resume is waiting for its answer.
+        /// The server's answers are held back so the abort lands while the resume is waiting for its answer. A
+        /// server without SASL2 answers the login in several steps, each held back, and writes the resume
+        /// only after them, so the delay is short and the wait for the resume long.
         @Test(.timeLimit(.minutes(3))) func aResumeWeAbortIsTriedAgain() async throws {
             let proxy = try await StreamProxy(to: UInt16(LiveServer.target.port))
             defer { proxy.stop() }
@@ -359,7 +361,7 @@ extension LiveServer {
             try await LiveServer.waitUntil("stream management", timeout: 60) { a.client.module(.streamManagement).resumptionEnabled }
             let enabledBefore = proxy.serverSent("<enabled")
 
-            proxy.serverDelay = 5
+            proxy.serverDelay = 2
             proxy.cut()
             let dropped = Date().addingTimeInterval(10)
             while a.isConnected, Date() < dropped { await Task.yield() }
