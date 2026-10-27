@@ -16,6 +16,13 @@ public final class AvatarStore: Sendable {
     /// extensions with their small memory limits, down.
     public static let maxDimension = 4096
 
+    /// Past this side, an interlaced PNG or one with 16 bits per channel is
+    /// refused. ImageIO decodes those in full even for a thumbnail, at 70 to
+    /// 140 MB for 4096 pixels, which the notification extension's limit of
+    /// about 24 MB can't take. The file is named by its hash, so it can't be
+    /// re-encoded smaller: it is refused instead.
+    static let maxHeavyDimension = 1024
+
     public init(directory: URL) {
         self.directory = directory
     }
@@ -53,13 +60,19 @@ public final class AvatarStore: Sendable {
     }
 
     /// Whether the image's header, read without decoding it, gives a size
-    /// we're willing to decode. Anything that isn't an image doesn't.
+    /// we're willing to decode, and a way of storing the pixels that doesn't
+    /// make decoding cost far more than the size says. Anything that isn't an image doesn't.
     static func hasAcceptableSize(_ source: CGImageSource) -> Bool {
         guard CGImageSourceGetCount(source) > 0,
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int
         else { return false }
-        return width > 0 && height > 0 && max(width, height) <= maxDimension
+        guard width > 0, height > 0, max(width, height) <= maxDimension else { return false }
+        guard max(width, height) > maxHeavyDimension else { return true }
+        let png = properties[kCGImagePropertyPNGDictionary] as? [CFString: Any]
+        let isInterlaced = (png?[kCGImagePropertyPNGInterlaceType] as? Int ?? 0) != 0
+        let depth = properties[kCGImagePropertyDepth] as? Int ?? 8
+        return !isInterlaced && depth <= 8
     }
 
     /// The image scaled down to fit `pixels` on its longest side, never

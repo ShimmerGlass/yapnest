@@ -7,23 +7,25 @@ import UniformTypeIdentifiers
 
 enum AvatarImages {
     /// A real, solid-colour PNG.
-    static func png(side: Int) throws -> Data {
+    static func png(side: Int, bitsPerChannel: Int = 8, interlaced: Bool = false) throws -> Data {
+        let byteOrder = bitsPerChannel == 16 ? CGBitmapInfo.byteOrder16Little.rawValue : 0
         let context = try #require(CGContext(
-            data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue,
+            data: nil, width: side, height: side, bitsPerComponent: bitsPerChannel, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | byteOrder,
         ))
         context.setFillColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1)
         context.fill(CGRect(x: 0, y: 0, width: side, height: side))
         let output = NSMutableData()
         let destination = try #require(CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil))
-        CGImageDestinationAddImage(destination, try #require(context.makeImage()), nil)
+        let properties: [CFString: Any] = interlaced ? [kCGImagePropertyPNGDictionary: [kCGImagePropertyPNGInterlaceType: 1]] : [:]
+        CGImageDestinationAddImage(destination, try #require(context.makeImage()), properties as CFDictionary)
         #expect(CGImageDestinationFinalize(destination))
         return output as Data
     }
 
     /// A PNG that claims to be `side` pixels square: only the header is real,
     /// which is all a size check should need to read.
-    static func pngClaiming(side: Int) -> Data {
+    static func pngClaiming(side: Int, bitDepth: UInt8 = 8, interlaced: Bool = false) -> Data {
         func chunk(_ type: String, _ body: [UInt8]) -> [UInt8] {
             let tagged = Array(type.utf8) + body
             var crc: UInt32 = 0xffff_ffff
@@ -35,7 +37,7 @@ enum AvatarImages {
             return be(UInt32(body.count)) + tagged + be(~crc)
         }
         func be(_ value: Int) -> [UInt8] { (0..<4).map { UInt8(truncatingIfNeeded: value >> (24 - 8 * $0)) } }
-        let header = be(side) + be(side) + [8, 2, 0, 0, 0]
+        let header = be(side) + be(side) + [bitDepth, 2, 0, 0, interlaced ? 1 : 0]
         return Data([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] + chunk("IHDR", header) + chunk("IEND", []))
     }
 }
@@ -54,6 +56,21 @@ struct AvatarSizeTests {
         #expect(data.count < 1024)
         #expect(!store.save(data, hash: AvatarStore.hash(of: data)))
         #expect(!store.contains(AvatarStore.hash(of: data)))
+    }
+
+    @Test func aLargeInterlacedOrSixteenBitImageIsRefused() throws {
+        let store = AvatarStore.temporary()
+        let side = AvatarStore.maxHeavyDimension + 100
+        for data in [try AvatarImages.png(side: side, interlaced: true), try AvatarImages.png(side: side, bitsPerChannel: 16)] {
+            #expect(data.count < AvatarStore.maxSize)
+            #expect(!store.save(data, hash: AvatarStore.hash(of: data)))
+            let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
+            #expect(AvatarStore.thumbnail(of: source, pixels: 192) == nil)
+        }
+        // Smaller ones, and a plain image of the largest size, are fine.
+        for data in [try AvatarImages.png(side: 512, interlaced: true), try AvatarImages.png(side: 512, bitsPerChannel: 16), try AvatarImages.png(side: AvatarStore.maxDimension)] {
+            #expect(store.save(data, hash: AvatarStore.hash(of: data)))
+        }
     }
 
     @Test func somethingThatIsNotAnImageIsRefused() {
