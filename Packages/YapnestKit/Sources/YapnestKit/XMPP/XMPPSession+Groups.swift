@@ -656,24 +656,21 @@ extension XMPPSession {
             role: item?.getAttribute("role") ?? "participant",
             occupantId: trustsOccupantIds ? claimedId : nil,
         )
-        // Someone else's arrival waits for the others'; ours ends the join, so it
-        // comes after, and applies those first.
-        guard isSelf else {
-            updateOccupants(room) { status in
-                var occupant = occupant
-                // A change of show or role is the same stay.
-                occupant.presenceSession = status?.occupants[nick]?.presenceSession ?? .random(in: 1...Int64.max)
-                status?.occupants[nick] = occupant
-                if let jid = occupant.jid { status?.setAffiliation(occupant.affiliation, of: jid) }
-            }
-            return
-        }
-        let joinedNow = updateRoom(room) { status in
+        let arrive: OccupantChange = { status in
             var occupant = occupant
             // A change of show or role is the same stay.
             occupant.presenceSession = status?.occupants[nick]?.presenceSession ?? .random(in: 1...Int64.max)
             status?.occupants[nick] = occupant
             if let jid = occupant.jid { status?.setAffiliation(occupant.affiliation, of: jid) }
+        }
+        // Someone else's arrival waits for the others'; ours ends the join, so it
+        // comes after, and applies those first.
+        guard isSelf else {
+            updateOccupants(room, arrive)
+            return
+        }
+        let joinedNow = updateRoom(room) { status in
+            arrive(&status)
             status?.affiliation = occupant.affiliation
             status?.role = occupant.role
             status?.nickname = nick
