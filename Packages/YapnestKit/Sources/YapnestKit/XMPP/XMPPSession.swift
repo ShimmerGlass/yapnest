@@ -184,8 +184,7 @@ public final class XMPPSession: @unchecked Sendable {
     }
     private var cancellables = Set<AnyCancellable>()
     private var pathMonitor: NWPathMonitor?
-    let pathDebouncer = Debouncer()
-    static let pathDebounce: TimeInterval = 0.5
+    lazy var pathGate = PathUpdateGate { [weak self] changed in self?.pathBecameSatisfied(changed: changed) }
 
     /// Holds a Combine subscription in `Mutable`, which must be Sendable.
     final class SubscriptionBox: @unchecked Sendable {
@@ -906,10 +905,13 @@ public final class XMPPSession: @unchecked Sendable {
         case loginNow
     }
 
-    static func pathAction(for state: XMPPClient.State, wantsConnection: Bool) -> PathAction {
+    /// - Parameter changed: whether the network differs in a way that matters. An
+    ///   attempt in flight began on the network that is still there when it doesn't,
+    ///   so restarting it would only cost a second.
+    static func pathAction(for state: XMPPClient.State, wantsConnection: Bool, changed: Bool = true) -> PathAction {
         switch state {
         case .connected: .verify
-        case .connecting: wantsConnection ? .restartAttempt : .nothing
+        case .connecting: wantsConnection && changed ? .restartAttempt : .nothing
         case .disconnected: wantsConnection ? .loginNow : .nothing
         case .disconnecting: .nothing
         }
@@ -919,10 +921,10 @@ public final class XMPPSession: @unchecked Sendable {
     /// stuck on the old interface, or a backoff that grew while we were
     /// offline would each otherwise last until a timeout or the next retry,
     /// up to a minute; none of them is worth waiting for once a network is back.
-    func pathBecameSatisfied() {
+    func pathBecameSatisfied(changed: Bool = true) {
         let wants = lock.withLock { $0.wantsConnection }
-        let action = Self.pathAction(for: client.state, wantsConnection: wants)
-        DiagLog.info(.network, "Network path usable", .value("action", action), .bool("wantsConnection", wants))
+        let action = Self.pathAction(for: client.state, wantsConnection: wants, changed: changed)
+        DiagLog.info(.network, "Network path usable", .value("action", action), .bool("wantsConnection", wants), .bool("changed", changed))
         switch action {
         case .nothing:
             break
@@ -956,12 +958,13 @@ public final class XMPPSession: @unchecked Sendable {
         // The first update only reports the starting path.
         let seenFirst = Once()
         monitor.pathUpdateHandler = { [weak self] path in
-            let isFirst = seenFirst.first()
-            DiagLog.network(isFirst ? "Network path at start" : "Network path changed", path)
-            guard !isFirst, path.status == .satisfied else { return }
-            // A switch reports several updates in a row.
             guard let self else { return }
-            pathDebouncer.schedule(after: Self.pathDebounce) { [weak self] in self?.pathBecameSatisfied() }
+            let isFirst = seenFirst.first()
+            let difference = pathGate.receive(PathSignature(path))
+            // A repeat of the path already logged adds nothing; the gate notes it at debug.
+            if isFirst || difference?.any != false {
+                DiagLog.network(isFirst ? "Network path at start" : "Network path changed", path)
+            }
         }
         monitor.start(queue: DispatchQueue.global())
         pathMonitor = monitor
