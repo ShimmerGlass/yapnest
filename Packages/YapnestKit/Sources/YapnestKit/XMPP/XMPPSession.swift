@@ -969,15 +969,27 @@ public final class XMPPSession: @unchecked Sendable {
     /// Tells the server whether the user is looking at the app (XEP-0352), so
     /// it can hold back presence and chat-state noise while backgrounded.
     public func setActive(_ active: Bool) {
-        lock.withLock {
-            $0.isActive = active
-            $0.idleSince = active ? nil : $0.idleSince ?? Date()
+        let away = lock.withLock { state -> TimeInterval? in
+            let since = state.idleSince
+            state.isActive = active
+            state.idleSince = active ? nil : since ?? Date()
+            return active ? since.map { Date().timeIntervalSince($0) } : nil
         }
         guard isConnected else { return }
         // A suspended app's connection is often dead by the time it returns.
         if active { verifyConnection() }
         reportClientState()
-        if active { selfPingRooms() }
+        if active, Self.recheckRooms(afterAbsence: away) { selfPingRooms() }
+    }
+
+    /// How long the app is away before coming back is worth asking every
+    /// room whether we are still in it. A banner, Control Center, Face ID or
+    /// a Cmd-Tab on the Mac takes seconds and the stream is untouched; rooms
+    /// drop us over a restart or a connection that resumed after a while.
+    static let roomRecheckAbsence: TimeInterval = 60
+
+    static func recheckRooms(afterAbsence away: TimeInterval?) -> Bool {
+        away.map { $0 >= roomRecheckAbsence } ?? false
     }
 
     /// Tells the server whether the user is looking at the app (not on the
