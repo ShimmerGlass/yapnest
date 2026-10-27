@@ -44,6 +44,13 @@ public enum SharedContainer {
         return id
     }
 
+    /// Signing out takes the id away, so the next account's resource doesn't
+    /// tell its server it is the same install as the last one's.
+    public static func forgetDeviceId() {
+        defaults.removeObject(forKey: deviceIdKey)
+        UserDefaults.standard.removeObject(forKey: deviceIdKey)
+    }
+
     /// The id, if the app made one: the extension doesn't.
     public static var existingDeviceId: String? { defaults.string(forKey: deviceIdKey) }
 

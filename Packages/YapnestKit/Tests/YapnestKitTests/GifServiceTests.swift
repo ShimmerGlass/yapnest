@@ -11,6 +11,36 @@ struct GifServiceTests {
         return Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
     }
 
+    @Test func aDownloadOverPlainHTTPIsRefusedBeforeAnyRequest() async {
+        await #expect(throws: GifService.DownloadError.notHTTPS) {
+            try await GifService.download(URL(string: "http://static.klipy.com/a.gif")!)
+        }
+        await #expect(throws: GifService.DownloadError.notHTTPS) {
+            try await GifService.download(URL(string: "file:///etc/passwd")!)
+        }
+    }
+
+    @Test func aDownloadStopsAtTheLimitWhateverTheServerSaid() async throws {
+        func stream(_ count: Int) -> AsyncStream<UInt8> {
+            AsyncStream { continuation in
+                for _ in 0..<count { continuation.yield(1) }
+                continuation.finish()
+            }
+        }
+        #expect(try await GifService.collect(stream(10), declaredLength: 10, limit: 10).count == 10)
+        // A length that was left out, or understated.
+        await #expect(throws: GifService.DownloadError.tooLarge) {
+            try await GifService.collect(stream(11), declaredLength: -1, limit: 10)
+        }
+        await #expect(throws: GifService.DownloadError.tooLarge) {
+            try await GifService.collect(stream(11), declaredLength: 5, limit: 10)
+        }
+        // Declared too large: not read at all.
+        await #expect(throws: GifService.DownloadError.tooLarge) {
+            try await GifService.collect(stream(1), declaredLength: 11, limit: 10)
+        }
+    }
+
     @Test func trendingRequest() {
         let request = service.request(query: nil, page: 2)
         let url = request.url!

@@ -1697,10 +1697,21 @@ public final class XMPPSession: @unchecked Sendable {
            result.conversationId != nil, let id = inbound.id, (try? database.hasConsented(inbound.peer)) == true {
             write(OutboundStanza.receipt(to: inbound.peer, for: id))
         }
-        if let chatState = result.chatState {
+        if let chatState = result.chatState, Self.isCurrentChatState(inbound, source: source) {
             events.send(.chatState(inbound.peer, chatState))
         }
         if let attachment = result.retractedAttachment { attachments.remove(attachment) }
+    }
+
+    /// Whether a chat state says what the sender is doing now. One read back
+    /// from the archive or stamped with a delay is old news, and would end
+    /// the indicator of someone typing at this moment.
+    static func isCurrentChatState(_ inbound: InboundMessage, source: InboundMessage.Source) -> Bool {
+        if inbound.isDelayed { return false }
+        switch source {
+        case .live, .carbon(sent: false): return true
+        default: return false
+        }
     }
 
     // MARK: Archive batches

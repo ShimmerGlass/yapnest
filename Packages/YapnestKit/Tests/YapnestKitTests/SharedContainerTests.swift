@@ -45,6 +45,15 @@ import Testing
         }
     }
 
+    @Test func forgettingTheIdMakesTheNextAccountANewOne() {
+        withDefaults(shared: "11111111", standard: "22222222") {
+            SharedContainer.forgetDeviceId()
+            #expect(SharedContainer.existingDeviceId == nil)
+            #expect(UserDefaults.standard.string(forKey: key) == nil)
+            #expect(SharedContainer.deviceId != "11111111" && SharedContainer.deviceId != "22222222")
+        }
+    }
+
     @Test func extensionReadingTheIdDoesNotMakeOne() {
         withDefaults(shared: nil, standard: nil) {
             #expect(SharedContainer.existingDeviceId == nil)

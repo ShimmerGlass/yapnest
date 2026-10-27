@@ -118,6 +118,41 @@ public struct GifService: Sendable {
         return URLRequest(url: components.url!)
     }
 
+    /// The most a GIF to send may be, the same as a picture from a contact
+    /// downloads on its own. KLIPY says how big its files are, but a CDN's
+    /// answer is its own to give.
+    public static let maxDownloadSize = 15 * 1024 * 1024
+
+    public enum DownloadError: Error, Sendable, Equatable {
+        case notHTTPS
+        case tooLarge
+        case status(Int)
+    }
+
+    /// The GIF at `url`, over HTTPS only and never more than
+    /// `maxDownloadSize`, without holding more than that in memory.
+    public static func download(_ url: URL, session: URLSession = privateSession) async throws -> Data {
+        guard url.scheme?.lowercased() == "https" else { throw DownloadError.notHTTPS }
+        let (bytes, response) = try await session.bytes(from: url)
+        // A redirect is followed, so the address that answered is checked too.
+        guard response.url?.scheme?.lowercased() == "https" else { throw DownloadError.notHTTPS }
+        if let status = (response as? HTTPURLResponse)?.statusCode, !(200..<300).contains(status) {
+            throw DownloadError.status(status)
+        }
+        return try await collect(bytes, declaredLength: response.expectedContentLength, limit: maxDownloadSize)
+    }
+
+    static func collect<Bytes: AsyncSequence>(_ bytes: Bytes, declaredLength: Int64, limit: Int) async throws -> Data where Bytes.Element == UInt8 {
+        guard declaredLength <= Int64(limit) else { throw DownloadError.tooLarge }
+        var data = Data()
+        if declaredLength > 0 { data.reserveCapacity(Int(declaredLength)) }
+        for try await byte in bytes {
+            guard data.count < limit else { throw DownloadError.tooLarge }
+            data.append(byte)
+        }
+        return data
+    }
+
     private func load(_ request: URLRequest, page: Int) async throws -> GifPage {
         let (data, response) = try await session.data(for: request)
         if let status = (response as? HTTPURLResponse)?.statusCode, !(200..<300).contains(status) {

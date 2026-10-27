@@ -51,6 +51,16 @@ struct ChatStateSessionTests {
         #expect(tracker()?.supported == true)
     }
 
+    @Test func aStateReadBackFromTheArchiveOrDelayedIsNotCurrent() throws {
+        let archive = InboundMessage.Source.archive(serverId: "s", timestamp: nil)
+        #expect(XMPPSession.isCurrentChatState(try parse(stateOnly), source: .live))
+        #expect(XMPPSession.isCurrentChatState(try parse(stateOnly, source: .carbon(sent: false)), source: .carbon(sent: false)))
+        #expect(!XMPPSession.isCurrentChatState(try parse(stateOnly, source: archive), source: archive))
+        var delayed = try parse(stateOnly)
+        delayed.isDelayed = true
+        #expect(!XMPPSession.isCurrentChatState(delayed, source: .live))
+    }
+
     @Test func receiptsSayNothing() throws {
         session.noteChatStates(of: try parse(receipt), source: .live)
         #expect(tracker() == nil)
