@@ -32,11 +32,7 @@ struct NetworkChangeTests {
         // The timer sits on a global queue, which can start late when the suites run in
         // parallel, so wait for the first run rather than a fixed time. The settle period
         // then gives any earlier generation that wrongly survived time to run too.
-        let deadline = ContinuousClock.now + .seconds(5)
-        while runs.withLock({ $0 }) == 0 && ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        try #require(runs.withLock { $0 } > 0, "The debounced action never ran")
+        await eventually("the debounced action") { runs.withLock { $0 } > 0 }
         try await Task.sleep(for: .milliseconds(300))
         #expect(runs.withLock { $0 } == 1)
     }
@@ -74,10 +70,7 @@ struct NetworkChangeTests {
     /// so wait for the first action, then give a wrongly surviving second one time to show.
     private func settle(_ acts: Acts, expectingAction: Bool = true) async throws {
         if expectingAction {
-            let deadline = ContinuousClock.now + .seconds(5)
-            while acts.values.isEmpty && ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(20))
-            }
+            await eventually("the first action") { !acts.values.isEmpty }
         }
         try await Task.sleep(for: .milliseconds(800))
     }

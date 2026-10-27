@@ -51,11 +51,6 @@ struct OMEMODeviceListTests {
         func add(_ change: OMEMOModule.AvailabilityChanged) { lock.withLock { changes.append(change) } }
     }
 
-    private func wait(_ condition: () -> Bool) async {
-        let deadline = Date().addingTimeInterval(5)
-        while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
-    }
-
     @Test(arguments: [("internal-server-error", false), ("item-not-found", true)])
     func ourOwnListIsABaselineOnlyIfTheServerAnsweredForIt(condition: String, readFromServer: Bool) async throws {
         let wire = FakeWire()
@@ -66,7 +61,7 @@ struct OMEMODeviceListTests {
         defer { subscription.cancel(); withExtendedLifetime(client) {} }
         encryption.module.isPepAvailable = true
         encryption.module.publishDeviceIdIfNeeded()
-        await wait { heard.all.contains { $0.jid.stringValue == me.description } }
+        await eventually("the change to be heard") { heard.all.contains { $0.jid.stringValue == me.description } }
         let own = try #require(heard.all.first { $0.jid.stringValue == me.description })
         #expect(own.readFromServer == readFromServer)
     }

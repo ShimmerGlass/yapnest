@@ -96,7 +96,7 @@ struct RoomOccupantBatchTests {
         session.roomPresence(occupant(1), room: room)
         session.roomPresence(occupant(2), room: room)
 
-        for _ in 0..<100 where updates.count == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        await eventually("the window to end") { updates.count > 0 }
 
         #expect(updates.count == 1)
         #expect(updates.last?.status?.occupants.count == 2)

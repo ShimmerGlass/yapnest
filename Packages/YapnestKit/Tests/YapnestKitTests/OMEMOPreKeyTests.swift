@@ -93,21 +93,16 @@ struct OMEMOPreKeyTests {
         _ = client.modulesManager.register(PubSubModule())
         _ = client.modulesManager.register(encryption.module)
         encryption.module.isPepAvailable = true
-        await wait { encryption.module.isReady }
-        #expect(encryption.module.isReady)
+        await eventually("the module to be ready") { encryption.module.isReady }
         return (encryption, server, client, database)
-    }
-
-    private func wait(_ condition: () -> Bool, seconds: TimeInterval = 5) async {
-        let deadline = Date().addingTimeInterval(seconds)
-        while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
     }
 
     /// Registers again, as a new connection does.
     private func register(_ encryption: OMEMOEncryption) async {
         encryption.module.reset(scopes: [.session])
         encryption.module.resumeRegistrationIfNeeded()
-        await wait { encryption.module.isReady }
+        // A registration the test holds up never finishes, which the test then checks.
+        _ = await eventually { encryption.module.isReady }
     }
 
     /// Someone who starts a session from the first prekey of `bundle`.
@@ -190,7 +185,7 @@ struct OMEMOPreKeyTests {
         #expect(try markedDeleted(database) == 1)
 
         bob.module.reset(scopes: [.stream])
-        await wait { server.bundlePublishes > before }
+        await eventually("the bundle to be published") { server.bundlePublishes > before }
         #expect(server.bundlePublishes == before + 1)
         #expect(!server.publishedPreKeyIds.contains(first.preKeyId))
         #expect(server.publishedPreKeyIds.count == 100)
