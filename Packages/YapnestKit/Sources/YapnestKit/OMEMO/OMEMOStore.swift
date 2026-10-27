@@ -246,19 +246,27 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
                 guard stored == key else { throw OMEMOError.identityChanged }
                 return
             }
-            let hasVerified = try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM omemoIdentity WHERE name = ? AND status IN (?, ?))",
-                                                arguments: [address.name, IdentityStatus.verifiedActive.rawValue, IdentityStatus.verifiedInactive.rawValue]) ?? false
+            let seen = try Row.fetchOne(db, sql: """
+                SELECT EXISTS (SELECT 1 FROM omemoIdentity WHERE name = ? AND status IN (?, ?)) AS hasVerified,
+                       EXISTS (SELECT 1 FROM omemoIdentity WHERE name = ?) AS hadDevices
+                """, arguments: [address.name, IdentityStatus.verifiedActive.rawValue, IdentityStatus.verifiedInactive.rawValue, address.name])
+            let hasVerified: Bool = seen?["hasVerified"] ?? false, hadDevices: Bool = seen?["hadDevices"] ?? false
             let status: IdentityStatus = hasVerified ? .undecidedActive : .trustedActive
-            let hadDevices = try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM omemoIdentity WHERE name = ?)", arguments: [address.name]) ?? false
             let date = now()
             try db.execute(sql: "INSERT INTO omemoIdentity (name, deviceId, key, status, firstSeen) VALUES (?, ?, ?, ?, ?)",
                            arguments: [address.name, address.deviceId, key, status.rawValue, date])
+            guard !isLocalDevice(address) else { return }
             // Whatever its status, the device now gets or may get our messages; the user hears of it.
-            let isOwn = address.name == account
-            if !(isOwn && UInt32(bitPattern: address.deviceId) == localRegistrationId()) {
-                try AppDatabase.noteNewDevice(db, name: address.name, deviceId: address.deviceId, fingerprint: Self.fingerprint(of: key), isOwn: isOwn, hadDevices: hadDevices, at: date)
-            }
+            try AppDatabase.noteNewDevice(
+                db, name: address.name, deviceId: address.deviceId, fingerprint: Self.fingerprint(of: key),
+                isOwn: address.name == account, hadDevices: hadDevices, at: date,
+            )
         }
+    }
+
+    /// This install's own device, whose identity is the key pair rather than a row.
+    private func isLocalDevice(_ address: SignalAddress) -> Bool {
+        address.name == account && UInt32(bitPattern: address.deviceId) == localRegistrationId()
     }
 
     func isTrusted(identity: SignalAddress, key: SignalIdentityKeyProtocol?) -> Bool {
@@ -361,7 +369,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
             for id in deviceIds {
                 try db.execute(sql: "DELETE FROM omemoSession WHERE name = ? AND deviceId = ?", arguments: [name, id])
                 // Gone from the account, so there's nothing left to warn about.
-                try db.execute(sql: "DELETE FROM deviceNotice WHERE name = ? AND deviceId = ?", arguments: [name, id])
+                if name == account { try db.execute(sql: "DELETE FROM deviceNotice WHERE deviceId = ?", arguments: [id]) }
                 try db.execute(sql: "DELETE FROM omemoIdentity WHERE name = ? AND deviceId = ? AND status NOT IN (?, ?)",
                                arguments: [name, id, IdentityStatus.compromisedActive.rawValue, IdentityStatus.compromisedInactive.rawValue])
             }
@@ -389,7 +397,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func identityFingerprint(forAddress address: SignalAddress) -> String? {
-        if address.name == account, UInt32(bitPattern: address.deviceId) == localRegistrationId() {
+        if isLocalDevice(address) {
             return keyPair()?.publicKey.map(Self.fingerprint)
         }
         return read { db in

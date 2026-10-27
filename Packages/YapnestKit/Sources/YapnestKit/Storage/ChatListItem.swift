@@ -49,7 +49,7 @@ public struct ChatListItem: Hashable, Sendable, Identifiable {
         let latest = try Message.fetchAll(db, sql: """
             SELECT message.* FROM conversation
             JOIN message ON message.id = (
-                SELECT id FROM message WHERE conversationId = conversation.id AND event IS NULL
+                SELECT id FROM message WHERE conversationId = conversation.id AND \(AppDatabase.isNotEvent)
                 ORDER BY timestamp DESC, id DESC LIMIT 1
             )
             WHERE conversation.isArchived = ?

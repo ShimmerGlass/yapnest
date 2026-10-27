@@ -74,7 +74,8 @@ private struct AccountWarningsSheet: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                     HStack {
-                        if warning.retry != nil {
+                        switch warning.action {
+                        case .retry:
                             Button {
                                 retry(warning.key)
                             } label: {
@@ -86,10 +87,11 @@ private struct AccountWarningsSheet: View {
                             }
                             .disabled(retrying.contains(warning.key))
                             .accessibilityIdentifier("accountWarningRetry")
-                        }
-                        if warning.opensDevices {
+                        case .openDevices:
                             Button("Devices") { showsDevices = true }
                                 .accessibilityIdentifier("accountWarningDevices")
+                        case nil:
+                            EmptyView()
                         }
                         // For a problem the user doesn't mean to fix; it comes back if it happens again.
                         Button("Dismiss") { warnings.dismiss(warning.key) }

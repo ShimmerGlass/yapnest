@@ -716,17 +716,20 @@ public final class AppDatabase: Sendable {
             // Our own account's new devices, for the chat list's warning. The
             // row stays once dismissed, so a device is announced once.
             try db.create(table: "deviceNotice") { t in
-                t.column("name", .text).notNull()
-                t.column("deviceId", .integer).notNull()
+                t.primaryKey("deviceId", .integer)
                 t.column("fingerprint", .text).notNull()
                 t.column("firstSeen", .datetime).notNull()
                 t.column("isDismissed", .boolean).notNull().defaults(to: false)
-                t.primaryKey(["name", "deviceId"])
             }
         }
 
         return migrator
     }
+
+    /// SQL for a message that is not an event row: what "a message in the
+    /// chat" means for the preview, the newest and oldest, and whether a chat
+    /// has any. Events are rows, but nobody said them.
+    static let isNotEvent = "message.event IS NULL"
 
     /// SQL for whether the message row `row` belongs in the search index:
     /// readable text that is still there, and not a file or place, which
@@ -742,4 +745,9 @@ public final class AppDatabase: Sendable {
              \(attachment ? "AND NOT EXISTS (SELECT 1 FROM attachment WHERE attachment.messageId = \(row).id)" : ""))
             """
     }
+}
+
+extension DerivableRequest<Message> {
+    /// Without the rows that only mark something that happened: see `AppDatabase.isNotEvent`.
+    func excludingEvents() -> Self { filter(Column("event") == nil) }
 }

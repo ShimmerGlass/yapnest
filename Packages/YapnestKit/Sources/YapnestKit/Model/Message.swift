@@ -4,6 +4,10 @@ import GRDB
 public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecord, MutablePersistableRecord {
     public enum Direction: String, Codable, Sendable, DatabaseValueConvertible {
         case incoming, outgoing
+        /// A row that marks something that happened rather than says it (see
+        /// `Message.event`). Neither side wrote it, so every filter on
+        /// `incoming` or `outgoing` leaves it out.
+        case event
     }
 
     /// Delivery state of an outgoing message. Incoming messages are always `.received`.
@@ -253,7 +257,7 @@ extension Message {
     /// no words, and its remote id is the call's session id: a correction to
     /// it would turn the call into text.
     public var isEditableText: Bool {
-        direction == .outgoing && !isRetracted && encryption != .omemoUndecryptable && callOutcome == nil && event == nil && id != nil
+        direction == .outgoing && !isRetracted && encryption != .omemoUndecryptable && callOutcome == nil && id != nil
     }
 }
 

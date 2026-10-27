@@ -828,7 +828,7 @@ final class ConversationModel {
     /// the glow in the background.
     private func notePulse(for arriving: Set<Int64>) {
         guard isOnScreen, UIApplication.shared.applicationState == .active,
-              arriving.contains(where: { items[$0]?.message.direction == .incoming && items[$0]?.message.event == nil }) else { return }
+              arriving.contains(where: { items[$0]?.message.direction == .incoming }) else { return }
         let now = ContinuousClock.now
         if let lastPulse, now - lastPulse < Self.pulseWindow { return }
         lastPulse = now

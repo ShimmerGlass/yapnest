@@ -14,8 +14,15 @@ public struct AccountWarning: Identifiable, Sendable {
     public var retry: (@Sendable () async throws -> Void)?
     /// The lead of `detail`, kept so that a failed retry says the same.
     var friendly: String?
-    /// Whether the sheet offers to open the account's devices.
-    public var opensDevices = false
+    /// What the sheet offers beside Dismiss.
+    public enum Action: Sendable {
+        /// Run `retry`.
+        case retry
+        /// Open the account's devices.
+        case openDevices
+    }
+
+    public var action: Action?
     /// Remembers the dismissal beyond this session. The warning goes when
     /// whoever posted it clears it, once that is done.
     var onDismiss: (@Sendable () -> Void)?
@@ -45,7 +52,7 @@ public final class AccountWarnings: @unchecked Sendable {
     ///         session.warnings.clear("profile")
     ///     }
     public func post(_ key: String, title: String, detail: String, retry: (@Sendable () async throws -> Void)? = nil) {
-        post(AccountWarning(key: key, title: title, detail: detail, retry: retry))
+        post(AccountWarning(key: key, title: title, detail: detail, retry: retry, action: retry == nil ? nil : .retry))
     }
 
     private func post(_ warning: AccountWarning) {
@@ -61,7 +68,7 @@ public final class AccountWarnings: @unchecked Sendable {
     /// after `friendly`, such as "Your profile wasn't saved". An error of our
     /// own, such as being offline, says what it is instead.
     public func post(_ key: String, title: String, friendly: String, error: Error, retry: (@Sendable () async throws -> Void)? = nil) {
-        post(AccountWarning(key: key, title: title, detail: ServerError.userMessage(for: error, friendly: friendly), retry: retry, friendly: friendly))
+        post(AccountWarning(key: key, title: title, detail: ServerError.userMessage(for: error, friendly: friendly), retry: retry, friendly: friendly, action: retry == nil ? nil : .retry))
     }
 
     /// Removes what a room posted, such as "room-history:cake@rooms.example.org",
@@ -74,14 +81,10 @@ public final class AccountWarnings: @unchecked Sendable {
         }
     }
 
-    /// Posts a warning about a device on the account, which the user can
-    /// dismiss for good. `dismissed` is told when they do, and the poster
-    /// clears the warning once it has recorded that.
-    public func postDevice(_ key: String, title: String, detail: String, dismissed: @escaping @Sendable () -> Void) {
-        var warning = AccountWarning(key: key, title: title, detail: detail, retry: nil)
-        warning.opensDevices = true
-        warning.onDismiss = dismissed
-        post(warning)
+    /// Posts a warning the user can dismiss for good: `onDismiss` records
+    /// that, and the poster clears the warning once it has.
+    public func post(_ key: String, title: String, detail: String, action: AccountWarning.Action, onDismiss: @escaping @Sendable () -> Void) {
+        post(AccountWarning(key: key, title: title, detail: detail, retry: nil, action: action, onDismiss: onDismiss))
     }
 
     /// The user's Dismiss: a warning that keeps its dismissal elsewhere has

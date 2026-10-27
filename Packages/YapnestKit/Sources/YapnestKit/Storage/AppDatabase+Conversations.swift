@@ -46,7 +46,7 @@ extension AppDatabase {
     public func markUnread(conversationId: Int64) throws {
         try writer.write { db in
             guard var last = try Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming && Column("isRetracted") == false && Column("event") == nil)
+                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming && Column("isRetracted") == false)
                 .order(Column("timestamp").desc, Column("id").desc)
                 .fetchOne(db) else { return }
             last.isRead = false

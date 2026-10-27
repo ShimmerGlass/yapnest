@@ -100,7 +100,7 @@ extension AppDatabase {
     /// Peers of the chats that hold a message.
     func peersWithMessages() throws -> Set<JID> {
         try reader.read { db in
-            Set(try JID.fetchAll(db, sql: "SELECT DISTINCT peer FROM conversation WHERE kind = 'chat' AND id IN (SELECT conversationId FROM message)"))
+            Set(try JID.fetchAll(db, sql: "SELECT DISTINCT peer FROM conversation WHERE kind = 'chat' AND id IN (SELECT conversationId FROM message WHERE \(Self.isNotEvent))"))
         }
     }
 
@@ -283,7 +283,7 @@ extension AppDatabase {
         try reader.read { db in
             var request = Message
                 .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming
-                    && Column("event") == nil && Column("timestamp") <= date)
+                    && Column("timestamp") <= date)
             if markable { request = request.filter(Column("isMarkable") == true) }
             return try request.order(Column("timestamp").desc).fetchOne(db)
         }

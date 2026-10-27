@@ -91,11 +91,8 @@ enum DevFixture: String, CaseIterable {
         case .interactions, .warnings: try InteractionsFixture.fill(database)
         case .newDevices:
             try InteractionsFixture.fill(database)
-            let nest = try database.conversation(with: InteractionsFixture.nest)
-            var event = Message(conversationId: nest.id!, direction: .incoming, sender: InteractionsFixture.nest, body: "", status: .received, isRead: true)
-            event.event = .newDevice(deviceId: 21, fingerprint: String(repeating: "21", count: 32))
-            _ = try database.insert(event)
-            try database.addDeviceNoticeForFixture(of: Self.account, id: 22, keyByte: 0x22)
+            try database.addDeviceEventForFixture(peer: InteractionsFixture.nest, id: 21, keyByte: 0x21)
+            try database.addDeviceNoticeForFixture(id: 22, keyByte: 0x22)
         case .devices: try Self.fillDevices(database)
         case .lastSeen: try Self.fillLastSeen(database)
         case .moderation: try Self.fillModeration(database)

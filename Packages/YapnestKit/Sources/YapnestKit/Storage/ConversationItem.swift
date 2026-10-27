@@ -337,7 +337,7 @@ extension AppDatabase {
     public func oldestMessage(peer: JID) throws -> Message? {
         try reader.read { db in
             guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return nil }
-            return try Message.filter(Column("conversationId") == conversationId && Column("event") == nil).order(Column("timestamp"), Column("id")).fetchOne(db)
+            return try Message.filter(Column("conversationId") == conversationId).excludingEvents().order(Column("timestamp"), Column("id")).fetchOne(db)
         }
     }
 

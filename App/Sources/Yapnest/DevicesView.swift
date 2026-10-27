@@ -239,17 +239,8 @@ private struct DeviceRow: View {
 struct FingerprintText: View {
     let fingerprint: String
 
-    static func grouped(_ fingerprint: String) -> String {
-        stride(from: 0, to: fingerprint.count, by: 8).map { offset in
-            let start = fingerprint.index(fingerprint.startIndex, offsetBy: offset)
-            let end = fingerprint.index(start, offsetBy: 8, limitedBy: fingerprint.endIndex) ?? fingerprint.endIndex
-            return String(fingerprint[start..<end])
-        }
-        .joined(separator: " ")
-    }
-
     var body: some View {
-        Text(Self.grouped(fingerprint))
+        Text(OMEMODevice.grouped(fingerprint))
             .font(.system(.footnote, design: .monospaced))
             .textSelection(.enabled)
     }

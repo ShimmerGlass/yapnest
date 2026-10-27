@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Martin
 import Testing
 @testable import YapnestKit
@@ -133,11 +134,11 @@ struct ServerErrorMessageTests {
 struct DeviceWarningTests {
     @Test func dismissingADeviceWarningHandsItToThePosterAndKeepsItUntilItClears() {
         let warnings = AccountWarnings()
-        let told = LockedFlag()
-        warnings.postDevice("new-device:3", title: "New device on your account", detail: "x") { told.set() }
-        #expect(warnings.current.first?.opensDevices == true)
+        let told = OSAllocatedUnfairLock(initialState: false)
+        warnings.post("new-device:3", title: "New device on your account", detail: "x", action: .openDevices) { told.withLock { $0 = true } }
+        #expect(warnings.current.first?.action == .openDevices)
         warnings.dismiss("new-device:3")
-        #expect(told.value)
+        #expect(told.withLock { $0 })
         #expect(warnings.current.map(\.key) == ["new-device:3"])
         warnings.clear("new-device:3")
         #expect(warnings.current.isEmpty)
@@ -149,12 +150,5 @@ struct DeviceWarningTests {
         warnings.post("b", title: "B", detail: "b")
         warnings.dismiss("a")
         #expect(warnings.current.map(\.key) == ["b"])
-    }
-
-    private final class LockedFlag: @unchecked Sendable {
-        private let lock = NSLock()
-        private var flag = false
-        var value: Bool { lock.withLock { flag } }
-        func set() { lock.withLock { flag = true } }
     }
 }

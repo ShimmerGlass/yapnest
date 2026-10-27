@@ -33,6 +33,16 @@ public struct OMEMODevice: Sendable, Hashable, Identifiable {
         }
     }
 
+    /// A fingerprint in groups of eight, the way other OMEMO clients show it.
+    public static func grouped(_ fingerprint: String) -> String {
+        stride(from: 0, to: fingerprint.count, by: 8).map { offset in
+            let start = fingerprint.index(fingerprint.startIndex, offsetBy: offset)
+            let end = fingerprint.index(start, offsetBy: 8, limitedBy: fingerprint.endIndex) ?? fingerprint.endIndex
+            return String(fingerprint[start..<end])
+        }
+        .joined(separator: " ")
+    }
+
     public var jid: JID
     public var id: Int32
     public var fingerprint: String

@@ -137,7 +137,7 @@ struct MessageMenu: View {
     @ViewBuilder
     private func trust(_ device: OMEMODevice) -> some View {
         Section("Compare with the fingerprint on their device:") {
-            Button(FingerprintText.grouped(device.fingerprint)) {}.disabled(true)
+            Button(OMEMODevice.grouped(device.fingerprint)) {}.disabled(true)
         }
         Section {
             trustChoice(.verified, "Mark as Verified", "checkmark.seal", for: device)

@@ -26,9 +26,9 @@ struct DeviceNoticeTests {
         let database = try AppDatabase.inMemory(), store = store(database)
         try database.noteDeviceList(of: me.description, ids: [1, 2])
         save(2, of: me, to: store)
-        #expect(try database.deviceNotices(of: me).isEmpty, "a device of the first list is not new")
+        #expect(try database.deviceNotices().isEmpty, "a device of the first list is not new")
         save(3, of: me, to: store)
-        let notices = try database.deviceNotices(of: me)
+        let notices = try database.deviceNotices()
         #expect(notices.map(\.deviceId) == [3])
         #expect(notices.first?.fingerprint == OMEMOStore.fingerprint(of: key(3)))
     }
@@ -37,7 +37,7 @@ struct DeviceNoticeTests {
         let database = try AppDatabase.inMemory(), store = store(database)
         save(2, of: me, to: store)
         save(3, of: me, to: store)
-        #expect(try database.deviceNotices(of: me).isEmpty)
+        #expect(try database.deviceNotices().isEmpty)
     }
 
     @Test func aLaterListDoesNotMakeItsDevicesPartOfTheFirst() throws {
@@ -45,7 +45,7 @@ struct DeviceNoticeTests {
         try database.noteDeviceList(of: me.description, ids: [1])
         try database.noteDeviceList(of: me.description, ids: [1, 3])
         save(3, of: me, to: store)
-        #expect(try database.deviceNotices(of: me).map(\.deviceId) == [3])
+        #expect(try database.deviceNotices().map(\.deviceId) == [3])
     }
 
     @Test func thisInstallsOwnDeviceNeverRaisesANotice() throws {
@@ -54,7 +54,7 @@ struct DeviceNoticeTests {
         try database.noteDeviceList(of: me.description, ids: [1])
         let own = Int32(bitPattern: encryption.deviceId)
         #expect(encryption.store.save(identity: SignalAddress(name: me.description, deviceId: own), publicKeyData: key(9)))
-        #expect(try database.deviceNotices(of: me).isEmpty)
+        #expect(try database.deviceNotices().isEmpty)
     }
 
     private func events(_ database: AppDatabase, in jid: JID) throws -> [Message] {
@@ -90,7 +90,20 @@ struct DeviceNoticeTests {
         #expect(event.conversationId == conversation.id)
         #expect(event.timestamp == clock.now)
         #expect(event.isRead && event.body.isEmpty)
+        #expect(event.direction == .event)
         #expect(try events(database, in: me).isEmpty, "nothing in a chat with ourselves")
+    }
+
+    @Test func aChatWithOnlyAnEventHasNoMessagesToRestore() throws {
+        let database = try AppDatabase.inMemory(), store = store(database)
+        let conversation = try chat(database, with: bob)
+        try database.noteDeviceList(of: bob.description, ids: [1])
+        save(1, of: bob, to: store)
+        save(2, of: bob, to: store)
+        #expect(try events(database, in: bob).count == 1)
+        #expect(try database.peersWithMessages().isEmpty, "an event is not a message, so the archive is still restored")
+        _ = try database.insert(Message(conversationId: try #require(conversation.id), direction: .incoming, sender: bob, body: "Hi", remoteId: "m"))
+        #expect(try database.peersWithMessages() == [bob])
     }
 
     @Test func noChatIsMadeForAContactWeNeverTalkedTo() throws {
@@ -107,7 +120,7 @@ struct DeviceNoticeTests {
         try database.noteDeviceList(of: me.description, ids: [1])
         save(5, of: me, to: store)
         #expect(try events(database, in: bob).isEmpty)
-        #expect(try database.deviceNotices(of: me).map(\.deviceId) == [5])
+        #expect(try database.deviceNotices().map(\.deviceId) == [5])
     }
 
     @Test func aContactWithoutAStoredDeviceGetsNoEventForTheirFirst() throws {
@@ -168,11 +181,11 @@ struct DeviceNoticeTests {
         try database.noteDeviceList(of: me.description, ids: [1])
         save(3, of: me, to: store)
         save(4, of: me, to: store)
-        try database.dismissDeviceNotice(of: me, deviceId: 3)
-        #expect(try database.deviceNotices(of: me).map(\.deviceId) == [4])
+        try database.dismissDeviceNotice(deviceId: 3)
+        #expect(try database.deviceNotices().map(\.deviceId) == [4])
         #expect(store.identities(forName: me.description).first { $0.address.deviceId == 3 }?.status == .trustedActive)
         save(3, of: me, to: store)
-        #expect(try database.deviceNotices(of: me).map(\.deviceId) == [4], "a dismissed device is not announced again")
+        #expect(try database.deviceNotices().map(\.deviceId) == [4], "a dismissed device is not announced again")
     }
 
     @Test func removingAnOwnDeviceTakesItsNoticeAway() throws {
@@ -180,7 +193,7 @@ struct DeviceNoticeTests {
         try database.noteDeviceList(of: me.description, ids: [1])
         save(3, of: me, to: store)
         store.forget(deviceIds: [3], of: me.description)
-        #expect(try database.deviceNotices(of: me).isEmpty)
+        #expect(try database.deviceNotices().isEmpty)
     }
 }
 
@@ -199,10 +212,10 @@ struct DeviceNoticeSessionTests {
         let warning = try #require(session.warnings.current.first)
         #expect(warning.title == "New device on your account")
         #expect(warning.detail.contains(OMEMOStore.fingerprint(of: key).prefix(8)))
-        #expect(warning.opensDevices)
+        #expect(warning.action == .openDevices)
         session.warnings.dismiss("new-device:7")
         await eventually("the warning gone") { session.warnings.current.isEmpty }
-        #expect(try database.deviceNotices(of: me).isEmpty)
+        #expect(try database.deviceNotices().isEmpty)
         #expect(session.devices(of: me).first { $0.id == 7 }?.trust == .trusted, "dismissing leaves trust alone")
     }
 }
