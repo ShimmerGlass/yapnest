@@ -878,7 +878,7 @@ final class AppModel {
         if callablePeers != offered { callablePeers = offered }
         if videoCallablePeers != videoOffered { videoCallablePeers = videoOffered }
         callableExpiry?.cancel()
-        guard let expiry = [callableHold.nextExpiry, videoCallableHold.nextExpiry].compactMap(\.self).min() else { return }
+        guard let expiry = [callableHold.nextExpiry(after: now), videoCallableHold.nextExpiry(after: now)].compactMap(\.self).min() else { return }
         callableExpiry = Task { [weak self] in
             try? await Task.sleep(until: expiry, clock: .continuous)
             guard !Task.isCancelled else { return }

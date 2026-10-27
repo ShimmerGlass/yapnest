@@ -82,7 +82,7 @@ private final class Token {}
         #expect(hold.offered(at: start + .milliseconds(20)) == [alice])
         hold.update([alice], now: start + .milliseconds(300))
         #expect(hold.offered(at: start + .seconds(10)) == [alice])
-        #expect(hold.nextExpiry == nil)
+        #expect(hold.nextExpiry(after: start + .milliseconds(300)) == nil)
     }
 
     @Test func aPeerWhoLeavesStopsBeingOfferedAfterTheGrace() throws {
@@ -91,7 +91,7 @@ private final class Token {}
         var hold = CallableHold()
         hold.update([alice, bob], now: start)
         hold.update([bob], now: start)
-        #expect(hold.nextExpiry == start + CallableHold.grace)
+        #expect(hold.nextExpiry(after: start) == start + CallableHold.grace)
         #expect(hold.offered(at: start + CallableHold.grace - .milliseconds(1)) == [alice, bob])
         #expect(hold.offered(at: start + CallableHold.grace) == [bob])
         // Another change doesn't restart a departure's grace.
@@ -99,7 +99,20 @@ private final class Token {}
         #expect(hold.offered(at: start + CallableHold.grace) == [bob])
         hold.update([], now: start + .seconds(5))
         #expect(hold.offered(at: start + .seconds(5)).isEmpty)
-        #expect(hold.nextExpiry == nil)
+        #expect(hold.nextExpiry(after: start + .seconds(5)) == nil)
+    }
+
+    @Test func aHoldThatRanOutHasNoExpiryLeftWithoutAnUpdate() throws {
+        let alice = try #require(JID("alice@example.org")), bob = try #require(JID("bob@example.org"))
+        let start = ContinuousClock.now
+        var hold = CallableHold()
+        hold.update([alice, bob], now: start)
+        hold.update([bob], now: start)
+        // Nothing updates the hold once the grace is over, as when no other
+        // peer comes or goes; a past expiry here had the app re-arm its timer
+        // in a tight loop.
+        #expect(hold.nextExpiry(after: start + CallableHold.grace) == nil)
+        #expect(hold.offered(at: start + CallableHold.grace) == [bob])
     }
 
     @Test func aNewPeerIsOfferedAtOnce() throws {

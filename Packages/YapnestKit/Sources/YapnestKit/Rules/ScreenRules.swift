@@ -105,6 +105,10 @@ public struct CallableHold: Sendable {
         latest.union(departed.filter { $0.value > now }.keys)
     }
 
-    /// When a peer still held stops being offered.
-    public var nextExpiry: ContinuousClock.Instant? { departed.values.min() }
+    /// When a peer still held stops being offered. A hold that ran out stays
+    /// in `departed` until the next update, and answering with its past
+    /// instant had the app's timer fire at once and re-arm, spinning a core.
+    public func nextExpiry(after now: ContinuousClock.Instant) -> ContinuousClock.Instant? {
+        departed.values.filter { $0 > now }.min()
+    }
 }
