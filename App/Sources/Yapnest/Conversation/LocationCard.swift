@@ -1,3 +1,4 @@
+import CryptoKit
 import MapKit
 import SwiftUI
 import YapnestKit
@@ -51,6 +52,53 @@ struct LocationCard: View {
     }
 }
 
+/// Snapshots kept as PNG files, so a launch doesn't draw them all again,
+/// which costs time, battery and a request to Apple Maps each. The oldest
+/// are removed past `limit`. A file that is missing or unreadable is just a
+/// miss.
+struct SnapshotDiskCache: Sendable {
+    let directory: URL
+    var limit = 200
+
+    /// In the caches directory, which the system empties when it needs room,
+    /// and not the shared container, which nothing else reads these from.
+    static let standard = SnapshotDiskCache(
+        directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "MapSnapshots"),
+    )
+
+    /// The key has characters a file name can't hold.
+    func url(for key: String) -> URL {
+        let name = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return directory.appending(path: name + ".png")
+    }
+
+    func image(for key: String) -> UIImage? {
+        let url = url(for: key)
+        guard let data = try? Data(contentsOf: url),
+              let image = UIImage(data: data, scale: LocationSnapshotCache.scale(inKey: key) ?? 1) else { return nil }
+        // A read counts as use, so what is shown often outlives what isn't.
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+        return image
+    }
+
+    func store(_ image: UIImage, for key: String) {
+        guard let data = image.pngData() else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? data.write(to: url(for: key), options: .atomic)
+        trim()
+    }
+
+    func trim() {
+        let keys: [URLResourceKey] = [.contentModificationDateKey]
+        guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys),
+              files.count > limit else { return }
+        let dated = files.map { ($0, (try? $0.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast) }
+        for (file, _) in dated.sorted(by: { $0.1 < $1.1 }).prefix(files.count - limit) {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+}
+
 /// Map snapshots, taken ahead of drawing. They're taken at one size, the
 /// widest a bubble gets, and scaled down to fit.
 @MainActor
@@ -68,8 +116,14 @@ enum LocationSnapshotCache {
         return cache
     }()
 
+    /// Everything that decides the picture, as the disk cache's file name comes from it.
     static func key(_ location: GeoLocation, dark: Bool, scale: CGFloat) -> String {
-        String(format: "%.6f,%.6f@%.0fx%.0f/%.0f/%@", location.latitude, location.longitude, size.width, size.height, scale, dark ? "dark" : "light")
+        String(format: "%.6f,%.6f@%.0fx%.0f/%.0f/%@/%.0f", location.latitude, location.longitude, size.width, size.height, scale, dark ? "dark" : "light", span)
+    }
+
+    nonisolated static func scale(inKey key: String) -> CGFloat? {
+        let parts = key.split(separator: "/")
+        return parts.count > 1 ? Double(parts[1]).map { CGFloat($0) } : nil
     }
 
     static func bytes(of image: UIImage) -> Int {
@@ -82,6 +136,11 @@ enum LocationSnapshotCache {
 
     static func load(_ location: GeoLocation, dark: Bool, scale: CGFloat, key: String) async -> UIImage? {
         if let image = cached(key) { return image }
+        let disk = SnapshotDiskCache.standard
+        if let image = await Task.detached(priority: .utility, operation: { disk.image(for: key) }).value {
+            cache.setObject(image, forKey: key as NSString, cost: Self.bytes(of: image))
+            return image
+        }
         let options = MKMapSnapshotter.Options()
         let coordinate = CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
         options.region = MKCoordinateRegion(center: coordinate, latitudinalMeters: span / 1.6, longitudinalMeters: span)
@@ -90,6 +149,7 @@ enum LocationSnapshotCache {
         let image = await snapshotWithPin(options: options, at: coordinate)
         guard let image else { return nil }
         cache.setObject(image, forKey: key as NSString, cost: Self.bytes(of: image))
+        Task.detached(priority: .utility) { disk.store(image, for: key) }
         return image
     }
 
