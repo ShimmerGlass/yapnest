@@ -106,6 +106,11 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
     /// Whether the call was proposed with video.
     public var callIsVideo = false
 
+    /// Set on the rows that mark something that happened rather than say
+    /// something: see `MessageEvent`. Their `body` is empty and they are
+    /// always read.
+    public var event: MessageEvent?
+
     /// The stanza id of our correction or retraction of this message that the
     /// server hasn't acknowledged. A later one replaces it, as only the latest
     /// state needs to reach the peer.
@@ -248,7 +253,7 @@ extension Message {
     /// no words, and its remote id is the call's session id: a correction to
     /// it would turn the call into text.
     public var isEditableText: Bool {
-        direction == .outgoing && !isRetracted && encryption != .omemoUndecryptable && callOutcome == nil && id != nil
+        direction == .outgoing && !isRetracted && encryption != .omemoUndecryptable && callOutcome == nil && event == nil && id != nil
     }
 }
 

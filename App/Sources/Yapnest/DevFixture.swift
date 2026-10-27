@@ -34,6 +34,9 @@ enum DevFixture: String, CaseIterable {
     /// The `interactions` chats with two account warnings above the list, one
     /// with a Retry that works; see `AccountWarnings`.
     case warnings
+    /// The `interactions` chats with a new device on the account, and a line
+    /// in the Nest chat's history for one of the contact's.
+    case newDevices = "new-devices"
     /// An account whose other OMEMO devices differ in use: one used yesterday,
     /// one quiet for 120 days, one never seen sending for 200 days, one new.
     case devices
@@ -86,6 +89,13 @@ enum DevFixture: String, CaseIterable {
         case .learnedReactions: try Self.fillLearnedReactions(database)
         case .quickResponses: try Self.fillQuickResponses(database)
         case .interactions, .warnings: try InteractionsFixture.fill(database)
+        case .newDevices:
+            try InteractionsFixture.fill(database)
+            let nest = try database.conversation(with: InteractionsFixture.nest)
+            var event = Message(conversationId: nest.id!, direction: .incoming, sender: InteractionsFixture.nest, body: "", status: .received, isRead: true)
+            event.event = .newDevice(deviceId: 21, fingerprint: String(repeating: "21", count: 32))
+            _ = try database.insert(event)
+            try database.addDeviceNoticeForFixture(of: Self.account, id: 22, keyByte: 0x22)
         case .devices: try Self.fillDevices(database)
         case .lastSeen: try Self.fillLastSeen(database)
         case .moderation: try Self.fillModeration(database)

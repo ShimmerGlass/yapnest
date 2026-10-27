@@ -5,7 +5,8 @@ import YapnestKit
 /// first warning and how many more there are. Tapping it opens the details,
 /// each with Retry where trying again could help.
 struct AccountWarningsBanner: View {
-    let warnings: AccountWarnings
+    let session: XMPPSession
+    private var warnings: AccountWarnings { session.warnings }
 
     @State private var list: [AccountWarning] = []
     @State private var showsDetails = false
@@ -47,16 +48,19 @@ struct AccountWarningsBanner: View {
             if isEmpty { showsDetails = false }
         }
         .sheet(isPresented: $showsDetails) {
-            AccountWarningsSheet(warnings: warnings, list: list)
+            AccountWarningsSheet(session: session, list: list)
         }
     }
 }
 
 private struct AccountWarningsSheet: View {
-    let warnings: AccountWarnings
+    let session: XMPPSession
     let list: [AccountWarning]
 
+    private var warnings: AccountWarnings { session.warnings }
+
     @Environment(\.dismiss) private var dismiss
+    @State private var showsDevices = false
     @State private var retrying: Set<String> = []
 
     var body: some View {
@@ -83,8 +87,12 @@ private struct AccountWarningsSheet: View {
                             .disabled(retrying.contains(warning.key))
                             .accessibilityIdentifier("accountWarningRetry")
                         }
+                        if warning.opensDevices {
+                            Button("Devices") { showsDevices = true }
+                                .accessibilityIdentifier("accountWarningDevices")
+                        }
                         // For a problem the user doesn't mean to fix; it comes back if it happens again.
-                        Button("Dismiss") { warnings.clear(warning.key) }
+                        Button("Dismiss") { warnings.dismiss(warning.key) }
                             .accessibilityIdentifier("accountWarningDismiss")
                     }
                     .buttonStyle(.bordered)
@@ -102,6 +110,10 @@ private struct AccountWarningsSheet: View {
             }
         }
         .sheetSizedForMac()
+        .sheet(isPresented: $showsDevices) {
+            DevicesView(session: session, peer: nil)
+                .sheetSizedForMac()
+        }
     }
 
     private func retry(_ key: String) {

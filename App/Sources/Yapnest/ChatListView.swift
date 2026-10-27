@@ -256,7 +256,7 @@ struct ChatListView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     ConnectionBanner(state: shownConnection)
-                    AccountWarningsBanner(warnings: session.warnings)
+                    AccountWarningsBanner(session: session)
                 }
             }
             .animation(.default, value: shownConnection)

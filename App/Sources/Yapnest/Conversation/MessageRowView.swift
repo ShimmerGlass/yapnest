@@ -57,6 +57,7 @@ struct MessageRowView: View, Equatable {
             }
             switch row.content.kind {
             case .call(let call): CallRowView(row: row, call: call, model: model)
+            case .event(let event, let name): EventRowView(row: row, event: event, name: name, model: model)
             case .bubble:
                 bubbleRow
                 QuickResponseButtons(row: row, model: model)

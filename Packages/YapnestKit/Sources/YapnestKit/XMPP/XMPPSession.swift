@@ -283,6 +283,8 @@ public final class XMPPSession: @unchecked Sendable {
         /// have been tried since each room last worked.
         var rejoinTasks: [JID: Task<Void, Never>] = [:]
         var rejoinAttempts: [JID: Int] = [:]
+        /// Posts a warning for each new device of ours until the session ends.
+        var ownDeviceNoticeTask: Task<Void, Never>?
         /// The server's group chat service, once discovered on this connection.
         var mucService: String?
         /// A new session waits for account discovery before catching up.
@@ -469,6 +471,7 @@ public final class XMPPSession: @unchecked Sendable {
         subscribe()
         reloadKnownRooms()
         monitorNetwork()
+        if mode == .app { warnOfNewOwnDevices() }
     }
 
     /// Martin's default validation checks the certificate with a client-side
@@ -715,6 +718,10 @@ public final class XMPPSession: @unchecked Sendable {
             .sink { [weak self] change in self?.subscriptionChanged(change) }
             .store(in: &cancellables)
 
+        omemo.module.activeDevicesPublisher
+            .sink { [weak self] change in self?.deviceListHeard(of: change.jid.description, ids: change.activeDevices) }
+            .store(in: &cancellables)
+
         client.module(.pepUserAvatar).avatarChangePublisher
             .sink { [weak self] change in
                 guard let self, let jid = JID(change.jid) else { return }
@@ -954,6 +961,7 @@ public final class XMPPSession: @unchecked Sendable {
 
     deinit {
         pathMonitor?.cancel()
+        lock.withLock { $0.ownDeviceNoticeTask?.cancel() }
     }
 
     private func scheduleReconnect() {
@@ -3062,7 +3070,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// rather than the last one. Seeing an older message than we've already
     /// read changes nothing, so the read point never moves backwards.
     public func markRead(_ conversation: Conversation, through message: Message) throws {
-        guard let id = conversation.id, message.direction == .incoming,
+        guard let id = conversation.id, message.direction == .incoming, message.event == nil,
               try database.hasUnread(conversationId: id, through: message.timestamp) else { return }
         try database.markRead(conversationId: id, through: message.timestamp)
         announceRead(conversation, id: id, through: message.timestamp, last: message)

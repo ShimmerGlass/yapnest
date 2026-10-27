@@ -143,3 +143,41 @@ final class StrangerNicknameUITests: InteractionsTestCase {
         XCTAssertFalse(driver.nicknameRow.exists, "a nickname row for someone who isn't a contact")
     }
 }
+
+/// A device that appeared on the contact's account is a line in their chat's
+/// history, and one on ours a warning above the chat list.
+@MainActor
+final class NewDeviceUITests: XCTestCase {
+    private func launch(open chat: String?) -> ConversationDriver {
+        continueAfterFailure = false
+        let driver = ConversationDriver(fixture: "new-devices", open: chat, context: name)
+        if chat != nil { driver.waitForOpenChat() }
+        return driver
+    }
+
+    func testTheChatShowsTheContactsNewDeviceInItsHistoryAndCheckOpensTheirDevices() {
+        let app = launch(open: "nest@fixture.test").app
+        let line = app.descendants(matching: .any)["newDeviceEvent"]
+        XCTAssertTrue(line.waitForExistence(timeout: 10), "no line about the new device")
+        XCTAssertTrue(line.label.contains("Nest has a new device"), "the line lacks the name: \(line.label)")
+        XCTAssertFalse(line.label.contains("21212121"), "the fingerprint is on the line, not only in the devices")
+        line.tap()
+        XCTAssertTrue(app.navigationBars["Devices"].waitForExistence(timeout: 10), "the devices of the contact didn't open")
+    }
+
+    func testTheAccountWarnsOfItsNewDeviceUntilDismissed() {
+        let app = launch(open: nil).app
+        let row = app.descendants(matching: .any)["accountWarnings"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no warning above the list")
+        XCTAssertTrue(row.label.contains("New device on your account"), "wrong warning: \(row.label)")
+        row.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "22222222")).firstMatch.waitForExistence(timeout: 5), "the sheet lacks the fingerprint")
+        app.buttons["accountWarningDevices"].tap()
+        XCTAssertTrue(app.navigationBars["Encryption"].waitForExistence(timeout: 10), "the devices didn't open")
+        app.buttons["Done"].firstMatch.tap()
+        let dismiss = app.buttons["accountWarningDismiss"]
+        dismiss.tap()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: row)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed, "Dismiss didn't remove the warning")
+    }
+}

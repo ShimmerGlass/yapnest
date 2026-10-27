@@ -283,7 +283,7 @@ extension AppDatabase {
         try reader.read { db in
             var request = Message
                 .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming
-                    && Column("timestamp") <= date)
+                    && Column("event") == nil && Column("timestamp") <= date)
             if markable { request = request.filter(Column("isMarkable") == true) }
             return try request.order(Column("timestamp").desc).fetchOne(db)
         }

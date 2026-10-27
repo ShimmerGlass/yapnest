@@ -119,7 +119,7 @@ extension AppDatabase {
                 // the chat, as a new message brings it back on every device.
                 var archived = at != nil
                 if let at, let id = c.id {
-                    archived = try Message.filter(Column("conversationId") == id && Column("timestamp") > at).fetchCount(db) == 0
+                    archived = try Message.filter(Column("conversationId") == id && Column("event") == nil && Column("timestamp") > at).fetchCount(db) == 0
                 }
                 try setColumn(db, c, Column("archivedAt").set(to: at), Column("isArchived").set(to: archived))
             },

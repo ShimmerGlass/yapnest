@@ -53,6 +53,8 @@ struct MessageRow: Identifiable, Equatable {
     enum Kind: Equatable {
         case bubble
         case call(CallSummary)
+        /// Something that happened in the chat, drawn as a quiet line.
+        case event(MessageEvent, name: String)
     }
 
     struct Content: Equatable {

@@ -249,8 +249,15 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
             let hasVerified = try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM omemoIdentity WHERE name = ? AND status IN (?, ?))",
                                                 arguments: [address.name, IdentityStatus.verifiedActive.rawValue, IdentityStatus.verifiedInactive.rawValue]) ?? false
             let status: IdentityStatus = hasVerified ? .undecidedActive : .trustedActive
+            let hadDevices = try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM omemoIdentity WHERE name = ?)", arguments: [address.name]) ?? false
+            let date = now()
             try db.execute(sql: "INSERT INTO omemoIdentity (name, deviceId, key, status, firstSeen) VALUES (?, ?, ?, ?, ?)",
-                           arguments: [address.name, address.deviceId, key, status.rawValue, now()])
+                           arguments: [address.name, address.deviceId, key, status.rawValue, date])
+            // Whatever its status, the device now gets or may get our messages; the user hears of it.
+            let isOwn = address.name == account
+            if !(isOwn && UInt32(bitPattern: address.deviceId) == localRegistrationId()) {
+                try AppDatabase.noteNewDevice(db, name: address.name, deviceId: address.deviceId, fingerprint: Self.fingerprint(of: key), isOwn: isOwn, hadDevices: hadDevices, at: date)
+            }
         }
     }
 
@@ -353,6 +360,8 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         _ = write { db in
             for id in deviceIds {
                 try db.execute(sql: "DELETE FROM omemoSession WHERE name = ? AND deviceId = ?", arguments: [name, id])
+                // Gone from the account, so there's nothing left to warn about.
+                try db.execute(sql: "DELETE FROM deviceNotice WHERE name = ? AND deviceId = ?", arguments: [name, id])
                 try db.execute(sql: "DELETE FROM omemoIdentity WHERE name = ? AND deviceId = ? AND status NOT IN (?, ?)",
                                arguments: [name, id, IdentityStatus.compromisedActive.rawValue, IdentityStatus.compromisedInactive.rawValue])
             }

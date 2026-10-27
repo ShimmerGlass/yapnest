@@ -828,7 +828,7 @@ final class ConversationModel {
     /// the glow in the background.
     private func notePulse(for arriving: Set<Int64>) {
         guard isOnScreen, UIApplication.shared.applicationState == .active,
-              arriving.contains(where: { items[$0]?.message.direction == .incoming }) else { return }
+              arriving.contains(where: { items[$0]?.message.direction == .incoming && items[$0]?.message.event == nil }) else { return }
         let now = ContinuousClock.now
         if let lastPulse, now - lastPulse < Self.pulseWindow { return }
         lastPulse = now
@@ -981,7 +981,7 @@ final class ConversationModel {
     private nonisolated static func textPlan(for item: ConversationItem, showsWhole: Bool, environment: RowEnvironment) -> TextPlan {
         let message = item.message
         // A call's body is only a fallback for clients that show no calls.
-        guard message.call == nil else { return TextPlan() }
+        guard message.call == nil, message.event == nil else { return TextPlan() }
         let isOutgoing = message.direction == .outgoing
         // A file message's body is just the file's URL.
         let bodyIsFile = item.attachment.map { message.body.isEmpty || message.body == $0.url } ?? false
@@ -1049,8 +1049,10 @@ final class ConversationModel {
         var author: Author
         var timestamp: Date
         var hasReactions: Bool
+        var isEvent: Bool
 
         init(_ item: ConversationItem) {
+            isEvent = item.message.event != nil
             direction = item.message.direction
             author = item.message.author
             timestamp = item.message.timestamp
@@ -1328,7 +1330,7 @@ final class ConversationModel {
         let this = Neighbour(item)
         let calendar = environment.calendar
         func grouped(_ a: Neighbour?, _ b: Neighbour?) -> Bool {
-            guard let a, let b else { return false }
+            guard let a, let b, !a.isEvent, !b.isEvent else { return false }
             return a.direction == b.direction
                 && a.author == b.author
                 && abs(a.timestamp.timeIntervalSince(b.timestamp)) < 120
@@ -1345,6 +1347,15 @@ final class ConversationModel {
         )
 
         let time = message.timestamp.formatted(date: .omitted, time: .shortened)
+        if let event = message.event {
+            let name = authorName(for: message.author, in: environment)
+            let words = [event.words(of: name), time].joined(separator: ", ")
+            let content = MessageRow.Content(
+                item: item, kind: .event(event, name: name), layout: layout, quoteAuthor: "", quoteText: "", time: time,
+                security: message.security, preview: .none, accessibilityLabel: words,
+            )
+            return (content, nil)
+        }
         if let call = message.call {
             let content = MessageRow.Content(
                 item: item, kind: .call(call), layout: layout, quoteAuthor: "", quoteText: "", time: time,

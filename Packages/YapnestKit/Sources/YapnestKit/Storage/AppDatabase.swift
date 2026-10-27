@@ -696,6 +696,35 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v44-device-notices") { db in
+            // A row that marks something that happened in the chat, such as a
+            // contact's new device, instead of a message: see `MessageEvent`.
+            try db.alter(table: "message") { t in
+                t.add(column: "event", .text)
+            }
+            // The devices a JID's first device list held, so later ones can
+            // be told from them; the marker says a list was seen at all,
+            // as it may have been empty.
+            try db.create(table: "deviceListSeen") { t in
+                t.primaryKey("name", .text)
+            }
+            try db.create(table: "baselineDevice") { t in
+                t.column("name", .text).notNull()
+                t.column("deviceId", .integer).notNull()
+                t.primaryKey(["name", "deviceId"])
+            }
+            // Our own account's new devices, for the chat list's warning. The
+            // row stays once dismissed, so a device is announced once.
+            try db.create(table: "deviceNotice") { t in
+                t.column("name", .text).notNull()
+                t.column("deviceId", .integer).notNull()
+                t.column("fingerprint", .text).notNull()
+                t.column("firstSeen", .datetime).notNull()
+                t.column("isDismissed", .boolean).notNull().defaults(to: false)
+                t.primaryKey(["name", "deviceId"])
+            }
+        }
+
         return migrator
     }
 

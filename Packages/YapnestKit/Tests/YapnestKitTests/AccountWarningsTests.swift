@@ -129,3 +129,32 @@ struct ServerErrorMessageTests {
         #expect(ServerError.isFromServer(XMPPError.not_allowed(nil)))
     }
 }
+
+struct DeviceWarningTests {
+    @Test func dismissingADeviceWarningHandsItToThePosterAndKeepsItUntilItClears() {
+        let warnings = AccountWarnings()
+        let told = LockedFlag()
+        warnings.postDevice("new-device:3", title: "New device on your account", detail: "x") { told.set() }
+        #expect(warnings.current.first?.opensDevices == true)
+        warnings.dismiss("new-device:3")
+        #expect(told.value)
+        #expect(warnings.current.map(\.key) == ["new-device:3"])
+        warnings.clear("new-device:3")
+        #expect(warnings.current.isEmpty)
+    }
+
+    @Test func dismissingAnOrdinaryWarningClearsIt() {
+        let warnings = AccountWarnings()
+        warnings.post("a", title: "A", detail: "a")
+        warnings.post("b", title: "B", detail: "b")
+        warnings.dismiss("a")
+        #expect(warnings.current.map(\.key) == ["b"])
+    }
+
+    private final class LockedFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var flag = false
+        var value: Bool { lock.withLock { flag } }
+        func set() { lock.withLock { flag = true } }
+    }
+}

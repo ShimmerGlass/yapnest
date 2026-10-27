@@ -14,6 +14,11 @@ public struct AccountWarning: Identifiable, Sendable {
     public var retry: (@Sendable () async throws -> Void)?
     /// The lead of `detail`, kept so that a failed retry says the same.
     var friendly: String?
+    /// Whether the sheet offers to open the account's devices.
+    public var opensDevices = false
+    /// Remembers the dismissal beyond this session. The warning goes when
+    /// whoever posted it clears it, once that is done.
+    var onDismiss: (@Sendable () -> Void)?
 
     public var id: String { key }
 }
@@ -67,6 +72,22 @@ public final class AccountWarnings: @unchecked Sendable {
             let kept = list.filter { !$0.key.hasSuffix(":\(room)") }
             if kept.count != list.count { subject.send(kept) }
         }
+    }
+
+    /// Posts a warning about a device on the account, which the user can
+    /// dismiss for good. `dismissed` is told when they do, and the poster
+    /// clears the warning once it has recorded that.
+    public func postDevice(_ key: String, title: String, detail: String, dismissed: @escaping @Sendable () -> Void) {
+        var warning = AccountWarning(key: key, title: title, detail: detail, retry: nil)
+        warning.opensDevices = true
+        warning.onDismiss = dismissed
+        post(warning)
+    }
+
+    /// The user's Dismiss: a warning that keeps its dismissal elsewhere has
+    /// that told, and otherwise goes at once.
+    public func dismiss(_ key: String) {
+        if let onDismiss = current.first(where: { $0.key == key })?.onDismiss { onDismiss() } else { clear(key) }
     }
 
     /// Removes the warning with `key`, when its action has succeeded. Does nothing if there is none.
