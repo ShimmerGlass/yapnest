@@ -38,18 +38,24 @@ struct AnimatedImageViewTests {
         return data as Data
     }
 
-    private func animating(_ data: Data) -> Bool {
+    /// Whether it plays once the header is read, which happens off the main
+    /// thread.
+    private func animating(_ data: Data) async -> Bool {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         let view = AnimatedUIImageView(frame: window.bounds)
         window.addSubview(view)
         view.source = .data(data)
+        for _ in 0..<50 {
+            if !view.isAnimating { return false }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
         return view.isAnimating
     }
 
-    @Test func aGifTooBigToPlayIsNotAnimated() throws {
+    @Test func aGifTooBigToPlayIsNotAnimated() async throws {
         let huge = try gif(canvas: 6000)
         #expect(AnimatedImages.header(of: huge)?.plan == .tooLarge)
-        #expect(!animating(huge))
+        #expect(await !animating(huge))
     }
 
     /// A file that declares a canvas and holds no frames, which ImageIO
@@ -58,11 +64,11 @@ struct AnimatedImageViewTests {
         Data("GIF89a".utf8) + [UInt8(width & 0xFF), UInt8(width >> 8), UInt8(height & 0xFF), UInt8(height >> 8), 0, 0, 0, 0x3B]
     }
 
-    @Test func aHugeGifThatImageIORefusesIsStillTooLargeToPlay() throws {
+    @Test func aHugeGifThatImageIORefusesIsStillTooLargeToPlay() async throws {
         let huge = unreadableGif(width: 20_000, height: 20_000)
         #expect(CGImageSourceCreateWithData(huge as CFData, nil).flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) } == nil)
         #expect(AnimatedImages.header(of: huge)?.plan == .tooLarge)
-        #expect(!animating(huge))
+        #expect(await !animating(huge))
 
         let file = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).gif")
         try huge.write(to: file)
@@ -74,10 +80,10 @@ struct AnimatedImageViewTests {
         #expect(AnimatedImages.header(of: unreadableGif(width: 64, height: 64)) == nil)
     }
 
-    @Test func aSmallGifIsAnimated() throws {
+    @Test func aSmallGifIsAnimated() async throws {
         let small = try gif(canvas: 64)
         #expect(AnimatedImages.header(of: small)?.plan == .play)
-        #expect(animating(small))
+        #expect(await animating(small))
     }
 
     /// Three noisy frames, since ImageIO rejects a GIF that compresses too well.

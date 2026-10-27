@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 import YapnestKit
 @testable import Yapnest
@@ -57,6 +58,31 @@ struct TypingIndicatorTests {
         session.state.send(.disconnected(error: nil))
 
         await eventually("typing ends") { fixture.model.typing.isEmpty }
+    }
+
+    @Test func anActiveFromSomeoneNotTypingInvalidatesNoReader() async throws {
+        let fixture = AppModelFixture()
+        let session = try await signedIn(fixture)
+        let model: AppModel = fixture.model
+        nonisolated(unsafe) var invalidated = false
+        withObservationTracking { _ = model.typing } onChange: { invalidated = true }
+
+        session.events.send(.chatState(peer, .active))
+
+        #expect(await stays { !invalidated })
+    }
+
+    @Test func aRepeatedComposingInvalidatesNoReader() async throws {
+        let fixture = AppModelFixture()
+        let session = try await signedIn(fixture)
+        let model: AppModel = fixture.model
+        await startTyping(session, model)
+        nonisolated(unsafe) var invalidated = false
+        withObservationTracking { _ = model.typing } onChange: { invalidated = true }
+
+        session.events.send(.chatState(peer, .composing))
+
+        #expect(await stays { !invalidated })
     }
 
     @Test func aComposingNeverFollowedByAnythingExpires() async throws {

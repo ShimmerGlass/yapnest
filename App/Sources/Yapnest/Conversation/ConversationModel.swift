@@ -548,10 +548,6 @@ final class ConversationModel {
 
         if isGroup {
             isActiveGroup = initial.group?.hasLeft == false
-            let group = database.observeGroupChat(peer)
-            tasks["group"] = Task { [weak self] in
-                await database.forEachValue(of: group, "Group") { self?.groupChanged($0) }
-            }
         }
 
         let transferUpdates = session.transfers.values
@@ -600,7 +596,8 @@ final class ConversationModel {
         }
     }
 
-    private func groupChanged(_ group: GroupChat?) {
+    /// Fed by the screen's observation of the group, which it needs as well.
+    func groupChanged(_ group: GroupChat?) {
         let active = group?.hasLeft == false
         guard active != isActiveGroup else { return }
         isActiveGroup = active
@@ -1002,10 +999,11 @@ final class ConversationModel {
     }
 
     private nonisolated static func renderText(_ key: TextKey) -> CachedText {
-        let rendered = MessageText.render(key.body, kind: key.kind, collapsed: key.collapsed)
+        var rendered = MessageText.render(key.body, kind: key.kind, collapsed: key.collapsed)
         // VoiceOver reads the whole body: the cut is for the eye, and a
         // reader who can't see it would hear a message that stops short.
         let whole = rendered.isCollapsed ? MessageText.render(key.body, kind: key.kind) : rendered
+        rendered.links = whole.links
         return CachedText(
             key: key, text: rendered,
             spoken: whole.segments.map { String($0.text.characters) }.joined(separator: "\n"),
@@ -2244,11 +2242,13 @@ final class ConversationModel {
     /// has the audio session, nor during a recording.
     func playVoice(id: Int64, file: URL, from fraction: Double?) {
         let playback = VoicePlayback.shared
-        let result = fraction.map { playback.seek(id: id, file: file, to: $0) } ?? playback.toggle(id: id, file: file)
-        if result == .refusedInCall {
-            prompt = .notice(title: String(localized: "Can't play during a call"), message: String(localized: "Hang up first, then play the voice message."))
-        } else if result == .refusedWhileRecording {
-            prompt = .notice(title: String(localized: "Can't play while recording"), message: String(localized: "Finish the recording first, then play the voice message."))
+        Task {
+            let result = if let fraction { await playback.seek(id: id, file: file, to: fraction) } else { await playback.toggle(id: id, file: file) }
+            if result == .refusedInCall {
+                prompt = .notice(title: String(localized: "Can't play during a call"), message: String(localized: "Hang up first, then play the voice message."))
+            } else if result == .refusedWhileRecording {
+                prompt = .notice(title: String(localized: "Can't play while recording"), message: String(localized: "Finish the recording first, then play the voice message."))
+            }
         }
     }
 

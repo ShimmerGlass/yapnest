@@ -78,6 +78,9 @@ final class AnimatedUIImageView: UIView {
             self, selector: #selector(reduceMotionChanged),
             name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil,
         )
+        for name in [UIScene.didEnterBackgroundNotification, UIScene.willEnterForegroundNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(sceneChanged(_:)), name: name, object: nil)
+        }
     }
 
     @available(*, unavailable)
@@ -85,8 +88,21 @@ final class AnimatedUIImageView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        isInBackground = window?.windowScene?.activationState == .background
         restart()
     }
+
+    /// Only a backgrounded scene stops the animation. An inactive one is
+    /// still visible, such as a Mac window that lost focus.
+    @objc private func sceneChanged(_ notification: Notification) {
+        guard let scene = notification.object as? UIScene, scene === window?.windowScene else { return }
+        // Tracked from the notifications: on the way back the scene's state
+        // still says background when `willEnterForeground` is posted.
+        isInBackground = notification.name == UIScene.didEnterBackgroundNotification
+        restart()
+    }
+
+    private var isInBackground = false
 
     @objc private func reduceMotionChanged() {
         reducesMotion = UIAccessibility.isReduceMotionEnabled
@@ -98,33 +114,32 @@ final class AnimatedUIImageView: UIView {
     /// change under a name.
     private static var headers: [URL: AnimatedImages.Header?] = [:]
 
-    private static func header(ofFile url: URL) -> AnimatedImages.Header? {
-        if let known = headers[url] { return known }
-        let header = AnimatedImages.header(of: url)
+    private static func remember(_ header: AnimatedImages.Header?, ofFile url: URL) {
         if headers.count >= 64 { headers.removeAll() }
         headers[url] = .some(header)
-        return header
+    }
+
+    private nonisolated static func parseHeader(of source: AnimatedImageView.Source) -> AnimatedImages.Header? {
+        switch source {
+        case .data(let data): AnimatedImages.header(of: data)
+        case .file(let url): AnimatedImages.header(of: url)
+        }
     }
 
     private func restart() {
         player?.cancel()
         player = nil
-        guard window != nil else { return }
+        guard window != nil, !isInBackground else { return }
         guard let source else {
             imageView.image = nil
             return
         }
         // Playing or even reading a frame of a big GIF decodes its whole
         // canvas; callers hand over a smaller copy of those, and this is the
-        // last line of defense.
-        let header: AnimatedImages.Header? = switch source {
-        case .data(let data): AnimatedImages.header(of: data)
-        case .file(let url): Self.header(ofFile: url)
-        }
-        guard header?.plan == .play else {
-            imageView.image = nil
-            return
-        }
+        // last line of defense. Reading the header opens the file, so that
+        // happens in the task too, unless a file's is already known.
+        let known: AnimatedImages.Header??
+        if case .file(let url) = source { known = Self.headers[url] } else { known = nil }
         // Frames are drawn at the size the view has now; a view that is
         // resized later keeps them, scaled by the image view.
         let side = bounds.isEmpty
@@ -132,6 +147,21 @@ final class AnimatedUIImageView: UIView {
             : Int((max(bounds.width, bounds.height) * traitCollection.displayScale).rounded(.up))
         let stillOnly = reducesMotion
         player = Task.detached(priority: .userInitiated) { [weak self] in
+            let header: AnimatedImages.Header?
+            if let known {
+                header = known
+            } else {
+                header = Self.parseHeader(of: source)
+                if case .file(let url) = source { await MainActor.run { Self.remember(header, ofFile: url) } }
+            }
+            guard header?.plan == .play else {
+                await MainActor.run {
+                    guard let view = self, !Task.isCancelled else { return }
+                    view.imageView.image = nil
+                    view.player = nil
+                }
+                return
+            }
             guard let frames = Self.frames(of: source) else {
                 await MainActor.run { self?.imageView.image = nil }
                 return

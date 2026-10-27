@@ -90,7 +90,7 @@ struct MessageMenu: View {
 
     @ViewBuilder
     private var links: some View {
-        let urls = item.attachment == nil && message.encryption != .omemoUndecryptable ? LinkDetector.links(in: message.body).map(\.url) : []
+        let urls = item.attachment == nil && message.encryption != .omemoUndecryptable ? row.content.text?.links ?? [] : []
         if urls.count == 1, let url = urls.first {
             Section { linkButtons(url) }
         } else if urls.count > 1 {

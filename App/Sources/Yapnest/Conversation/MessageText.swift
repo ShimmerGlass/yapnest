@@ -20,6 +20,10 @@ struct RenderedText: Equatable {
     }
 
     var segments: [Segment]
+    /// The links found in the body, in order, for the message menu to offer
+    /// without detecting them again on the main thread. A cut-short body
+    /// still has all of its links.
+    var links: [URL] = []
     /// Only the start of a long body is here; `MessageText.collapsedLineLimit` says why.
     var isCollapsed = false
     /// The body is nothing but a few emoji, drawn large (see `emojiOnlyCount`).
@@ -163,6 +167,7 @@ enum MessageText {
     }
 
     private static func render(_ body: String, font: BodyFont) -> RenderedText {
+        var found: [URL] = []
         let segments = MessageStyling.blocks(in: body).enumerated().map { index, block in
             var text = AttributedString(block.text)
             #if targetEnvironment(macCatalyst)
@@ -180,6 +185,7 @@ enum MessageText {
             }
             text.font = font.swiftUI
             let links = LinkDetector.links(in: block.text)
+            found += links.map(\.url)
             for (range, url) in links {
                 guard let attributed = attributedRange(range, in: block.text, of: text) else { continue }
                 // The link's color comes from the view's tint.
@@ -210,7 +216,7 @@ enum MessageText {
             #endif
             return segment
         }
-        return RenderedText(segments: segments)
+        return RenderedText(segments: segments, links: found)
     }
 
     private static func attributedRange(_ range: NSRange, in string: String, of text: AttributedString) -> Range<AttributedString.Index>? {

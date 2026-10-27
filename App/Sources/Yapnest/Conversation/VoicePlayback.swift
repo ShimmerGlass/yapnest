@@ -126,68 +126,131 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
     /// Plays the clip, or pauses it if it is the one playing, or goes on
     /// where it was paused.
     @discardableResult
-    func toggle(id: Int64, file: URL) -> Result {
-        guard current == id, player != nil else { return start(id: id, file: file, at: 0) }
-        if isPlaying { pause() } else { resume() }
+    func toggle(id: Int64, file: URL) async -> Result {
+        guard !isStarting else { return .started }
+        guard current == id, player != nil else { return await start(id: id, file: file, at: 0) }
+        if isPlaying { pause() } else { return await resume() }
         return .started
     }
 
     /// Plays from `fraction` of the clip's length.
     @discardableResult
-    func seek(id: Int64, file: URL, to fraction: Double) -> Result {
+    func seek(id: Int64, file: URL, to fraction: Double) async -> Result {
+        guard !isStarting else { return .started }
         let fraction = min(1, max(0, fraction))
-        guard current == id, let player else { return start(id: id, file: file, at: fraction) }
+        guard current == id, let player else { return await start(id: id, file: file, at: fraction) }
         player.currentTime = fraction * player.duration
         publish(player)
-        if !isPlaying { resume() }
-        return .started
+        return isPlaying ? .started : await resume()
     }
 
     func stop() {
+        if isStarting { startCancelled = true }
         guard current != nil else { return }
         player?.stop()
         reset()
+    }
+
+    /// Setting up the audio session and loading a clip take a while, so they
+    /// run on this queue, in order: an end queued by one clip's stop must not
+    /// land after the next clip's begin.
+    @ObservationIgnored private let audioQueue = DispatchQueue(label: "fr.yapnest.voice-playback", qos: .userInitiated)
+    @ObservationIgnored private var isStarting = false
+    @ObservationIgnored private var startCancelled = false
+
+    /// Returns once what was handed to the audio queue has run.
+    func settled() async {
+        await withCheckedContinuation { continuation in audioQueue.async { continuation.resume() } }
     }
 
     private func pause() {
         player?.pause()
         isPlaying = false
         stopClock()
+        // A paused clip shouldn't keep other apps' sound off.
+        releaseSession()
     }
 
-    private func resume() {
-        player?.play()
+    private func resume() async -> Result {
+        guard let player else { return .failed }
+        guard !isInCall else { return .refusedInCall }
+        isStarting = true
+        startCancelled = false
+        let session = session
+        let activated: Bool = await withCheckedContinuation { continuation in
+            audioQueue.async { continuation.resume(returning: (try? session.beginPlayback()) != nil) }
+        }
+        isStarting = false
+        guard activated else { return .failed }
+        guard !startCancelled, !isInCall, self.player === player else {
+            releaseSession()
+            return .failed
+        }
+        player.play()
         isPlaying = true
         startClock()
+        return .started
     }
 
-    private func start(id: Int64, file: URL, at fraction: Double) -> Result {
+    private struct Prepared: @unchecked Sendable {
+        var player: AVAudioPlayer
+    }
+
+    private nonisolated static func prepare(_ session: VoiceAudioSession, file: URL, at fraction: Double) throws -> Prepared {
+        try session.beginPlayback()
+        do {
+            let player = try AVAudioPlayer(contentsOf: file)
+            guard player.prepareToPlay() else { throw PlaybackError.unplayable }
+            player.currentTime = fraction * player.duration
+            return Prepared(player: player)
+        } catch {
+            // The session was taken for a clip that isn't playing.
+            session.end()
+            throw error
+        }
+    }
+
+    private func start(id: Int64, file: URL, at fraction: Double) async -> Result {
         stop()
         guard !isInCall else { return .refusedInCall }
         // A recording holds the session as `.playAndRecord`. Playing would
         // switch it to `.playback`, and the clip's end would deactivate it
         // under the recorder.
         guard activeRecorder.map({ $0.phase == .idle }) ?? true else { return .refusedWhileRecording }
+        isStarting = true
+        startCancelled = false
+        let session = session
+        let prepared: Prepared
         do {
-            try session.beginPlayback()
+            prepared = try await withCheckedThrowingContinuation { continuation in
+                audioQueue.async {
+                    do {
+                        continuation.resume(returning: try Self.prepare(session, file: file, at: fraction))
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
         } catch {
+            isStarting = false
             return .failed
         }
-        do {
-            let player = try AVAudioPlayer(contentsOf: file)
-            player.delegate = self
-            guard player.prepareToPlay() else { throw PlaybackError.unplayable }
-            player.currentTime = fraction * player.duration
-            guard player.play() else { throw PlaybackError.unplayable }
-            self.player = player
-        } catch {
-            // The session was taken for a clip that isn't playing.
-            session.end()
+        isStarting = false
+        // Stopped, or a call began, while it loaded.
+        guard !startCancelled, !isInCall else {
+            releaseSession()
             return .failed
         }
+        let player = prepared.player
+        player.delegate = self
+        guard player.play() else {
+            releaseSession()
+            return .failed
+        }
+        self.player = player
         current = id
         isPlaying = true
-        if let player { publish(player) }
+        publish(player)
         startClock()
         return .started
     }
@@ -200,7 +263,13 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
         seconds = 0
         playedFraction = 0
         // Whatever was playing before (music) goes on.
-        endSession()
+        releaseSession()
+    }
+
+    private func releaseSession() {
+        guard !isInCall else { return }
+        let session = session
+        audioQueue.async { session.end() }
     }
 
     /// Gives the session back, unless a call has it.

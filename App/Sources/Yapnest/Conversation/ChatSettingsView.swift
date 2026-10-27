@@ -1,4 +1,5 @@
 import GRDB
+import Observation
 import SwiftUI
 import YapnestKit
 
@@ -33,6 +34,10 @@ struct ChatSettingsView: View {
     @State private var confirmsBlock = false
     @State private var unblock = ServerAction()
     @State private var memberRows: [MemberRow.Model] = []
+    /// Counts the changes to the room, so the members are worked out when it
+    /// changes rather than by comparing the whole room on every body pass.
+    @State private var roomRevision = 0
+    @State private var probeNickList: [String] = []
     /// Nicks of occupants that said they take commands, and the ones asked so
     /// far. Occupants of a room send no capabilities, so each is asked once.
     @State private var commandNicks: Set<String> = []
@@ -156,12 +161,11 @@ struct ChatSettingsView: View {
     }
 
     var body: some View {
-        let nicks = probeNicks
         NavigationStack {
             Form {
                 header
 
-                if let group { groupSections(group, probeNicks: nicks) }
+                if let group { groupSections(group, probeNicks: probeNickList) }
 
                 if group == nil, contact?.seesPresence == true, let status = model.statuses[peer] {
                     Section("Status") {
@@ -381,10 +385,11 @@ struct ChatSettingsView: View {
                     self.contact = contact
                 }
             }
-            .task(id: MembersKey(room: room, nickname: group?.nickname)) {
+            .task(id: group?.nickname) { await watchRoom() }
+            .task(id: MembersKey(revision: roomRevision, nickname: group?.nickname)) {
                 await loadMembers()
             }
-            .task(id: CommandProbeKey(nicks: nicks)) {
+            .task(id: CommandProbeKey(nicks: probeNickList)) {
                 await probeCommands()
             }
             .sheet(item: $commandsTarget) { target in
@@ -579,10 +584,31 @@ struct ChatSettingsView: View {
 
     /// The nicks of present occupants other than us, once we're in the room,
     /// sorted so the probe restarts only when someone comes or goes.
-    private var probeNicks: [String] {
+    private func probeNicks(of room: RoomStatus?) -> [String] {
         guard let room, room.isJoined else { return [] }
         let own = group?.nickname
         return room.occupants.values.filter { $0.nick != own && $0.jid != session.account }.map(\.nick).sorted()
+    }
+
+    /// Follows the room through the model's observation, so a change to it is
+    /// compared once, not whenever this view is drawn.
+    private func watchRoom() async {
+        let (changes, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        // Read and armed with nothing in between, so no change goes unseen.
+        func arm() -> RoomStatus? {
+            withObservationTracking { _ = model.rooms[peer] } onChange: { signal.yield() }
+            return room
+        }
+        var last = arm()
+        probeNickList = probeNicks(of: last)
+        for await _ in changes {
+            let now = arm()
+            guard now != last else { continue }
+            last = now
+            roomRevision += 1
+            let nicks = probeNicks(of: now)
+            if nicks != probeNickList { probeNickList = nicks }
+        }
     }
 
     private func commandsAction(for row: MemberRow.Model) -> (() -> Void)? {
@@ -597,7 +623,7 @@ struct ChatSettingsView: View {
 
     /// Returns whether it asked anyone, so there may be more to ask.
     private func probeBatch() async -> Bool {
-        let batch = probeNicks.filter { !probedNicks.contains($0) }.prefix(30)
+        let batch = probeNickList.filter { !probedNicks.contains($0) }.prefix(30)
         guard !batch.isEmpty else { return false }
         let session = session, peer = peer
         let offering = await Task.detached(priority: .utility) {
@@ -618,7 +644,7 @@ struct ChatSettingsView: View {
     }
 
     private struct MembersKey: Hashable {
-        var room: RoomStatus?
+        var revision: Int
         var nickname: String?
     }
 

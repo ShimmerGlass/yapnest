@@ -200,7 +200,7 @@ struct VoiceRecorderTests {
         let clip = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".caf")
         try InteractionsFixture.writeSound(to: clip, seconds: 2, amplitude: 0)
         let session = try #require(s.audio.session as? VoicePlaybackTests.FakeSession)
-        #expect(s.audio.toggle(id: 1, file: clip) != .started)
+        #expect(await s.audio.toggle(id: 1, file: clip) != .started)
         #expect(session.began == 0, "playback would switch the session under the recorder")
         s.audio.stop()
         #expect(session.ended == 0, "and ending it would cut the recorder's session")

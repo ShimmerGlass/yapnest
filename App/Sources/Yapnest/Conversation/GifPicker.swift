@@ -351,7 +351,10 @@ private struct GifStill: View {
             }
         }
         .task(id: url) {
-            image = await GifPreviewCache.data(for: url).flatMap(UIImage.init(data:))
+            guard let data = await GifPreviewCache.data(for: url) else { return }
+            // Decoded here rather than when first drawn, which would be on
+            // the main thread.
+            image = await Task.detached(priority: .userInitiated) { UIImage(data: data)?.preparingForDisplay() }.value
         }
     }
 }

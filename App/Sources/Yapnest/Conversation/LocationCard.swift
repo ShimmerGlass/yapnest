@@ -62,11 +62,18 @@ enum LocationSnapshotCache {
     private static let cache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 100
+        // Snapshots are drawn at the screen's scale, a couple of megabytes
+        // each, so the bytes bound the cache rather than the count.
+        cache.totalCostLimit = 16_000_000
         return cache
     }()
 
     static func key(_ location: GeoLocation, dark: Bool, scale: CGFloat) -> String {
         String(format: "%.6f,%.6f@%.0fx%.0f/%.0f/%@", location.latitude, location.longitude, size.width, size.height, scale, dark ? "dark" : "light")
+    }
+
+    static func bytes(of image: UIImage) -> Int {
+        image.cgImage.map { $0.bytesPerRow * $0.height } ?? Int(image.size.width * image.size.height * image.scale * image.scale * 4)
     }
 
     static func cached(_ key: String) -> UIImage? {
@@ -82,7 +89,7 @@ enum LocationSnapshotCache {
         options.traitCollection = UITraitCollection(traitsFrom: [UITraitCollection(userInterfaceStyle: dark ? .dark : .light), UITraitCollection(displayScale: scale)])
         let image = await snapshotWithPin(options: options, at: coordinate)
         guard let image else { return nil }
-        cache.setObject(image, forKey: key as NSString)
+        cache.setObject(image, forKey: key as NSString, cost: Self.bytes(of: image))
         return image
     }
 

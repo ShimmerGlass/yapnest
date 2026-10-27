@@ -190,7 +190,7 @@ struct ChatListView: View {
         }
         #endif
         .task(id: session.account) {
-            await session.database.forEachValue(of: session.database.observeContact(session.account), "Own contact") { contact in
+            await session.database.forEachValue(of: session.database.observeContact(session.account).removeDuplicates(), "Own contact") { contact in
                 me = contact
             }
         }
@@ -641,7 +641,7 @@ private struct ChatListContent: View {
         }
         .task(id: archived) {
             guard !archived else { return }
-            await session.database.forEachValue(of: session.database.observeContactRequests(), "Contact request") { list in
+            await session.database.forEachValue(of: session.database.observeContactRequests().removeDuplicates(), "Contact request") { list in
                 // The first value is what the list opens with.
                 if requests == nil { requests = list } else { withAnimation { requests = list } }
             }
@@ -649,7 +649,7 @@ private struct ChatListContent: View {
         .task(id: archived) {
             guard !archived else { return }
             var previous: Set<JID>?
-            await session.database.forEachValue(of: session.database.observeGroupInvitations(), "Group invitation") { list in
+            await session.database.forEachValue(of: session.database.observeGroupInvitations().removeDuplicates(), "Group invitation") { list in
                 if invitations == nil { invitations = list } else { withAnimation { invitations = list } }
                 let held = Set(list.map(\.room))
                 // The first value also clears what an earlier run left; after
@@ -1073,19 +1073,22 @@ private struct ChatListRow: View {
 
 /// Signal's chat list typing indicator: three pulsing dots.
 private struct TypingDots: View {
+    @State private var lit = false
+
+    // One repeating animation per dot, run by the render server, rather than
+    // a view body redrawn every frame.
     var body: some View {
-        TimelineView(.animation) { context in
-            let phase = context.date.timeIntervalSinceReferenceDate * 3
-            HStack(spacing: 4) {
-                ForEach(0..<3) { index in
-                    Circle()
-                        .fill(Color.secondary)
-                        .frame(width: 7, height: 7)
-                        .opacity(0.35 + 0.65 * max(0, sin(phase - Double(index) * 0.8)))
-                }
+        HStack(spacing: 4) {
+            ForEach(0..<3) { index in
+                Circle()
+                    .fill(Color.secondary)
+                    .frame(width: 7, height: 7)
+                    .opacity(lit ? 1 : 0.35)
+                    .animation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true).delay(Double(index) * 0.27), value: lit)
             }
-            .padding(.vertical, 6)
         }
+        .padding(.vertical, 6)
+        .onAppear { lit = true }
         .accessibilityLabel("typing")
     }
 }

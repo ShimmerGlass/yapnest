@@ -164,8 +164,12 @@ enum GifDownload {
     }
 
     static func fetch(_ gif: Gif) async throws -> URL {
-        let (data, response) = try await GifService.privateSession.data(from: gif.shared.url)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw NotAGif() }
+        let data: Data
+        do {
+            data = try await GifService.download(gif.shared.url)
+        } catch is GifService.DownloadError {
+            throw NotAGif()
+        }
         // A service error page or another format would otherwise be sent as a GIF.
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetType(source) as String? == UTType.gif.identifier

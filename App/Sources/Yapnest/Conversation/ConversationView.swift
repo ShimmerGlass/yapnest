@@ -181,6 +181,7 @@ struct ConversationView: View {
                 await session.database.forEachValue(of: session.database.observeGroupChat(peer), "Group") { group in
                     screen.group = group
                     screen.hasGroupValue = true
+                    if screen.conversation.isGroup { screen.conversation.groupChanged(group) }
                 }
             }
             .task {

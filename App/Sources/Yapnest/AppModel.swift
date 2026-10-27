@@ -44,6 +44,7 @@ final class AppModel {
     private var composingSince: [JID: Date] = [:]
     /// Runs only while someone is typing.
     private var typingExpiry: Task<Void, Never>?
+    @ObservationIgnored let badgeSync = BadgeSync()
     /// Contacts' availability, from the session.
     private(set) var presences: [JID: ContactPresence] = [:]
     /// Contacts online with a device that takes calls.
@@ -134,6 +135,7 @@ final class AppModel {
             KeychainIdentityKeyStore.deleteAll()
             ShareSuggestions.removeAll()
             DraftWriter.shared.forgetAll()
+            SharedContainer.forgetDeviceId()
         }
         /// The diagnostic log and the key its ids are hashed with, which hold
         /// nothing of the next account's.
@@ -548,6 +550,7 @@ final class AppModel {
         AppDatabase.resume()
         // The extension may have stored messages this process hasn't seen.
         let database = session.database
+        badgeSync.forget()
         Task { await offMain { try? database.notifyExternalChanges() } }
         if sessionLock.tryLock(as: .app) {
             environment.connect(session)
@@ -572,6 +575,7 @@ final class AppModel {
                 }
                 if locked {
                     let database = session.database
+                    badgeSync.forget()
                     await offMain { try? database.notifyExternalChanges() }
                     environment.connect(session)
                     return
@@ -682,7 +686,9 @@ final class AppModel {
         // Without the lock, the database is let go of too, and the next
         // connection sends what the extension wrote.
         guard let session, sessionLock.isLocked else { return }
+        let badgeSync = badgeSync
         Task.detached(priority: .userInitiated) {
+            badgeSync.forget()
             try? session.database.notifyExternalChanges()
             session.resendPending()
         }
@@ -745,14 +751,17 @@ final class AppModel {
     private func observeUnread(_ session: XMPPSession) {
         unreadObservation?.cancel()
         guard environment.managesBadge else { return }
+        badgeSync.forget()
+        let badgeSync = badgeSync
         unreadObservation = Task {
             var last: [JID: Int]?
             await session.database.forEachValue(of: session.database.observeUnreadBadge(), "Unread") { badge in
                 let center = UNUserNotificationCenter.current()
-                // Every time: the notification extension sets the badge as
-                // well, and a message it counted can be read before this
-                // sees the count go up, so the counts alone may not change.
-                try? await center.setBadgeCount(badge.count)
+                // Each call is a round trip to the system, and most writes
+                // leave the count alone. The notification extension sets the
+                // badge as well, so what we set last is forgotten whenever
+                // it may have stored something (`BadgeSync`).
+                if badgeSync.shouldSet(badge.count) { try? await center.setBadgeCount(badge.count) }
                 DockBadge.showDot(badge.showsDot)
                 let counts = badge.counts
                 guard counts != last else { return }
@@ -940,7 +949,9 @@ final class AppModel {
     // peers whose app died or whose network dropped mid-sentence.
 
     private func startTyping(_ peer: JID) {
-        typing.insert(peer)
+        // Only a change of who is typing invalidates readers; a `composing`
+        // follows every few seconds.
+        if !typing.contains(peer) { typing.insert(peer) }
         composingSince[peer] = Date()
         guard typingExpiry == nil else { return }
         let interval = environment.typingSweepInterval
@@ -955,13 +966,13 @@ final class AppModel {
     }
 
     private func stopTyping(_ peer: JID) {
-        typing.remove(peer)
+        if typing.contains(peer) { typing.remove(peer) }
         composingSince[peer] = nil
         if typing.isEmpty { typingExpiry?.cancel(); typingExpiry = nil }
     }
 
     private func clearTyping() {
-        typing = []
+        if !typing.isEmpty { typing = [] }
         composingSince = [:]
         typingExpiry?.cancel()
         typingExpiry = nil
@@ -1043,4 +1054,22 @@ final class LiveConversations {
     func model(for peer: JID) -> ConversationModel? {
         entries[peer]?.model
     }
+}
+
+/// The badge count this process set last, to set it only when it changes. The
+/// notification extension sets the badge too, and a message it counted can be
+/// read before the app sees the count go up, so the count the app set is
+/// forgotten wherever the extension may have written to the database.
+final class BadgeSync: Sendable {
+    private let last = OSAllocatedUnfairLock<Int?>(initialState: nil)
+
+    func shouldSet(_ count: Int) -> Bool {
+        last.withLock {
+            if $0 == count { return false }
+            $0 = count
+            return true
+        }
+    }
+
+    func forget() { last.withLock { $0 = nil } }
 }

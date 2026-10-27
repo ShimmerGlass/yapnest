@@ -62,13 +62,24 @@ struct SelectableText: UIViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectableTextView, context: Context) -> CGSize? {
         // Measured here from the words, as the view may not hold them yet.
         let offered = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 100_000
+        // The lazy stack asks again for every row it lays out, and measuring
+        // is a full text layout.
+        let coordinator = context.coordinator
+        if coordinator.measuredText != text {
+            coordinator.measuredText = text
+            coordinator.sizes = [:]
+        }
+        if let known = coordinator.sizes[offered] { return known }
         let options: NSStringDrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
         let wanted = text.boundingRect(with: CGSize(width: offered, height: .greatestFiniteMagnitude), options: options, context: nil)
         // A point of slack, so rounding can't wrap the last word of a line
         // that just fits.
         let width = min(offered, ceil(wanted.width) + 1)
         let height = ceil(text.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude), options: options, context: nil).height)
-        return CGSize(width: width, height: height)
+        let size = CGSize(width: width, height: height)
+        if coordinator.sizes.count >= 8 { coordinator.sizes = [:] }
+        coordinator.sizes[offered] = size
+        return size
     }
 
     static func dismantleUIView(_ view: SelectableTextView, coordinator: Coordinator) {
@@ -77,6 +88,9 @@ struct SelectableText: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var text: NSAttributedString?
+        /// What `sizes` was measured for, which is dropped when it changes.
+        var measuredText: NSAttributedString?
+        var sizes: [CGFloat: CGSize] = [:]
         var openLink: ((URL) -> Void)?
         let cursor = HandCursor()
 

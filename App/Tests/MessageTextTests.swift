@@ -25,6 +25,11 @@ struct MessageTextTests {
         runs(body).flatMap { $0 }.compactMap { $0.link == nil ? nil : $0.text }
     }
 
+    @Test func theRenderedTextKeepsItsLinksForTheMenu() {
+        let rendered = MessageText.render("see https://example.com/a and\n> https://example.org/b\n```\nhttps://example.net/c\n```", kind: .normal)
+        #expect(rendered.links.map(\.absoluteString) == ["https://example.com/a", "https://example.org/b"])
+    }
+
     private func styled(_ body: String, _ font: Font) -> [String] {
         runs(body).flatMap { $0 }.filter { $0.font == font && $0.link == nil }.map(\.text)
     }
