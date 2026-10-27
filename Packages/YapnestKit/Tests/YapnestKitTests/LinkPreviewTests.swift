@@ -220,6 +220,20 @@ struct LinkPreviewerTests {
         await #expect(throws: FetchError.self) { try await previewer.fetch(URL(string: "https://unreachable.test/")!) }
     }
 
+    @Test func aLinkThatFailedIsNotAskedForAgainForAnHour() async throws {
+        let url = URL(string: "https://unreachable.test/")!
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        previewer.fetchIfNeeded(url, now: start)
+        #expect(await eventually { stub.requested.count == 1 && previewer.isBackedOff(url.absoluteString, now: start) })
+
+        previewer.fetchIfNeeded(url, now: start.addingTimeInterval(60))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(stub.requested.count == 1)
+
+        previewer.fetchIfNeeded(url, now: start.addingTimeInterval(LinkPreviewer.retryAfter + 1))
+        #expect(await eventually { stub.requested.count == 2 })
+    }
+
     @Test func refusedLinkHasNothingToShow() async throws {
         let refusing = LinkPreviewer(database: db, directory: previewer.directory, fetcher: RefusingFetcher())
         #expect(try await refusing.fetch(URL(string: "https://192.168.1.1/")!).kind == .none)

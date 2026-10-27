@@ -17,6 +17,11 @@ public final class LinkPreviewer: Sendable {
     /// Links whose preview was fetched but couldn't be stored. Without this
     /// they would be fetched again every time their message shows.
     private let unstored = OSAllocatedUnfairLock(initialState: Set<String>())
+    /// When each link last failed in a way worth retrying. The message shows
+    /// again with every scroll, so without this an unreachable page would be
+    /// asked for each time.
+    private let failures = OSAllocatedUnfairLock(initialState: [String: Date]())
+    static let retryAfter: TimeInterval = 3600
     private static let logger = Logger(subsystem: "Yapnest", category: "LinkPreviews")
 
     static let maxPageSize = 1024 * 1024
@@ -46,8 +51,12 @@ public final class LinkPreviewer: Sendable {
 
     /// Fetches `url`'s preview in the background unless it's stored or on its way.
     public func fetchIfNeeded(_ url: URL) {
+        fetchIfNeeded(url, now: Date())
+    }
+
+    func fetchIfNeeded(_ url: URL, now: Date) {
         let key = url.absoluteString
-        guard !unstored.withLock({ $0.contains(key) }), inFlight.withLock({ $0.insert(key).inserted }) else { return }
+        guard !unstored.withLock({ $0.contains(key) }), !isBackedOff(key, now: now), inFlight.withLock({ $0.insert(key).inserted }) else { return }
         Task.detached(priority: .utility) { [self] in
             defer { _ = inFlight.withLock { $0.remove(key) } }
             let stored = try? await database.reader.read { db in try LinkPreview.fetchOne(db, key: key) }
@@ -56,9 +65,11 @@ public final class LinkPreviewer: Sendable {
             do {
                 preview = try await fetch(url)
             } catch {
-                // Offline or timed out: try again next time the message shows.
+                // Offline or timed out: try again, but not at once.
+                failures.withLock { $0[key] = now }
                 return
             }
+            _ = failures.withLock { $0.removeValue(forKey: key) }
             do {
                 try await database.writer.write { db in try preview.save(db) }
             } catch {
@@ -66,6 +77,10 @@ public final class LinkPreviewer: Sendable {
                 Self.logger.error("Couldn't store the preview of a link: \(error)")
             }
         }
+    }
+
+    func isBackedOff(_ key: String, now: Date) -> Bool {
+        failures.withLock { $0[key] }.map { abs(now.timeIntervalSince($0)) < Self.retryAfter } ?? false
     }
 
     /// Downloads and describes `url`. Throws only for errors worth retrying
