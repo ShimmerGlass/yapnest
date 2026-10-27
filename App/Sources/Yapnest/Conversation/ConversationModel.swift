@@ -582,8 +582,9 @@ final class ConversationModel {
                 // rows need here, so `apply` finds it all cached.
                 guard let self else { return }
                 FrameLog.event("observed items=\(items.count)")
+                let environment = self.rowEnvironment()
                 let missing: [(id: Int64, key: TextKey)] = items.compactMap { item in
-                    self.textKey(for: item).flatMap { key in self.textCache[item.id]?.key == key ? nil : (item.id, key) }
+                    self.textKey(for: item, in: environment).flatMap { key in self.textCache[item.id]?.key == key ? nil : (item.id, key) }
                 }
                 if !missing.isEmpty {
                     let rendered = await Task.detached(priority: .userInitiated) { Self.renderTexts(missing) }.value
@@ -591,7 +592,13 @@ final class ConversationModel {
                     guard generation == self.generation else { return }
                     for (id, cached) in rendered { self.textCache[id] = cached }
                 }
-                self.apply(items, generation: generation)
+                // The rows' contents are worked out here too: for a long chat
+                // that took tens of milliseconds of `apply`, in the push into it.
+                let snapshot = self.prebuildSnapshot(for: items)
+                let prebuilt = await Task.detached(priority: .userInitiated) { Self.prebuild(snapshot) }.value
+                FrameLog.event("prebuilt rows=\(prebuilt.rows.count)")
+                guard generation == self.generation else { return }
+                self.apply(items, generation: generation, prebuilt: prebuilt)
             }
         }
     }
@@ -632,7 +639,7 @@ final class ConversationModel {
         isFetchingHistory = fetching
     }
 
-    private func apply(_ newItems: [ConversationItem], generation: Int) {
+    private func apply(_ newItems: [ConversationItem], generation: Int, prebuilt: Prebuilt? = nil) {
         guard generation == self.generation else { return }
         let wasNearBottom = isNearBottom
         let previousOrder = order
@@ -733,7 +740,7 @@ final class ConversationModel {
         if prepended { recorder?.update { $0.olderRowsComing() } }
         #endif
         let previousRows = rowsByID
-        let built = buildRows()
+        let built = buildRows(prebuilt: prebuilt)
         defer { followsWithRows = false }
         // Rows the user sees changing in place animate, and so do new ones.
         // Not older rows, a trimmed window or a jump, which move rows that
@@ -971,7 +978,7 @@ final class ConversationModel {
         var key: TextKey?
     }
 
-    private func textPlan(for item: ConversationItem) -> TextPlan {
+    private nonisolated static func textPlan(for item: ConversationItem, showsWhole: Bool, environment: RowEnvironment) -> TextPlan {
         let message = item.message
         // A call's body is only a fallback for clients that show no calls.
         guard message.call == nil else { return TextPlan() }
@@ -986,16 +993,16 @@ final class ConversationModel {
         } else if message.encryption == .omemoUndecryptable {
             .undecryptable
         } else if message.meAction != nil {
-            .action(name: isOutgoing ? String(localized: "You") : authorName(for: message.author))
+            .action(name: isOutgoing ? String(localized: "You") : authorName(for: message.author, in: environment))
         } else {
             .normal
         }
-        return TextPlan(location: nil, key: TextKey(body: message.body, kind: kind, collapsed: !showsEveryBodyWhole && !showingWhole.contains(item.id)))
+        return TextPlan(location: nil, key: TextKey(body: message.body, kind: kind, collapsed: !environment.showsEveryBodyWhole && !showsWhole))
     }
 
     /// The key of the text a row shows; nil when it shows none.
-    private func textKey(for item: ConversationItem) -> TextKey? {
-        textPlan(for: item).key
+    private func textKey(for item: ConversationItem, in environment: RowEnvironment) -> TextKey? {
+        Self.textPlan(for: item, showsWhole: showingWhole.contains(item.id), environment: environment).key
     }
 
     private nonisolated static func renderText(_ key: TextKey) -> CachedText {
@@ -1037,7 +1044,7 @@ final class ConversationModel {
 
     /// What of a message's neighbour decides how it is drawn: whether they
     /// are grouped, where the day changes, and whether the bubbles join.
-    private struct Neighbour: Equatable {
+    private struct Neighbour: Equatable, Sendable {
         var direction: Message.Direction
         var author: Author
         var timestamp: Date
@@ -1057,7 +1064,7 @@ final class ConversationModel {
     /// checks once for all rows. A row whose inputs are equal to those it
     /// was last built from has the same content, so it isn't built again.
     /// Anything new that `makeContent` reads belongs here.
-    private struct RowInputs: Equatable {
+    private struct RowInputs: Equatable, Sendable {
         var item: ConversationItem
         var previous: Neighbour?
         var next: Neighbour?
@@ -1077,7 +1084,140 @@ final class ConversationModel {
     /// The time zone and locale the rows were last built in.
     @ObservationIgnored private var builtIn: (calendar: Calendar, locale: Locale)?
 
-    private func buildRows() -> [MessageRow] {
+    /// What a row is made of apart from its inputs: everything `makeContent`
+    /// reads from the model, copied so that it can run off the main actor.
+    /// What is fixed for the screen's life, and what changes with the
+    /// contacts' names or the link preview choices (`inputsEpoch`).
+    private struct RowEnvironment: Sendable {
+        var account: JID
+        var isGroup: Bool
+        var contactNames: [JID: String]
+        var linkPreviewSetting: LinkPreviewSetting
+        var linkPreviewsAllowed: Bool?
+        var showsEveryBodyWhole: Bool
+        var attachments: AttachmentStore
+        var previews: LinkPreviewer?
+        var now: Date
+        var calendar: Calendar
+        var locale: Locale
+    }
+
+    private func rowEnvironment() -> RowEnvironment {
+        RowEnvironment(
+            account: session.account, isGroup: isGroup, contactNames: contactNames,
+            linkPreviewSetting: linkPreviewSetting, linkPreviewsAllowed: linkPreviewsAllowed,
+            showsEveryBodyWhole: showsEveryBodyWhole, attachments: session.attachments, previews: previews,
+            now: now(), calendar: Calendar.current, locale: Locale.current,
+        )
+    }
+
+    /// Rows built off the main actor for an observed window, with the
+    /// environment they were built in. `buildRows` takes one only if its
+    /// inputs are still what the main actor works out, so a change that came
+    /// in meanwhile builds that row again, as it always did.
+    private struct Prebuilt: Sendable {
+        struct Row: Sendable {
+            var inputs: RowInputs
+            var content: MessageRow.Content
+            var text: CachedText?
+        }
+
+        var rows: [Int64: Row]
+        var calendar: Calendar
+        var locale: Locale
+    }
+
+    private struct PrebuildSnapshot: Sendable {
+        var items: [ConversationItem]
+        var dividerId: Int64?
+        var showingWhole: Set<Int64>
+        var newestIsOffered: Bool
+        var epoch: Int
+        /// What the rows on screen were built from; those aren't built again.
+        var built: [Int64: RowInputs]
+        var texts: [Int64: CachedText]
+        var environment: RowEnvironment
+    }
+
+    /// Counts the rows `buildRows` had to work out on the main actor, for tests.
+    @ObservationIgnored private(set) var rowsBuiltOnMain = 0
+
+    private func prebuildSnapshot(for items: [ConversationItem]) -> PrebuildSnapshot {
+        let environment = rowEnvironment()
+        let sameEnvironment = builtIn.map { $0.calendar == environment.calendar && $0.locale == environment.locale } ?? false
+        return PrebuildSnapshot(
+            items: items,
+            // As `apply` works it out for the first emission.
+            dividerId: hasLoaded ? unreadDividerId : items.first { $0.message.direction == .incoming && !$0.message.isRead }?.id,
+            showingWhole: showingWhole,
+            newestIsOffered: !isBounded || holdsNewest,
+            epoch: inputsEpoch,
+            built: sameEnvironment ? inputsByID : [:],
+            texts: textCache,
+            environment: environment,
+        )
+    }
+
+    private nonisolated static func prebuild(_ snapshot: PrebuildSnapshot) -> Prebuilt {
+        let inputs = rowInputs(
+            for: snapshot.items, dividerId: snapshot.dividerId, showingWhole: snapshot.showingWhole,
+            newestIsOffered: snapshot.newestIsOffered, epoch: snapshot.epoch,
+        )
+        var rows: [Int64: Prebuilt.Row] = [:]
+        for input in inputs where snapshot.built[input.item.id] != input {
+            let (content, text) = makeContent(input, cached: snapshot.texts[input.item.id], environment: snapshot.environment)
+            rows[input.item.id] = Prebuilt.Row(inputs: input, content: content, text: text)
+        }
+        return Prebuilt(rows: rows, calendar: snapshot.environment.calendar, locale: snapshot.environment.locale)
+    }
+
+    private nonisolated static func rowInputs(
+        for items: [ConversationItem], dividerId: Int64?, showingWhole: Set<Int64>, newestIsOffered: Bool, epoch: Int,
+    ) -> [RowInputs] {
+        let neighbours = items.map(Neighbour.init)
+        return items.indices.map { index in
+            RowInputs(
+                item: items[index],
+                previous: index > 0 ? neighbours[index - 1] : nil,
+                next: index + 1 < items.count ? neighbours[index + 1] : nil,
+                hasUnreadDivider: items[index].id == dividerId,
+                showsWholeBody: showingWhole.contains(items[index].id),
+                // Held, it was the newest when the user scrolled up; its
+                // quick responses going would move the list by their height.
+                isNewest: index == items.count - 1 && newestIsOffered,
+                epoch: epoch,
+            )
+        }
+    }
+
+    #if DEBUG
+    /// What the main actor's path makes of the rows now, for a test to compare
+    /// with what was built off it.
+    func contentsBuiltOnMainForTesting() -> [MessageRow.Content] {
+        let environment = rowEnvironment()
+        let inputs = Self.rowInputs(
+            for: order.map { items[$0]! }, dividerId: unreadDividerId, showingWhole: showingWhole,
+            newestIsOffered: !isBounded || holdsNewest, epoch: inputsEpoch,
+        )
+        return inputs.map { Self.makeContent($0, cached: textCache[$0.item.id], environment: environment).content }
+    }
+
+    /// Builds the rows again from nothing, offering contents that differ from
+    /// what the main actor would make: ones that still fit the rows' inputs,
+    /// or ones made for inputs that have since changed.
+    func rowsBuiltWithMarkedPrebuiltForTesting(stillCurrent: Bool) async -> [MessageRow] {
+        inputsByID = [:]
+        let snapshot = prebuildSnapshot(for: order.map { items[$0]! })
+        var prebuilt = await Task.detached { Self.prebuild(snapshot) }.value
+        for id in prebuilt.rows.keys {
+            prebuilt.rows[id]?.content.accessibilityLabel = "prebuilt"
+            if !stillCurrent { prebuilt.rows[id]?.inputs.epoch += 1 }
+        }
+        return buildRows(prebuilt: prebuilt)
+    }
+    #endif
+
+    private func buildRows(prebuilt: Prebuilt? = nil) -> [MessageRow] {
         var built: [MessageRow] = []
         built.reserveCapacity(order.count)
         var newTexts: [Int64: CachedText] = [:]
@@ -1088,24 +1228,18 @@ final class ConversationModel {
         let environment = (calendar: Calendar.current, locale: Locale.current)
         let sameEnvironment = builtIn.map { $0.calendar == environment.calendar && $0.locale == environment.locale } ?? false
         builtIn = environment
-        let neighbours = order.map { Neighbour(items[$0]!) }
+        let prebuilt = prebuilt.flatMap { $0.calendar == environment.calendar && $0.locale == environment.locale ? $0 : nil }
+        var shared: RowEnvironment?
         let holds = holdsRowsBelow
         let boundary = holds ? visibleIDs.compactMap { orderIndex[$0] }.max() : nil
         var held: Set<Int64> = []
+        let allInputs = Self.rowInputs(
+            for: order.map { items[$0]! }, dividerId: unreadDividerId, showingWhole: showingWhole,
+            newestIsOffered: !isBounded || holdsNewest, epoch: inputsEpoch,
+        )
         for index in order.indices {
             let id = order[index]
-            let item = items[id]!
-            let inputs = RowInputs(
-                item: item,
-                previous: index > 0 ? neighbours[index - 1] : nil,
-                next: index + 1 < order.count ? neighbours[index + 1] : nil,
-                hasUnreadDivider: id == unreadDividerId,
-                showsWholeBody: showingWhole.contains(id),
-                // Held, it was the newest when the user scrolled up; its
-                // quick responses going would move the list by their height.
-                isNewest: index == order.count - 1 && (!isBounded || holdsNewest),
-                epoch: inputsEpoch,
-            )
+            let inputs = allInputs[index]
             newInputs[id] = inputs
             if sameEnvironment, let existing = rowsByID[id], inputsByID[id] == inputs {
                 built.append(existing)
@@ -1124,7 +1258,17 @@ final class ConversationModel {
                 newTexts[id] = textCache[id]
                 continue
             }
-            let content = makeContent(inputs, texts: &newTexts)
+            let content: MessageRow.Content
+            if let ready = prebuilt?.rows[id], ready.inputs == inputs {
+                content = ready.content
+                newTexts[id] = ready.text
+            } else {
+                rowsBuiltOnMain += 1
+                if shared == nil { shared = rowEnvironment() }
+                let made = Self.makeContent(inputs, cached: textCache[id], environment: shared!)
+                content = made.content
+                newTexts[id] = made.text
+            }
             let row: MessageRow
             if let existing = rowsByID[id], existing.content == content {
                 row = existing
@@ -1174,13 +1318,15 @@ final class ConversationModel {
         withoutAnimation { rebuildRows() }
     }
 
-    private func makeContent(_ inputs: RowInputs, texts: inout [Int64: CachedText]) -> MessageRow.Content {
+    private nonisolated static func makeContent(
+        _ inputs: RowInputs, cached existing: CachedText?, environment: RowEnvironment,
+    ) -> (content: MessageRow.Content, text: CachedText?) {
         let item = inputs.item
         let isNewest = inputs.isNewest
         let message = item.message
         let isOutgoing = message.direction == .outgoing
         let this = Neighbour(item)
-        let calendar = Calendar.current
+        let calendar = environment.calendar
         func grouped(_ a: Neighbour?, _ b: Neighbour?) -> Bool {
             guard let a, let b else { return false }
             return a.direction == b.direction
@@ -1192,29 +1338,30 @@ final class ConversationModel {
         let joinsPrevious = grouped(inputs.previous, this)
         let startsRun = !joinsPrevious || showsDay
         let layout = MessageRow.Layout(
-            dayHeader: showsDay ? message.timestamp.dayHeaderFormatted(now: now()) : nil,
-            showsUnreadDivider: item.id == unreadDividerId,
+            dayHeader: showsDay ? message.timestamp.dayHeaderFormatted(now: environment.now) : nil,
+            showsUnreadDivider: inputs.hasUnreadDivider,
             joinsPrevious: joinsPrevious,
             joinsNext: grouped(this, inputs.next) && inputs.next?.hasReactions != true && item.reactions.isEmpty,
         )
 
         let time = message.timestamp.formatted(date: .omitted, time: .shortened)
         if let call = message.call {
-            return MessageRow.Content(
+            let content = MessageRow.Content(
                 item: item, kind: .call(call), layout: layout, quoteAuthor: "", quoteText: "", time: time,
                 security: message.security, preview: .none, accessibilityLabel: [call.title, time].joined(separator: ", "),
             )
+            return (content, nil)
         }
 
-        let attachment = attachmentDisplay(for: item)
-        let plan = textPlan(for: item)
+        let attachment = attachmentDisplay(for: item, in: environment)
+        let plan = textPlan(for: item, showsWhole: inputs.showsWholeBody, environment: environment)
         var text: RenderedText?
+        var cachedText: CachedText?
         var spoken: String?
         if plan.location != nil {
             spoken = String(localized: "Location")
         } else if let key = plan.key {
             let cached: CachedText
-            let existing = textCache[item.id]
             if let existing, existing.key == key {
                 cached = existing
             } else if let existing, let whole = existing.whole, existing.key.opened == key {
@@ -1225,12 +1372,12 @@ final class ConversationModel {
                 // which renders ahead of `apply`: a contact's name, say.
                 cached = Self.renderText(key)
             }
-            texts[item.id] = cached
+            cachedText = cached
             text = cached.text
             spoken = cached.spoken
         }
 
-        let who = isOutgoing ? String(localized: "You") : authorName(for: message.author)
+        let who = isOutgoing ? String(localized: "You") : authorName(for: message.author, in: environment)
         // A file's own summary starts with an emoji and a bare file message has
         // no words, so VoiceOver gets the kind and name spelled out instead.
         let attachmentSpoken = attachment.map { display -> String in
@@ -1250,12 +1397,12 @@ final class ConversationModel {
         } else {
             nil
         }
-        let preview = previewDisplay(for: item)
+        let preview = previewDisplay(for: item, in: environment)
         let previewTitle: String? = switch preview {
         case .page(let preview, _), .image(let preview, _): preview.title
         case .none, .ask: nil
         }
-        let quoteAuthor = item.quote?.author.map(authorName(for:))
+        let quoteAuthor = item.quote?.author.map { authorName(for: $0, in: environment) }
         let quoteText = item.quote?.text.trimmingBlankEdgeLines
         let replying: String? = quoteText.map { summary in
             quoteAuthor.map { String(localized: "Replying to \($0): \(summary)") } ?? String(localized: "Replying to: \(summary)")
@@ -1263,8 +1410,8 @@ final class ConversationModel {
         let reactions: String? = item.reactions.isEmpty ? nil
             : String(localized: "Reactions: \(item.reactions.map { "\($0.emoji) \($0.senders.count)" }.joined(separator: ", "))")
         let words = [replying, spoken ?? attachmentSpoken, previewTitle, reactions, state, time].compactMap { $0 }.joined(separator: ", ")
-        let showsName = isGroup && !isOutgoing && startsRun
-        return MessageRow.Content(
+        let showsName = environment.isGroup && !isOutgoing && startsRun
+        let content = MessageRow.Content(
             item: item,
             layout: layout,
             senderName: showsName ? who : nil,
@@ -1285,26 +1432,35 @@ final class ConversationModel {
             ),
             accessibilityLabel: [who, words].joined(separator: ": "),
         )
+        return (content, cachedText)
     }
 
     /// In groups, the nickname people chose there; in 1:1 chats, the contact's name.
     func authorName(for author: Author) -> String {
-        if author.jid == session.account { return String(localized: "You") }
+        Self.authorName(for: author, account: session.account, isGroup: isGroup, contactNames: contactNames)
+    }
+
+    private nonisolated static func authorName(for author: Author, in environment: RowEnvironment) -> String {
+        authorName(for: author, account: environment.account, isGroup: environment.isGroup, contactNames: environment.contactNames)
+    }
+
+    private nonisolated static func authorName(for author: Author, account: JID, isGroup: Bool, contactNames: [JID: String]) -> String {
+        if author.jid == account { return String(localized: "You") }
         if isGroup, let nick = author.nick { return nick }
         return contactNames[author.jid] ?? author.jid.shortName
     }
 
-    private func attachmentDisplay(for item: ConversationItem) -> AttachmentDisplay? {
+    private nonisolated static func attachmentDisplay(for item: ConversationItem, in environment: RowEnvironment) -> AttachmentDisplay? {
         guard let attachment = item.attachment else { return nil }
-        let file = attachment.state == .ready || attachment.state == .pendingUpload ? session.attachments.url(for: attachment) : nil
+        let file = attachment.state == .ready || attachment.state == .pendingUpload ? environment.attachments.url(for: attachment) : nil
         return AttachmentDisplay(attachment: attachment, fileURL: file)
     }
 
     // MARK: Link previews
 
-    private func previewDisplay(for item: ConversationItem) -> PreviewDisplay {
-        guard item.message.link != nil, let previews else { return .none }
-        switch decision(for: item.message) {
+    private nonisolated static func previewDisplay(for item: ConversationItem, in environment: RowEnvironment) -> PreviewDisplay {
+        guard item.message.link != nil, let previews = environment.previews else { return .none }
+        switch decision(for: item.message, in: environment) {
         case .ask: return .ask
         case .off: return .none
         case .show:
@@ -1319,7 +1475,15 @@ final class ConversationModel {
     }
 
     private func decision(for message: Message) -> LinkPreviewPolicy.Decision {
-        LinkPreviewPolicy.decide(global: linkPreviewSetting, chat: linkPreviewsAllowed,
+        Self.decision(for: message, setting: linkPreviewSetting, chat: linkPreviewsAllowed, isGroup: isGroup)
+    }
+
+    private nonisolated static func decision(for message: Message, in environment: RowEnvironment) -> LinkPreviewPolicy.Decision {
+        decision(for: message, setting: environment.linkPreviewSetting, chat: environment.linkPreviewsAllowed, isGroup: environment.isGroup)
+    }
+
+    private nonisolated static func decision(for message: Message, setting: LinkPreviewSetting, chat: Bool?, isGroup: Bool) -> LinkPreviewPolicy.Decision {
+        LinkPreviewPolicy.decide(global: setting, chat: chat,
                                   isOurs: Message.isTrustedOutgoing(isOutgoing: message.direction == .outgoing, isWrittenHere: message.isWrittenHere, inGroup: isGroup))
     }
 
