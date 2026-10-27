@@ -127,12 +127,6 @@ struct SettingsView: View {
                         Toggle("Hide Screen in App Switcher", isOn: $hidesScreenInAppSwitcher)
                     } footer: {
                         Text("Shows a blank screen instead of your chats in the app switcher.")
-                            #if DEBUG
-                            // The snapshot can't be read from a UI test, so it
-                            // reads how often the cover went up instead.
-                            .accessibilityIdentifier("appSwitcherCoverCount")
-                            .accessibilityValue("\(AppSwitcherCover.shared.shownCount)")
-                            #endif
                     }
                 }
 
@@ -343,6 +337,20 @@ struct SettingsView: View {
                 }
             }
         }
+        #if DEBUG
+        // The snapshot can't be read from a UI test, so it reads how often the
+        // cover went up. Its own element beside the form, as a footer is
+        // exposed differently from one iOS version to the next.
+        .overlay(alignment: .bottomTrailing) {
+            Button {} label: {
+                Color.clear.frame(width: 6, height: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("appSwitcherCoverCount")
+            .accessibilityLabel("Covers shown")
+            .accessibilityValue("\(AppSwitcherCover.shared.shownCount)")
+        }
+        #endif
         .closableFromPushedScreens()
     }
 

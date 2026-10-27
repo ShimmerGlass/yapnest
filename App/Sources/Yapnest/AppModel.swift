@@ -280,6 +280,9 @@ final class AppModel {
     private func startFixture(_ fixture: DevFixture) {
         let credentials = XMPPSession.Credentials(jid: DevFixture.account, password: "fixture")
         let directory = environment.accountDirectory(DevFixture.account)
+        // Per-device settings outlive the fixture's wiped account, so a test
+        // would start on what the one before it left.
+        UserDefaults.standard.removeObject(forKey: AppSwitcherCoverSetting.key)
         Task {
             do {
                 try? FileManager.default.removeItem(at: directory.url)

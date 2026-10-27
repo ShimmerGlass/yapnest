@@ -58,7 +58,7 @@ final class SettingsUITests: InteractionsTestCase {
         XCTAssertEqual(toggle.value as? String, "0", "the setting is on by default")
     }
 
-    /// The snapshot can't be read, so the debug footer counts the covers
+    /// The snapshot can't be read, so a debug element in Settings counts the covers
     /// raised. The cover is a window of its own, so it's gone from the app's
     /// elements once the app is back.
     func testTheCoverGoesUpWhenTheAppLeavesAndIsGoneOnReturn() {
@@ -68,8 +68,7 @@ final class SettingsUITests: InteractionsTestCase {
         XCTAssertTrue(toggle.exists, "no Hide Screen in App Switcher in Settings")
         toggle.switches.firstMatch.tap()
         XCTAssertEqual(toggle.value as? String, "1", "the switch didn't turn on")
-        // A footer is a static text on iOS 18 and another kind of element on 26.
-        let count = app.descendants(matching: .any)["appSwitcherCoverCount"].firstMatch
+        let count = app.buttons["appSwitcherCoverCount"]
         XCTAssertTrue(count.waitForExistence(timeout: 5), "no cover counter")
         XCTAssertEqual(count.value as? String, "0")
 
