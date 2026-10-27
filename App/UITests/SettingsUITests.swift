@@ -50,6 +50,36 @@ final class SettingsUITests: InteractionsTestCase {
         XCTAssertNotEqual(toggle.value as? String, before, "the GIF switch didn't change")
     }
 
+    func testHideScreenInAppSwitcherIsOffByDefault() {
+        driver.openSettings()
+        let toggle = app.switches["Hide Screen in App Switcher"]
+        for _ in 0..<5 where !toggle.exists || !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.exists, "no Hide Screen in App Switcher in Settings")
+        XCTAssertEqual(toggle.value as? String, "0", "the setting is on by default")
+    }
+
+    /// The snapshot can't be read, so the debug footer counts the covers
+    /// raised. The cover is a window of its own, so it's gone from the app's
+    /// elements once the app is back.
+    func testTheCoverGoesUpWhenTheAppLeavesAndIsGoneOnReturn() {
+        driver.openSettings()
+        let toggle = app.switches["Hide Screen in App Switcher"]
+        for _ in 0..<5 where !toggle.exists || !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.exists, "no Hide Screen in App Switcher in Settings")
+        toggle.switches.firstMatch.tap()
+        XCTAssertEqual(toggle.value as? String, "1", "the switch didn't turn on")
+        let count = app.staticTexts["appSwitcherCoverCount"]
+        XCTAssertTrue(count.waitForExistence(timeout: 5), "no cover counter")
+        XCTAssertEqual(count.value as? String, "0")
+
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "Settings isn't back")
+        let raised = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: count)
+        XCTAssertEqual(XCTWaiter.wait(for: [raised], timeout: 10), .completed, "the cover didn't go up: \(count.value ?? "nil")")
+        waitUntilGone(app.otherElements["appSwitcherCover"], "the cover")
+    }
+
     /// The fixture's account never connects; the check is local, so nothing is sent.
     func testChangePasswordRefusesPasswordsThatDontMatch() {
         driver.openSettings()

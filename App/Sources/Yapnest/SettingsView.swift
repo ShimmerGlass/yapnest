@@ -21,6 +21,7 @@ struct SettingsView: View {
     @State private var includesMessagesInBackups = true
     @State private var gifsEnabled = true
     @State private var encryptsNewChats = true
+    @AppStorage(AppSwitcherCoverSetting.key) private var hidesScreenInAppSwitcher = false
     @State private var privacyError: String?
     @State private var confirmsSignOut = false
     @State private var photo: PhotosPickerItem?
@@ -120,6 +121,18 @@ struct SettingsView: View {
                     Text("Only the people you've added see these. With Activity Status on, your contacts see how long ago you were online, and see you as away once you leave Yapnest on your iPhone or iPad, or step away from your Mac. You see theirs. While you're offline, your server may tell your contacts when you were last online whatever this says; Yapnest can't control that.")
                 }
                 .disabled(!isLoaded)
+
+                Section {
+                    Toggle("Hide Screen in App Switcher", isOn: $hidesScreenInAppSwitcher)
+                } footer: {
+                    Text("Shows a blank screen instead of your chats in the app switcher.")
+                        #if DEBUG
+                        // The snapshot can't be read from a UI test, so it
+                        // reads how often the cover went up instead.
+                        .accessibilityIdentifier("appSwitcherCoverCount")
+                        .accessibilityValue("\(AppSwitcherCover.shared.shownCount)")
+                        #endif
+                }
 
                 Section {
                     HStack {
