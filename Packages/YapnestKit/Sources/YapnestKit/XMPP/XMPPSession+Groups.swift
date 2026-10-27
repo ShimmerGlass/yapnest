@@ -883,6 +883,17 @@ extension XMPPSession {
     /// Which lists to ask a room for. Members are who we encrypt for, which
     /// only a room that shows addresses lets us do; bans are for those who
     /// can lift them, and show addresses to them in any room.
+    /// Whose sessions an encrypted group message is decrypted with. Current
+    /// occupants say nothing about who wrote an archived message, and anyone
+    /// may have held our nick before we joined, so an archived one is ours
+    /// only by the occupant id the room gave us.
+    static func encryptedSender(of stanza: Martin.Message, nick: String, in room: RoomContext, account: JID, source: InboundMessage.Source) -> JID? {
+        if let real = InboundMessage.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous) { return real }
+        guard case .archive = source else { return room.occupants[nick] ?? (nick == room.nickname ? account : nil) }
+        guard room.trustsOccupantIds, let own = room.ownOccupantId, InboundMessage.occupantId(in: stanza.element) == own else { return nil }
+        return account
+    }
+
     static func listsToFetch(isNonAnonymous: Bool, isOwnerOrAdmin: Bool) -> [RoomAffiliation] {
         (isNonAnonymous ? memberLists : []) + (isOwnerOrAdmin ? [.outcast] : [])
     }
@@ -1295,7 +1306,7 @@ extension XMPPSession {
         var encryption = Message.Encryption.none
         var device: (id: Int32?, trust: OMEMODevice.Trust?)?
         if stanza.type == .groupchat, stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) != nil, let nick = stanza.from?.resource {
-            let real = InboundMessage.archivedAddress(in: stanza, source: source, isNonAnonymous: context.isNonAnonymous) ?? context.occupants[nick] ?? (nick == context.nickname ? account : nil)
+            let real = Self.encryptedSender(of: stanza, nick: nick, in: context, account: account, source: source)
             if let real {
                 let result = omemo.decrypt(stanza, from: real, ownCopy: real == account, isHistory: isHistory, sentAt: source.archivedAt ?? Date())
                 switch result {

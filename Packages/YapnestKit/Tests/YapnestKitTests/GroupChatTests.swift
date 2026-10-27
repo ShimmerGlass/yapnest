@@ -12,7 +12,7 @@ private func stanza(_ xml: String) -> Martin.Message {
     Stanza.from(element: Element.from(string: xml)!) as! Martin.Message
 }
 
-private let context = RoomContext(jid: room, nickname: "me", occupants: ["anna": alice])
+private let context = RoomContext(jid: room, nickname: "me", occupants: ["anna": alice], isNonAnonymous: true)
 
 private func parse(_ xml: String, source: InboundMessage.Source = .live) -> InboundMessage? {
     InboundMessage(groupchat: stanza(xml), room: context, account: me, source: source, now: Date(timeIntervalSince1970: 0))

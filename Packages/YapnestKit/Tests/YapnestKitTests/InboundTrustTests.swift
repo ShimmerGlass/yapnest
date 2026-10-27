@@ -168,7 +168,7 @@ struct ArchivedGroupSenderTests {
     }
 
     private func item(_ extra: String = "", nick: String = "me", source: InboundMessage.Source, occupants: [String: YapnestKit.JID] = [:]) throws -> InboundMessage {
-        let context = RoomContext(jid: room, nickname: "me", occupants: occupants, trustsOccupantIds: true, ownOccupantId: "occ-me")
+        let context = RoomContext(jid: room, nickname: "me", occupants: occupants, trustsOccupantIds: true, ownOccupantId: "occ-me", isNonAnonymous: true)
         return try #require(InboundMessage(groupchat: stanza("""
             <message from='cake@rooms.example.org/\(nick)' type='groupchat' id='x1'><body>hi</body>
               <origin-id xmlns='urn:xmpp:sid:0' id='orig1'/>\(extra)

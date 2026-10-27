@@ -19,8 +19,9 @@ struct GroupSenderSpoofingTests {
         </message>
         """
 
-    private func parse(source: InboundMessage.Source, occupants: [String: YapnestKit.JID] = [:]) throws -> InboundMessage {
-        try #require(InboundMessage(groupchat: stanza(xml), room: RoomContext(jid: room, nickname: "me", occupants: occupants), account: me, source: source))
+    private func parse(source: InboundMessage.Source, occupants: [String: YapnestKit.JID] = [:], isNonAnonymous: Bool = false) throws -> InboundMessage {
+        let context = RoomContext(jid: room, nickname: "me", occupants: occupants, isNonAnonymous: isNonAnonymous)
+        return try #require(InboundMessage(groupchat: stanza(xml), room: context, account: me, source: source))
     }
 
     @Test func liveMessagesCannotClaimAnAddress() throws {
@@ -35,11 +36,14 @@ struct GroupSenderSpoofingTests {
     }
 
     @Test func archivedMessagesCarryTheRealAddress() throws {
-        let m = try parse(source: .archive(serverId: "r1", timestamp: nil))
+        let m = try parse(source: .archive(serverId: "r1", timestamp: nil), isNonAnonymous: true)
         #expect(m.sender == alice)
+        // An anonymous room's archive may keep the sender's own claim and add none.
+        let anonymous = try parse(source: .archive(serverId: "r1", timestamp: nil))
+        #expect(anonymous.sender == room)
     }
 
-    @Test func anArchiveThatGivesTheOriginalSenderAsAnAddressIsBelievedByItsLastOne() throws {
+    @Test func anArchiveThatGivesTwoOriginalSendersIsNotBelieved() throws {
         let openfire = """
             <message from='cake@rooms.example.org/bob' type='groupchat' id='m1'>
               <body>hi</body>
@@ -48,12 +52,9 @@ struct GroupSenderSpoofingTests {
             </message>
             """
         let room = RoomContext(jid: room, nickname: "me", isNonAnonymous: true)
+        // One of them is the sender's, and nothing says which.
         let archived = try #require(InboundMessage(groupchat: stanza(openfire), room: room, account: me, source: .archive(serverId: "r1", timestamp: nil)))
-        #expect(archived.sender == alice)
-        // An anonymous room's archive adds none, so one there is the sender's claim.
-        let anonymous = RoomContext(jid: room.jid, nickname: "me")
-        let claimed = try #require(InboundMessage(groupchat: stanza(openfire), room: anonymous, account: me, source: .archive(serverId: "r1", timestamp: nil)))
-        #expect(claimed.sender != alice)
+        #expect(archived.sender == room.jid)
         // Live, the same element is whatever the sender wrote.
         let live = try #require(InboundMessage(groupchat: stanza(openfire), room: room, account: me, source: .live))
         #expect(live.sender != alice)
@@ -63,6 +64,92 @@ struct GroupSenderSpoofingTests {
         let forged = xml.replacingOccurrences(of: "alice@example.org/phone", with: "me@example.org/laptop")
         let m = try #require(InboundMessage(groupchat: stanza(forged), room: RoomContext(jid: room, nickname: "me"), account: me, source: .live))
         #expect(!m.isOutgoing)
+    }
+}
+
+/// What each dev server's room archive kept of a message whose sender
+/// claimed to be Carol, both as a muc#user item and as an original sender.
+struct ArchivedSenderTests {
+    private let bob = YapnestKit.JID("bob@example.org")!
+    private let x = "http://jabber.org/protocol/muc#user"
+    private let addresses = "http://jabber.org/protocol/address"
+
+    private func sender(_ inner: String, isNonAnonymous: Bool = true) throws -> YapnestKit.JID {
+        let xml = "<message from='cake@rooms.example.org/bob' type='groupchat' id='m1'><body>hi</body>\(inner)</message>"
+        let context = RoomContext(jid: room, nickname: "me", isNonAnonymous: isNonAnonymous)
+        return try #require(InboundMessage(groupchat: stanza(xml), room: context, account: me, source: .archive(serverId: "r1", timestamp: nil))).sender
+    }
+
+    private var forgedItem: String { "<x xmlns='\(x)'><item jid='carol@example.org/x'/></x>" }
+    private var forgedOriginal: String { "<addresses xmlns='\(addresses)'><address type='ofrom' jid='carol@example.org'/></addresses>" }
+
+    /// Prosody appends its own item after the sender's.
+    @Test func prosodysOwnItemComesLast() throws {
+        let real = "<x xmlns='\(x)'><item role='participant' affiliation='none' jid='bob@example.org'/></x>"
+        #expect(try sender(forgedItem + forgedOriginal + real) == room)
+        #expect(try sender(real) == bob)
+    }
+
+    /// ejabberd replaces the sender's item but keeps their original sender.
+    @Test func ejabberdKeepsTheSendersOriginalSender() throws {
+        let real = "<x xmlns='\(x)'><item jid='bob@example.org/probe'/></x>"
+        #expect(try sender(real + forgedOriginal) == room)
+        #expect(try sender(real) == bob)
+    }
+
+    /// Openfire keeps the sender's item, the only one, and appends its own
+    /// original sender.
+    @Test func openfiresOnlyItemIsTheSenders() throws {
+        let real = "<addresses xmlns='\(addresses)'><address type='ofrom' jid='bob@example.org/probe'/></addresses>"
+        #expect(try sender(forgedItem + forgedOriginal + real) == room)
+        #expect(try sender(real) == bob)
+    }
+
+    /// Openfire's anonymous archive keeps the sender's claims and adds nothing.
+    @Test func anAnonymousRoomsArchiveIsNotBelieved() throws {
+        #expect(try sender(forgedItem + forgedOriginal, isNonAnonymous: false) == room)
+        #expect(try sender(forgedItem, isNonAnonymous: false) == room)
+    }
+
+    @Test func aSenderRepeatingTheirOwnAddressIsStillThemselves() throws {
+        let item = "<x xmlns='\(x)'><item jid='bob@example.org/phone'/></x>"
+        let original = "<addresses xmlns='\(addresses)'><address type='ofrom' jid='bob@example.org'/></addresses>"
+        #expect(try sender(item + original) == bob)
+    }
+
+    @Test func anAddressThatDoesntParseIsADisagreement() throws {
+        let real = "<x xmlns='\(x)'><item jid='bob@example.org'/></x>"
+        let garbage = "<addresses xmlns='\(addresses)'><address type='ofrom' jid='@@'/></addresses>"
+        #expect(try sender(real + garbage) == room)
+    }
+}
+
+/// Whose sessions an encrypted group message is decrypted with.
+struct EncryptedGroupSenderTests {
+    private let carol = YapnestKit.JID("carol@example.org")!
+    private let archive = InboundMessage.Source.archive(serverId: "r1", timestamp: nil)
+
+    private func sender(nick: String, occupantId: String? = nil, source: InboundMessage.Source, ownOccupantId: String? = nil) -> YapnestKit.JID? {
+        let id = occupantId.map { "<occupant-id xmlns='urn:xmpp:occupant-id:0' id='\($0)'/>" } ?? ""
+        let message = stanza("<message from='cake@rooms.example.org/\(nick)' type='groupchat' id='m1'>\(id)</message>")
+        let context = RoomContext(jid: room, nickname: "me", occupants: ["carol": carol], trustsOccupantIds: true, ownOccupantId: ownOccupantId, isNonAnonymous: true)
+        return XMPPSession.encryptedSender(of: message, nick: nick, in: context, account: me, source: source)
+    }
+
+    @Test func liveTheOccupantsAddressIsUsed() {
+        #expect(sender(nick: "carol", source: .live) == carol)
+        #expect(sender(nick: "me", source: .live) == me)
+    }
+
+    /// Someone else held the nick when it was written.
+    @Test func archivedTheNickSaysNothing() {
+        #expect(sender(nick: "carol", source: archive) == nil)
+        #expect(sender(nick: "me", source: archive) == nil)
+    }
+
+    @Test func archivedOursIsKnownByOurOccupantId() {
+        #expect(sender(nick: "me", occupantId: "ours", source: archive, ownOccupantId: "ours") == me)
+        #expect(sender(nick: "me", occupantId: "theirs", source: archive, ownOccupantId: "ours") == nil)
     }
 }
 

@@ -23,7 +23,7 @@ private func stanza(_ xml: String) -> Martin.Message {
     }
 
     private func ingest(_ xml: String, source: InboundMessage.Source = .live, ownOccupantId: String? = nil) throws -> IngestResult {
-        let context = RoomContext(jid: room, nickname: "me", trustsOccupantIds: ownOccupantId != nil, ownOccupantId: ownOccupantId)
+        let context = RoomContext(jid: room, nickname: "me", trustsOccupantIds: ownOccupantId != nil, ownOccupantId: ownOccupantId, isNonAnonymous: true)
         return try db.ingest(try #require(InboundMessage(groupchat: stanza(xml), room: context, account: me, source: source)))
     }
 

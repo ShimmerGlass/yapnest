@@ -244,21 +244,27 @@ extension InboundMessage {
     /// The real address a non-anonymous room's archive gives an occupant's
     /// message. Live, the address comes from the occupant's presence: the
     /// same element in a live message is whatever its sender put there.
+    ///
+    /// Archives keep what the sender wrote beside what they add themselves,
+    /// and each server differs in where. Prosody appends its own muc#user
+    /// item after the sender's; ejabberd replaces the sender's item but keeps
+    /// their XEP-0033 original sender; Openfire keeps both and appends its
+    /// own original sender. So no one element can be trusted by its place,
+    /// but an honest message carries a single address: one believed only when
+    /// every claim agrees. An anonymous room's archive may add nothing at
+    /// all, leaving only the sender's claims, so none are believed there.
     static func archivedAddress(in stanza: Martin.Message, source: Source, isNonAnonymous: Bool) -> JID? {
-        guard case .archive = source else { return nil }
-        if let item = stanza.firstChild(name: "x", xmlns: NS.mucUser)?.firstChild(name: "item")?.getAttribute("jid").flatMap(JID.init(_:)) {
-            return item
-        }
-        // Openfire's archive gives it the way XEP-0313 suggests, as a XEP-0033
-        // original sender. The archive adds its own after anything the
-        // sender put there, so the last one is the one to believe. Rooms
-        // don't strip these, so in an anonymous room, where the archive adds
-        // none, the only one would be the sender's own claim.
-        guard isNonAnonymous else { return nil }
-        return stanza.filterChildren(name: "addresses", xmlns: "http://jabber.org/protocol/address")
+        guard case .archive = source, isNonAnonymous else { return nil }
+        let items = stanza.filterChildren(name: "x", xmlns: NS.mucUser)
+            .flatMap { $0.filterChildren(name: "item", xmlns: nil) }
+            .compactMap { $0.getAttribute("jid") }
+        let originalSenders = stanza.filterChildren(name: "addresses", xmlns: "http://jabber.org/protocol/address")
             .flatMap { $0.filterChildren(name: "address", xmlns: nil) }
-            .last { $0.getAttribute("type") == "ofrom" }?
-            .getAttribute("jid").flatMap(JID.init(_:))
+            .filter { $0.getAttribute("type") == "ofrom" }
+            .compactMap { $0.getAttribute("jid") }
+        let claims = (items + originalSenders).map { JID($0) }
+        guard let first = claims.first, let address = first, claims.allSatisfy({ $0 == address }) else { return nil }
+        return address
     }
 
     /// The XEP-0421 id a room stamped on a message or presence. Only to be
