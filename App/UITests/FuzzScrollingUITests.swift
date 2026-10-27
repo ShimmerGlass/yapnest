@@ -198,6 +198,13 @@ final class FuzzSeed28GroupUITests: FuzzScrollingTestCase {
 /// 570 messages, past the 500 the chat opens with, so older ones load.
 @MainActor
 final class FuzzSeed19ChatUITests: FuzzScrollingTestCase {
+    override func setUp() async throws {
+        try await super.setUp()
+        // It takes about 239 seconds on an iPhone 17, against the 240 every
+        // other test gets (`task ui`), so a slightly busy run timed it out.
+        executionTimeAllowance = 360
+    }
+
     func testSeed19() { runChat(seed: 19) }
 }
 
