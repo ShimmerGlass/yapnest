@@ -202,8 +202,8 @@ final class FuzzSeed28GroupUITests: FuzzScrollingTestCase {
 final class FuzzSeed19ChatUITests: FuzzScrollingTestCase {
     override func setUp() async throws {
         try await super.setUp()
-        // It takes about 239 seconds on an iPhone 17, against the 240 every
-        // other test gets (`task ui`), so a slightly busy run timed it out.
+        // It takes about 190 seconds on an iPhone 17, against the 240 every
+        // other test gets (`task ui`), and a busy run is far slower.
         executionTimeAllowance = 360
     }
 

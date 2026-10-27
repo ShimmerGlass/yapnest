@@ -68,7 +68,8 @@ final class SettingsUITests: InteractionsTestCase {
         XCTAssertTrue(toggle.exists, "no Hide Screen in App Switcher in Settings")
         toggle.switches.firstMatch.tap()
         XCTAssertEqual(toggle.value as? String, "1", "the switch didn't turn on")
-        let count = app.staticTexts["appSwitcherCoverCount"]
+        // A footer is a static text on iOS 18 and another kind of element on 26.
+        let count = app.descendants(matching: .any)["appSwitcherCoverCount"].firstMatch
         XCTAssertTrue(count.waitForExistence(timeout: 5), "no cover counter")
         XCTAssertEqual(count.value as? String, "0")
 
