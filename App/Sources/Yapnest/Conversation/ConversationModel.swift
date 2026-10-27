@@ -503,6 +503,7 @@ final class ConversationModel {
         }
         observeMessages()
         session.downloadMissedImages(in: peer)
+        session.fetchAvatarIfFirstContact(peer)
 
         // Apart from the window, so a message arriving past its end is counted.
         let unread = database.observeUnreadMessageCount(peer: peer)

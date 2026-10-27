@@ -2093,7 +2093,10 @@ public final class XMPPSession: @unchecked Sendable {
     /// The daily refresh has come and gone by the time a chat with someone
     /// whose presence we don't receive begins, so their avatar is asked for
     /// once, here.
-    func fetchAvatarIfFirstContact(_ peer: JID) {
+    ///
+    /// Opening a chat before anyone has written asks too, or its avatar would
+    /// stay missing until the next daily refresh.
+    public func fetchAvatarIfFirstContact(_ peer: JID) {
         let contact = (try? database.contact(peer)) ?? nil
         guard !isGroup(peer), contact?.seesPresence != true,
               contact?.avatarHash == nil,
