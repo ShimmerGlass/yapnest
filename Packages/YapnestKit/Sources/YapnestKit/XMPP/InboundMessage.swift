@@ -392,9 +392,13 @@ extension InboundMessage {
     /// When the stanza was held back, if someone we trust to know says so, and
     /// otherwise `now`. A `<delay>` is a claim by whoever added it, so any
     /// sender could back-date a message into old history, where it stays
-    /// unread and raises no notification. Only the entity that stamped it
-    /// counts: the room for a group chat, and for a 1:1 chat our own server
-    /// (offline storage, by its domain or our address). Never in the future.
+    /// unread and raises no notification. Only a stamp that names the room
+    /// for a group chat, or for a 1:1 chat our own server (offline storage,
+    /// by its domain or our address), counts. Servers don't check `from`, so
+    /// a sender can still write one of those: this only keeps out the plain
+    /// claims, and ingest's floor (the newest stored message and the last
+    /// notification) is what stops a forged stamp from reaching back past
+    /// what was already seen. Never in the future.
     static func trustedDelay(in stanza: Martin.Message, stamper: JID, account: JID, now: Date) -> Date {
         min(trustedStamp(in: stanza, stamper: stamper, account: account) ?? now, now)
     }
