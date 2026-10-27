@@ -28,7 +28,8 @@ extension LiveServer {
         init(name: String) {
             self.name = name
             let (port, httpPort, conference) = switch name {
-            case "prosody", "ejabberd": (5222, 5280, "conference.localhost")
+            case "prosody": (5222, 5280, "conference.localhost")
+            case "ejabberd": (15222, 15280, "conference.localhost")
             case "snikket": (25222, 25280, "groups.localhost")
             case "openfire", "openfire-bare": (35222, 35280, "conference.localhost")
             default: fatalError("YAPNEST_SERVER must be prosody, ejabberd, snikket, openfire or openfire-bare, not \(name)")

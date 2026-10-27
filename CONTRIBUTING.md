@@ -58,14 +58,14 @@ The Prosody also serves `push.localhost` for the push relay ([yapnest-relay](htt
 
 Every dev server also offers STARTTLS, with a certificate from a local CA that `dev/certs/make.sh` makes (the setup scripts call it; the files are git-ignored, and it renews them in their last month). TLS stays optional, because most suites connect with `disableTLS: true` and the resilience proxy reads plaintext stanzas. The suites for SASL2, Bind 2 and FAST (`FastSignInIntegrationTests`) and for signing in over TLS (`TLSIntegrationTests`) connect with TLS instead, trusting `dev/certs/ca.pem` (`YAPNEST_DEV_CA` names another file) in place of the system's roots, with the host name and expiry still checked. ejabberd offers SASL2 only on an encrypted stream, which is why they run this way. A server that doesn't offer SASL2 even then (Openfire 5.1) cancels the SASL2 tests, with the reason in the test output. A server already running needs a restart to pick up the certificate (`docker compose restart`, or `setup.sh`). `YAPNEST_PUBLIC_SERVER=<domain> swift test --filter PublicServerTLS` connects to a public server by its domain alone, to check SRV lookup and the system's trust over real TLS; it signs in to nothing.
 
-`dev/ejabberd/` is the same setup on ejabberd, on the same ports as Prosody, so stop one before starting the other (`docker compose down` in its folder). It also offers STUN and TURN for calls on UDP 3478, relaying from UDP 49152–49171, and hands out TURN credentials through External Service Discovery (XEP-0215). `setup.sh` advertises them on the Mac's network address (in `dev/ejabberd/.env`; `TURN_HOST` overrides it), since WebRTC on the Mac can't reach a relay on 127.0.0.1, and that address also reaches the Android emulator and phones. TURN takes only the credentials XEP-0215 hands out, not the account's password, as the accounts are stored as SCRAM.
+`dev/ejabberd/` is the same setup on ejabberd, on ports of its own (15222 and 15280), so it runs beside Prosody. It also offers STUN and TURN for calls on UDP 3478, relaying from UDP 49152–49171, and hands out TURN credentials through External Service Discovery (XEP-0215). `setup.sh` advertises them on the Mac's network address (in `dev/ejabberd/.env`; `TURN_HOST` overrides it), since WebRTC on the Mac can't reach a relay on 127.0.0.1, and that address also reaches the Android emulator and phones. TURN takes only the credentials XEP-0215 hands out, not the account's password, as the accounts are stored as SCRAM.
 
-Two more servers have ports of their own, so all four can run together:
+Each server has ports of its own, so all four can run together:
 
 | Server | `YAPNEST_SERVER` | Client port | HTTP uploads |
 | --- | --- | --- | --- |
 | Prosody (`dev/prosody/`) | `prosody` (the default) | 5222 | 5280 |
-| ejabberd (`dev/ejabberd/`) | `ejabberd` | 5222 | 5280 |
+| ejabberd (`dev/ejabberd/`) | `ejabberd` | 15222 | 15280 |
 | Snikket (`dev/snikket/`) | `snikket` | 25222 | 25280 |
 | Openfire (`dev/openfire/`) | `openfire`, `openfire-bare` | 35222 | 35280 |
 

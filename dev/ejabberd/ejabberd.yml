@@ -103,7 +103,7 @@ modules:
   mod_client_state: {}
   mod_disco: {}
   mod_http_upload:
-    put_url: "http://localhost:5280/upload"
+    put_url: "http://localhost:15280/upload"
     docroot: /opt/ejabberd/upload
     max_size: 52428800
     custom_headers:

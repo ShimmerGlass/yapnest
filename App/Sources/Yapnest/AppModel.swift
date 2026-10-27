@@ -213,7 +213,7 @@ final class AppModel {
         let env = ProcessInfo.processInfo.environment
         if let address = env["YAPNEST_DEV_ACCOUNT"], let jid = JID(address), let password = env["YAPNEST_DEV_PASSWORD"] {
             phase = .signedOut
-            let credentials = XMPPSession.Credentials(jid: jid, password: password, host: env["YAPNEST_DEV_HOST"] ?? "127.0.0.1", port: 5222, disableTLS: true)
+            let credentials = XMPPSession.Credentials(jid: jid, password: password, host: env["YAPNEST_DEV_HOST"] ?? "127.0.0.1", port: env["YAPNEST_DEV_PORT"].flatMap { Int($0) } ?? 5222, disableTLS: true)
             Task {
                 do { try await signIn(credentials) } catch { DiagLog.error(.app, "Dev sign-in failed", .error(error)) }
             }

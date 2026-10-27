@@ -4,7 +4,7 @@
 # for video that a picture arrived: dev/call-e2e.sh [--audio]
 # Builds Debug signed (an unsigned build has no keychain entitlement, and the
 # dev sign-in fails), so it needs Config/Local.xcconfig. The dev ejabberd or
-# Prosody must be running with alice and bob.
+# Prosody must be running with alice and bob; PORT=15222 picks ejabberd.
 #
 # SIM_A (default: iPhone 17) calls, SIM_B (default: Yapnest iOS 26) answers;
 # both are names or ids of simulators that already exist. OUTPUT_DIR holds the
@@ -101,7 +101,7 @@ wait_for() {
     return 1
 }
 
-common=(SIMCTL_CHILD_YAPNEST_DEV_PASSWORD=password SIMCTL_CHILD_YAPNEST_DEV_HOST=127.0.0.1 SIMCTL_CHILD_YAPNEST_DEV_NO_AUDIO=1)
+common=(SIMCTL_CHILD_YAPNEST_DEV_PASSWORD=password SIMCTL_CHILD_YAPNEST_DEV_HOST=127.0.0.1 SIMCTL_CHILD_YAPNEST_DEV_PORT="${PORT:-5222}" SIMCTL_CHILD_YAPNEST_DEV_NO_AUDIO=1)
 
 echo "Launching bob on $sim_b"
 env "${common[@]}" SIMCTL_CHILD_YAPNEST_DEV_ACCOUNT=bob@localhost SIMCTL_CHILD_YAPNEST_DEV_ANSWER=1 \

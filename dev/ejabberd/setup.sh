@@ -1,7 +1,7 @@
 #!/bin/sh
-# Starts the ejabberd dev server on the same ports as the Prosody one (stop
-# that first: `docker compose -f ../prosody/compose.yaml down`) and creates
-# alice, bob, carol, pwchange and admin @localhost (password: "password").
+# Starts the ejabberd dev server, on 15222 and 15280 so it can run beside the
+# Prosody one, and creates alice, bob, carol, pwchange and admin @localhost
+# (password: "password").
 set -e
 cd "$(dirname "$0")"
 # Every start is a fresh server: accounts, archives and published OMEMO
@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 # changed a password) would otherwise carry over. The tests' device
 # databases for this server go too, as they remember that server's archive.
 docker compose down -v
-rm -rf "${TMPDIR:-/tmp}/yapnest-integration/ejabberd-5222" "${TMPDIR:-/tmp}/yapnest-integration-kept/ejabberd-5222"
+rm -rf "${TMPDIR:-/tmp}/yapnest-integration/ejabberd-15222" "${TMPDIR:-/tmp}/yapnest-integration-kept/ejabberd-15222"
 ../certs/make.sh
 # TURN has to be advertised on an address WebRTC on this Mac can send to, and
 # macOS drops packets from the network interface to 127.0.0.1. The Mac's own

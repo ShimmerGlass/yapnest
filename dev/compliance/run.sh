@@ -12,7 +12,8 @@
 set -e
 server=${1:?usage: run.sh prosody|ejabberd|snikket|openfire|openfire-bare}
 case "$server" in
-    prosody|ejabberd) port=5222 ;;
+    prosody) port=5222 ;;
+    ejabberd) port=15222 ;;
     snikket) port=25222 ;;
     openfire|openfire-bare) port=35222 ;;
     *) echo "unknown server $server" >&2; exit 1 ;;
