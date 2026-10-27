@@ -32,6 +32,13 @@ struct MessageTextTests {
         #expect(rendered.segments.last?.text.runs.allSatisfy { $0.link == nil } == true)
     }
 
+    @Test func aHugeQuoteDepthAndManyBlocksAreBounded() {
+        let deep = MessageText.render(String(repeating: ">", count: 60_000) + " x", kind: .normal)
+        #expect(deep.segments.map(\.depth) == [MessageStyling.maxQuoteDepth])
+        let body = (0..<5_000).map { $0.isMultiple(of: 2) ? "> a" : ">> b" }.joined(separator: "\n")
+        #expect(MessageText.render(body, kind: .normal).segments.count == MessageStyling.maxBlocks + 1)
+    }
+
     private func styled(_ body: String, _ font: Font) -> [String] {
         runs(body).flatMap { $0 }.filter { $0.font == font && $0.link == nil }.map(\.text)
     }

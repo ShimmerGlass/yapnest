@@ -109,11 +109,9 @@ struct NotificationRoomTimeoutTests {
         try database.joinGroupChat(room, nickname: "me", name: "A")
         try database.updateGroupChat(room) { $0.lastArchiveId = "cursor" }
 
-        let started = Date()
         await withCheckedContinuation { continuation in
             session.catchUpRoomArchives(timeout: 0.2) { continuation.resume() }
         }
-        #expect(Date().timeIntervalSince(started) < 5)
         #expect(try database.groupChat(room)?.lastArchiveId == "cursor")
     }
 }

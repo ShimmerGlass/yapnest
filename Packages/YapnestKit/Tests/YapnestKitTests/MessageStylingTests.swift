@@ -86,6 +86,24 @@ struct MessageStylingTests {
         #expect(blocks("```\n```npm i```\n```") == ["pre0:```npm i```"])
     }
 
+    @Test func quotesNestOnlyToTheCapAndDeeperMarkersStayText() {
+        let deep = String(repeating: ">", count: MessageStyling.maxQuoteDepth + 3)
+        let result = MessageStyling.blocks(in: "\(deep) hi")
+        #expect(result.map(\.depth) == [MessageStyling.maxQuoteDepth])
+        #expect(result.first?.text == "\(String(repeating: ">", count: 3)) hi")
+        let huge = MessageStyling.blocks(in: String(repeating: ">", count: 60_000) + " x")
+        #expect(huge.map(\.depth) == [MessageStyling.maxQuoteDepth])
+    }
+
+    @Test func aMessageIsSplitIntoBoundedBlocks() {
+        let body = (0..<5_000).map { $0.isMultiple(of: 2) ? "> a" : ">> b" }.joined(separator: "\n")
+        let result = MessageStyling.blocks(in: body)
+        #expect(result.count == MessageStyling.maxBlocks + 1)
+        #expect(result.last?.depth == 0)
+        #expect(result.last?.isPreformatted == false)
+        #expect(result.last?.text.split(separator: "\n").count == 5_000 - MessageStyling.maxBlocks)
+    }
+
     @Test func aFenceOpensABlockAndALoneFenceClosesIt() {
         #expect(blocks("before\n```\nlet a = 1\n  b\n```\nafter") == ["text0:before", "pre0:let a = 1\n  b", "text0:after"])
     }

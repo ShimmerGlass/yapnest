@@ -68,6 +68,14 @@ public enum MessageStyling {
         public var isPreformatted: Bool
     }
 
+    /// How deep quotes nest, and how many blocks a message is split into.
+    /// The bubble draws a bar per level and a view per block, so a body of
+    /// sixty thousand `>`, or of lines alternating between two depths, would
+    /// build that many views. Markers past the depth stay as text in the
+    /// deepest level, and blocks past the count are merged into plain text.
+    public static let maxQuoteDepth = 8
+    public static let maxBlocks = 200
+
     /// Splits a message into quotes and preformatted blocks. Quote markers
     /// and the lines holding a block's ``` directives are dropped, so the text
     /// is just what's shown. A block opens at a line starting with ```, whose
@@ -86,9 +94,10 @@ public enum MessageStyling {
             open = nil
         }
         for line in body.split(separator: "\n", omittingEmptySubsequences: false) {
-            let depth = line.prefix { $0 == ">" }.count
+            let markerCount = line.prefix { $0 == ">" }.count
+            let depth = min(markerCount, maxQuoteDepth)
             // The markers must be followed by a space, or end the line.
-            let isQuote = depth > 0 && (line.count == depth || line[line.index(line.startIndex, offsetBy: depth)] == " ")
+            let isQuote = markerCount > 0 && (line.count == markerCount || line[line.index(line.startIndex, offsetBy: markerCount)] == " ")
             let level = isQuote ? depth : 0
             if let inBlock = open {
                 if inBlock.depth == 0 {
@@ -106,7 +115,8 @@ public enum MessageStyling {
                 // The quote the block was in has ended, and so has the block.
                 close()
             }
-            let shown = isQuote ? String(line.dropFirst(min(line.count, depth + 1))) : String(line)
+            // Markers past the cap are text, and the space after them is too.
+            let shown = isQuote ? String(line.dropFirst(min(line.count, markerCount > depth ? depth : depth + 1))) : String(line)
             // A line that opens and closes on itself is inline code somebody typed,
             // not a fence with a language hint: opening a block there would hide
             // its text and turn the lines after it into code.
@@ -120,6 +130,11 @@ public enum MessageStyling {
             }
         }
         close()
+        if blocks.count > maxBlocks {
+            let rest = blocks[maxBlocks...].map(\.text).joined(separator: "\n")
+            blocks.removeSubrange(maxBlocks...)
+            blocks.append(Block(text: rest, depth: 0, isPreformatted: false))
+        }
         return blocks.isEmpty ? [Block(text: body, depth: 0, isPreformatted: false)] : blocks
     }
 }
