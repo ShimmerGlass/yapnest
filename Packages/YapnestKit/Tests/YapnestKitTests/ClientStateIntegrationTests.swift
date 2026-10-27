@@ -36,9 +36,11 @@ extension LiveServer {
             }
         }
 
+        /// Bounded, as a session that can't sign in otherwise holds up the
+        /// whole run rather than failing.
         private func connected(_ session: XMPPSession) async throws {
             session.connect()
-            while session.state.value != .connected(isSyncing: false) { try await Task.sleep(for: .milliseconds(50)) }
+            try await LiveServer.waitUntil("\(session.account) to connect") { session.state.value == .connected(isSyncing: false) }
         }
 
         /// Counts the chat states a session has received while it's alive.
@@ -114,6 +116,9 @@ extension LiveServer {
         /// active, sends only the newest per node, which on the node with an
         /// item per chat loses the chats between the first and the last.
         @Test func readStatesOfSeveralChatsSurviveBeingInactive() async throws {
+            guard LiveServer.target.name == "ejabberd" else {
+                try Test.cancel("only the ejabberd dev config has a fourth account, admin")
+            }
             let carol = LiveServer.jid("carol")
             let dave = LiveServer.jid("admin")
             let a = try session(alice), c = try session(carol), d = try session(dave)
