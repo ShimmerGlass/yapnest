@@ -18,15 +18,10 @@ extension AppDatabase {
         }
     }
 
-    /// Whether the user added or approved `jid` (`Contact.hasConsent`): what
-    /// a `subscribe` needs to be answered without asking, and what every
-    /// other trust decision about a contact asks.
-    /// Whether `jid` gets what only those we consented to get. Not someone
-    /// blocked: a server's block can miss sessions already online (Openfire's
-    /// first block does), and what still reaches us mustn't earn a receipt,
-    /// a ringing phone or a download.
+    /// Whether `jid` gets what only those we consented to get
+    /// (`Contact.mayReceive`): what every trust decision about a contact asks.
     func hasConsented(_ jid: JID) throws -> Bool {
-        try reader.read { db in try Contact.fetchOne(db, key: jid).map { $0.hasConsent && !$0.isBlocked } ?? false }
+        try reader.read { db in try Contact.fetchOne(db, key: jid).map { $0.mayReceive } ?? false }
     }
 
     /// Applies `change` to the stored contact, or a new one, and saves only

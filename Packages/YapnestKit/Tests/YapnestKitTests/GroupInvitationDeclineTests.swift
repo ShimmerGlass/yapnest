@@ -50,6 +50,14 @@ struct GroupInvitationDeclineTests {
         #expect(declines.isEmpty)
     }
 
+    @Test func aBlockedContactIsNeverTold() throws {
+        try database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        try database.setBlocked(true, alice)
+        try database.recordGroupInvitation(room: room, inviter: alice, reason: nil)
+        try session.declineGroupInvitation(room)
+        #expect(declines.isEmpty)
+    }
+
     @Test func aContactWeOnlyHearFromStillCounts() throws {
         try database.updateRosterItem(jid: alice, name: nil, subscription: .from, isPending: false)
         try database.recordGroupInvitation(room: room, inviter: alice, reason: nil)

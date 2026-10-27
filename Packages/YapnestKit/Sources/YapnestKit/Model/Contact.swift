@@ -84,11 +84,17 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
     /// from them we haven't answered. Everything a stranger mustn't get (a
     /// ringing phone, receipts, automatic downloads, being told our presence
     /// or last seen) hangs on this, never on `isInRoster`.
-    /// `AppDatabase.missedImages` repeats this in SQL, and it and
-    /// `AppDatabase.hasConsented` also leave out someone blocked.
+    /// This is for what the UI shows; whether to act for them is `mayReceive`.
+    /// `AppDatabase.missedImages` repeats `mayReceive` in SQL.
     public var hasConsent: Bool {
         isAddedByUser || isSubscriptionPending || subscription != .none
     }
+
+    /// Whether they get what only those we consented to get: consent, and not
+    /// blocked. A server's block can miss sessions already online (Openfire's
+    /// first block does), and what still reaches us mustn't earn a receipt, a
+    /// ringing phone, a download or a conversation.
+    public var mayReceive: Bool { hasConsent && !isBlocked }
 
     /// The roster name, else the name they publish if the user added them,
     /// else the bare address.

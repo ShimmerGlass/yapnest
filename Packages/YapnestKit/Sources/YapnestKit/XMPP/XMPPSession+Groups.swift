@@ -1786,10 +1786,10 @@ extension XMPPSession {
     }
 
     /// Whether declining `invitation` is told to its inviter: only when
-    /// they're a contact we have a subscription with, and the invitation was
+    /// they're a contact we have a subscription with and haven't blocked, and the invitation was
     /// relayed through the room: a direct one (XEP-0249) has no decline.
     static func sendsDecline(for invitation: GroupInvitation, inviter: Contact?) -> Bool {
-        guard !invitation.isDirect, let inviter, inviter.hasConsent else { return false }
+        guard !invitation.isDirect, let inviter, inviter.mayReceive else { return false }
         return inviter.subscription != .none
     }
 

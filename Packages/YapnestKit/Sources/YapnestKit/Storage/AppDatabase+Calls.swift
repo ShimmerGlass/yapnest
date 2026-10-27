@@ -144,7 +144,7 @@ extension AppDatabase {
     private static func upsertCall(_ db: Database, _ record: CallRecord, isAuthoritative: Bool, isHistory: Bool, known: KnownCall? = nil) throws -> Message? {
         var known = try known ?? knownCall(db, peer: record.peer, sid: record.sid)
         if known.conversation == nil {
-            let consented = try Contact.fetchOne(db, key: record.peer)?.hasConsent == true
+            let consented = try Contact.fetchOne(db, key: record.peer)?.mayReceive == true
             guard isAuthoritative || consented else { return nil }
             known.conversation = try Self.conversation(db, with: record.peer)
         }

@@ -268,6 +268,14 @@ struct CallLogTests {
         #expect(try db.reader.read { try Conversation.filter(Column("peer") == stranger).fetchCount($0) } == 0)
     }
 
+    @Test func aBlockedContactsCallOpensNoChat() throws {
+        let blocked = JID("carol@example.org")!
+        try db.writer.write { try Contact(jid: blocked, subscription: .both, isInRoster: true, isBlocked: true).insert($0) }
+        try apply(signal(propose, peer: blocked), signal(.retract(nil), peer: blocked, at: 2))
+        #expect(try rows().isEmpty)
+        #expect(try db.reader.read { try Conversation.filter(Column("peer") == blocked).fetchCount($0) } == 0)
+    }
+
     @Test func aChatWeHaveStaysOpenForItsCalls() throws {
         _ = try db.conversation(with: bob)
         try apply(signal(propose, peer: bob), signal(.retract(nil), peer: bob, at: 2))
