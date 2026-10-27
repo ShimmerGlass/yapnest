@@ -239,7 +239,7 @@ extension XMPPSession {
     /// step to that call. `remote` is what the Jingle message brought, kept
     /// for the work the machine may ask for.
     @discardableResult
-    func callStep(_ input: CallMachine.Input, sid: String? = nil, remote: CallJingle.Negotiation? = nil) -> [CallMachine.Effect] {
+    func callStep(_ input: CallMachine.Input, sid: String? = nil, remote: CallJingle.Negotiation? = nil, verified: (device: Int32, verification: CallVerification)? = nil) -> [CallMachine.Effect] {
         publish(callState, under: callPublishLock) { state -> (result: [CallMachine.Effect], snapshot: CallState??) in
             guard var call = state.call, sid == nil || call.machine.sid == sid else { return ([], nil) }
             let before = call.machine
@@ -248,7 +248,12 @@ extension XMPPSession {
             // Only a message the machine took may set the negotiation: a
             // retransmission, or another of the peer's devices, would replace
             // the one the queued answer is about to read.
-            if let remote { call.run.remote = remote }
+            // The same goes for who vouched for it: a stanza the machine
+            // ignored must not show the call as verified.
+            if let remote {
+                call.run.remote = remote
+                call.run.verified = verified
+            }
             state.call = call
             perform(effects, run: call.run, machine: call.machine)
             logCall(call.machine)
@@ -369,11 +374,13 @@ extension XMPPSession {
     // MARK: Jingle
 
     func callSessionInitiated(from jid: Martin.JID, sid: String, negotiation: CallJingle.Negotiation) -> Bool {
-        callStep(.sessionInitiate(from: jid.stringValue), sid: sid, remote: negotiation).contains(.answerSession)
+        let verified = call(sid: sid)?.run.takeOfferedVerification()
+        return callStep(.sessionInitiate(from: jid.stringValue), sid: sid, remote: negotiation, verified: verified).contains(.answerSession)
     }
 
     func callSessionAccepted(from jid: Martin.JID, sid: String, negotiation: CallJingle.Negotiation) -> Bool {
-        callStep(.sessionAccept(from: jid.stringValue), sid: sid, remote: negotiation).contains(.applyAnswer)
+        let verified = call(sid: sid)?.run.takeOfferedVerification()
+        return callStep(.sessionAccept(from: jid.stringValue), sid: sid, remote: negotiation, verified: verified).contains(.applyAnswer)
     }
 
     func callTransportInfo(from jid: Martin.JID, sid: String, contents: [Jingle.Content]) -> Bool {
@@ -705,8 +712,14 @@ extension XMPPSession {
             do {
                 try await jingle.sendSession(initiating: true, to: Martin.JID(device), sid: sid, contents: negotiation.contents, bundle: negotiation.bundle, encryption: encryption)
             } catch let error as CallFingerprintError {
-                // A call goes ahead unverified, as with a peer that doesn't
-                // do this; the screen says so.
+                // A device the user marked compromised ends the call. What is
+                // only not possible, such as no session yet, goes ahead
+                // unverified, as with a peer that doesn't do this; the screen
+                // says so.
+                if error == .compromisedDevice {
+                    self.failCallVerification(error, sid: sid)
+                    return
+                }
                 DiagLog.notice(.calls, "Call fingerprint sent plain", fields: self.callFields(sid: sid) + [.value("reason", error)])
                 run.encryptedTo = nil
                 try await jingle.sendSession(initiating: true, to: Martin.JID(device), sid: sid, contents: negotiation.contents, bundle: negotiation.bundle, encryption: nil)
@@ -751,7 +764,13 @@ extension XMPPSession {
     /// the call ends over them. A call that isn't ours, or isn't with this
     /// device, is left for the module to refuse.
     func openCallFingerprints(from jid: Martin.JID, sid: String, initiating: Bool, in jingle: Element) -> Bool {
-        guard let run = call(sid: sid, peer: jid)?.run else { return true }
+        guard let active = call(sid: sid, peer: jid) else { return true }
+        let run = active.run
+        // Only a stanza the machine will take is read. A retransmission of one
+        // already taken, or a second one from a server in the middle, is left
+        // alone: it can neither verify the call nor fail it.
+        guard active.machine.phase == .accepted, active.machine.direction == (initiating ? .incoming : .outgoing), run.remote == nil else { return true }
+        run.offerVerification(nil)
         guard let sender = JID(jid.bareJid.stringValue) else { return true }
         switch CallFingerprints.open(jingle, from: sender, with: callCipher) {
         case .failure(let error):
@@ -771,9 +790,8 @@ extension XMPPSession {
                 failCallVerification(.wrongDevice, sid: sid)
                 return false
             }
-            run.verified = (device, CallVerification(trust))
+            run.offerVerification((device, CallVerification(trust)))
             DiagLog.info(.calls, "Call fingerprint verified", fields: callFields(sid: sid) + [.value("verification", CallVerification(trust))])
-            updateCallRun { _ in }
             return true
         }
     }

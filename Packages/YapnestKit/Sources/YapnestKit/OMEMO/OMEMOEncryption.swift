@@ -30,6 +30,11 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// How long to wait for device lists and bundles before giving up on a send.
     var setupTimeout: TimeInterval = 45
 
+    /// How long a call waits for the peer's device list before its fingerprint
+    /// goes out plain. The caller's session-initiate is due within the
+    /// callee's setup window after `proceed`, and a send is not worth 45 s.
+    var callFetchTimeout: TimeInterval = 5
+
     init(database: AppDatabase, account: JID, identityKeys: any IdentityKeyStore, now: @escaping @Sendable () -> Date = { Date() }) throws {
         self.account = account
         store = OMEMOStore(database: database, account: account, identityKeys: identityKeys, now: now)
@@ -188,18 +193,17 @@ final class OMEMOEncryption: @unchecked Sendable {
     func encryptCallFingerprint(_ fingerprint: String, to peer: JID, device: Int32) async -> Result<Element, CallFingerprintError> {
         let module = module
         let name = peer.description
-        let listed: [Int32]?
-        do {
-            listed = try await withTimeout(setupTimeout) {
-                await withCheckedContinuation { continuation in
-                    module.addresses(for: [peer.martin]) { result in
-                        continuation.resume(returning: (try? result.get())?.filter { $0.name == name }.map(\.deviceId))
-                    }
-                }
+        // Before any waiting, and whatever the peer's list says.
+        if store.status(forName: name, deviceId: device)?.trust == .compromised { return .failure(.compromisedDevice) }
+        let timeout = callFetchTimeout
+        let listed: [Int32]? = await withCheckedContinuation { continuation in
+            let once = OnceResume(continuation)
+            module.addresses(for: [peer.martin]) { result in
+                once.resume((try? result.get())?.filter { $0.name == name }.map(\.deviceId))
             }
-        } catch {
-            return .failure(.setupFailed)
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { once.resume(nil) }
         }
+        if listed == nil { return .failure(.setupFailed) }
         // The peer's own list, from which sessions are built: a device the
         // peer's caller names that isn't on it is not theirs to vouch with.
         let address = SignalAddress(name: name, deviceId: device)
@@ -291,5 +295,23 @@ final class OMEMOEncryption: @unchecked Sendable {
             guard devices.contains(where: keys.contains) else { return .failure(.setupFailed(recipient)) }
         }
         return .success((message, verified ? .verified : .trusted))
+    }
+}
+
+/// Resumes a continuation once, from whichever of an answer and a timeout comes first.
+private final class OnceResume<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Never>?
+
+    init(_ continuation: CheckedContinuation<T, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ value: T) {
+        let taken = lock.withLock {
+            defer { continuation = nil }
+            return continuation
+        }
+        taken?.resume(returning: value)
     }
 }

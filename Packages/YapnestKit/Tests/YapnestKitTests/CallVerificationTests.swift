@@ -6,8 +6,8 @@ import Testing
 
 private let alice = YapnestKit.JID("alice@example.org")!
 private let aliceDevice = "alice@example.org/phone"
-private let omemoNamespace = "http://gultsch.de/xmpp/drafts/omemo/dlts-srtp-verification"
-private let plainNamespace = "urn:xmpp:jingle:apps:dtls:0"
+let omemoNamespace = "http://gultsch.de/xmpp/drafts/omemo/dlts-srtp-verification"
+let plainNamespace = "urn:xmpp:jingle:apps:dtls:0"
 
 /// The `<fingerprint>` of a transport as Conversations sends it in a
 /// `session-initiate` or `session-accept`. Reconstructed from its source
@@ -17,7 +17,7 @@ private let plainNamespace = "urn:xmpp:jingle:apps:dtls:0"
 /// the legacy OMEMO message with one `<key>` for the receiving device, whose
 /// payload is the fingerprint text. Dino's `dtls_srtp_verification_draft.vala`
 /// writes and reads the same layout.
-private let conversationsFingerprint = """
+let conversationsFingerprint = """
 <fingerprint xmlns='http://gultsch.de/xmpp/drafts/omemo/dlts-srtp-verification' hash='sha-256' setup='actpass'>\
 <encrypted xmlns='eu.siacs.conversations.axolotl'>\
 <header sid='1234'><key rid='5678'>MwohBVjZuV7ahpEB</key><iv>AAECAwQFBgcICQoL</iv></header>\
@@ -27,7 +27,7 @@ private let conversationsFingerprint = """
 
 /// Stands for OMEMO, so what the call does with the keys is tested without
 /// two devices that have sessions with each other.
-private final class FakeCipher: @unchecked Sendable {
+final class FakeCipher: @unchecked Sendable {
     private let lock = NSLock()
     private var sent: [(fingerprint: String, peer: YapnestKit.JID, device: Int32)] = []
     var encryptResult: Result<Element, CallFingerprintError> = .success(Element.from(string: conversationsFingerprint)!.firstChild(name: "encrypted")!)
@@ -51,21 +51,21 @@ private final class FakeCipher: @unchecked Sendable {
     }
 }
 
-private func wrapped(_ iq: String) -> String {
+func wrapped(_ iq: String) -> String {
     iq.replacingOccurrences(
         of: "<fingerprint xmlns='urn:xmpp:jingle:apps:dtls:0' hash='sha-256' setup='actpass'>AB:CD:EF:01:23:45:67:89</fingerprint>",
         with: conversationsFingerprint,
     )
 }
 
-private func wrappedAccept(_ iq: String) -> String {
+func wrappedAccept(_ iq: String) -> String {
     iq.replacingOccurrences(
         of: "<fingerprint xmlns='urn:xmpp:jingle:apps:dtls:0' hash='sha-256' setup='active'>12:34:56:78</fingerprint>",
         with: conversationsFingerprint.replacingOccurrences(of: "setup='actpass'", with: "setup='active'"),
     )
 }
 
-private func fingerprints(in iq: Iq) -> [Element] {
+func fingerprints(in iq: Iq) -> [Element] {
     CallFingerprints.transports(in: iq.firstChild(name: "jingle")!).flatMap { $0.children.filter { $0.name == "fingerprint" } }
 }
 

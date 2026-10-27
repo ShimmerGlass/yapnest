@@ -21,6 +21,7 @@ final class CallRun: @unchecked Sendable {
     private var contents: [Jingle.Content] = []
     private var verifiedState: (device: Int32, verification: CallVerification)?
     private var encryptedDevice: Int32?
+    private var offeredState: (device: Int32, verification: CallVerification)?
 
     /// The candidates seen, for the log of how a call connected.
     let candidates = CallCandidateTally()
@@ -44,6 +45,19 @@ final class CallRun: @unchecked Sendable {
     var verified: (device: Int32, verification: CallVerification)? {
         get { lock.withLock { verifiedState } }
         set { lock.withLock { verifiedState = newValue } }
+    }
+
+    /// What the fingerprints of the stanza being handled showed, held until the
+    /// machine takes the stanza, which is when it becomes `verified`.
+    func offerVerification(_ offered: (device: Int32, verification: CallVerification)?) {
+        lock.withLock { offeredState = offered }
+    }
+
+    func takeOfferedVerification() -> (device: Int32, verification: CallVerification)? {
+        lock.withLock {
+            defer { offeredState = nil }
+            return offeredState
+        }
     }
 
     var verification: CallVerification { lock.withLock { verifiedState?.verification ?? .unverified } }
