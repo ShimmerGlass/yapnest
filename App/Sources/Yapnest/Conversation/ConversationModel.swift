@@ -558,11 +558,11 @@ final class ConversationModel {
             }
         }
 
-        let history = session.state.combineLatest(session.rooms).values
         let peer = peer
+        let history = session.state.combineLatest(session.rooms.map { @Sendable rooms in rooms[peer] }.removeDuplicates()).values
         tasks["history"] = Task { [weak self] in
-            for await (state, rooms) in history {
-                self?.historyChanged(state, room: rooms[peer])
+            for await (state, room) in history {
+                self?.historyChanged(state, room: room)
             }
         }
     }
