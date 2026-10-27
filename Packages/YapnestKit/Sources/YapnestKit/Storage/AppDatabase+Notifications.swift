@@ -243,7 +243,18 @@ extension AppDatabase {
     /// no longer count for anything, so they keep the decision they had.
     static func refreshAddressesMe(_ db: Database, conversationId: Int64, nickname: String) throws {
         let word = nicknameRegex(nickname)
-        for message in try Message.filter(Column("conversationId") == conversationId && Column("isRead") == false).fetchAll(db) {
+        var unread = Message.filter(Column("conversationId") == conversationId && Column("isRead") == false)
+        // A busy room can have thousands of unread messages and most mention
+        // nobody. SQL clears those that can't match and `isMention` decides
+        // the rest. SQLite lowercases ASCII only, so a nickname beyond that,
+        // which `isMention` matches by Unicode case, narrows nothing.
+        if !nickname.isEmpty, nickname.allSatisfy(\.isASCII) {
+            let mightMention = Column("mentionsMe") == true || Column("replyToId") != nil
+                || SQL("instr(lower(body), lower(\(nickname))) > 0").sqlExpression
+            try unread.filter(!mightMention && Column("addressesMe") == true).updateAll(db, Column("addressesMe").set(to: false))
+            unread = unread.filter(mightMention)
+        }
+        for message in try unread.fetchAll(db) {
             let mention = try isMention(db, message, nickname: nickname, word: word)
             if mention != message.addressesMe {
                 try Message.filter(key: message.id).updateAll(db, Column("addressesMe").set(to: mention))
