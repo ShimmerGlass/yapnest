@@ -7,8 +7,8 @@ import YapnestKit
 struct LocationSnapshotCacheTests {
     private let place = GeoLocation(latitude: 48.8584, longitude: 2.2945)
 
-    private func cache(limit: Int = 200) -> SnapshotDiskCache {
-        SnapshotDiskCache(directory: FileManager.default.temporaryDirectory.appending(path: "snapshots-\(UUID().uuidString)"), limit: limit)
+    private func cache(limit: Int = 200, keep: Int = 150) -> SnapshotDiskCache {
+        SnapshotDiskCache(directory: FileManager.default.temporaryDirectory.appending(path: "snapshots-\(UUID().uuidString)"), limit: limit, keep: keep)
     }
 
     private func picture() -> UIImage {
@@ -22,31 +22,29 @@ struct LocationSnapshotCacheTests {
         #expect(base != LocationSnapshotCache.key(place, dark: false, scale: 3))
         #expect(base != LocationSnapshotCache.key(GeoLocation(latitude: 48.8585, longitude: 2.2945), dark: false, scale: 2))
         #expect(base != LocationSnapshotCache.key(GeoLocation(latitude: 48.8584, longitude: 2.2946), dark: false, scale: 2))
-        #expect(LocationSnapshotCache.scale(inKey: base) == 2)
     }
 
     @Test func aStoredPictureIsFoundAgain() throws {
         let disk = cache()
         let key = LocationSnapshotCache.key(place, dark: false, scale: 2)
-        #expect(disk.image(for: key) == nil)
+        #expect(disk.image(for: key, scale: 2) == nil)
         disk.store(picture(), for: key)
-        let found = try #require(disk.image(for: key))
+        let found = try #require(disk.image(for: key, scale: 2))
         #expect(found.scale == 2)
-        #expect(disk.image(for: LocationSnapshotCache.key(place, dark: true, scale: 2)) == nil)
+        #expect(disk.image(for: LocationSnapshotCache.key(place, dark: true, scale: 2), scale: 2) == nil)
     }
 
-    @Test func pastTheLimitTheOldestAreRemoved() throws {
-        let disk = cache(limit: 3)
+    @Test func pastTheLimitTheOldestAreRemovedDownToTheMark() throws {
+        let disk = cache(limit: 4, keep: 2)
         let keys = (0..<5).map { LocationSnapshotCache.key(GeoLocation(latitude: Double($0), longitude: 0), dark: false, scale: 2) }
         for (index, key) in keys.enumerated() {
             disk.store(picture(), for: key)
             try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(1000 + index))], ofItemAtPath: disk.url(for: key).path)
         }
-        disk.trim()
         let left = try FileManager.default.contentsOfDirectory(at: disk.directory, includingPropertiesForKeys: nil)
-        #expect(left.count == 3)
-        #expect(disk.image(for: keys[0]) == nil)
-        #expect(disk.image(for: keys[1]) == nil)
-        #expect(disk.image(for: keys[4]) != nil)
+        #expect(left.count == 2)
+        for key in keys[0..<3] { #expect(disk.image(for: key, scale: 2) == nil) }
+        #expect(disk.image(for: keys[3], scale: 2) != nil)
+        #expect(disk.image(for: keys[4], scale: 2) != nil)
     }
 }

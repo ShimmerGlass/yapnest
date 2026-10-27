@@ -54,11 +54,13 @@ struct LocationCard: View {
 
 /// Snapshots kept as PNG files, so a launch doesn't draw them all again,
 /// which costs time, battery and a request to Apple Maps each. The oldest
-/// are removed past `limit`. A file that is missing or unreadable is just a
+/// are removed past `limit`, down to `keep`, so most stores find nothing to
+/// trim. A file that is missing or unreadable is just a
 /// miss.
 struct SnapshotDiskCache: Sendable {
     let directory: URL
     var limit = 200
+    var keep = 150
 
     /// In the caches directory, which the system empties when it needs room,
     /// and not the shared container, which nothing else reads these from.
@@ -72,10 +74,10 @@ struct SnapshotDiskCache: Sendable {
         return directory.appending(path: name + ".png")
     }
 
-    func image(for key: String) -> UIImage? {
+    func image(for key: String, scale: CGFloat) -> UIImage? {
         let url = url(for: key)
         guard let data = try? Data(contentsOf: url),
-              let image = UIImage(data: data, scale: LocationSnapshotCache.scale(inKey: key) ?? 1) else { return nil }
+              let image = UIImage(data: data, scale: scale) else { return nil }
         // A read counts as use, so what is shown often outlives what isn't.
         try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
         return image
@@ -98,8 +100,9 @@ struct SnapshotDiskCache: Sendable {
         let keys: [URLResourceKey] = [.contentModificationDateKey]
         guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys),
               files.count > limit else { return }
+        let excess = files.count - min(keep, limit)
         let dated = files.map { ($0, (try? $0.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast) }
-        for (file, _) in dated.sorted(by: { $0.1 < $1.1 }).prefix(files.count - limit) {
+        for (file, _) in dated.sorted(by: { $0.1 < $1.1 }).prefix(excess) {
             try? FileManager.default.removeItem(at: file)
         }
     }
@@ -127,11 +130,6 @@ enum LocationSnapshotCache {
         String(format: "%.6f,%.6f@%.0fx%.0f/%.0f/%@/%.0f", location.latitude, location.longitude, size.width, size.height, scale, dark ? "dark" : "light", span)
     }
 
-    nonisolated static func scale(inKey key: String) -> CGFloat? {
-        let parts = key.split(separator: "/")
-        return parts.count > 1 ? Double(parts[1]).map { CGFloat($0) } : nil
-    }
-
     static func bytes(of image: UIImage) -> Int {
         image.cgImage.map { $0.bytesPerRow * $0.height } ?? Int(image.size.width * image.size.height * image.scale * image.scale * 4)
     }
@@ -143,7 +141,10 @@ enum LocationSnapshotCache {
     static func load(_ location: GeoLocation, dark: Bool, scale: CGFloat, key: String) async -> UIImage? {
         if let image = cached(key) { return image }
         let disk = SnapshotDiskCache.standard
-        if let image = await Task.detached(priority: .utility, operation: { disk.image(for: key) }).value {
+        if let image = await Task.detached(priority: .utility, operation: {
+            // Decoded here, as drawing it for the first time would do it on the main thread.
+            disk.image(for: key, scale: scale).map { $0.preparingForDisplay() ?? $0 }
+        }).value {
             cache.setObject(image, forKey: key as NSString, cost: Self.bytes(of: image))
             return image
         }
