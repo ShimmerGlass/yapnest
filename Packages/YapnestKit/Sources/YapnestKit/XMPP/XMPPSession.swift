@@ -129,6 +129,10 @@ public final class XMPPSession: @unchecked Sendable {
     public let transfers = CurrentValueSubject<[Int64: Double], Never>([:])
     /// Group chats we're joining or in on this connection.
     public let rooms = CurrentValueSubject<[JID: RoomStatus], Never>([:])
+    /// Each change to one room's state as it's published, with nil for a room
+    /// that's gone. The app follows this rather than `rooms`, as handing it
+    /// whole dictionaries would have it compare every room at every change.
+    public let roomUpdates = PassthroughSubject<RoomUpdate, Never>()
     /// The call under way, or the one that just ended, until the next. Nil in
     /// sessions without media, and before the first call.
     public let callState = CurrentValueSubject<CallState?, Never>(nil)
@@ -154,6 +158,9 @@ public final class XMPPSession: @unchecked Sendable {
     /// Where caps results update `callablePeers`, one run for however many
     /// arrived meanwhile.
     let callableQueue = DispatchQueue(label: "Yapnest.callable")
+    let occupantQueue = DispatchQueue(label: "Yapnest.occupants")
+    /// How long occupants' presences are gathered before they are applied.
+    var occupantWindow: TimeInterval = 0.05
     let callableUpdatePending = OSAllocatedUnfairLock(initialState: false)
     /// The relays found for calls.
     let iceServerCache = IceServerCache()
@@ -278,6 +285,11 @@ public final class XMPPSession: @unchecked Sendable {
         var transferProgress: [Int64: Double] = [:]
         /// Group chats' live state, by room.
         var rooms: [JID: RoomStatus] = [:]
+        /// Occupants' arrivals and departures not yet applied to `rooms`: a
+        /// room sends everyone present on joining, and applying each at once
+        /// copied the room's state every time.
+        var pendingOccupantChanges: [JID: [OccupantChange]] = [:]
+        var occupantDrainScheduled = false
         /// Every group chat we have a conversation for, joined or not, so
         /// their stanzas aren't taken for 1:1 ones.
         var knownRooms: Set<JID> = []

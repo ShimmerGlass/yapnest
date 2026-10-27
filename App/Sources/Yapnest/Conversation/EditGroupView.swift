@@ -56,7 +56,7 @@ struct EditGroupView: View {
         _savedSubject = State(initialValue: group.subject ?? "")
     }
 
-    private var status: RoomStatus? { model.rooms[room] }
+    private var status: RoomStatus? { model.live.room(room).status }
     private var isOwner: Bool { status?.canEditInfo == true }
     private var canChangeSubject: Bool { status?.canChangeSubject == true }
 

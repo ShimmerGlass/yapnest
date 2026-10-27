@@ -20,7 +20,7 @@ struct AppModelSessionTests {
         #expect(await stays(for: .milliseconds(700)) { fixture.lock.isLocked && FileManager.default.fileExists(atPath: fixture.databaseFile.path) })
         let peer = JID("peer@example.com")!
         session.presences.send([peer: .away])
-        await eventually("the new session's presences reach the model") { model.presences[peer] == .away }
+        await eventually("the new session's presences reach the model") { model.live.peer(peer).presence == .away }
     }
 
     @Test func aFailedCredentialSaveTearsTheSessionDown() async throws {
@@ -41,7 +41,7 @@ struct AppModelSessionTests {
         let session = try #require(model.session)
         let peer = JID("peer@example.com")!
         session.events.send(.chatState(peer, .composing))
-        await eventually("typing starts") { model.typing.contains(peer) }
+        await eventually("typing starts") { model.live.peer(peer).isTyping }
         model.open(peer)
         model.requestedSheet = .newGroup
         #expect(model.linkPreviews != nil)
@@ -49,7 +49,7 @@ struct AppModelSessionTests {
         model.signOut()
 
         await eventually("the account's state is reset") {
-            model.typing.isEmpty && model.requestedConversation == nil && model.requestedSheet == nil && model.linkPreviews == nil
+            model.typingPeers.isEmpty && model.requestedConversation == nil && model.requestedSheet == nil && model.linkPreviews == nil
         }
     }
 

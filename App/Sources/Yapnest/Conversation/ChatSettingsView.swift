@@ -92,7 +92,7 @@ struct ChatSettingsView: View {
         isLoaded = true
     }
 
-    private var room: RoomStatus? { model.rooms[peer] }
+    private var room: RoomStatus? { model.live.room(peer).status }
 
     /// The addresses a 1:1 peer takes commands at: its own if it's a bare
     /// domain, and the devices that say so in their capabilities. A component
@@ -164,7 +164,7 @@ struct ChatSettingsView: View {
 
                 if let group { groupSections(group, probeNicks: probeNickList) }
 
-                if group == nil, contact?.seesPresence == true, let status = model.statuses[peer] {
+                if group == nil, contact?.seesPresence == true, let status = model.live.peer(peer).status {
                     Section("Status") {
                         Text(status)
                     }

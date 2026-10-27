@@ -17,7 +17,7 @@ struct BannedMembersView: View {
     @State private var names: [JID: String] = [:]
 
     private var banned: [JID] {
-        (model.rooms[room]?.banned ?? []).sorted { $0.description < $1.description }
+        (model.live.room(room).status?.banned ?? []).sorted { $0.description < $1.description }
     }
 
     var body: some View {

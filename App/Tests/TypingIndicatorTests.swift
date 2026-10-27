@@ -15,7 +15,7 @@ struct TypingIndicatorTests {
 
     private func startTyping(_ session: XMPPSession, _ model: AppModel) async {
         session.events.send(.chatState(peer, .composing))
-        await eventually("typing starts") { model.typing.contains(peer) }
+        await eventually("typing starts") { model.live.peer(peer).isTyping }
     }
 
     @Test func anOfflinePresenceEndsTheIndicator() async throws {
@@ -26,7 +26,7 @@ struct TypingIndicatorTests {
 
         session.presences.send([peer: .offline])
 
-        await eventually("typing ends") { fixture.model.typing.isEmpty }
+        await eventually("typing ends") { fixture.model.typingPeers.isEmpty }
     }
 
     @Test func aPeerThatDropsOutOfThePresencesStopsTyping() async throws {
@@ -37,7 +37,7 @@ struct TypingIndicatorTests {
 
         session.presences.send([:])
 
-        await eventually("typing ends") { fixture.model.typing.isEmpty }
+        await eventually("typing ends") { fixture.model.typingPeers.isEmpty }
     }
 
     @Test func aStrangerWeHaveNoPresenceForKeepsTyping() async throws {
@@ -47,7 +47,7 @@ struct TypingIndicatorTests {
 
         session.presences.send([JID("friend@example.com")!: .online])
 
-        #expect(await stays { fixture.model.typing.contains(peer) })
+        #expect(await stays { fixture.model.live.peer(peer).isTyping })
     }
 
     @Test func disconnectingEndsTheIndicator() async throws {
@@ -57,7 +57,7 @@ struct TypingIndicatorTests {
 
         session.state.send(.disconnected(error: nil))
 
-        await eventually("typing ends") { fixture.model.typing.isEmpty }
+        await eventually("typing ends") { fixture.model.typingPeers.isEmpty }
     }
 
     @Test func anActiveFromSomeoneNotTypingInvalidatesNoReader() async throws {
@@ -90,6 +90,6 @@ struct TypingIndicatorTests {
         let session = try await signedIn(fixture)
         await startTyping(session, fixture.model)
 
-        await eventually("typing expires", timeout: .seconds(4)) { fixture.model.typing.isEmpty }
+        await eventually("typing expires", timeout: .seconds(4)) { fixture.model.typingPeers.isEmpty }
     }
 }

@@ -57,7 +57,7 @@ struct ConversationView: View {
 
     private var isJoining: Bool {
         guard let group, !group.hasLeft else { return false }
-        switch model.rooms[peer]?.phase {
+        switch model.live.room(peer).phase {
         case .joining?, nil: return true
         case .joined?, .failed?: return false
         }
@@ -89,13 +89,13 @@ struct ConversationView: View {
     private var subtitle: Text? {
         if let group {
             if group.hasLeft { return Text("You left this group") }
-            switch model.rooms[peer]?.phase {
-            case .joined?: return Text("\(model.rooms[peer]?.memberCount ?? 0) members")
+            switch model.live.room(peer).phase {
+            case .joined?: return Text("\(model.live.room(peer).memberCount) members")
             case .failed(let reason)?: return Text(reason)
             case .joining?, nil: return joinIsSlow ? Text("Joining…") : nil
             }
         }
-        if model.typing.contains(peer) { return Text("typing…") }
+        if model.live.peer(peer).isTyping { return Text("typing…") }
         guard let presence else { return nil }
         // Their server's word on when they left, which only shows while
         // the user shares their own.
@@ -104,7 +104,7 @@ struct ConversationView: View {
         }
         // One line, so a long status is cut off rather than pushing the
         // name around; the full text is in the chat's settings.
-        if let status = model.statuses[peer] { return Text("\(presence.title) · \(status)") }
+        if let status = model.live.peer(peer).status { return Text("\(presence.title) · \(status)") }
         return Text(presence.title)
     }
 
@@ -333,7 +333,7 @@ struct ConversationView: View {
             ActionBar(message: Text("You blocked this contact."), button: "Unblock", errorTitle: "Couldn't unblock") {
                 try await session.unblock(peer)
             }
-        } else if group != nil, case .failed(let reason)? = model.rooms[peer]?.phase {
+        } else if group != nil, case .failed(let reason)? = model.live.room(peer).phase {
             // Not left, but out for now; some failures retry by themselves.
             ActionBar(message: Text(verbatim: reason), button: "Join Again", errorTitle: "Couldn't join") {
                 try await session.joinGroup(peer)

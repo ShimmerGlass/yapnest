@@ -35,6 +35,27 @@ public struct RoomOccupant: Hashable, Sendable {
     }
 }
 
+/// A room's state as it changed, or nil once the room is gone.
+public struct RoomUpdate: Sendable {
+    public let room: JID
+    public let status: RoomStatus?
+
+    public init(room: JID, status: RoomStatus?) {
+        self.room = room
+        self.status = status
+    }
+}
+
+extension RoomStatus {
+    /// A room as the app's tests need one; the session fills in the rest as it joins.
+    public init(phase: Phase, nickname: String) {
+        self.init(phase: phase, nickname: nickname, mayCreate: true)
+    }
+}
+
+/// One occupant's arrival, change or departure, waiting to be applied.
+typealias OccupantChange = @Sendable (inout RoomStatus?) -> Void
+
 /// A group chat's state on the current connection.
 public struct RoomStatus: Hashable, Sendable {
     public enum Phase: Hashable, Sendable {
@@ -303,8 +324,12 @@ extension XMPPSession {
         lock.withLock { $0.knownRooms = rooms }
     }
 
+    /// The room's state, with the occupants' presences waiting to be applied.
     public func roomStatus(_ jid: JID) -> RoomStatus? {
-        lock.withLock { $0.rooms[jid] }
+        if lock.withLock({ $0.pendingOccupantChanges[jid] != nil }) {
+            return updateRoom(jid) { _ in }
+        }
+        return lock.withLock { $0.rooms[jid] }
     }
 
     /// The room's status while we're connected and in it, for what only
@@ -330,24 +355,57 @@ extension XMPPSession {
         return status
     }
 
-    /// Changes one room's live state and publishes the result.
+    /// Changes one room's live state and publishes the result, after the
+    /// occupants' presences that arrived before it.
     @discardableResult
     func updateRoom(_ jid: JID, _ change: (inout RoomStatus?) -> Void) -> RoomStatus? {
-        publish(rooms, under: roomsPublishLock) { state in
+        roomsPublishLock.lock()
+        defer { roomsPublishLock.unlock() }
+        let (room, changed) = publish(rooms, under: roomsPublishLock) { state -> (result: (RoomStatus?, Bool), snapshot: [JID: RoomStatus]?) in
             let before = state.rooms[jid]
             var room = before
+            for occupantChange in state.pendingOccupantChanges.removeValue(forKey: jid) ?? [] { occupantChange(&room) }
             change(&room)
             state.rooms[jid] = room
-            return (room, room == before ? nil : state.rooms)
+            let changed = room != before
+            return ((room, changed), changed ? state.rooms : nil)
         }
+        if changed { roomUpdates.send(RoomUpdate(room: jid, status: room)) }
+        return room
+    }
+
+    /// Records an occupant arriving, changing or leaving, applied with the
+    /// others within a moment as one update of the room.
+    func updateOccupants(_ jid: JID, _ change: @escaping OccupantChange) {
+        let schedule = lock.withLock { state in
+            state.pendingOccupantChanges[jid, default: []].append(change)
+            defer { state.occupantDrainScheduled = true }
+            return !state.occupantDrainScheduled
+        }
+        guard schedule else { return }
+        occupantQueue.asyncAfter(deadline: .now() + occupantWindow) { [weak self] in self?.applyOccupantChanges() }
+    }
+
+    /// Applies every waiting occupant change, one update for each room.
+    func applyOccupantChanges() {
+        let rooms = lock.withLock { state in
+            state.occupantDrainScheduled = false
+            return Array(state.pendingOccupantChanges.keys)
+        }
+        for room in rooms { updateRoom(room) { _ in } }
     }
 
     func clearRooms() {
         cancelAllRejoins()
-        publish(rooms, under: roomsPublishLock) { state in
+        roomsPublishLock.lock()
+        defer { roomsPublishLock.unlock() }
+        let gone = publish(rooms, under: roomsPublishLock) { state -> (result: [JID], snapshot: [JID: RoomStatus]?) in
+            let gone = Array(state.rooms.keys)
             state.rooms = [:]
-            return ((), rooms.value.isEmpty ? nil : [:])
+            state.pendingOccupantChanges = [:]
+            return (gone, rooms.value.isEmpty ? nil : [:])
         }
+        for room in gone { roomUpdates.send(RoomUpdate(room: room, status: nil)) }
     }
 
     // MARK: Joining
@@ -533,7 +591,8 @@ extension XMPPSession {
         let x = presence.firstChild(name: "x", xmlns: NS.mucUser)
         let item = x?.firstChild(name: "item")
         let statuses = Set(x?.filterChildren(name: "status", xmlns: nil).compactMap { $0.getAttribute("code").flatMap(Int.init) } ?? [])
-        guard let status = roomStatus(room) else { return }
+        // Not `roomStatus`, which would apply the waiting occupants for each presence.
+        guard let status = lock.withLock({ $0.rooms[room] }) else { return }
 
         if presence.type == .error {
             guard status.phase == .joining || nick == status.nickname else { return }
@@ -560,14 +619,16 @@ extension XMPPSession {
                 removedFromRoom(room, presence: presence, statuses: statuses)
                 return
             }
-            updateRoom(room) { status in
+            let itemJID = item?.getAttribute("jid").flatMap(JID.init(_:))
+            let newNick = item?.getAttribute("nick")
+            let leave: OccupantChange = { status in
                 let occupant = status?.occupants.removeValue(forKey: nick)
                 // Taken out of the room for good: 301 banned, 321 and 322 no
                 // longer a member. A kick or a plain leave keeps membership.
-                if !statuses.isDisjoint(with: [301, 321, 322]), let jid = item?.getAttribute("jid").flatMap(JID.init(_:)) {
-                    status?.setAffiliation(statuses.contains(301) ? .outcast : .none, of: jid)
+                if !statuses.isDisjoint(with: [301, 321, 322]), let itemJID {
+                    status?.setAffiliation(statuses.contains(301) ? .outcast : .none, of: itemJID)
                 }
-                if statuses.contains(303), let newNick = item?.getAttribute("nick"), var occupant {
+                if statuses.contains(303), let newNick, var occupant {
                     occupant.nick = newNick
                     // The stay under the old nickname ended; its presence under
                     // the new one starts another.
@@ -576,6 +637,8 @@ extension XMPPSession {
                     if isSelf { status?.nickname = newNick }
                 }
             }
+            // Our own change of nickname is read at once by what follows it.
+            if isSelf { updateRoom(room, leave) } else { updateOccupants(room, leave) }
             return
         }
 
@@ -593,13 +656,21 @@ extension XMPPSession {
             role: item?.getAttribute("role") ?? "participant",
             occupantId: trustsOccupantIds ? claimedId : nil,
         )
+        // Someone else's arrival waits for the others'; ours ends the join, so it
+        // comes after, and applies those first.
+        guard isSelf else {
+            updateOccupants(room) { status in
+                status?.occupants[nick] = occupant
+                if let jid = occupant.jid { status?.setAffiliation(occupant.affiliation, of: jid) }
+            }
+            return
+        }
         let joinedNow = updateRoom(room) { status in
             var occupant = occupant
             // A change of show or role is the same stay.
             occupant.presenceSession = status?.occupants[nick]?.presenceSession ?? .random(in: 1...Int64.max)
             status?.occupants[nick] = occupant
             if let jid = occupant.jid { status?.setAffiliation(occupant.affiliation, of: jid) }
-            guard isSelf else { return }
             status?.affiliation = occupant.affiliation
             status?.role = occupant.role
             status?.nickname = nick
@@ -612,7 +683,6 @@ extension XMPPSession {
                 status?.isSyncing = true
             }
         }
-        guard isSelf else { return }
         if statuses.contains(210) || nick != status.nickname {
             // The room picked our nickname.
             try? database.updateGroupChat(room) { $0.nickname = nick }

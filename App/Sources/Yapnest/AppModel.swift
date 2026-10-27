@@ -38,15 +38,21 @@ final class AppModel {
     private(set) var loadingIsSlow = false
     private(set) var catchUpIsSlow = false
     @ObservationIgnored private var catchUpWatch: Task<Void, Never>?
-    /// Peers currently typing to us.
-    private(set) var typing: Set<JID> = []
+    /// What the screens show of each contact and group, in a box of its own.
+    let live = LiveStates()
+    /// Peers currently typing to us. Views read their peer's box instead.
+    @ObservationIgnored private(set) var typingPeers: Set<JID> = []
     /// When each typing peer last sent `composing`, for expiring stale ones.
     private var composingSince: [JID: Date] = [:]
     /// Runs only while someone is typing.
     private var typingExpiry: Task<Void, Never>?
     @ObservationIgnored let badgeSync = BadgeSync()
-    /// Contacts' availability, from the session.
-    private(set) var presences: [JID: ContactPresence] = [:]
+    /// What the session has said since the last run-loop turn, applied to the
+    /// boxes together: a burst of presences or room changes becomes one pass.
+    @ObservationIgnored private var latestPresences: [JID: ContactPresence]?
+    @ObservationIgnored private var latestStatuses: [JID: String]?
+    @ObservationIgnored private var pendingRooms: [JID: RoomStatus?] = [:]
+    @ObservationIgnored private var liveFlushScheduled = false
     /// Contacts online with a device that takes calls.
     private(set) var callablePeers: Set<JID> = []
     /// The callable peers with a device that takes video too.
@@ -58,12 +64,8 @@ final class AppModel {
     /// The dot to show for `peer`: only contacts whose presence we receive have
     /// one, since for anyone else "offline" would just mean unknown.
     func presence(of peer: JID, contact: Contact?, isGroup: Bool) -> ContactPresence? {
-        !isGroup && contact?.seesPresence == true ? presences[peer] ?? .offline : nil
+        !isGroup && contact?.seesPresence == true ? live.peer(peer).presence ?? .offline : nil
     }
-    /// Contacts' status messages, where they have one.
-    private(set) var statuses: [JID: String] = [:]
-    /// Group chats' state on the current connection.
-    private(set) var rooms: [JID: RoomStatus] = [:]
     /// A conversation to show, from a tapped notification.
     var requestedConversation: JID?
     /// The chat list to show, from a tapped invitation notification.
@@ -845,12 +847,8 @@ final class AppModel {
         session.presences
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in
-                guard let self else { return }
-                let before = presences
-                presences = $0
-                // An unavailable peer can't be typing, and won't send "paused".
-                // Someone we never had presence for (a stranger) isn't dropped.
-                for peer in typing where $0[peer] == .offline || ($0[peer] == nil && before[peer] != nil) { stopTyping(peer) }
+                self?.latestPresences = $0
+                self?.scheduleLiveFlush()
             }
             .store(in: &cancellables)
         session.callablePeers
@@ -869,17 +867,49 @@ final class AppModel {
             .store(in: &cancellables)
         session.statuses
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.statuses = $0 }
+            .sink { [weak self] in
+                self?.latestStatuses = $0
+                self?.scheduleLiveFlush()
+            }
             .store(in: &cancellables)
-        session.rooms
+        session.roomUpdates
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.rooms = $0 }
+            .sink { [weak self] in
+                self?.pendingRooms[$0.room] = .some($0.status)
+                self?.scheduleLiveFlush()
+            }
             .store(in: &cancellables)
         session.events
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.handle($0) }
             .store(in: &cancellables)
         return session
+    }
+
+    private func scheduleLiveFlush() {
+        guard !liveFlushScheduled else { return }
+        liveFlushScheduled = true
+        Task { [weak self] in self?.flushLive() }
+    }
+
+    private func flushLive() {
+        liveFlushScheduled = false
+        if let presences = latestPresences {
+            latestPresences = nil
+            let before = live.apply(presences: presences)
+            // An unavailable peer can't be typing, and won't send "paused".
+            // Someone we never had presence for (a stranger) isn't dropped.
+            for peer in typingPeers where presences[peer] == .offline || (presences[peer] == nil && before[peer] != nil) {
+                stopTyping(peer)
+            }
+        }
+        if let statuses = latestStatuses {
+            latestStatuses = nil
+            live.apply(statuses: statuses)
+        }
+        let rooms = pendingRooms
+        pendingRooms = [:]
+        for (room, status) in rooms { live.apply(room: room, status: status) }
     }
 
     /// Publishes who is offered a call, and comes back when a peer who left
@@ -910,14 +940,15 @@ final class AppModel {
         #endif
         cancellables = []
         connection = .disconnected(error: nil)
-        presences = [:]
+        latestPresences = nil
+        latestStatuses = nil
+        pendingRooms = [:]
+        live.reset()
         callableExpiry?.cancel()
         callableHold = CallableHold()
         videoCallableHold = CallableHold()
         callablePeers = []
         videoCallablePeers = []
-        statuses = [:]
-        rooms = [:]
         clearTyping()
         requestedConversation = nil
         requestedSheet = nil
@@ -937,7 +968,7 @@ final class AppModel {
                 notifyInBackground(session)
                 // A message ends the sender's typing indicator; with nobody
                 // typing there's nothing to look up.
-                if !typing.isEmpty {
+                if !typingPeers.isEmpty {
                     let database = session.database, conversationId = message.conversationId
                     Task {
                         let peer = await offMain { try? database.reader.read { try Conversation.fetchOne($0, key: conversationId)?.peer } }
@@ -952,9 +983,8 @@ final class AppModel {
     // peers whose app died or whose network dropped mid-sentence.
 
     private func startTyping(_ peer: JID) {
-        // Only a change of who is typing invalidates readers; a `composing`
-        // follows every few seconds.
-        if !typing.contains(peer) { typing.insert(peer) }
+        typingPeers.insert(peer)
+        live.setTyping(peer, true)
         composingSince[peer] = Date()
         guard typingExpiry == nil else { return }
         let interval = environment.typingSweepInterval
@@ -969,13 +999,15 @@ final class AppModel {
     }
 
     private func stopTyping(_ peer: JID) {
-        if typing.contains(peer) { typing.remove(peer) }
+        typingPeers.remove(peer)
+        live.setTyping(peer, false)
         composingSince[peer] = nil
-        if typing.isEmpty { typingExpiry?.cancel(); typingExpiry = nil }
+        if typingPeers.isEmpty { typingExpiry?.cancel(); typingExpiry = nil }
     }
 
     private func clearTyping() {
-        if !typing.isEmpty { typing = [] }
+        for peer in typingPeers { live.setTyping(peer, false) }
+        typingPeers = []
         composingSince = [:]
         typingExpiry?.cancel()
         typingExpiry = nil

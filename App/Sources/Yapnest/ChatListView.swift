@@ -499,7 +499,7 @@ private struct ChatListContent: View {
                 } label: {
                     ChatListRow(
                         item: item,
-                        isTyping: item.groupChat == nil && model.typing.contains(item.conversation.peer),
+                        isTyping: item.groupChat == nil && model.live.peer(item.conversation.peer).isTyping,
                         avatarURL: session.avatars.url(for: item.contact),
                         presence: model.presence(of: item.conversation.peer, contact: item.contact, isGroup: item.groupChat != nil),
                     )
