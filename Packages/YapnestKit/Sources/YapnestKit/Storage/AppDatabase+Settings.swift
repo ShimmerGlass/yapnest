@@ -50,6 +50,10 @@ extension AppDatabase {
         /// Whether the GIF picker is offered. On unless turned off, because
         /// its searches go to KLIPY.
         case gifs
+        /// Set once the user has agreed to KLIPY, in the United States,
+        /// seeing their searches, region and IP address: see
+        /// `ConsentedGifService`. Not synced, and kept when GIFs are turned off.
+        case gifConsent
         /// The GIFs starred before they were synced, as JSON. Taken into
         /// `syncedEntry` and removed by the first write: see `addGifFavorite`.
         case gifFavorites

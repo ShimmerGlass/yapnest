@@ -53,7 +53,7 @@ struct WelcomeView: View {
                 }
                 if Klipy.apiKey != nil {
                     Section {
-                        option("GIFs", isOn: $gifsEnabled, detail: "Searches go to KLIPY, which sees what you search for and your IP address.")
+                        option("GIFs", isOn: $gifsEnabled, detail: "Searches go to KLIPY, a company in the United States, which sees what you search for, your region and your IP address. You are asked before the first one.")
                     }
                 }
 

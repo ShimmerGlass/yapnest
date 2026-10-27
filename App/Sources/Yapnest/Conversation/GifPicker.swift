@@ -13,6 +13,11 @@ struct GifPicker: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var service = Klipy.service()
+    /// Whether the user has agreed to KLIPY: nil until the database answers.
+    /// Nothing goes to KLIPY, previews included, unless it's true.
+    @State private var consent: Bool?
+    @State private var isAgreeing = false
+    @State private var consentError: String?
     @State private var query = ""
     @State private var gifs: [Gif] = []
     @State private var seen: Set<String> = []
@@ -36,6 +41,11 @@ struct GifPicker: View {
     private struct LoadKey: Hashable {
         let query: String
         let favorites: Bool
+        let consented: Bool
+    }
+
+    private var gate: ConsentedGifService? {
+        service.map { ConsentedGifService(service: $0, database: database) }
     }
 
     private var columnCount: Int { sizeClass == .compact ? 2 : 3 }
@@ -46,7 +56,114 @@ struct GifPicker: View {
 
     var body: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
+            Group {
+                if consent == true {
+                    browser
+                } else if consent == false {
+                    consentNotice
+                } else {
+                    ProgressView()
+                }
+            }
+            .navigationTitle("GIFs")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    SheetCancelButton { dismiss() }
+                }
+            }
+            .task { consent = await gate?.hasConsent() ?? false }
+            .task {
+                await database.forEachValue(of: database.observeGifFavorites(), "GIF favorites") { favorites = $0 }
+            }
+            .alert("Couldn't Update Favorites", isPresented: Binding(get: { favoriteError != nil }, set: { if !$0 { favoriteError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(favoriteError ?? "")
+            }
+            .alert("Couldn't Save Your Choice", isPresented: Binding(get: { consentError != nil }, set: { if !$0 { consentError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(consentError ?? "")
+            }
+        }
+    }
+
+    /// Asked once, before the first request: KLIPY is a company in the United
+    /// States, which the EU has no adequacy decision for.
+    private var consentNotice: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            VStack(spacing: 12) {
+                Image(systemName: "hand.raised")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text("GIFs from KLIPY")
+                    .font(.title2.bold())
+                    .accessibilityAddTraits(.isHeader)
+                Text("GIFs come from KLIPY, a company in the United States. KLIPY sees what you search, your region and your IP address. The United States may not protect this data the way the EU does.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .accessibilityElement(children: .combine)
+            VStack(spacing: 8) {
+                Button {
+                    agree()
+                } label: {
+                    ZStack {
+                        Text("Accept").opacity(isAgreeing ? 0 : 1)
+                        if isAgreeing { ProgressView() }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isAgreeing)
+                Button("Turn Off GIFs", role: .destructive) { turnOff() }
+                    .disabled(isAgreeing)
+                Text("You can turn GIFs back on in Settings.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .controlSize(.large)
+            Spacer()
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: 420)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func turnOff() {
+        guard let gate, !isAgreeing else { return }
+        isAgreeing = true
+        Task {
+            defer { isAgreeing = false }
+            do {
+                try await gate.turnOffGifs()
+                dismiss()
+            } catch {
+                consentError = error.localizedDescription
+            }
+        }
+    }
+
+    private func agree() {
+        guard let gate, !isAgreeing else { return }
+        isAgreeing = true
+        Task {
+            defer { isAgreeing = false }
+            do {
+                try await gate.agree()
+                consent = true
+            } catch {
+                consentError = error.localizedDescription
+            }
+        }
+    }
+
+    private var browser: some View {
+        ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 12) {
                         if !isSearching {
@@ -77,28 +194,12 @@ struct GifPicker: View {
                     proxy.scrollTo("top", anchor: .top)
                 }
             }
-            .navigationTitle("GIFs")
-            .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: Text("Search KLIPY"))
             .autocorrectionDisabled()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    SheetCancelButton { dismiss() }
-                }
-            }
             // Waits for typing to stop, and a newer query cancels this one,
             // request included.
             // Trending only loads while it shows, so the key has the source too.
-            .task(id: LoadKey(query: query, favorites: showsFavorites)) { await reload() }
-            .task {
-                await database.forEachValue(of: database.observeGifFavorites(), "GIF favorites") { favorites = $0 }
-            }
-            .alert("Couldn't Update Favorites", isPresented: Binding(get: { favoriteError != nil }, set: { if !$0 { favoriteError = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(favoriteError ?? "")
-            }
-        }
+            .task(id: LoadKey(query: query, favorites: showsFavorites, consented: consent == true)) { await reload() }
     }
 
     @ViewBuilder
@@ -219,7 +320,7 @@ struct GifPicker: View {
     private func reload(debounce: Bool = true) async {
         moreTask?.cancel()
         moreTask = nil
-        guard let service, !showsFavorites else { return }
+        guard let service = gate, consent == true, !showsFavorites else { return }
         let text = trimmedQuery
         // Back from Favorites, the pages already loaded are still right. A
         // failed load, and so Retry, has no loaded query and goes on.
@@ -257,7 +358,7 @@ struct GifPicker: View {
     }
 
     private func loadMore() {
-        guard let service, hasNext, !isLoading, !isLoadingMore else { return }
+        guard let service = gate, consent == true, hasNext, !isLoading, !isLoadingMore else { return }
         isLoadingMore = true
         nextPageError = false
         let text = trimmedQuery
@@ -279,7 +380,7 @@ struct GifPicker: View {
         }
     }
 
-    private func fetch(_ service: GifService, _ text: String, page: Int) async throws -> GifPage {
+    private func fetch(_ service: ConsentedGifService, _ text: String, page: Int) async throws -> GifPage {
         text.isEmpty ? try await service.trending(page: page) : try await service.search(text, page: page)
     }
 }
