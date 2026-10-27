@@ -202,6 +202,11 @@ struct LinkPreviewerTests {
         #expect(preview.imageSize == CGSize(width: 1600, height: 800))
     }
 
+    @Test func anImageOfTooManyPixelsIsNotDecoded() async throws {
+        stub.serve("https://img.test/huge.jpg", .init(headers: ["Content-Type": "image/jpeg"], body: Self.jpeg(width: 4100, height: 4100)))
+        #expect(try await previewer.fetch(URL(string: "https://img.test/huge.jpg")!).kind == .none)
+    }
+
     @Test func nothingToShow() async throws {
         stub.serve("https://none.test/missing", .init(status: 404, headers: ["Content-Type": "text/html"], body: Data("<title>Not found</title>".utf8)))
         stub.serve("https://none.test/file.zip", .init(headers: ["Content-Type": "application/zip"], body: Data([1, 2, 3])))

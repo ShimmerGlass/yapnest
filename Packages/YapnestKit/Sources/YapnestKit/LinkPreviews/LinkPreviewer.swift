@@ -23,8 +23,9 @@ public final class LinkPreviewer: Sendable {
     static let maxImageSize = 10 * 1024 * 1024
     /// Larger images are scaled down to this many pixels on their long side.
     static let maxImageDimension = 1600
-    /// Refuse to decode anything bigger, whatever its file size.
-    static let maxImagePixels = 50_000_000
+    /// Refuse to decode anything bigger, whatever its file size: a preview is
+    /// 1600 pixels at most, and a PNG is decoded in full before it is scaled.
+    static let maxImagePixels = 16_000_000
 
     /// Fetches with a fetcher that keeps previews away from the local network
     /// and sends no cookies, so nothing links fetches together.
