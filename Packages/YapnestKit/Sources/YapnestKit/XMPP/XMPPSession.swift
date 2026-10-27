@@ -176,17 +176,21 @@ public final class XMPPSession: @unchecked Sendable {
     /// arbitrary code that may call back into the session; the publishing
     /// lock is recursive for the same reason. Nothing may take a publishing
     /// lock while holding `lock`. `build` returns what to hand back, and the
-    /// snapshot to send, or nil to send nothing.
+    /// snapshot to send, or nil to send nothing. `after` runs under the
+    /// publishing lock once the snapshot is sent, for what must follow it in
+    /// the same order.
     @discardableResult
     func publish<Value, Result>(
         _ subject: CurrentValueSubject<Value, Never>,
         under publishLock: NSRecursiveLock,
+        after: (Result) -> Void = { _ in },
         _ build: (inout Mutable) -> (result: Result, snapshot: Value?),
     ) -> Result {
         publishLock.lock()
         defer { publishLock.unlock() }
         let (result, snapshot) = lock.withLockUnchecked { build(&$0) }
         if let snapshot { subject.send(snapshot) }
+        after(result)
         return result
     }
     private var cancellables = Set<AnyCancellable>()

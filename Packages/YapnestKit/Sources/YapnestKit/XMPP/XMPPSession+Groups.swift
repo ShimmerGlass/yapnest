@@ -359,9 +359,9 @@ extension XMPPSession {
     /// occupants' presences that arrived before it.
     @discardableResult
     func updateRoom(_ jid: JID, _ change: (inout RoomStatus?) -> Void) -> RoomStatus? {
-        roomsPublishLock.lock()
-        defer { roomsPublishLock.unlock() }
-        let (room, changed) = publish(rooms, under: roomsPublishLock) { state -> (result: (RoomStatus?, Bool), snapshot: [JID: RoomStatus]?) in
+        let (room, _) = publish(rooms, under: roomsPublishLock, after: { room, changed in
+            if changed { roomUpdates.send(RoomUpdate(room: jid, status: room)) }
+        }) { state -> (result: (RoomStatus?, Bool), snapshot: [JID: RoomStatus]?) in
             let before = state.rooms[jid]
             var room = before
             for occupantChange in state.pendingOccupantChanges.removeValue(forKey: jid) ?? [] { occupantChange(&room) }
@@ -370,7 +370,6 @@ extension XMPPSession {
             let changed = room != before
             return ((room, changed), changed ? state.rooms : nil)
         }
-        if changed { roomUpdates.send(RoomUpdate(room: jid, status: room)) }
         return room
     }
 
@@ -397,15 +396,14 @@ extension XMPPSession {
 
     func clearRooms() {
         cancelAllRejoins()
-        roomsPublishLock.lock()
-        defer { roomsPublishLock.unlock() }
-        let gone = publish(rooms, under: roomsPublishLock) { state -> (result: [JID], snapshot: [JID: RoomStatus]?) in
+        publish(rooms, under: roomsPublishLock, after: { gone in
+            for room in gone { roomUpdates.send(RoomUpdate(room: room, status: nil)) }
+        }) { state -> (result: [JID], snapshot: [JID: RoomStatus]?) in
             let gone = Array(state.rooms.keys)
             state.rooms = [:]
             state.pendingOccupantChanges = [:]
             return (gone, rooms.value.isEmpty ? nil : [:])
         }
-        for room in gone { roomUpdates.send(RoomUpdate(room: room, status: nil)) }
     }
 
     // MARK: Joining
