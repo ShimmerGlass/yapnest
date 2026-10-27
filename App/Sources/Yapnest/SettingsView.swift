@@ -122,16 +122,18 @@ struct SettingsView: View {
                 }
                 .disabled(!isLoaded)
 
-                Section {
-                    Toggle("Hide Screen in App Switcher", isOn: $hidesScreenInAppSwitcher)
-                } footer: {
-                    Text("Shows a blank screen instead of your chats in the app switcher.")
-                        #if DEBUG
-                        // The snapshot can't be read from a UI test, so it
-                        // reads how often the cover went up instead.
-                        .accessibilityIdentifier("appSwitcherCoverCount")
-                        .accessibilityValue("\(AppSwitcherCover.shared.shownCount)")
-                        #endif
+                if !Platform.isMac {
+                    Section {
+                        Toggle("Hide Screen in App Switcher", isOn: $hidesScreenInAppSwitcher)
+                    } footer: {
+                        Text("Shows a blank screen instead of your chats in the app switcher.")
+                            #if DEBUG
+                            // The snapshot can't be read from a UI test, so it
+                            // reads how often the cover went up instead.
+                            .accessibilityIdentifier("appSwitcherCoverCount")
+                            .accessibilityValue("\(AppSwitcherCover.shared.shownCount)")
+                            #endif
+                    }
                 }
 
                 Section {

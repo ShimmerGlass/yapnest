@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// Hides the window from the app switcher, Mission Control and the Dock's
-/// previews when the user has asked for it. The choice is about this device,
+/// Hides the window from the iPhone's and iPad's app switcher when the user
+/// has asked for it. The choice is about this device,
 /// not the account, so it lives in the device's defaults and never syncs.
 enum AppSwitcherCoverSetting {
     static let key = "yapnest.hidesScreenInAppSwitcher"

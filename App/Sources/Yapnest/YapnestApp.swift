@@ -102,7 +102,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().delegate = self
         MainActor.assumeIsolated {
             model.followLifecycle()
-            AppSwitcherCover.shared.start()
+            // The Mac shows windows live in Mission Control, and a cover there
+            // would hide the chat whenever another app is in front.
+            if !Platform.isMac { AppSwitcherCover.shared.start() }
         }
         return true
     }
