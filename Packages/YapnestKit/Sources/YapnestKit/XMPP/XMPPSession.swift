@@ -2463,7 +2463,10 @@ public final class XMPPSession: @unchecked Sendable {
         let peer = route.peer
         let to = route.isGroup ? original?.nick.map { "\(peer)/\($0)" } : author.description
         // A file's link holds its key, so the quote describes the file instead.
-        let raw = original.map { $0.isRetracted ? "" : $0.body } ?? message.replyFallback ?? ""
+        var raw = original.map { $0.isRetracted ? "" : $0.body } ?? message.replyFallback ?? ""
+        // The text of an encrypted message must not reach the servers in the
+        // clear, which a quote in an unencrypted reply would do.
+        if original?.encryption == .omemo && message.encryption != .omemo { raw = "" }
         let text = Attachment.quoteSummary(text: raw, attachment: attachment) ?? raw
         return .init(id: replyId, author: to ?? peer.description, text: text)
     }

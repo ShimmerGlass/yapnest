@@ -55,15 +55,20 @@ enum OutboundStanza {
         let message = base(to: route, id: id)
         var quoteLength = 0
         if let quote {
-            let quoted = quote.text
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .map { "> \($0)" }
-                .joined(separator: "\n") + "\n"
-            message.body = quoted + text
-            quoteLength = quoted.unicodeScalars.count
             message.addChild(Element(name: "reply", attributes: ["xmlns": NS.reply, "to": quote.author, "id": quote.id]))
-            let range = Element(name: "body", attributes: ["start": "0", "end": String(quoteLength)])
-            message.addChild(Element(name: "fallback", xmlns: NS.fallback, children: [range]).with(attribute: "for", NS.reply))
+            // Nothing to quote: the reference alone still links the reply.
+            if quote.text.isEmpty {
+                message.body = text
+            } else {
+                let quoted = quote.text
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .map { "> \($0)" }
+                    .joined(separator: "\n") + "\n"
+                message.body = quoted + text
+                quoteLength = quoted.unicodeScalars.count
+                let range = Element(name: "body", attributes: ["start": "0", "end": String(quoteLength)])
+                message.addChild(Element(name: "fallback", xmlns: NS.fallback, children: [range]).with(attribute: "for", NS.reply))
+            }
         } else {
             message.body = text
         }
