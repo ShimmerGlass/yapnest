@@ -40,10 +40,10 @@ final class AppModel {
     @ObservationIgnored private var catchUpWatch: Task<Void, Never>?
     /// What the screens show of each contact and group, in a box of its own.
     let live = LiveStates()
-    /// Peers currently typing to us. Views read their peer's box instead.
-    @ObservationIgnored private(set) var typingPeers: Set<JID> = []
-    /// When each typing peer last sent `composing`, for expiring stale ones.
-    private var composingSince: [JID: Date] = [:]
+    /// When each peer typing to us last sent `composing`, for expiring stale
+    /// ones. Views read their peer's box instead.
+    @ObservationIgnored private var composingSince: [JID: Date] = [:]
+    var typingPeers: Set<JID> { Set(composingSince.keys) }
     /// Runs only while someone is typing.
     private var typingExpiry: Task<Void, Never>?
     @ObservationIgnored let badgeSync = BadgeSync()
@@ -971,7 +971,7 @@ final class AppModel {
                 notifyInBackground(session)
                 // A message ends the sender's typing indicator; with nobody
                 // typing there's nothing to look up.
-                if !typingPeers.isEmpty {
+                if !composingSince.isEmpty {
                     let database = session.database, conversationId = message.conversationId
                     Task {
                         let peer = await offMain { try? database.reader.read { try Conversation.fetchOne($0, key: conversationId)?.peer } }
@@ -986,7 +986,6 @@ final class AppModel {
     // peers whose app died or whose network dropped mid-sentence.
 
     private func startTyping(_ peer: JID) {
-        typingPeers.insert(peer)
         live.setTyping(peer, true)
         composingSince[peer] = Date()
         guard typingExpiry == nil else { return }
@@ -1002,15 +1001,13 @@ final class AppModel {
     }
 
     private func stopTyping(_ peer: JID) {
-        typingPeers.remove(peer)
         live.setTyping(peer, false)
         composingSince[peer] = nil
-        if typingPeers.isEmpty { typingExpiry?.cancel(); typingExpiry = nil }
+        if composingSince.isEmpty { typingExpiry?.cancel(); typingExpiry = nil }
     }
 
     private func clearTyping() {
-        for peer in typingPeers { live.setTyping(peer, false) }
-        typingPeers = []
+        for peer in composingSince.keys { live.setTyping(peer, false) }
         composingSince = [:]
         typingExpiry?.cancel()
         typingExpiry = nil
