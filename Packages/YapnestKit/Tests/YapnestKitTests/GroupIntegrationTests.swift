@@ -81,8 +81,11 @@ extension LiveServer {
             try await b.database.writer.write { db in
                 _ = try Message.filter(!kept.map(\.id!).contains(Column("id"))).deleteAll(db)
             }
-            try b.database.markRead(conversationId: kept[0].conversationId)
-            let before = try #require(try await b.database.reader.read { try Conversation.fetchOne($0, key: kept[0].conversationId) })
+            // A wait that timed out leaves nothing here, and indexing it would crash
+            // the test process, ending every suite still to run.
+            let newest = try #require(kept.first)
+            try b.database.markRead(conversationId: newest.conversationId)
+            let before = try #require(try await b.database.reader.read { try Conversation.fetchOne($0, key: newest.conversationId) })
 
             var pages = 0
             while try await b.loadOlderHistory(for: room) {
