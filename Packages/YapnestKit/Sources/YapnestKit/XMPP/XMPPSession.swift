@@ -726,7 +726,11 @@ public final class XMPPSession: @unchecked Sendable {
             .store(in: &cancellables)
 
         omemo.module.activeDevicesPublisher
-            .sink { [weak self] change in self?.deviceListHeard(of: change.jid.description, ids: change.activeDevices) }
+            .sink { [weak self] change in
+                // A list made up after a failed read would make every device we have look new later.
+                guard change.readFromServer else { return }
+                self?.deviceListHeard(of: change.jid.description, ids: change.activeDevices)
+            }
             .store(in: &cancellables)
 
         client.module(.pepUserAvatar).avatarChangePublisher

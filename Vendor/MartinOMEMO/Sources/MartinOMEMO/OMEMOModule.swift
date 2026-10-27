@@ -461,6 +461,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                     return;
                 }
                 let knownActiveDevices: [Int32] = listEl.mapChildren(transform: { $0.getAttribute("id") }).compactMap({ Int32($0) });
+                self.activeDevicesPublisher.send(AvailabilityChanged(jid: jid, activeDevices: knownActiveDevices, readFromServer: true));
                 let allDevices = self.storage.sessionStore.allDevices(for: jid.stringValue, activeAndTrusted: true);
                 for deviceId in allDevices where !knownActiveDevices.contains(deviceId) {
                     _ = self.storage.identityKeyStore.setStatus(active: false, forIdentity: SignalAddress(name: jid.stringValue, deviceId: deviceId));
@@ -716,12 +717,13 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                     completionHandler?(.failure(pubsubError));
                     return;
                 }
-                self.checkAndPublishDevicesListIfNeeded(jid: pepJid, list: nil, completionHandler: completionHandler);
+                // An empty node is a real, empty list; a server error says nothing about the list.
+                self.checkAndPublishDevicesListIfNeeded(jid: pepJid, list: nil, readFromServer: pubsubError.error == .item_not_found, completionHandler: completionHandler);
             }
         });
     }
 
-    fileprivate func checkAndPublishDevicesListIfNeeded(jid: BareJID, list input: Element?, removeDevicesWithIds: [UInt32]? = nil, completionHandler: ((Result<Void, PubSubError>) -> Void)? = nil) {
+    fileprivate func checkAndPublishDevicesListIfNeeded(jid: BareJID, list input: Element?, readFromServer: Bool = true, removeDevicesWithIds: [UInt32]? = nil, completionHandler: ((Result<Void, PubSubError>) -> Void)? = nil) {
         guard let context = context else {
             completionHandler?(.failure(.undefined_condition));
             return;
@@ -850,7 +852,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         self.devicesQueue.async {
             self.devices[jid] = knownActiveDevices;
             self.devicesFetchedAt[jid] = nil;
-            self.activeDevicesPublisher.send(AvailabilityChanged(jid: jid, activeDevices: knownActiveDevices));
+            self.activeDevicesPublisher.send(AvailabilityChanged(jid: jid, activeDevices: knownActiveDevices, readFromServer: readFromServer));
             self.fire(AvailabilityChangedEvent(sessionObject: context.sessionObject, jid: jid));
         }
     }
@@ -1664,6 +1666,9 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         
         public let jid: BareJID;
         public let activeDevices: [Int32];
+        /// Whether the list was read from the server, rather than made up
+        /// after a failed read: only a list that was read says what exists.
+        public let readFromServer: Bool;
         
     }
     

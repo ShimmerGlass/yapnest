@@ -287,10 +287,19 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
                            arguments: [address.name, address.deviceId, key, status.rawValue, date])
             guard !isLocalDevice(address) else { return }
             // Whatever its status, the device now gets or may get our messages; the user hears of it.
-            try AppDatabase.noteNewDevice(
-                db, name: address.name, deviceId: address.deviceId, fingerprint: Self.fingerprint(of: key),
-                isOwn: address.name == account, hadDevices: hadDevices, at: date,
-            )
+            // A side effect must never cost the session its device: if the
+            // notice can't be written, only it is rolled back.
+            do {
+                try db.inSavepoint {
+                    try AppDatabase.noteNewDevice(
+                        db, name: address.name, deviceId: address.deviceId, fingerprint: Self.fingerprint(of: key),
+                        isOwn: address.name == account, hadDevices: hadDevices, at: date,
+                    )
+                    return .commit
+                }
+            } catch {
+                DiagLog.error(.omemo, "New device not recorded", .error(error))
+            }
         }
     }
 

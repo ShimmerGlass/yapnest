@@ -188,6 +188,14 @@ struct DeviceNoticeTests {
         #expect(try database.deviceNotices().map(\.deviceId) == [4], "a dismissed device is not announced again")
     }
 
+    @Test func aNoticeThatCantBeWrittenDoesNotCostTheDeviceItsIdentity() throws {
+        let database = try AppDatabase.inMemory(), store = store(database)
+        try database.writer.write { try $0.execute(sql: "DROP TABLE deviceListSeen") }
+        let address = SignalAddress(name: me.description, deviceId: 4)
+        #expect(store.save(identity: address, publicKeyData: key(4)), "the save failed with the notice")
+        #expect(store.identities(forName: me.description).map(\.address.deviceId) == [4])
+    }
+
     @Test func removingAnOwnDeviceTakesItsNoticeAway() throws {
         let database = try AppDatabase.inMemory(), store = store(database)
         try database.noteDeviceList(of: me.description, ids: [1])
