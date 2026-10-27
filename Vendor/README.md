@@ -710,6 +710,17 @@ Each entry gives what went wrong for users, why, and what changed.
 
 ### MartinOMEMO
 
+**A device list of thousands of ids cost thousands of bundle fetches**
+(`limitDevices`, `addresses(for:)`, `checkAndPublishDevicesListIfNeeded`)
+- *Symptom:* a contact, or a server, that published a list of thousands of
+  device ids had us fetch a bundle for each and send a stanza to each, most
+  of which bounced.
+- *Change:* a list we read is passed through `limitDevices`, a hook the app
+  sets, before sessions are built, statuses set or anything is emitted, in
+  both places a list is parsed (a notification, and the fetch made when
+  encrypting). The policy (at most 64 devices: those in use first, then new
+  ones, then those gone quiet) is in YapnestKit's `OMEMOStore.limited`.
+
 **Logs named people publicly** (`OMEMOModule`)
 - *Symptom:* the system log held the addresses whose device lists or bundles
   failed, readable by anyone who collects a sysdiagnose.

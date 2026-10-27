@@ -44,6 +44,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         try store.setUpIdentityIfNeeded(context: context)
         module = OMEMOModule(aesGCMEngine: CryptoKitAESGCM(), signalContext: context, signalStorage: storage)
         module.signedPreKeyRotationDue = { [store] in store.signedPreKeyRotationDue() }
+        module.limitDevices = { [store] jid, ids in store.limited(ids, of: jid.stringValue) }
         module.defaultBody = "This message is encrypted with OMEMO, which your client doesn't support."
     }
 

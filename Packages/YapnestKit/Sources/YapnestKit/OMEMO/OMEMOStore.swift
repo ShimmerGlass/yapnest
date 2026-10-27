@@ -390,6 +390,34 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         }
     }
 
+    /// The most devices of one JID we build sessions for.
+    static let deviceLimit = 64
+
+    /// `ids`, a device list as read from the server, cut to `deviceLimit`. A
+    /// list that long is more likely an attack than a person's devices, and
+    /// each device costs a bundle fetch and a stanza that bounces. Kept in
+    /// this order: devices we know that are in use, most recent first; then
+    /// ones we have never seen, in the list's order, so a new device takes
+    /// the place of a stale one; then known devices gone quiet. This
+    /// install's own device is never cut.
+    func limited(_ ids: [Int32], of name: String) -> [Int32] {
+        guard ids.count > Self.deviceLimit else { return ids }
+        let usage = usage(forName: name), now = now()
+        func recency(_ id: Int32) -> Date { usage[id].map { $0.lastUsed ?? $0.firstSeen } ?? .distantPast }
+        var seen = Set<Int32>()
+        let unique = ids.filter { seen.insert($0).inserted }
+        let known = unique.filter { usage[$0] != nil }.sorted { recency($0) > recency($1) }
+        let active = known.filter { !usage[$0]!.isInactive(now: now) }
+        let quiet = known.filter { usage[$0]!.isInactive(now: now) }
+        let unknown = unique.filter { usage[$0] == nil }
+        let local = Int32(bitPattern: localRegistrationId())
+        let own = name == account && unique.contains(local) ? [local] : []
+        var taken = Set<Int32>()
+        let kept = Array((own + active + unknown + quiet).filter { taken.insert($0).inserted }.prefix(Self.deviceLimit))
+        DiagLog.info(.omemo, "Device list cut", .int("listed", ids.count), .int("kept", kept.count))
+        return kept
+    }
+
     func usage(forName name: String) -> [Int32: Usage] {
         read { db in
             let rows = try Row.fetchAll(db, sql: "SELECT deviceId, firstSeen, lastUsed FROM omemoIdentity WHERE name = ?", arguments: [name])

@@ -95,6 +95,10 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
     /// by their time limit would leave keys stored here and not on the server.
     /// Set before the module is registered.
     public var publishesKeys = true;
+    /// Cuts a device list we read for `jid` down before anything is built
+    /// from it. A list can name thousands of devices, each one a bundle to
+    /// fetch and a stanza to send; the policy is the app's. Nil keeps lists whole.
+    public var limitDevices: ((BareJID, [Int32]) -> [Int32])?;
     /// How long a fetched device list spares the next send a round trip. A
     /// contact who isn't subscribed to us sends no notifications, so it can't
     /// be forever; a minute is long enough for a conversation's messages.
@@ -460,7 +464,8 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                     }
                     return;
                 }
-                let knownActiveDevices: [Int32] = listEl.mapChildren(transform: { $0.getAttribute("id") }).compactMap({ Int32($0) });
+                let listedDevices: [Int32] = listEl.mapChildren(transform: { $0.getAttribute("id") }).compactMap({ Int32($0) });
+                let knownActiveDevices = self.limitDevices?(jid, listedDevices) ?? listedDevices;
                 self.activeDevicesPublisher.send(AvailabilityChanged(jid: jid, activeDevices: knownActiveDevices, readFromServer: true));
                 let allDevices = self.storage.sessionStore.allDevices(for: jid.stringValue, activeAndTrusted: true);
                 for deviceId in allDevices where !knownActiveDevices.contains(deviceId) {
@@ -800,12 +805,13 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             completionHandler?(.success(()));
         }
 
-        let knownActiveDevices = listEl!.mapChildren(transform: { (el) -> Int32? in
+        let listedDevices = listEl!.mapChildren(transform: { (el) -> Int32? in
             guard let id = el.getAttribute("id") else {
                 return nil;
             }
             return Int32(id);
         });
+        let knownActiveDevices = limitDevices?(jid, listedDevices) ?? listedDevices;
         
         let allDevices = storage.sessionStore.allDevices(for: jid.stringValue, activeAndTrusted: true);
         allDevices.filter { (id) -> Bool in
