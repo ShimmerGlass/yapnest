@@ -133,4 +133,21 @@ extension AppDatabase {
     public func setFlag(_ key: SettingKey, _ on: Bool) throws {
         try setSetting(key, on ? "1" : "0")
     }
+
+    /// A setting holding a moment, stored as seconds since 1970.
+    public func date(_ key: SettingKey) -> Date? {
+        (try? reader.read { try Self.date($0, key) }) ?? nil
+    }
+
+    static func date(_ db: Database, _ key: SettingKey) throws -> Date? {
+        try setting(db, key).flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0) }
+    }
+
+    public func setDate(_ key: SettingKey, _ date: Date) throws {
+        try setSetting(key, String(date.timeIntervalSince1970))
+    }
+
+    static func setDate(_ db: Database, _ key: SettingKey, _ date: Date) throws {
+        try setSetting(db, key, String(date.timeIntervalSince1970))
+    }
 }

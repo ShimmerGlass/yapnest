@@ -263,7 +263,7 @@ final class SystemVoiceRecordingEngine: VoiceRecordingEngine {
         let session = audio.session
         let started: Started
         do {
-            started = try await Task.detached(priority: .userInitiated) { try Self.begin(session) }.value
+            started = try await audio.perform { try Self.begin(session) }
         } catch {
             releaseSession()
             throw error
@@ -321,7 +321,7 @@ final class SystemVoiceRecordingEngine: VoiceRecordingEngine {
     }
 
     private func releaseSession() {
-        audio.endSession()
+        audio.releaseSession()
     }
 
     private enum RecorderError: LocalizedError {

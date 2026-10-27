@@ -2036,10 +2036,9 @@ public final class XMPPSession: @unchecked Sendable {
     /// changes, and the latest when we come online (XEP-0163). Done at most
     /// once a day, as a change in between arrives as an event.
     func refreshAvatars(now: Date = Date()) {
-        if let last = (try? database.setting(.lastAvatarRefresh)).flatMap({ $0 }).flatMap(TimeInterval.init),
-           abs(now.timeIntervalSince1970 - last) < Self.avatarRefreshInterval { return }
+        if let last = database.date(.lastAvatarRefresh), abs(now.timeIntervalSince(last)) < Self.avatarRefreshInterval { return }
         guard let peers = try? database.conversationPeers(), let roster = try? database.roster() else { return }
-        try? database.setSetting(.lastAvatarRefresh, String(now.timeIntervalSince1970))
+        try? database.setDate(.lastAvatarRefresh, now)
         let notifying = Set(roster.filter(\.seesPresence).map(\.jid))
         for peer in peers where !notifying.contains(peer) { fetchAvatar(of: peer) }
     }

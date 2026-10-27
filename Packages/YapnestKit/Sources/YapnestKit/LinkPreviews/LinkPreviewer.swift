@@ -80,7 +80,12 @@ public final class LinkPreviewer: Sendable {
     }
 
     func isBackedOff(_ key: String, now: Date) -> Bool {
-        failures.withLock { $0[key] }.map { abs(now.timeIntervalSince($0)) < Self.retryAfter } ?? false
+        failures.withLock { failures in
+            guard let failedAt = failures[key] else { return false }
+            if abs(now.timeIntervalSince(failedAt)) < Self.retryAfter { return true }
+            failures[key] = nil
+            return false
+        }
     }
 
     /// Downloads and describes `url`. Throws only for errors worth retrying

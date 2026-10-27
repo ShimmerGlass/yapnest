@@ -388,7 +388,7 @@ final class ProgressDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownlo
     private let policy: DownloadPolicy
     private let report: @Sendable (Double) -> Void
     private let exceeded = OSAllocatedUnfairLock<Int64?>(initialState: nil)
-    private let lastReported = OSAllocatedUnfairLock<Double>(initialState: -1)
+    private let throttle = OSAllocatedUnfairLock(initialState: ProgressThrottle())
 
     /// Set once a download was cancelled for being over the limit: its size
     /// if the server said, else 0.
@@ -415,16 +415,8 @@ final class ProgressDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownlo
         publish(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
     }
 
-    /// Reports only when progress has moved half a percent (as a Jingle
-    /// transfer does): the delegate is called per chunk, and every report
-    /// redraws the views that watch the transfers.
     private func publish(_ value: Double) {
-        let due = lastReported.withLock { last in
-            guard value - last >= 0.005 || (value >= 1 && last < 1) else { return false }
-            last = value
-            return true
-        }
-        if due { report(value) }
+        if let due = throttle.withLock({ $0.admit(value) }) { report(due) }
     }
 
     /// A redirect is a new request to wherever the server says, so it gets the

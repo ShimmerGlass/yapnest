@@ -20,27 +20,6 @@ struct GifServiceTests {
         }
     }
 
-    @Test func aDownloadStopsAtTheLimitWhateverTheServerSaid() async throws {
-        func stream(_ count: Int) -> AsyncStream<UInt8> {
-            AsyncStream { continuation in
-                for _ in 0..<count { continuation.yield(1) }
-                continuation.finish()
-            }
-        }
-        #expect(try await GifService.collect(stream(10), declaredLength: 10, limit: 10).count == 10)
-        // A length that was left out, or understated.
-        await #expect(throws: GifService.DownloadError.tooLarge) {
-            try await GifService.collect(stream(11), declaredLength: -1, limit: 10)
-        }
-        await #expect(throws: GifService.DownloadError.tooLarge) {
-            try await GifService.collect(stream(11), declaredLength: 5, limit: 10)
-        }
-        // Declared too large: not read at all.
-        await #expect(throws: GifService.DownloadError.tooLarge) {
-            try await GifService.collect(stream(1), declaredLength: 11, limit: 10)
-        }
-    }
-
     @Test func trendingRequest() {
         let request = service.request(query: nil, page: 2)
         let url = request.url!
@@ -235,6 +214,44 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     @Test func resultFalseThrows() async {
         let service = service { _ in (200, Data(#"{"result":false,"data":{"data":[]}}"#.utf8)) }
         await #expect(throws: GifServiceError(status: nil)) { try await service.trending(page: 1) }
+    }
+
+    private func download(_ url: String, limit: Int = GifService.maxDownloadSize, body: Data = Data(), status: Int = 200) async throws -> Data {
+        StubProtocol.handler = { _ in (status, body) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubProtocol.self]
+        let transport = FakeTransport()
+        transport.dns = ["static.klipy.com": [IPAddress(literal: "93.184.216.34")!]]
+        return try await GifService.download(
+            URL(string: url)!, session: URLSession(configuration: configuration),
+            policy: DownloadPolicy(allowsInsecure: false, transport: transport), limit: limit,
+        )
+    }
+
+    @Test func aDownloadReturnsTheBytesUpToTheLimit() async throws {
+        let body = Data(repeating: 1, count: 10)
+        #expect(try await download("https://static.klipy.com/a.gif", limit: 10, body: body) == body)
+    }
+
+    @Test func aDownloadOverTheLimitIsRefused() async {
+        await #expect(throws: GifService.DownloadError.tooLarge) {
+            try await download("https://static.klipy.com/a.gif", limit: 10, body: Data(repeating: 1, count: 11))
+        }
+    }
+
+    @Test func aDownloadFromAPrivateAddressIsRefusedBeforeAnyRequest() async {
+        let requested = OSAllocatedBox()
+        StubProtocol.handler = { _ in requested.value = "yes"; return (200, Data()) }
+        for url in ["https://127.0.0.1/a.gif", "https://192.168.1.5/a.gif", "https://[::1]/a.gif"] {
+            await #expect(throws: FetchError.self) { try await download(url) }
+        }
+        #expect(requested.value == nil)
+    }
+
+    @Test func aFailingStatusIsReported() async {
+        await #expect(throws: GifService.DownloadError.status(404)) {
+            try await download("https://static.klipy.com/a.gif", body: Data("x".utf8), status: 404)
+        }
     }
 
     @Test func slashInTheKeyStaysInOnePathSegment() async throws {

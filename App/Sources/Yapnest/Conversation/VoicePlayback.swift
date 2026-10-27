@@ -158,6 +158,28 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
     @ObservationIgnored private var isStarting = false
     @ObservationIgnored private var startCancelled = false
 
+    /// Runs `work` on the audio queue, behind whatever is queued there.
+    func perform<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            audioQueue.async {
+                do {
+                    continuation.resume(returning: try work())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Takes the audio session for a clip, with `stop()` able to cancel it
+    /// while it waits.
+    private func beginning<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        isStarting = true
+        startCancelled = false
+        defer { isStarting = false }
+        return try await perform(work)
+    }
+
     /// Returns once what was handed to the audio queue has run.
     func settled() async {
         await withCheckedContinuation { continuation in audioQueue.async { continuation.resume() } }
@@ -174,14 +196,8 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
     private func resume() async -> Result {
         guard let player else { return .failed }
         guard !isInCall else { return .refusedInCall }
-        isStarting = true
-        startCancelled = false
         let session = session
-        let activated: Bool = await withCheckedContinuation { continuation in
-            audioQueue.async { continuation.resume(returning: (try? session.beginPlayback()) != nil) }
-        }
-        isStarting = false
-        guard activated else { return .failed }
+        guard (try? await beginning({ try session.beginPlayback() })) != nil else { return .failed }
         guard !startCancelled, !isInCall, self.player === player else {
             releaseSession()
             return .failed
@@ -217,25 +233,13 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
         // switch it to `.playback`, and the clip's end would deactivate it
         // under the recorder.
         guard activeRecorder.map({ $0.phase == .idle }) ?? true else { return .refusedWhileRecording }
-        isStarting = true
-        startCancelled = false
         let session = session
         let prepared: Prepared
         do {
-            prepared = try await withCheckedThrowingContinuation { continuation in
-                audioQueue.async {
-                    do {
-                        continuation.resume(returning: try Self.prepare(session, file: file, at: fraction))
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                }
-            }
+            prepared = try await beginning { try Self.prepare(session, file: file, at: fraction) }
         } catch {
-            isStarting = false
             return .failed
         }
-        isStarting = false
         // Stopped, or a call began, while it loaded.
         guard !startCancelled, !isInCall else {
             releaseSession()
@@ -266,15 +270,12 @@ final class VoicePlayback: NSObject, AVAudioPlayerDelegate {
         releaseSession()
     }
 
-    private func releaseSession() {
+    /// Gives the session back, unless a call has it. Queued behind the begin
+    /// of whatever started before, so it can't land after the next one's.
+    func releaseSession() {
         guard !isInCall else { return }
         let session = session
         audioQueue.async { session.end() }
-    }
-
-    /// Gives the session back, unless a call has it.
-    func endSession() {
-        if !isInCall { session.end() }
     }
 
     /// Only what the bubble draws is published: the raw time changes every tick.

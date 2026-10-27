@@ -62,6 +62,7 @@ final class AnimatedUIImageView: UIView {
     var isAnimating: Bool { player != nil }
     var image: UIImage? { imageView.image }
     private var reducesMotion = UIAccessibility.isReduceMotionEnabled
+    private var isInBackground = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -102,28 +103,27 @@ final class AnimatedUIImageView: UIView {
         restart()
     }
 
-    private var isInBackground = false
-
     @objc private func reduceMotionChanged() {
         reducesMotion = UIAccessibility.isReduceMotionEnabled
         restart()
     }
 
     /// Reading a header opens the file, and `restart()` runs each time a row
-    /// scrolls back into view, so the answer is kept. Files in the store don't
-    /// change under a name.
-    private static var headers: [URL: AnimatedImages.Header?] = [:]
+    /// scrolls back into view, so whether the file plays is kept. Files in the
+    /// store don't change under a name.
+    private static var playable: [URL: Bool] = [:]
 
-    private static func remember(_ header: AnimatedImages.Header?, ofFile url: URL) {
-        if headers.count >= 64 { headers.removeAll() }
-        headers[url] = .some(header)
+    private static func remember(_ isPlayable: Bool, ofFile url: URL) {
+        if playable.count >= 64 { playable.removeAll() }
+        playable[url] = isPlayable
     }
 
-    private nonisolated static func parseHeader(of source: AnimatedImageView.Source) -> AnimatedImages.Header? {
-        switch source {
+    private nonisolated static func isPlayable(_ source: AnimatedImageView.Source) -> Bool {
+        let header = switch source {
         case .data(let data): AnimatedImages.header(of: data)
         case .file(let url): AnimatedImages.header(of: url)
         }
+        return header?.plan == .play
     }
 
     private func restart() {
@@ -138,8 +138,8 @@ final class AnimatedUIImageView: UIView {
         // canvas; callers hand over a smaller copy of those, and this is the
         // last line of defense. Reading the header opens the file, so that
         // happens in the task too, unless a file's is already known.
-        let known: AnimatedImages.Header??
-        if case .file(let url) = source { known = Self.headers[url] } else { known = nil }
+        let known: Bool?
+        if case .file(let url) = source { known = Self.playable[url] } else { known = nil }
         // Frames are drawn at the size the view has now; a view that is
         // resized later keeps them, scaled by the image view.
         let side = bounds.isEmpty
@@ -147,23 +147,19 @@ final class AnimatedUIImageView: UIView {
             : Int((max(bounds.width, bounds.height) * traitCollection.displayScale).rounded(.up))
         let stillOnly = reducesMotion
         player = Task.detached(priority: .userInitiated) { [weak self] in
-            let header: AnimatedImages.Header?
+            let playable: Bool
             if let known {
-                header = known
+                playable = known
             } else {
-                header = Self.parseHeader(of: source)
-                if case .file(let url) = source { await MainActor.run { Self.remember(header, ofFile: url) } }
+                playable = Self.isPlayable(source)
+                if case .file(let url) = source { await MainActor.run { Self.remember(playable, ofFile: url) } }
             }
-            guard header?.plan == .play else {
+            guard playable, let frames = Self.frames(of: source) else {
                 await MainActor.run {
                     guard let view = self, !Task.isCancelled else { return }
                     view.imageView.image = nil
                     view.player = nil
                 }
-                return
-            }
-            guard let frames = Self.frames(of: source) else {
-                await MainActor.run { self?.imageView.image = nil }
                 return
             }
             var next = ContinuousClock.now

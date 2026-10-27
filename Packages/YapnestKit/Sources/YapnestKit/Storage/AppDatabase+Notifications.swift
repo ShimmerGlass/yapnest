@@ -73,9 +73,9 @@ extension AppDatabase {
             }
             let newest = try Int64.fetchOne(db, sql: "SELECT MAX(id) FROM message") ?? 0
             let markId = try setting(.lastNotifiedMessageId).flatMap { Int64($0) }
-            let markDate = try Self.lastNotifiedAt(db)
+            let markDate = try Self.date(db, .lastNotifiedAt)
             try set(.lastNotifiedMessageId, String(max(newest, markId ?? 0)))
-            try set(.lastNotifiedAt, String(max(now, markDate ?? now).timeIntervalSince1970))
+            try Self.setDate(db, .lastNotifiedAt, max(now, markDate ?? now))
             guard let markId, let markDate else { return ([], []) }
 
             // Sent shortly before the last claim but not stored by then: the
@@ -131,10 +131,6 @@ extension AppDatabase {
     }
 
     static let notificationClockSlack: TimeInterval = 5 * 60
-
-    static func lastNotifiedAt(_ db: Database) throws -> Date? {
-        try setting(db, .lastNotifiedAt).flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0) }
-    }
 
     /// `claimedAt` is set when the message is new to the claim, which holds a
     /// group to its notification interval, and moves the interval on when

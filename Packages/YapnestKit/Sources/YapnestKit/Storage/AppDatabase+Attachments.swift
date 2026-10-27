@@ -74,16 +74,16 @@ extension AppDatabase {
     /// `isFinal`. A tap that fails changes neither: only a tap can retry it.
     func setDownloadFailed(messageId: Int64, automatic: Bool, isFinal: Bool) throws {
         try writer.write { db in
-            try db.execute(sql: """
-                UPDATE attachment SET state = 'downloadFailed',
-                    autoDownloadAttempts = CASE WHEN ? = 0 THEN autoDownloadAttempts WHEN ? THEN ? ELSE autoDownloadAttempts + 1 END
-                WHERE messageId = ?
-                """, arguments: [automatic, isFinal, XMPPSession.autoDownloadAttemptLimit, messageId])
+            let attempts: String
+            if !automatic {
+                attempts = "autoDownloadAttempts"
+            } else if isFinal {
+                attempts = String(XMPPSession.autoDownloadAttemptLimit)
+            } else {
+                attempts = "autoDownloadAttempts + 1"
+            }
+            try db.execute(sql: "UPDATE attachment SET state = 'downloadFailed', autoDownloadAttempts = \(attempts) WHERE messageId = ?", arguments: [messageId])
         }
-    }
-
-    func autoDownloadAttempts(messageId: Int64) throws -> Int {
-        try reader.read { try Int.fetchOne($0, sql: "SELECT autoDownloadAttempts FROM attachment WHERE messageId = ?", arguments: [messageId]) ?? 0 }
     }
 
     /// Records that a download stopped for being over its limit. That isn't
@@ -91,11 +91,10 @@ extension AppDatabase {
     /// showing. Sweeps leave it alone even when its size is unknown.
     func setTooLarge(messageId: Int64, size: Int64?) throws {
         try writer.write { db in
-            guard var attachment = try Attachment.fetchOne(db, key: messageId) else { return }
-            if let size { attachment.size = size }
-            attachment.state = .remote
-            try attachment.update(db)
-            try db.execute(sql: "UPDATE attachment SET autoDownloadAttempts = ? WHERE messageId = ?", arguments: [XMPPSession.autoDownloadAttemptLimit, messageId])
+            try db.execute(sql: """
+                UPDATE attachment SET state = 'remote', size = COALESCE(?, size), autoDownloadAttempts = ?
+                WHERE messageId = ?
+                """, arguments: [size, XMPPSession.autoDownloadAttemptLimit, messageId])
         }
     }
 

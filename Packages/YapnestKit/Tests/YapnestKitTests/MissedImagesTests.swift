@@ -8,6 +8,10 @@ private let bob = JID("bob@example.org")!
 private let room = JID("cake@rooms.example.org")!
 private let me = JID("me@example.org")!
 
+private func attempts(_ fixture: Fixture, _ messageId: Int64) throws -> Int {
+    try fixture.db.reader.read { try Int.fetchOne($0, sql: "SELECT autoDownloadAttempts FROM attachment WHERE messageId = ?", arguments: [messageId]) ?? 0 }
+}
+
 private struct Fixture {
     let db = try! AppDatabase.inMemory()
     var nextId = 0
@@ -154,7 +158,7 @@ struct MissedImagesTests {
             #expect(try f.missed() == [flaky])
         }
         try f.db.setDownloadFailed(messageId: flaky, automatic: true, isFinal: false)
-        #expect(try f.db.autoDownloadAttempts(messageId: flaky) == XMPPSession.autoDownloadAttemptLimit)
+        #expect(try attempts(f, flaky) == XMPPSession.autoDownloadAttemptLimit)
         #expect(try f.missed().isEmpty)
     }
 
@@ -163,7 +167,7 @@ struct MissedImagesTests {
         try f.contact(alice, inRoster: true)
         let id = try f.add(in: alice, from: alice)
         try f.db.setDownloadFailed(messageId: id, automatic: false, isFinal: true)
-        #expect(try f.db.autoDownloadAttempts(messageId: id) == 0)
+        #expect(try attempts(f, id) == 0)
         #expect(try f.missed() == [id])
     }
 

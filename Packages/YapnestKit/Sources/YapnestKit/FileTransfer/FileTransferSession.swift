@@ -61,7 +61,7 @@ final class FileTransferSession: @unchecked Sendable {
     private var expectedHash: Data?
     private var timerGeneration = 0
     private var lastActivity = Date()
-    private var lastPublished = 0.0
+    private var throttle = ProgressThrottle()
 
     // Receiving.
     private var temporary: URL?
@@ -122,10 +122,7 @@ final class FileTransferSession: @unchecked Sendable {
     /// redrawing for: a large file has a hundred thousand blocks.
     private func progress(_ bytes: Int64) -> Double? {
         guard size > 0 else { return nil }
-        let value = min(1, Double(bytes) / Double(size))
-        guard value - lastPublished >= 0.005 || value >= 1 else { return nil }
-        lastPublished = value
-        return value
+        return throttle.admit(min(1, Double(bytes) / Double(size)))
     }
 
     // MARK: Timer

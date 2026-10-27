@@ -34,9 +34,6 @@ struct ChatSettingsView: View {
     @State private var confirmsBlock = false
     @State private var unblock = ServerAction()
     @State private var memberRows: [MemberRow.Model] = []
-    /// Counts the changes to the room, so the members are worked out when it
-    /// changes rather than by comparing the whole room on every body pass.
-    @State private var roomRevision = 0
     @State private var probeNickList: [String] = []
     /// Nicks of occupants that said they take commands, and the ones asked so
     /// far. Occupants of a room send no capabilities, so each is asked once.
@@ -386,9 +383,6 @@ struct ChatSettingsView: View {
                 }
             }
             .task(id: group?.nickname) { await watchRoom() }
-            .task(id: MembersKey(revision: roomRevision, nickname: group?.nickname)) {
-                await loadMembers()
-            }
             .task(id: CommandProbeKey(nicks: probeNickList)) {
                 await probeCommands()
             }
@@ -591,7 +585,8 @@ struct ChatSettingsView: View {
     }
 
     /// Follows the room through the model's observation, so a change to it is
-    /// compared once, not whenever this view is drawn.
+    /// compared once, not whenever this view is drawn, and loads the members
+    /// for it, one load at a time.
     private func watchRoom() async {
         let (changes, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         // Read and armed with nothing in between, so no change goes unseen.
@@ -601,13 +596,14 @@ struct ChatSettingsView: View {
         }
         var last = arm()
         probeNickList = probeNicks(of: last)
+        await loadMembers()
         for await _ in changes {
             let now = arm()
             guard now != last else { continue }
             last = now
-            roomRevision += 1
             let nicks = probeNicks(of: now)
             if nicks != probeNickList { probeNickList = nicks }
+            await loadMembers()
         }
     }
 
@@ -641,11 +637,6 @@ struct ChatSettingsView: View {
         commandNicks.formUnion(offering)
         probedNicks.formUnion(batch)
         return true
-    }
-
-    private struct MembersKey: Hashable {
-        var revision: Int
-        var nickname: String?
     }
 
     /// The rows are worked out when the room changes rather than whenever the

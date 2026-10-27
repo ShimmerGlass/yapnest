@@ -207,12 +207,13 @@ struct VoiceRecorderTests {
         #expect(s.recorder.phase == .locked)
     }
 
-    @Test func theRecordingEngineLeavesTheSessionAloneDuringACall() {
+    @Test func theRecordingEngineLeavesTheSessionAloneDuringACall() async {
         for (inCall, releases) in [(true, 0), (false, 1)] {
             let session = VoicePlaybackTests.FakeSession()
             let audio = VoicePlayback(session: session)
             audio.isInCall = inCall
             SystemVoiceRecordingEngine(audio: audio).discard()
+            await audio.settled()
             #expect(session.ended == releases, "in a call: \(inCall)")
         }
     }
@@ -220,8 +221,10 @@ struct VoiceRecorderTests {
     @Test func aFailedStartGivesTheSessionBack() async {
         let session = VoicePlaybackTests.FakeSession()
         session.recordingFailure = Boom()
-        let engine = SystemVoiceRecordingEngine(audio: VoicePlayback(session: session))
+        let audio = VoicePlayback(session: session)
+        let engine = SystemVoiceRecordingEngine(audio: audio)
         await #expect(throws: Boom.self) { try await engine.start() }
+        await audio.settled()
         #expect(session.ended == 1)
     }
 
@@ -232,6 +235,7 @@ struct VoiceRecorderTests {
         audio.isInCall = true
         let engine = SystemVoiceRecordingEngine(audio: audio)
         await #expect(throws: Boom.self) { try await engine.start() }
+        await audio.settled()
         #expect(session.ended == 0)
     }
 

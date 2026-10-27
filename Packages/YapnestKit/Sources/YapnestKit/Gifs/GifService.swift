@@ -129,27 +129,33 @@ public struct GifService: Sendable {
         case status(Int)
     }
 
-    /// The GIF at `url`, over HTTPS only and never more than
-    /// `maxDownloadSize`, without holding more than that in memory.
+    /// The GIF at `url`, over HTTPS only, never from a local address and
+    /// never more than `maxDownloadSize`.
     public static func download(_ url: URL, session: URLSession = privateSession) async throws -> Data {
+        try await download(url, session: session, policy: DownloadPolicy(allowsInsecure: false))
+    }
+
+    static func download(_ url: URL, session: URLSession, policy: DownloadPolicy, limit: Int = maxDownloadSize) async throws -> Data {
         guard url.scheme?.lowercased() == "https" else { throw DownloadError.notHTTPS }
-        let (bytes, response) = try await session.bytes(from: url)
-        // A redirect is followed, so the address that answered is checked too.
+        try await policy.check(url)
+        // The delegate cancels the transfer once it is over the limit and
+        // checks every redirect like the first request.
+        let delegate = ProgressDelegate(limit: Int64(limit), policy: policy) { _ in }
+        let file: URL
+        let response: URLResponse
+        do {
+            (file, response) = try await session.download(from: url, delegate: delegate)
+        } catch {
+            if delegate.exceededSize != nil { throw DownloadError.tooLarge }
+            throw error
+        }
+        defer { try? FileManager.default.removeItem(at: file) }
         guard response.url?.scheme?.lowercased() == "https" else { throw DownloadError.notHTTPS }
         if let status = (response as? HTTPURLResponse)?.statusCode, !(200..<300).contains(status) {
             throw DownloadError.status(status)
         }
-        return try await collect(bytes, declaredLength: response.expectedContentLength, limit: maxDownloadSize)
-    }
-
-    static func collect<Bytes: AsyncSequence>(_ bytes: Bytes, declaredLength: Int64, limit: Int) async throws -> Data where Bytes.Element == UInt8 {
-        guard declaredLength <= Int64(limit) else { throw DownloadError.tooLarge }
-        var data = Data()
-        if declaredLength > 0 { data.reserveCapacity(Int(declaredLength)) }
-        for try await byte in bytes {
-            guard data.count < limit else { throw DownloadError.tooLarge }
-            data.append(byte)
-        }
+        let data = try Data(contentsOf: file, options: .mappedIfSafe)
+        guard data.count <= limit else { throw DownloadError.tooLarge }
         return data
     }
 
