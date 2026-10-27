@@ -30,7 +30,8 @@ public struct ConsentedGifService: Sendable {
     /// Turns GIFs off, the setting Settings has, and records no consent.
     public func turnOffGifs() async throws {
         let database = database
-        try database.setFlag(.gifs, false)
+        // The picker calls this from the main actor, and writes stay off it.
+        try await Task.detached { try database.setFlag(.gifs, false) }.value
     }
 
     public func trending(page: Int) async throws -> GifPage {
