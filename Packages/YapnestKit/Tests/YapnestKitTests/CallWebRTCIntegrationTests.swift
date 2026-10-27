@@ -30,39 +30,37 @@ extension LiveServer {
             let caller = try await device(alice, forceRelay: callerForcesRelay)
             let callee = try await device(bob, forceRelay: false)
             defer { caller.disconnect(); callee.disconnect() }
-            try await LiveServer.forgettingSyncedSettings(of: caller) { try await call(caller, callee, forcesRelay: callerForcesRelay) }
-        }
-
-        private func call(_ caller: XMPPSession, _ callee: XMPPSession, forcesRelay callerForcesRelay: Bool) async throws {
-            try await LiveServer.befriend(caller, callee)
-            try await LiveServer.waitUntil("alice to be able to call bob") { caller.canCall(bob) }
-            if callerForcesRelay {
-                let servers = await caller.discoverIceServers()
-                guard servers.contains(where: { $0.urls.contains { $0.hasPrefix("turn:") } }) else {
-                    try Test.cancel("\(LiveServer.target.name) offers no TURN")
-                    return
+            try await LiveServer.forgettingSyncedSettings(of: caller) {
+                try await LiveServer.befriend(caller, callee)
+                try await LiveServer.waitUntil("alice to be able to call bob") { caller.canCall(bob) }
+                if callerForcesRelay {
+                    let servers = await caller.discoverIceServers()
+                    guard servers.contains(where: { $0.urls.contains { $0.hasPrefix("turn:") } }) else {
+                        try Test.cancel("\(LiveServer.target.name) offers no TURN")
+                        return
+                    }
                 }
-            }
 
-            try caller.startCall(to: bob)
-            let sid = try #require(caller.callState.value?.sid)
-            try await LiveServer.waitUntil("bob to ring") { callee.callState.value?.phase == .incoming }
-            callee.answerCall()
-            try await LiveServer.waitUntil("both to be connected", timeout: 20) {
-                caller.callState.value?.phase == .active && callee.callState.value?.phase == .active
-            }
-            if let ended = [caller, callee].first(where: { $0.callState.value?.phase == .ended(.failed) }) {
-                Issue.record("\(ended.account) failed")
-            }
+                try caller.startCall(to: bob)
+                let sid = try #require(caller.callState.value?.sid)
+                try await LiveServer.waitUntil("bob to ring") { callee.callState.value?.phase == .incoming }
+                callee.answerCall()
+                try await LiveServer.waitUntil("both to be connected", timeout: 20) {
+                    caller.callState.value?.phase == .active && callee.callState.value?.phase == .active
+                }
+                if let ended = [caller, callee].first(where: { $0.callState.value?.phase == .ended(.failed) }) {
+                    Issue.record("\(ended.account) failed")
+                }
 
-            caller.hangUpCall()
-            try await LiveServer.waitUntil("bob to be hung up on") { callee.callState.value?.phase == .ended(.completed) }
-            func row(_ session: XMPPSession) -> Message? {
-                try? session.database.reader.read { try Message.filter(Column("callOutcome") != nil && Column("remoteId") == sid).fetchOne($0) }
+                caller.hangUpCall()
+                try await LiveServer.waitUntil("bob to be hung up on") { callee.callState.value?.phase == .ended(.completed) }
+                func row(_ session: XMPPSession) -> Message? {
+                    try? session.database.reader.read { try Message.filter(Column("callOutcome") != nil && Column("remoteId") == sid).fetchOne($0) }
+                }
+                try await LiveServer.waitUntil("both to record it") { row(caller) != nil && row(callee) != nil }
+                #expect(row(caller)?.callOutcome == .answered)
+                #expect(row(callee)?.callOutcome == .answered)
             }
-            try await LiveServer.waitUntil("both to record it") { row(caller) != nil && row(callee) != nil }
-            #expect(row(caller)?.callOutcome == .answered)
-            #expect(row(callee)?.callOutcome == .answered)
         }
 
         /// Video both ways from generated pictures, so no camera or microphone is

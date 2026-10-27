@@ -47,7 +47,6 @@ extension LiveServer {
 
             try aliceSession.startCall(to: bob)
             let sid = aliceSession.callState.value?.sid
-            print("DBG bob contact", String(describing: try bobSession.database.contact(alice)), "consent", try bobSession.database.hasConsented(alice), "state", String(describing: bobSession.callState.value))
             try await LiveServer.waitUntil("bob to ring") { bobSession.callState.value?.phase == .incoming }
             #expect(bobSession.callState.value?.peer == alice)
             try await LiveServer.waitUntil("alice to hear it ring") { aliceSession.callState.value?.phase == .ringing }

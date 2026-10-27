@@ -880,9 +880,6 @@ extension XMPPSession {
 
     static let memberLists: [RoomAffiliation] = [.owner, .admin, .member]
 
-    /// Which lists to ask a room for. Members are who we encrypt for, which
-    /// only a room that shows addresses lets us do; bans are for those who
-    /// can lift them, and show addresses to them in any room.
     /// Whose sessions an encrypted group message is decrypted with. Current
     /// occupants say nothing about who wrote an archived message, and anyone
     /// may have held our nick before we joined, so an archived one is ours
@@ -894,6 +891,9 @@ extension XMPPSession {
         return account
     }
 
+    /// Which lists to ask a room for. Members are who we encrypt for, which
+    /// only a room that shows addresses lets us do; bans are for those who
+    /// can lift them, and show addresses to them in any room.
     static func listsToFetch(isNonAnonymous: Bool, isOwnerOrAdmin: Bool) -> [RoomAffiliation] {
         (isNonAnonymous ? memberLists : []) + (isOwnerOrAdmin ? [.outcast] : [])
     }
@@ -1046,12 +1046,13 @@ extension XMPPSession {
         if let last = page.rsm?.last {
             try? database.updateGroupChat(room) { $0.lastArchiveId = last }
         }
-        switch Self.nextRoomArchivePage(after: after, last: page.rsm?.last, complete: onePage || page.complete, pagesRead: pagesRead + 1) {
+        let pagesRead = pagesRead + 1
+        switch Self.nextRoomArchivePage(after: after, last: page.rsm?.last, complete: onePage || page.complete, pagesRead: pagesRead) {
         case .end: finishRoomCatchUp(room, visit, reachedEnd: true)
         // Live messages mustn't move the cursor past what's left; the next
         // visit reads on from it.
         case .stop: finishRoomCatchUp(room, visit, reachedEnd: false)
-        case .after(let last): fetchRoomArchivePage(room, rsm: RSM.Query(after: last, max: 100), after: last, visit, pagesRead: pagesRead + 1)
+        case .after(let last): fetchRoomArchivePage(room, rsm: RSM.Query(after: last, max: 100), after: last, visit, pagesRead: pagesRead)
         }
     }
 

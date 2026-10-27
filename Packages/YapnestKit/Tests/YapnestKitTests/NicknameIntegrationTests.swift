@@ -25,9 +25,7 @@ extension LiveServer {
 
         /// Starts each case from a server without the node.
         private func deleteNode(_ session: XMPPSession) async {
-            await withCheckedContinuation { continuation in
-                session.client.module(.pubsub).deleteNode(from: carol.martin, node: NS.nick) { _ in continuation.resume() }
-            }
+            await LiveServer.deleteNode(NS.nick, of: session)
         }
 
         private func publishedNames(_ session: XMPPSession) async throws -> [String] {
@@ -62,25 +60,21 @@ extension LiveServer {
             let session = try await connectedSession()
             defer { session.disconnect() }
             try await LiveServer.forgettingSyncedSettings(of: session) {
-                try await reconfigures(session, sharesPublicly: sharesPublicly, left: left, expected: expected)
-            }
-        }
+                await deleteNode(session)
+                try session.database.setFlag(.sharesProfilePublicly, sharesPublicly)
 
-        private func reconfigures(_ session: XMPPSession, sharesPublicly: Bool, left: String, expected: String) async throws {
-            await deleteNode(session)
-            try session.database.setFlag(.sharesProfilePublicly, sharesPublicly)
+                try await session.publishPEP(node: NS.nick, itemId: "current", payload: ProfileStanza.nick("Old"), accessModel: left)
 
-            try await session.publishPEP(node: NS.nick, itemId: "current", payload: ProfileStanza.nick("Old"), accessModel: left)
-
-            try await session.setNickname("Carol")
-            #expect(try await publishedNames(session) == ["Carol"])
-            let accessModel: String? = try await withCheckedThrowingContinuation { continuation in
-                session.client.module(.pubsub).retrieveNodeConfiguration(from: nil, node: NS.nick) { result in
-                    continuation.resume(with: result.map { $0.accessModel?.rawValue })
+                try await session.setNickname("Carol")
+                #expect(try await publishedNames(session) == ["Carol"])
+                let accessModel: String? = try await withCheckedThrowingContinuation { continuation in
+                    session.client.module(.pubsub).retrieveNodeConfiguration(from: nil, node: NS.nick) { result in
+                        continuation.resume(with: result.map { $0.accessModel?.rawValue })
+                    }
                 }
+                #expect(accessModel == expected)
+                await deleteNode(session)
             }
-            #expect(accessModel == expected)
-            await deleteNode(session)
         }
     }
 }

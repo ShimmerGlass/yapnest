@@ -36,13 +36,6 @@ extension LiveServer {
             }
         }
 
-        /// Bounded, as a session that can't sign in otherwise holds up the
-        /// whole run rather than failing.
-        private func connected(_ session: XMPPSession) async throws {
-            session.connect()
-            try await LiveServer.waitUntil("\(session.account) to connect") { session.state.value == .connected(isSyncing: false) }
-        }
-
         /// Counts the chat states a session has received while it's alive.
         final class Heard: Sendable {
             private let count = Mutex(0)
@@ -73,8 +66,7 @@ extension LiveServer {
             let proxy = try await FreezableProxy(to: UInt16(LiveServer.target.port))
             defer { proxy.stop() }
             let a = try session(alice), b = try session(bob, port: proxy.port)
-            try await connected(a)
-            try await connected(b)
+            try await LiveServer.connected(a, b)
             defer { a.disconnect(); b.disconnect() }
             let heard = listen(to: b)
 
@@ -98,8 +90,7 @@ extension LiveServer {
         @Test func reportedOnConnect() async throws {
             let a = try session(alice), b = try session(bob)
             b.setActive(false)
-            try await connected(a)
-            try await connected(b)
+            try await LiveServer.connected(a, b)
             defer { a.disconnect(); b.disconnect() }
             let heard = listen(to: b)
 
@@ -125,7 +116,7 @@ extension LiveServer {
             let proxy = try await FreezableProxy(to: UInt16(LiveServer.target.port))
             defer { proxy.stop() }
             let phone = try session(bob), laptop = try session(bob, port: proxy.port)
-            for each in [a, c, d, phone, laptop] { try await connected(each) }
+            try await LiveServer.connected(a, c, d, phone, laptop)
             defer { for each in [a, c, d, phone, laptop] { each.disconnect() } }
             try await LiveServer.require("urn:xmpp:sid:0", of: a, "read state is published by the stanza-id its server gave the message")
             try a.setEncrypted(false, with: bob)
@@ -170,8 +161,7 @@ extension LiveServer {
             mac.reportsInactive = false
             let a = try session(alice)
             let b = try LiveServer.makeSession(bob, resource: "mac", database: try AppDatabase.inMemory(), policy: mac)
-            try await connected(a)
-            try await connected(b)
+            try await LiveServer.connected(a, b)
             defer { a.disconnect(); b.disconnect() }
             let heard = listen(to: b)
             try await Task.sleep(for: .seconds(2))

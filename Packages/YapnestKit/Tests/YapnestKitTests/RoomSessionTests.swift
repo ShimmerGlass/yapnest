@@ -1,7 +1,6 @@
 import Foundation
 import GRDB
 import Martin
-import Synchronization
 import Testing
 @testable import Martin
 @testable import YapnestKit
@@ -152,10 +151,10 @@ struct RoomCatchUpTests {
         }
     }
 
-    /// The end of an archive page that is the archive's last.
-    static func fin(last: String) -> Element {
+    /// The end of an archive page, by default the archive's last.
+    static func fin(last: String, complete: Bool = true) -> Element {
         let fin = Element(name: "fin", xmlns: "urn:xmpp:mam:2")
-        fin.setAttribute("complete", value: "true")
+        if complete { fin.setAttribute("complete", value: "true") }
         fin.addChild(Element(name: "set", xmlns: "http://jabber.org/protocol/rsm", children: [Element(name: "last", cdata: last)]))
         return fin
     }
@@ -190,30 +189,25 @@ struct RoomCatchUpTests {
 
     /// Answers every archive query with an incomplete page, ending at the
     /// cursor `last` gives for the page asked after.
-    final class Queries: Sendable {
-        let count = Mutex(0)
-    }
-
-    private func endlessArchive(last: @escaping @Sendable (String?) -> String) -> Queries {
-        let queries = Queries()
+    private func endlessArchive(last: @escaping @Sendable (String?) -> String) {
         wire.answer { request in
             guard let query = request.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") else { return nil }
-            queries.count.withLock { $0 += 1 }
             let after = query.firstChild(name: "set", xmlns: "http://jabber.org/protocol/rsm")?.firstChild(name: "after")?.value
-            let fin = Element(name: "fin", xmlns: "urn:xmpp:mam:2")
-            fin.addChild(Element(name: "set", xmlns: "http://jabber.org/protocol/rsm", children: [Element(name: "last", cdata: last(after))]))
-            return FakeWire.result(to: request, fin)
+            return FakeWire.result(to: request, Self.fin(last: last(after), complete: false))
         }
-        return queries
+    }
+
+    private var archiveQueries: Int {
+        wire.written.filter { ($0 as? Iq)?.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") != nil }.count
     }
 
     @Test func anArchiveThatNeverEndsIsReadAPageLimitAtATime() async throws {
         wire.answersLater = true
-        let queries = endlessArchive { after in "\(after ?? "")+" }
+        endlessArchive { after in "\(after ?? "")+" }
         session.roomPresence(selfPresence(), room: room)
 
         #expect(await eventually(timeout: 10) { session.roomStatus(room)?.isSyncing == false })
-        #expect(queries.count.withLock { $0 } == XMPPSession.roomArchivePageLimit)
+        #expect(archiveQueries == XMPPSession.roomArchivePageLimit)
         // What's left is read from the cursor next time, so live messages
         // don't move it past.
         #expect(session.roomStatus(room)?.catchUpReachedEnd == false)
@@ -221,10 +215,10 @@ struct RoomCatchUpTests {
     }
 
     @Test func anArchiveWhoseCursorDoesNotMoveIsReadOnce() throws {
-        let queries = endlessArchive { after in after ?? "old" }
+        endlessArchive { after in after ?? "old" }
         session.roomPresence(selfPresence(), room: room)
 
-        #expect(queries.count.withLock { $0 } == 1)
+        #expect(archiveQueries == 1)
         #expect(session.roomStatus(room)?.isSyncing == false)
         #expect(session.roomStatus(room)?.catchUpReachedEnd == false)
     }

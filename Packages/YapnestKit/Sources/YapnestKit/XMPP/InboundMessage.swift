@@ -258,12 +258,13 @@ extension InboundMessage {
         let items = stanza.filterChildren(name: "x", xmlns: NS.mucUser)
             .flatMap { $0.filterChildren(name: "item", xmlns: nil) }
             .compactMap { $0.getAttribute("jid") }
-        let originalSenders = stanza.filterChildren(name: "addresses", xmlns: "http://jabber.org/protocol/address")
+        let originalSenders = stanza.filterChildren(name: "addresses", xmlns: NS.address)
             .flatMap { $0.filterChildren(name: "address", xmlns: nil) }
             .filter { $0.getAttribute("type") == "ofrom" }
             .compactMap { $0.getAttribute("jid") }
         let claims = (items + originalSenders).map { JID($0) }
-        guard let first = claims.first, let address = first, claims.allSatisfy({ $0 == address }) else { return nil }
+        // One that doesn't parse disagrees with every other.
+        guard let address = claims.first ?? nil, claims.allSatisfy({ $0 == address }) else { return nil }
         return address
     }
 

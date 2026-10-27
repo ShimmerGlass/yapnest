@@ -139,8 +139,13 @@ extension LiveServer {
     }
 
     private static func forgetSyncedSettings(of session: XMPPSession) async {
+        await deleteNode(NS.settings, of: session)
+    }
+
+    /// Deletes one of the account's PEP nodes, whether or not it exists.
+    static func deleteNode(_ node: String, of session: XMPPSession) async {
         await withCheckedContinuation { continuation in
-            session.client.module(.pubsub).deleteNode(from: session.account.martin, node: NS.settings) { _ in continuation.resume() }
+            session.client.module(.pubsub).deleteNode(from: session.account.martin, node: node) { _ in continuation.resume() }
         }
     }
 

@@ -1847,12 +1847,12 @@ public final class XMPPSession: @unchecked Sendable {
             return
         }
         let resource = from.resource ?? ""
-        let isAvailable = presence.type == nil || presence.type == .available
         // The roster is only read when the table is full, so a contact whose
         // presence beats the roster at sign-in is never turned away for it.
-        let isFull = isAvailable && lock.withLock { $0.resources[jid] == nil && $0.resources.count >= Self.maxPresenceSenders }
-        let subscribed = isFull ? Set(((try? database.roster()) ?? []).filter(\.seesPresence).map(\.jid)) : []
-        if isFull, !subscribed.contains(jid) { return }
+        let isFull = (presence.type == nil || presence.type == .available)
+            && lock.withLock { $0.resources[jid] == nil && $0.resources.count >= Self.maxPresenceSenders }
+        if isFull, (try? database.seesPresence(of: jid)) != true { return }
+        let subscribed = isFull ? (try? database.presenceSubscriptions()) ?? [] : []
         presencesPublishLock.lock()
         let wasOnline = presences.value[jid] != nil
         // What changed, if anything: the sender's best resource, and the
@@ -1866,9 +1866,7 @@ public final class XMPPSession: @unchecked Sendable {
             case nil, .available:
                 if isFull {
                     // Everyone kept is a contact: there's no room for another.
-                    guard let stranger = state.resources.filter({ !subscribed.contains($0.key) })
-                        .min(by: { ($0.value.values.map(\.order).max() ?? 0) < ($1.value.values.map(\.order).max() ?? 0) })?.key
-                    else { return nil }
+                    guard let stranger = Self.stalestStranger(in: state.resources, subscribed: subscribed) else { return nil }
                     state.resources[stranger] = nil
                     evicted = stranger
                 }
@@ -1899,11 +1897,21 @@ public final class XMPPSession: @unchecked Sendable {
             presencesPublishLock.unlock()
             return
         }
-        var combined = presences.value, combinedStatuses = statuses.value
-        if let evicted = change.evicted { (combined[evicted], combinedStatuses[evicted]) = (nil, nil) }
-        (combined[jid], combinedStatuses[jid]) = (change.best?.availability, change.best?.status)
-        if presences.value != combined { presences.send(combined) }
-        if statuses.value != combinedStatuses { statuses.send(combinedStatuses) }
+        // Only the touched entries can differ, so the tables are copied only
+        // when one does.
+        let touched = [jid] + (change.evicted.map { [$0] } ?? [])
+        let availability = { (key: JID) in key == jid ? change.best?.availability : nil }
+        let status = { (key: JID) in key == jid ? change.best?.status : nil }
+        if touched.contains(where: { presences.value[$0] != availability($0) }) {
+            var combined = presences.value
+            for key in touched { combined[key] = availability(key) }
+            presences.send(combined)
+        }
+        if touched.contains(where: { statuses.value[$0] != status($0) }) {
+            var combinedStatuses = statuses.value
+            for key in touched { combinedStatuses[key] = status(key) }
+            statuses.send(combinedStatuses)
+        }
         presencesPublishLock.unlock()
         // Coalesced: a presence for each contact arrives at sign-in, and each
         // full recount checks every online contact's capabilities.
@@ -1925,6 +1933,16 @@ public final class XMPPSession: @unchecked Sendable {
     /// resource.
     private static func best(of resources: [String: ResourcePresence]) -> ResourcePresence? {
         resources.values.max(by: { ($0.availability, $0.order) < ($1.availability, $1.order) })
+    }
+
+    /// The sender we're not subscribed to who was heard from longest ago.
+    private static func stalestStranger(in resources: [JID: [String: ResourcePresence]], subscribed: Set<JID>) -> JID? {
+        var stalest: (jid: JID, order: Int)?
+        for (jid, byResource) in resources where !subscribed.contains(jid) {
+            let newest = byResource.values.lazy.map(\.order).max() ?? 0
+            if newest < stalest?.order ?? .max { stalest = (jid, newest) }
+        }
+        return stalest?.jid
     }
 
     func clearPresences() {

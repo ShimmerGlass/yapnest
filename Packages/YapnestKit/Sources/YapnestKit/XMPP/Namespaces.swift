@@ -1,5 +1,6 @@
 enum NS {
     static let last = "jabber:iq:last"
+    static let address = "http://jabber.org/protocol/address"
     static let reactions = "urn:xmpp:reactions:0"
     static let reply = "urn:xmpp:reply:0"
     static let fallback = "urn:xmpp:fallback:0"
