@@ -232,18 +232,19 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// Whether the newest signed prekey has been published for its lifetime.
     /// Also deletes the replaced ones that have outlived the grace period.
     func signedPreKeyRotationDue() -> Bool {
-        var due = false
-        _ = write { db in
-            let rows = try Row.fetchAll(db, sql: "SELECT id, createdAt FROM omemoSignedPreKey ORDER BY id")
-            let now = now()
-            let dates = rows.map { ($0["id"] as Int64, ($0["createdAt"] as Date?) ?? now) }
-            // A key is replaced when the next one is made.
-            for (index, entry) in dates.dropLast().enumerated() where now.timeIntervalSince(dates[index + 1].1) >= Self.signedPreKeyGrace {
-                try db.execute(sql: "DELETE FROM omemoSignedPreKey WHERE id = ?", arguments: [entry.0])
+        let now = now()
+        let dates = read { db in
+            try Row.fetchAll(db, sql: "SELECT id, createdAt FROM omemoSignedPreKey ORDER BY id")
+                .map { ($0["id"] as Int64, ($0["createdAt"] as Date?) ?? now) }
+        } ?? []
+        // A key is replaced when the next one is made.
+        let expired = dates.indices.dropLast().filter { now.timeIntervalSince(dates[$0 + 1].1) >= Self.signedPreKeyGrace }.map { dates[$0].0 }
+        if !expired.isEmpty {
+            _ = write { db in
+                for id in expired { try db.execute(sql: "DELETE FROM omemoSignedPreKey WHERE id = ?", arguments: [id]) }
             }
-            if let newest = dates.last { due = now.timeIntervalSince(newest.1) >= Self.signedPreKeyLifetime }
         }
-        return due
+        return dates.last.map { now.timeIntervalSince($0.1) >= Self.signedPreKeyLifetime } ?? false
     }
 
     func loadSignedPreKey(withId id: UInt32) -> Data? {
