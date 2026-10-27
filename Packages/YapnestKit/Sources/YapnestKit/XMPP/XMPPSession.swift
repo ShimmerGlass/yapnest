@@ -975,15 +975,14 @@ public final class XMPPSession: @unchecked Sendable {
     private func monitorNetwork() {
         guard policy.verifiesLiveness else { return }
         let monitor = NWPathMonitor()
-        // The first update only reports the starting path.
-        let seenFirst = Once()
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            let isFirst = seenFirst.first()
+            // The first update only reports the starting path, and the gate
+            // returns no difference for it.
             let difference = pathGate.receive(PathSignature(path))
             // A repeat of the path already logged adds nothing; the gate notes it at debug.
-            if isFirst || difference?.any != false {
-                DiagLog.network(isFirst ? "Network path at start" : "Network path changed", path)
+            if difference?.any != false {
+                DiagLog.network(difference == nil ? "Network path at start" : "Network path changed", path)
             }
         }
         monitor.start(queue: DispatchQueue.global())

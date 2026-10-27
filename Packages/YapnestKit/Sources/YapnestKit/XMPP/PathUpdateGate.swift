@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 /// What about a network path matters to a connection: whether it is usable
 /// and which interfaces it runs over. Two updates with the same signature
@@ -7,7 +8,7 @@ import Network
 /// on. Gateways are left out: their order and presence vary between updates
 /// on the same network, so they would report changes that aren't one.
 struct PathSignature: Equatable, Sendable {
-    enum Status: String, DiagEnum {
+    enum Status: String {
         case satisfied, unsatisfied, requiresConnection
     }
 
@@ -29,8 +30,6 @@ struct PathSignature: Equatable, Sendable {
         }
         self.init(status: status, interfaces: path.availableInterfaces.map { "\($0.name)/\($0.type)" })
     }
-
-    var isSatisfied: Bool { status == .satisfied }
 }
 
 /// Decides what a stream of path updates is worth. Updates that change
@@ -51,8 +50,7 @@ final class PathUpdateGate: @unchecked Sendable {
         var lastActed: Date?
     }
 
-    private let lock = NSLock()
-    private var state = State()
+    private let state = OSAllocatedUnfairLock(initialState: State())
     private let debouncer = Debouncer()
     private let changeDelay: TimeInterval
     private let quietDelay: TimeInterval
@@ -74,24 +72,26 @@ final class PathUpdateGate: @unchecked Sendable {
     /// Takes an update. Returns what differed from the one before, or nil for the first, which only reports the start.
     @discardableResult
     func receive(_ signature: PathSignature) -> Difference? {
-        let (difference, wasPending): (Difference?, Bool) = lock.withLock {
+        let outcome: (difference: Difference, changed: Bool?)? = state.withLock { state in
             defer { state.last = signature }
-            guard let last = state.last else { return (nil, false) }
-            return (Difference(status: last.status != signature.status, interfaces: last.interfaces != signature.interfaces), state.pendingChange)
+            guard let last = state.last else { return nil }
+            let difference = Difference(status: last.status != signature.status, interfaces: last.interfaces != signature.interfaces)
+            guard signature.status == .satisfied else {
+                // Whatever was waiting was for a network that has since gone.
+                if difference.any { state.pendingChange = false }
+                return (difference, nil)
+            }
+            let changed = difference.any || state.pendingChange
+            state.pendingChange = changed
+            return (difference, changed)
         }
-        guard let difference else { return nil }
+        guard let (difference, changed) = outcome else { return nil }
         if difference.any {
             DiagLog.info(.network, "Network path differs", fields: Self.fields(difference))
         } else {
             DiagLog.debug(.network, "Network path repeated", fields: Self.fields(difference))
         }
-        guard signature.isSatisfied else {
-            // Whatever was waiting was for a network that has since gone.
-            if difference.any { lock.withLock { state.pendingChange = false } }
-            return difference
-        }
-        let changed = difference.any || wasPending
-        lock.withLock { state.pendingChange = changed }
+        guard let changed else { return difference }
         debouncer.schedule(after: changed ? changeDelay : quietDelay) { [weak self] in self?.fire() }
         return difference
     }
@@ -101,7 +101,7 @@ final class PathUpdateGate: @unchecked Sendable {
     }
 
     private func fire() {
-        let changed: Bool? = lock.withLock {
+        let changed: Bool? = state.withLock { state in
             let changed = state.pendingChange
             state.pendingChange = false
             if !changed, let last = state.lastActed, Date().timeIntervalSince(last) < quietInterval { return nil }
