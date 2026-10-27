@@ -170,7 +170,7 @@ public struct ShareSender: Sendable {
     /// Nil once this process holds the lock; else how the send ends without it.
     private func takeLock() async -> Outcome? {
         func acquire(_ wait: TimeInterval) async -> Bool {
-            await Task.detached(operation: { [lock] in lock.lock(timeout: wait, as: .share) }).value
+            await lock.waitForLock(timeout: wait, as: .share)
         }
         if await acquire(lockTimeout) { return nil }
         // Only the app listens for the signal.

@@ -68,6 +68,10 @@ public final class ProcessLock: @unchecked Sendable {
 
     private let url: URL
     private let fd = OSAllocatedUnfairLock<Int32>(initialState: -1)
+    /// Where `waitForLock` blocks. A wait can last 30 seconds, and the
+    /// cooperative pool has about a thread per core, so it must not be one of
+    /// its threads.
+    private let waitQueue = DispatchQueue(label: "fr.yapnest.process-lock-wait", qos: .userInitiated)
 
     public init(url: URL) {
         self.url = url
@@ -82,6 +86,14 @@ public final class ProcessLock: @unchecked Sendable {
             if tryLock(as: role) { return true }
             if Date() >= deadline { return false }
             Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
+    /// `lock(timeout:as:)` for async code: it polls on a queue of its own and
+    /// resumes when it has the lock or the time is up.
+    public func waitForLock(timeout: TimeInterval, as role: Role? = nil) async -> Bool {
+        await withCheckedContinuation { continuation in
+            waitQueue.async { continuation.resume(returning: self.lock(timeout: timeout, as: role)) }
         }
     }
 

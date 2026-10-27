@@ -108,7 +108,7 @@ public struct NotificationFetcher: Sendable {
 
     private func catchUpAndClaim(lockWait: TimeInterval, timeout: TimeInterval) async -> (Outcome, completed: Bool) {
         // The app connects and resumes in a moment, then lets go.
-        guard await Task.detached(operation: { [lock] in lock.lock(timeout: lockWait, as: .notification) }).value else {
+        guard await lock.waitForLock(timeout: lockWait, as: .notification) else {
             if lock.holder == .app { return (.appIsRunning, false) }
             return (.busy, false)
         }

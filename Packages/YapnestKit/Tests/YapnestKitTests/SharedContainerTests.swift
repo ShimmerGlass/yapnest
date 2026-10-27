@@ -149,6 +149,29 @@ struct ProcessLockTests {
         #expect(ProcessLock(url: url).holder == .app)
     }
 
+    @Test func manyWaitsForTheLockDoNotTakeTheConcurrencyPool() async throws {
+        let url = try lockURL()
+        let holder = ProcessLock(url: url)
+        #expect(holder.tryLock(as: .app))
+        // More waiters than the pool has threads.
+        let waiters = ProcessInfo.processInfo.activeProcessorCount * 4
+        let waiting = Task {
+            await withTaskGroup(of: Bool.self) { group in
+                for _ in 0..<waiters {
+                    let lock = ProcessLock(url: url)
+                    group.addTask { await lock.waitForLock(timeout: 1.5, as: .share) }
+                }
+                return await group.reduce(into: [Bool]()) { $0.append($1) }
+            }
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        // Other work still runs while they wait.
+        let started = Date()
+        await Task.detached { try? await Task.sleep(for: .milliseconds(50)) }.value
+        #expect(Date().timeIntervalSince(started) < 1)
+        #expect(await waiting.value.allSatisfy { !$0 })
+    }
+
     @Test func lockGivesUpAfterTheTimeout() throws {
         let url = try lockURL()
         let first = ProcessLock(url: url)

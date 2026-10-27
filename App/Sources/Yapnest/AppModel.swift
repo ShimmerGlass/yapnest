@@ -567,7 +567,7 @@ final class AppModel {
             defer { if lockWaiter === session { lockWaiter = nil } }
             while true {
                 let (sessionLock, timeout) = (sessionLock, environment.lockTimeout)
-                let locked = await Task.detached { sessionLock.lock(timeout: timeout, as: .app) }.value
+                let locked = await sessionLock.waitForLock(timeout: timeout, as: .app)
                 guard isActive, SessionScope.isWanted(session, signedIn: self.session, pendingSignIn: pendingSignIn) else {
                     // Not if a newer session waits on the same lock: it would take it from there.
                     if locked, lockWaiter === session { sessionLock.unlock() }
