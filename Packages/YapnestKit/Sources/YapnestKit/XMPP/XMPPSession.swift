@@ -260,6 +260,9 @@ public final class XMPPSession: @unchecked Sendable {
         /// Why we're tearing the connection down ourselves, which Martin
         /// would otherwise report as a plain disconnect.
         var pendingFailure: Failure?
+        /// The (address, hash) pairs of photos asked for with a vCard, kept
+        /// whether or not the answer was usable.
+        var vCardAvatarAttempts: Set<String> = []
         /// Each contact's connected resources and what they say.
         var resources: [JID: [String: ResourcePresence]] = [:]
         /// Orders resources' presences, so of equally available ones the
@@ -1992,10 +1995,14 @@ public final class XMPPSession: @unchecked Sendable {
             try? database.setAvatarHash(hash, for: jid)
             return
         }
+        // Presence repeats the hash with every resource and reconnect, so a
+        // photo that is being fetched, or was unusable, isn't asked for again
+        // this session.
+        guard lock.withLock({ $0.vCardAvatarAttempts.insert("\(jid)#\(hash)").inserted }) else { return }
         client.module(.vcardTemp).retrieveVCard(from: Martin.JID(jid.martin)) { [weak self] result in
             guard let self, case .success(let vcard) = result,
                   let binval = vcard.photos.first?.binval,
-                  let data = Data(base64Encoded: binval, options: .ignoreUnknownCharacters),
+                  let data = AvatarStore.data(fromBase64: binval),
                   self.avatars.save(data, hash: hash) else { return }
             try? self.database.setAvatarHash(hash, for: jid)
         }
@@ -2003,12 +2010,18 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Asks for the current PEP avatar of everyone we have a conversation
     /// with whose presence we don't receive. Those we do send their avatar
-    /// changes, and the latest when we come online (XEP-0163).
-    private func refreshAvatars() {
+    /// changes, and the latest when we come online (XEP-0163). Done at most
+    /// once a day, as a change in between arrives as an event.
+    func refreshAvatars(now: Date = Date()) {
+        if let last = (try? database.setting(.lastAvatarRefresh)).flatMap({ $0 }).flatMap(TimeInterval.init),
+           abs(now.timeIntervalSince1970 - last) < Self.avatarRefreshInterval { return }
         guard let peers = try? database.conversationPeers(), let roster = try? database.roster() else { return }
+        try? database.setSetting(.lastAvatarRefresh, String(now.timeIntervalSince1970))
         let notifying = Set(roster.filter(\.seesPresence).map(\.jid))
         for peer in peers where !notifying.contains(peer) { fetchAvatar(of: peer) }
     }
+
+    static let avatarRefreshInterval: TimeInterval = 24 * 3600
 
     func fetchAvatar(of jid: JID) {
         client.module(.pepUserAvatar).retrieveAvatarMetadata(from: jid.martin, fireEvents: false) { [weak self] result in

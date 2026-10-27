@@ -86,6 +86,13 @@ public final class AvatarStore: Sendable {
         hash.count == 40 && hash.allSatisfy(\.isHexDigit)
     }
 
+    /// A vCard's photo, decoded only if it could fit `maxSize`: the stanza
+    /// can be tens of megabytes, and decoding comes before the size check.
+    static func data(fromBase64 binval: String) -> Data? {
+        guard binval.utf8.count <= maxSize * 4 / 3 + 4096 else { return nil }
+        return Data(base64Encoded: binval, options: .ignoreUnknownCharacters)
+    }
+
     static func hash(of data: Data) -> String {
         Data(Insecure.SHA1.hash(data: data)).hex
     }

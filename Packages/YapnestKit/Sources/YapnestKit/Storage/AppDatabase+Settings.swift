@@ -32,6 +32,9 @@ extension AppDatabase {
         case lastNotifiedMessageId
         /// When notifications were last claimed, seconds since 1970.
         case lastNotifiedAt
+        /// When the avatars of chats without presence were last asked for,
+        /// seconds since 1970.
+        case lastAvatarRefresh
         /// The roster version we hold (RFC 6121 §2.6), so a new session
         /// only gets what changed.
         case rosterVersion

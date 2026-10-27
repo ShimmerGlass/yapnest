@@ -69,6 +69,13 @@ struct AvatarSizeTests {
         #expect(max(image.width, image.height) <= 100)
     }
 
+    @Test func aVCardPhotoTooBigToKeepIsNotBase64Decoded() throws {
+        let small = Data(repeating: 7, count: 1000).base64EncodedString()
+        #expect(AvatarStore.data(fromBase64: small) == Data(repeating: 7, count: 1000))
+        let big = Data(repeating: 7, count: AvatarStore.maxSize * 2).base64EncodedString()
+        #expect(AvatarStore.data(fromBase64: big) == nil)
+    }
+
     @Test func storedOversizedFilesAreNotDecoded() throws {
         let data = AvatarImages.pngClaiming(side: 15000)
         let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))

@@ -87,4 +87,30 @@ struct PresenceLimitTests {
         receive("alice@example.org/phone", photo)
         #expect(vCardRequests == 0)
     }
+
+    @Test func aPhotoBeingFetchedOrUnusableIsNotAskedForAgain() throws {
+        try session.database.updateRosterItem(jid: alice, name: nil, subscription: .both, isPending: false)
+        receive("alice@example.org/phone", photo)
+        receive("alice@example.org/laptop", photo)
+        receive("alice@example.org/phone", photo)
+        #expect(vCardRequests == 1)
+        let other = "<x xmlns='vcard-temp:x:update'><photo>\(String(repeating: "c", count: 40))</photo></x>"
+        receive("alice@example.org/phone", other)
+        #expect(vCardRequests == 2)
+    }
+
+    private var avatarRequests: Int {
+        wire.written.filter { ($0 as? Iq)?.findChild(name: "pubsub")?.firstChild(name: "items")?.attribute("node") == "urn:xmpp:avatar:metadata" }.count
+    }
+
+    @Test func avatarsOfChatsWithoutPresenceAreAskedForOnceADay() throws {
+        _ = try session.database.conversation(with: alice)
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        session.refreshAvatars(now: start)
+        #expect(avatarRequests == 1)
+        session.refreshAvatars(now: start.addingTimeInterval(3600))
+        #expect(avatarRequests == 1)
+        session.refreshAvatars(now: start.addingTimeInterval(XMPPSession.avatarRefreshInterval + 1))
+        #expect(avatarRequests == 2)
+    }
 }
