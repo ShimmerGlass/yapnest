@@ -20,7 +20,9 @@ company or a phone number.
   people, and report spam where your server supports it. Only people you
   added or approved can ring you, send you files, have their pictures
   downloaded by themselves, invite you to groups, and get your receipts
-  and typing.
+  and typing. The one exception is pictures from members of your private
+  groups, which also download by themselves unless you turn off Download
+  Pictures from Group Members in Settings.
 - **Fast and reliable connections.** Quick sign-in on servers that support
   it, a dropped connection picks up where it left off, and push
   notifications arrive even when the app is closed.
