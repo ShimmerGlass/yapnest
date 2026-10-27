@@ -406,15 +406,18 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         let usage = usage(forName: name), now = now()
         func recency(_ id: Int32) -> Date { usage[id].map { $0.lastUsed ?? $0.firstSeen } ?? .distantPast }
         var seen = Set<Int32>()
-        let unique = ids.filter { seen.insert($0).inserted }
-        let known = unique.filter { usage[$0] != nil }.sorted { recency($0) > recency($1) }
-        let active = known.filter { !usage[$0]!.isInactive(now: now) }
-        let quiet = known.filter { usage[$0]!.isInactive(now: now) }
-        let unknown = unique.filter { usage[$0] == nil }
         let local = Int32(bitPattern: localRegistrationId())
-        let own = name == account && unique.contains(local) ? [local] : []
-        var taken = Set<Int32>()
-        let kept = Array((own + active + unknown + quiet).filter { taken.insert($0).inserted }.prefix(Self.deviceLimit))
+        let unique = ids.filter { seen.insert($0).inserted }
+        let own = name == account && seen.contains(local) ? [local] : []
+        var known: [Int32] = [], unknown: [Int32] = []
+        for id in unique where id != local || own.isEmpty {
+            if usage[id] != nil { known.append(id) } else { unknown.append(id) }
+        }
+        var active: [Int32] = [], quiet: [Int32] = []
+        for id in known.sorted(by: { recency($0) > recency($1) }) {
+            if usage[id]!.isInactive(now: now) { quiet.append(id) } else { active.append(id) }
+        }
+        let kept = Array((own + active + unknown + quiet).prefix(Self.deviceLimit))
         DiagLog.info(.omemo, "Device list cut", .int("listed", ids.count), .int("kept", kept.count))
         return kept
     }
