@@ -39,6 +39,8 @@ For the Mac, pick the "My Mac (Mac Catalyst)" destination. It needs the same sig
 
 The app group and keychain access group are shared with both extensions, so each extension's App ID (`<prefix>.notifications`, `<prefix>.share`) needs the same two capabilities as the app's. Share sheet suggestions (the chats shown at the top) only appear on a signed build installed on a device.
 
+A build refuses an account whose database a newer build has migrated ("This version of Yapnest is older…"), in Debug too. After running a branch with a newer migration, delete the app from the simulator or device before going back to an older one.
+
 ## Development servers
 
 The Server compatibility table in `README.md` is what the `LiveServer` tests show against each of these servers.

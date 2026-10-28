@@ -202,9 +202,12 @@ struct OMEMODeviceUsageTests {
 
     // MARK: Decrypting
 
-    private func setUp() throws -> (OMEMOEncryption, XMPPClient) {
+    /// - Parameter replaced: device ids an older build made, as `findOrMakeIdentity` notes them.
+    private func setUp(replaced: String? = nil) throws -> (OMEMOEncryption, XMPPClient) {
         let clock = clock
-        let encryption = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore(), now: { clock.now })
+        let database = try AppDatabase.inMemory()
+        if let replaced { try database.setSetting(.omemoReplacedDeviceIds, replaced) }
+        let encryption = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore(), now: { clock.now })
         let client = XMPPClient()
         client.connectionConfiguration.userJid = BareJID(me.description)
         client.writer = SilentWriter()
@@ -334,6 +337,54 @@ struct OMEMODeviceUsageTests {
         guard case .failure = result else { Issue.record("expected the failed read to be reported"); return }
     }
 
+    // MARK: A device an older build made
+
+    /// Build 7 installed over build 10 made a device of its own, which stayed
+    /// listed after the keychain's device took over again: contacts went on
+    /// encrypting to it, and a removal by hand was all that took it off.
+    @Test func aDeviceAnOlderBuildMadeIsTakenOffTheListOnceRegistered() async throws {
+        let (encryption, client) = try setUp(replaced: "21")
+        defer { withExtendedLifetime(client) {} }
+        let (server, own) = listServer(for: encryption, on: client, listing: [21, 12])
+
+        encryption.retireReplacedDevices(listed: [own, 21, 12])
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(server.deletedBundles.isEmpty, "not before registration, whose publish could list it again")
+        #expect(encryption.store.replacedDeviceIds() == [21])
+
+        // Registration reads our list, which the module announces from its
+        // devices queue, where the removal must not start.
+        encryption.module.isPepAvailable = true
+        await server.waitUntil { encryption.store.replacedDeviceIds().isEmpty }
+        #expect(Set(server.publishedList) == [own, 12])
+        #expect(server.deletedBundles == [21])
+        #expect(encryption.store.replacedDeviceIds().isEmpty)
+    }
+
+    /// One already gone from the list, by hand or by another client, is
+    /// simply forgotten.
+    @Test func aReplacedDeviceNoLongerListedIsForgotten() async throws {
+        let (encryption, client) = try setUp(replaced: "21")
+        defer { withExtendedLifetime(client) {} }
+        let (server, own) = listServer(for: encryption, on: client, listing: [12])
+        encryption.module.isPepAvailable = true
+        await server.waitUntil { encryption.store.replacedDeviceIds().isEmpty }
+        #expect(encryption.store.replacedDeviceIds().isEmpty)
+        #expect(server.deletedBundles.isEmpty)
+        #expect(Set(server.publishedList) == [own, 12])
+    }
+
+    /// A server listing this device and `others`, whose own bundle it lets
+    /// the registration publish, so the device gets ready.
+    private func listServer(for encryption: OMEMOEncryption, on client: XMPPClient, listing others: [Int32]) -> (ListServer, own: Int32) {
+        let server = ListServer()
+        client.writer = server
+        let own = Int32(bitPattern: encryption.deviceId)
+        server.ownDevice = own
+        server.storedList = ListServer.list([own] + others)
+        return (server, own)
+    }
+
     private func remove(_ ids: [Int32], with encryption: OMEMOEncryption) async -> Result<Void, PubSubError> {
         await withCheckedContinuation { continuation in
             encryption.module.removeDevices(withIds: ids) { continuation.resume(returning: $0) }
@@ -367,6 +418,9 @@ private final class ListServer: PacketWriter, @unchecked Sendable {
         set { lock.withLock { refuseRead = newValue } }
     }
     var deletedBundles: [Int32] { lock.withLock { deleted } }
+    /// This device, whose own bundle isn't there yet, so a registration
+    /// publishes it and the device gets ready.
+    var ownDevice: Int32?
     var publishedList: [Int32] {
         lock.withLock { list }?.mapChildren(transform: { $0.getAttribute("id") }).compactMap { Int32($0) } ?? []
     }
@@ -421,6 +475,8 @@ private final class ListServer: PacketWriter, @unchecked Sendable {
             let node = Element(name: "items", attributes: ["node": OMEMOModule.DEVICES_LIST_NODE])
             node.addChild(item)
             reply.addChild(Element(name: "pubsub", xmlns: "http://jabber.org/protocol/pubsub", children: [node]))
+        } else if let ownDevice, items?.attribute("node") == OMEMOModule.XMLNS + ".bundles:\(UInt32(bitPattern: ownDevice))" {
+            reply = errorIq("item-not-found")
         } else if lock.withLock({ refuseRead }) && items != nil || items?.attribute("node")?.contains(".bundles:") == true {
             // Other devices' bundles can't be had; a missing one would have
             // them dropped from the list as broken, which isn't what's tested.

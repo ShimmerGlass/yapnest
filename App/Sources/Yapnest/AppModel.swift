@@ -80,6 +80,9 @@ final class AppModel {
     var showsWelcome = false
     /// Set when a link couldn't be understood; the window says so.
     var linkProblem: String?
+    /// Set when the saved account couldn't be opened for a reason the user
+    /// can act on; the window says so over the sign-in screen.
+    var openProblem: String?
     /// Counts the menu bar's Find in Chat, which the open chat answers.
     var chatSearchRequests = 0
     /// Bumped by Edit Last Message in the Mac's menu; the open chat answers it.
@@ -268,6 +271,7 @@ final class AppModel {
             applyScenePhase(to: session)
         } catch {
             DiagLog.error(.app, "Failed to restore account", .error(error))
+            if let error = error as? AppDatabaseError { openProblem = error.localizedDescription }
             phase = .signedOut
         }
     }

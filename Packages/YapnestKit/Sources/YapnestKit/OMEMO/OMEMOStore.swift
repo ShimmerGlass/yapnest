@@ -1,6 +1,7 @@
 import Foundation
 import GRDB
 @preconcurrency import MartinOMEMO
+import libsignal
 
 /// Keeps the account's OMEMO keys, sessions and peer identities in its
 /// database, except this device's identity key pair, which is in
@@ -80,12 +81,23 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// The decision, inside the transaction. Also says whether a key kept in
     /// the database by a version from before was erased from it.
     private func findOrMakeIdentity(in db: Database, context: SignalContext) throws -> (StoredIdentity, erasedLegacyKey: Bool) {
-        let registrationId = try AppDatabase.setting(db, .omemoRegistrationId).flatMap { UInt32($0) }
+        var registrationId = try AppDatabase.setting(db, .omemoRegistrationId).flatMap { UInt32($0) }
         var erased = false
         if let legacy = try AppDatabase.setting(db, .omemoIdentityKeyPair) {
+            let kept = try identityKeys.load()
             // It leaves the database once the keychain holds it. One that
             // can't be moved goes all the same: a new device is made below.
-            if let registrationId, let data = Data(base64Encoded: legacy) {
+            if let kept, kept.keyPair != Data(base64Encoded: legacy), try Self.hasSignedPreKey(of: kept, in: db) {
+                // A build from before the keychain, installed over a later
+                // one, found no key in the database and made a device of its
+                // own. The keychain's is the one contacts know, and a contact
+                // who isn't subscribed to us never hears of another, so it
+                // stays and the older build's goes. Only if this database
+                // signed with it: the keychain outlives a deleted app, and a
+                // key from an install before that is no one's device now.
+                try replaceDevice(registrationId, with: kept, in: db, context: context)
+                registrationId = kept.registrationId
+            } else if let registrationId, let data = Data(base64Encoded: legacy) {
                 let moved = StoredIdentity(registrationId: registrationId, keyPair: data)
                 try identityKeys.save(moved)
                 guard try identityKeys.load() == moved else { throw OMEMOError.identityNotStored }
@@ -112,6 +124,68 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         }
         try AppDatabase.setSetting(db, .omemoRegistrationId, String(newId))
         return (identity, erased)
+    }
+
+    /// Puts `kept` back in place of the device an older build made in the
+    /// database, and notes that device for the session to take off the
+    /// account's list. The sessions stay: most are the kept device's, and
+    /// the few the other one set up are repaired by whoever holds them.
+    private func replaceDevice(_ replaced: UInt32?, with kept: StoredIdentity, in db: Database, context: SignalContext) throws {
+        // Its signed prekey is signed with its own key and has the highest
+        // id, which the bundle publishes: every contact would refuse it. One
+        // signed with the kept key goes above it. The kept device's own stay
+        // for the sessions started from its bundle meanwhile, unless the older
+        // build, which counted rows for the next id, wrote over one; a
+        // message built on that one is repaired. The other's go with the old
+        // ones once their grace is over.
+        let newest = try Self.newestSignedPreKeyId(in: db)
+        guard let pair = SignalIdentityKeyPair(fromKeyPairData: kept.keyPair),
+              let signed = context.generateSignedPreKey(withIdentity: pair, signedPreKeyId: UInt32(newest + 1), timestamp: now()),
+              let data = signed.serializedData else { throw OMEMOError.keyGenerationFailed }
+        try Self.storeSignedPreKey(data, withId: signed.preKeyId, at: now(), in: db)
+        try AppDatabase.setSetting(db, .omemoRegistrationId, String(kept.registrationId))
+        guard let replaced, replaced != kept.registrationId else { return }
+        let id = Int32(bitPattern: replaced)
+        try Self.setReplacedDeviceIds(try Self.replacedDeviceIds(in: db) + [id], in: db)
+        DiagLog.notice(.omemo, "Device made by an older build replaced by the keychain's", .id("device", Redacted.id(String(id))))
+    }
+
+    /// Whether any signed prekey in the database is signed with `identity`'s
+    /// key, which only that device's own registrations make.
+    private static func hasSignedPreKey(of identity: StoredIdentity, in db: Database) throws -> Bool {
+        guard let publicKey = SignalIdentityKeyPair(fromKeyPairData: identity.keyPair)?.publicKey,
+              let key = SignalIdentityKey.publicKey(from: publicKey) else { return false }
+        return try Data.fetchAll(db, sql: "SELECT data FROM omemoSignedPreKey").contains { data in
+            guard let signed = SignalSignedPreKey(fromSerializedData: data), let message = signed.publicKeyData else { return false }
+            let signature = signed.signature
+            return message.withUnsafeBytes { m in
+                signature.withUnsafeBytes { s in
+                    curve_verify_signature(key, m.baseAddress!.assumingMemoryBound(to: UInt8.self), message.count, s.baseAddress!.assumingMemoryBound(to: UInt8.self), signature.count)
+                }
+            } == 1
+        }
+    }
+
+    private static func replacedDeviceIds(in db: Database) throws -> [Int32] {
+        (try AppDatabase.setting(db, .omemoReplacedDeviceIds) ?? "").split(separator: ",").compactMap { UInt32($0).map { Int32(bitPattern: $0) } }
+    }
+
+    private static func setReplacedDeviceIds(_ ids: [Int32], in db: Database) throws {
+        try AppDatabase.setSetting(db, .omemoReplacedDeviceIds, ids.isEmpty ? nil : ids.map { String(UInt32(bitPattern: $0)) }.joined(separator: ","))
+    }
+
+    /// The devices `replaceDevice` gave up, not yet off the account's list.
+    func replacedDeviceIds() -> [Int32] {
+        read { db in try Self.replacedDeviceIds(in: db) } ?? []
+    }
+
+    /// Forgets `ids` as replaced devices, and what was kept of them as our
+    /// account's other devices.
+    func forgetReplaced(_ ids: [Int32]) {
+        forget(deviceIds: ids, of: account)
+        _ = write { db in
+            try Self.setReplacedDeviceIds(try Self.replacedDeviceIds(in: db).filter { !ids.contains($0) }, in: db)
+        }
     }
 
     private func use(_ identity: StoredIdentity) {
@@ -231,7 +305,11 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// The id of the newest one, which the module takes as its count to pick
     /// the next id. Not a count: old ones are deleted, and ids must not repeat.
     func countSignedPreKeys() -> Int {
-        (read { db in try Int.fetchOne(db, sql: "SELECT MAX(id) FROM omemoSignedPreKey") } ?? nil) ?? 0
+        read { db in try Self.newestSignedPreKeyId(in: db) } ?? 0
+    }
+
+    private static func newestSignedPreKeyId(in db: Database) throws -> Int {
+        try Int.fetchOne(db, sql: "SELECT MAX(id) FROM omemoSignedPreKey") ?? 0
     }
 
     /// Whether the newest signed prekey has been published for its lifetime.
@@ -257,7 +335,11 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func storeSignedPreKey(_ data: Data, withId id: UInt32) -> Bool {
-        write { db in try db.execute(sql: "INSERT OR REPLACE INTO omemoSignedPreKey (id, data, createdAt) VALUES (?, ?, ?)", arguments: [id, data, now()]) }
+        write { db in try Self.storeSignedPreKey(data, withId: id, at: now(), in: db) }
+    }
+
+    private static func storeSignedPreKey(_ data: Data, withId id: UInt32, at date: Date, in db: Database) throws {
+        try db.execute(sql: "INSERT OR REPLACE INTO omemoSignedPreKey (id, data, createdAt) VALUES (?, ?, ?)", arguments: [id, data, date])
     }
 
     func containsSignedPreKey(withId id: UInt32) -> Bool {

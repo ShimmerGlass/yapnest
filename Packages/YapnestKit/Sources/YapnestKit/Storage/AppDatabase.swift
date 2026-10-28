@@ -11,7 +11,12 @@ public final class AppDatabase: Sendable {
 
     public init(_ writer: any DatabaseWriter) throws {
         self.writer = writer
-        try Self.migrator.migrate(writer)
+        // A build older than the one that last wrote the database would run
+        // its code over data it doesn't know. Build 7 did that over build 10's
+        // and made a new encryption key while the keychain held the device's.
+        let migrator = Self.migrator
+        if try writer.read(migrator.hasBeenSuperseded) { throw AppDatabaseError.createdByNewerVersion }
+        try migrator.migrate(writer)
     }
 
     public var reader: any DatabaseReader { writer }
@@ -820,4 +825,17 @@ public final class AppDatabase: Sendable {
 extension DerivableRequest<Message> {
     /// Without the rows that only mark something that happened: see `AppDatabase.isNotEvent`.
     func excludingEvents() -> Self { filter(Column("event") == nil) }
+}
+
+public enum AppDatabaseError: Error, LocalizedError, Equatable, Sendable {
+    /// The database was last written by a newer build, which made changes
+    /// this one doesn't know.
+    case createdByNewerVersion
+
+    public var errorDescription: String? {
+        switch self {
+        case .createdByNewerVersion:
+            String(localized: "This version of Yapnest is older than the one that last used your account on this device. Install the latest version.")
+        }
+    }
 }

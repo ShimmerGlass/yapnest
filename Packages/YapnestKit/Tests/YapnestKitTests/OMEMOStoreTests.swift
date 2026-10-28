@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Security
 @preconcurrency import MartinOMEMO
+import libsignal
 import Testing
 @testable import YapnestKit
 
@@ -143,6 +144,97 @@ struct OMEMOStoreTests {
         for file in files {
             #expect((try? Data(contentsOf: file))?.range(of: Data(encoded.utf8)) == nil, "\(file.lastPathComponent) still holds the key")
         }
+    }
+
+    /// Build 7 installed over build 10's data found no key in the database
+    /// and made another device; build 10 then moved that key over the
+    /// keychain's and became a new device on the old one's sessions, and
+    /// contacts who weren't subscribed to us never encrypted to it. The
+    /// keychain's device, which contacts know, carries on instead, and the
+    /// older build's is noted for removal from the list.
+    @Test func aDeviceAnOlderBuildMadeGivesWayToTheKeychainsOne() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let kept = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        let bobsDevice = SignalAddress(name: bob, deviceId: 7)
+        #expect(kept.store.storeSessionRecord(Data([1]), forAddress: bobsDevice))
+        let keptSigned = try Self.signedPreKey(1, by: kept)
+        #expect(kept.store.storeSignedPreKey(keptSigned, withId: 1))
+        // What build 7 left: its own key and id in the database, and a signed
+        // prekey signed with that key under the next id.
+        let older = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
+        let olderPair = try #require((older.store.keyPair() as? SignalIdentityKeyPair)?.keyPair)
+        try database.setSetting(.omemoIdentityKeyPair, olderPair.base64EncodedString())
+        try database.setSetting(.omemoRegistrationId, String(older.deviceId))
+        #expect(kept.store.storeSignedPreKey(try Self.signedPreKey(2, by: older), withId: 2))
+
+        let upgraded = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(upgraded.deviceId == kept.deviceId)
+        #expect(upgraded.store.keyPair()?.publicKey == kept.store.keyPair()?.publicKey)
+        #expect(try keys.load()?.registrationId == kept.deviceId)
+        #expect(try database.setting(.omemoRegistrationId) == String(kept.deviceId))
+        #expect(try database.setting(.omemoIdentityKeyPair) == nil)
+        #expect(upgraded.store.sessionRecord(forAddress: bobsDevice) == Data([1]), "the kept device's sessions stay")
+        #expect(upgraded.store.loadSignedPreKey(withId: 1) == keptSigned, "for sessions started from the kept device's bundle")
+        // The older build's, signed with its key, is no longer the newest,
+        // which is what the bundle publishes.
+        #expect(upgraded.store.countSignedPreKeys() == 3)
+        let newest = try #require(upgraded.store.loadSignedPreKey(withId: 3).flatMap { SignalSignedPreKey(fromSerializedData: $0) })
+        let keptPair = try #require(kept.store.keyPair() as? SignalIdentityKeyPair)
+        #expect(Self.verifies(newest, by: keptPair))
+        #expect(upgraded.store.replacedDeviceIds() == [Int32(bitPattern: older.deviceId)])
+    }
+
+    /// The keychain outlives a deleted app. A build from before the keychain,
+    /// installed afresh after that, made the device in use; the key left
+    /// from the install before isn't anyone's device now, so it gives way.
+    @Test func aKeyLeftByADeletedInstallGivesWayToTheDevicesOwn() throws {
+        let keys = MemoryIdentityKeyStore()
+        _ = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: keys)
+        let database = try AppDatabase.inMemory()
+        let fresh = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        let freshPair = try #require((fresh.store.keyPair() as? SignalIdentityKeyPair)?.keyPair)
+        try database.setSetting(.omemoIdentityKeyPair, freshPair.base64EncodedString())
+        #expect(fresh.store.storeSignedPreKey(try Self.signedPreKey(1, by: fresh), withId: 1))
+
+        let upgraded = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(upgraded.deviceId == fresh.deviceId)
+        #expect(try keys.load() == StoredIdentity(registrationId: fresh.deviceId, keyPair: freshPair))
+        #expect(upgraded.store.replacedDeviceIds().isEmpty)
+    }
+
+    /// A signed prekey as `owner`'s registration makes it.
+    private static func signedPreKey(_ id: UInt32, by owner: OMEMOEncryption) throws -> Data {
+        let pair = try #require(owner.store.keyPair())
+        return try #require(owner.module.signalContext.generateSignedPreKey(withIdentity: pair, signedPreKeyId: id)?.serializedData)
+    }
+
+    /// Whether `signed` is signed with `identity`'s key, which a contact
+    /// checks before starting a session from the bundle that has it.
+    private static func verifies(_ signed: SignalSignedPreKey, by identity: SignalIdentityKeyPair) -> Bool {
+        guard let message = signed.publicKeyData, let keyData = identity.publicKey,
+              let key = SignalIdentityKey.publicKey(from: keyData) else { return false }
+        let signature = signed.signature
+        return message.withUnsafeBytes { m in
+            signature.withUnsafeBytes { s in
+                curve_verify_signature(key, m.baseAddress!.assumingMemoryBound(to: UInt8.self), message.count, s.baseAddress!.assumingMemoryBound(to: UInt8.self), signature.count)
+            }
+        } == 1
+    }
+
+    /// A move cut short after the keychain took the key, with the key still
+    /// in the database, is finished, not taken for another device.
+    @Test func aMoveCutShortIsFinished() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let omemo = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        let pair = try #require((omemo.store.keyPair() as? SignalIdentityKeyPair)?.keyPair)
+        try database.setSetting(.omemoIdentityKeyPair, pair.base64EncodedString())
+        #expect(omemo.store.storeSignedPreKey(Data([3]), withId: 1))
+
+        let again = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(again.deviceId == omemo.deviceId)
+        #expect(try database.setting(.omemoIdentityKeyPair) == nil)
+        #expect(again.store.loadSignedPreKey(withId: 1) == Data([3]))
+        #expect(again.store.replacedDeviceIds().isEmpty)
     }
 
     /// A key that can't be moved, with no device id beside it, is erased all the same.

@@ -1,6 +1,8 @@
+import Combine
 import Foundation
 @preconcurrency import Martin
 @preconcurrency import MartinOMEMO
+import os
 
 /// OMEMO 0.3 (`eu.siacs.conversations.axolotl`) for one account: owns the
 /// key store and MartinOMEMO's module, and turns their callback API into
@@ -47,6 +49,22 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// store the session as they left it. Not `encodeLock`, which is held
     /// while device lists and bundles are fetched.
     private let decodeLock = NSLock()
+    /// Replaced devices to take off our list: see `retireReplacedDevices`.
+    private struct Retirement {
+        /// Whether any are noted, so that every other install's list reads
+        /// cost nothing.
+        var isPending: Bool
+        /// When the removal under way started. One whose answer never came,
+        /// with the connection gone, stops holding the next back after a while.
+        var startedAt: Date?
+
+        func isBusy(at now: Date) -> Bool {
+            startedAt.map { now.timeIntervalSince($0) < 120 } ?? false
+        }
+    }
+
+    private let retirement: OSAllocatedUnfairLock<Retirement>
+    private var ownListHeard: AnyCancellable?
 
     /// How long to wait for device lists and bundles before giving up on a send.
     var setupTimeout: TimeInterval = 45
@@ -66,11 +84,17 @@ final class OMEMOEncryption: @unchecked Sendable {
         guard let context = SignalContext(withStorage: storage) else { throw OMEMOError.keyGenerationFailed }
         self.context = context
         try store.setUpIdentityIfNeeded(context: context)
+        retirement = OSAllocatedUnfairLock(initialState: Retirement(isPending: !store.replacedDeviceIds().isEmpty))
         module = OMEMOModule(aesGCMEngine: CryptoKitAESGCM(), signalContext: context, signalStorage: storage)
         if rotatesSignedPreKey { module.signedPreKeyRotationDue = { [store] in store.signedPreKeyRotationDue() } }
         module.limitDevices = { [store] jid, ids in store.limited(ids, of: jid.stringValue) }
         module.diagnostics = { OMEMOEvent.log($0) }
         module.defaultBody = "This message is encrypted with OMEMO, which your client doesn't support."
+        ownListHeard = module.activeDevicesPublisher.sink { [weak self] change in
+            // An extension doesn't publish our keys, so it leaves our list alone.
+            guard let self, change.readFromServer, change.jid.stringValue == account.description, module.publishesKeys else { return }
+            retireReplacedDevices(listed: change.activeDevices)
+        }
     }
 
     var deviceId: UInt32 { store.localRegistrationId() }
@@ -153,6 +177,49 @@ final class OMEMOEncryption: @unchecked Sendable {
             logFailure(DecryptFailure(error), stanza, device: device, isHistory: isHistory)
             return .failed("\(error)")
         }
+    }
+
+    /// Takes the devices an older build made in this install off our list,
+    /// `listed` as read from the server, with their bundles, once this device
+    /// is registered: see `OMEMOStore.findOrMakeIdentity`. Before that,
+    /// registration's own publish could put them back.
+    func retireReplacedDevices(listed: [Int32]) {
+        guard module.isReady, retirement.withLock({ $0.isPending }) else { return }
+        // Lists are announced from the module's devices queue, which the
+        // removal syncs onto first; the database work goes along.
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let replaced = store.replacedDeviceIds()
+            let ids = replaced.filter(listed.contains)
+            // While a removal is out, the list it publishes is announced
+            // before the server takes it: a device missing from it isn't gone yet.
+            let starts = retirement.withLock { state in
+                guard !state.isBusy(at: Date()) else { return false }
+                if !ids.isEmpty { state.startedAt = Date() }
+                return true
+            }
+            guard starts else { return }
+            guard !ids.isEmpty else {
+                forgetReplaced(replaced)
+                return
+            }
+            module.removeDevices(withIds: ids) { [self] result in
+                retirement.withLock { $0.startedAt = nil }
+                switch result {
+                case .success:
+                    forgetReplaced(replaced)
+                case .failure(let error):
+                    // Not the user's to act on: the next read of our list, at
+                    // the latest on the next connection, tries again.
+                    DiagLog.error(.omemo, "Replaced device not removed", .error(ServerError(error)))
+                }
+            }
+        }
+    }
+
+    private func forgetReplaced(_ ids: [Int32]) {
+        store.forgetReplaced(ids)
+        let left = store.replacedDeviceIds()
+        retirement.withLock { $0.isPending = !left.isEmpty }
     }
 
     /// The keys in `stanza` for this device. Martin tries each of them.

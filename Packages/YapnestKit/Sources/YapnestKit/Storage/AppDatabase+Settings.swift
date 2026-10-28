@@ -16,6 +16,10 @@ extension AppDatabase {
         case omemoRegistrationId
         /// This device's OMEMO identity key pair, base64.
         case omemoIdentityKeyPair
+        /// OMEMO device ids this install made and gave up, comma separated:
+        /// see `OMEMOStore.findOrMakeIdentity`. Taken off the account's device
+        /// list once connected.
+        case omemoReplacedDeviceIds
         /// This device's APNs token, hex, and whether it's a development
         /// build's ("sandbox") or not ("production").
         case pushToken
