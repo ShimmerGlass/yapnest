@@ -108,6 +108,16 @@ struct NetworkChangeTests {
         #expect(acts.values == [true])
     }
 
+    @Test func aNetworkThatWentBeforeTheDebounceFiresIsNotActedOn() async throws {
+        let acts = Acts()
+        let gate = gate(acts)
+        gate.receive(Self.wifi)
+        gate.receive(Self.cellular)
+        gate.receive(Self.down)
+        try await settle(acts, expectingAction: false)
+        #expect(acts.values.isEmpty)
+    }
+
     @Test func unsatisfiedThenSatisfiedActsAsChanged() async throws {
         let acts = Acts()
         let gate = gate(acts)

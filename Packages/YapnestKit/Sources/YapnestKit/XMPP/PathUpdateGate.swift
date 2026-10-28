@@ -102,6 +102,11 @@ final class PathUpdateGate: @unchecked Sendable {
 
     private func fire() {
         let changed: Bool? = state.withLock { state in
+            // An update that came after the one that scheduled this says the network is gone.
+            guard state.last?.status == .satisfied else {
+                state.pendingChange = false
+                return nil
+            }
             let changed = state.pendingChange
             state.pendingChange = false
             if !changed, let last = state.lastActed, Date().timeIntervalSince(last) < quietInterval { return nil }
