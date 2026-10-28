@@ -267,4 +267,15 @@ struct OMEMOPreKeyTests {
         #expect(bob.store.loadSignedPreKey(withId: 2) != nil, "replaced 9 days ago")
         #expect(bob.store.loadSignedPreKey(withId: 4) != nil)
     }
+
+    /// The extensions run beside the app, and two processes making the next signed prekey at once would
+    /// each store one under the same id.
+    @Test func onlyTheAppsSessionReplacesTheSignedPreKey() throws {
+        let me = JID("me@example.org")!
+        for (mode, rotates) in [(XMPPSession.Mode.app, true), (.notificationService, false), (.share, false)] {
+            let database = try AppDatabase.inMemory()
+            let session = try XMPPSession(credentials: .init(jid: me, password: "x"), resource: "t", database: database, mode: mode, identityKeys: testIdentityKeys(for: database))
+            #expect((session.omemoModuleForTesting.signedPreKeyRotationDue != nil) == rotates, "\(mode)")
+        }
+    }
 }

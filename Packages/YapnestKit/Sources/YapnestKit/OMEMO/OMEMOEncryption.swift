@@ -35,7 +35,10 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// callee's setup window after `proceed`, and a send is not worth 45 s.
     var callFetchTimeout: TimeInterval = 5
 
-    init(database: AppDatabase, account: JID, identityKeys: any IdentityKeyStore, now: @escaping @Sendable () -> Date = { Date() }) throws {
+    /// - Parameter rotatesSignedPreKey: whether this process replaces the signed prekey when it is due. Only the
+    ///   app's does: the extensions run beside it and would make the next one at the same time, each with the
+    ///   next id and a key of its own, so that the bundle published and the one kept could differ.
+    init(database: AppDatabase, account: JID, identityKeys: any IdentityKeyStore, rotatesSignedPreKey: Bool = true, now: @escaping @Sendable () -> Date = { Date() }) throws {
         self.account = account
         store = OMEMOStore(database: database, account: account, identityKeys: identityKeys, now: now)
         storage = SignalStorage(sessionStore: store, preKeyStore: store, signedPreKeyStore: store, identityKeyStore: store, senderKeyStore: store)
@@ -43,7 +46,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         self.context = context
         try store.setUpIdentityIfNeeded(context: context)
         module = OMEMOModule(aesGCMEngine: CryptoKitAESGCM(), signalContext: context, signalStorage: storage)
-        module.signedPreKeyRotationDue = { [store] in store.signedPreKeyRotationDue() }
+        if rotatesSignedPreKey { module.signedPreKeyRotationDue = { [store] in store.signedPreKeyRotationDue() } }
         module.limitDevices = { [store] jid, ids in store.limited(ids, of: jid.stringValue) }
         module.defaultBody = "This message is encrypted with OMEMO, which your client doesn't support."
     }

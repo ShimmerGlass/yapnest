@@ -466,7 +466,7 @@ public final class XMPPSession: @unchecked Sendable {
         self.attachments = attachments
         self.allowsInsecureTransfers = credentials.disableTLS
         database.allowsInsecureLinks = credentials.disableTLS
-        self.omemo = try OMEMOEncryption(database: database, account: credentials.jid, identityKeys: identityKeys ?? Self.identityKeys(for: credentials.jid, in: database))
+        self.omemo = try OMEMOEncryption(database: database, account: credentials.jid, identityKeys: identityKeys ?? Self.identityKeys(for: credentials.jid, in: database), rotatesSignedPreKey: mode == .app)
 
         client.connectionConfiguration.userJid = credentials.jid.martin
         client.connectionConfiguration.credentials = .password(password: credentials.password)
