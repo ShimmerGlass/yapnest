@@ -568,6 +568,9 @@ extension XMPPSession {
         }
         guard isConnected else {
             keepForReconnect(message, sid: sid, since: Date())
+            // The stream may have come back since the look, and the send that follows its return have
+            // found nothing yet to send: this would then wait for a reconnect that is not coming.
+            if isConnected { sendUnsentCallMessages() }
             return
         }
         client.context.writer.write(stanza) { [weak self] result in

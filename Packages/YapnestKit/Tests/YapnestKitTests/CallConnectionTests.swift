@@ -12,6 +12,12 @@ struct CallConnectionTests {
 
     init() throws {
         h = try CallSessionHarness()
+        // Connecting leaves a send of the kept call messages waiting, which first finds the client not
+        // yet reading connected and looks again 10 ms later: just as these tests drop and restore the
+        // stream. It would send what a test has kept, or take it while the stream is down and put it
+        // back after the reconnect's own send has found nothing. A new attempt number makes it stand
+        // down; the sends of these tests' own reconnects are made after this.
+        h.session.lock.withLock { $0.attempt += 1 }
     }
 
     private func startCall() async throws -> String {
