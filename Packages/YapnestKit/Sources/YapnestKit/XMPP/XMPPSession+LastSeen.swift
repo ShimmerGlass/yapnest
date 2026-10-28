@@ -68,7 +68,7 @@ extension XMPPSession {
     public func refreshLastSeen(of peer: JID) async {
         guard offersLastActivity, isConnected, !isGroup(peer),
               (try? database.contact(peer))?.seesPresence == true,
-              (presences.value[peer] ?? .offline) == .offline,
+              presence(of: peer) == .offline,
               lock.withLock({ $0.lastSeenSchedule.claim(peer, now: Date()) }) else { return }
         do {
             let seconds = try await lastActivity(of: Martin.JID(peer.martin))

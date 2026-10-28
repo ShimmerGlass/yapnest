@@ -49,8 +49,7 @@ final class AppModel {
     @ObservationIgnored let badgeSync = BadgeSync()
     /// What the session has said since the last run-loop turn, applied to the
     /// boxes together: a burst of presences or room changes becomes one pass.
-    @ObservationIgnored private var latestPresences: [JID: ContactPresence]?
-    @ObservationIgnored private var latestStatuses: [JID: String]?
+    @ObservationIgnored private var pendingPeers: [JID: PeerUpdate] = [:]
     @ObservationIgnored private var pendingRooms: [JID: RoomStatus?] = [:]
     @ObservationIgnored private var liveFlushScheduled = false
     /// Contacts online with a device that takes calls.
@@ -848,10 +847,10 @@ final class AppModel {
                 if case .connected = $0 {} else { self?.clearTyping() }
             }
             .store(in: &cancellables)
-        session.presences
+        session.peerUpdates
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in
-                self?.latestPresences = $0
+                self?.pendingPeers[$0.jid] = $0
                 self?.scheduleLiveFlush()
             }
             .store(in: &cancellables)
@@ -867,13 +866,6 @@ final class AppModel {
             .sink { [weak self] in
                 self?.videoCallableHold.update($0, now: .now)
                 self?.offerCallablePeers()
-            }
-            .store(in: &cancellables)
-        session.statuses
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] in
-                self?.latestStatuses = $0
-                self?.scheduleLiveFlush()
             }
             .store(in: &cancellables)
         session.roomUpdates
@@ -898,18 +890,15 @@ final class AppModel {
 
     private func flushLive() {
         liveFlushScheduled = false
-        if let presences = latestPresences {
-            latestPresences = nil
-            let before = live.apply(presences: presences)
+        let peers = pendingPeers
+        pendingPeers = [:]
+        for (jid, update) in peers {
+            let before = live.apply(peer: jid, presence: update.presence, status: update.status)
             // An unavailable peer can't be typing, and won't send "paused".
             // Someone we never had presence for (a stranger) isn't dropped.
-            for peer in typingPeers where presences[peer] == .offline || (presences[peer] == nil && before[peer] != nil) {
-                stopTyping(peer)
+            if composingSince[jid] != nil, update.presence == .offline || (update.presence == nil && before != nil) {
+                stopTyping(jid)
             }
-        }
-        if let statuses = latestStatuses {
-            latestStatuses = nil
-            live.apply(statuses: statuses)
         }
         let rooms = pendingRooms
         pendingRooms = [:]
@@ -944,8 +933,7 @@ final class AppModel {
         #endif
         cancellables = []
         connection = .disconnected(error: nil)
-        latestPresences = nil
-        latestStatuses = nil
+        pendingPeers = [:]
         pendingRooms = [:]
         live.reset()
         callableExpiry?.cancel()

@@ -98,7 +98,7 @@ extension XMPPSession {
         defer { callablePublishLock.unlock() }
         var callable: Set<JID> = [], videoCallable: Set<JID> = []
         let caps = client.modulesManager.moduleOrNil(CapabilitiesModule.IDENTIFIER)
-        for peer in presences.value.keys {
+        for peer in lock.withLock({ Array($0.resources.keys) }) {
             guard let caps else { break }
             let audio = Self.callFeatures.map { caps.isFeatureSupported($0, by: peer.martin) }
             guard Self.supportsAll(audio) else { continue }

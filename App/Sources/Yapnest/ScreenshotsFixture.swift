@@ -47,7 +47,9 @@ enum ScreenshotsFixture {
 
     /// What a server would tell the session: who is online, and the rooms.
     static func configure(_ session: XMPPSession) {
-        session.presences.send([lea: .online, sam: .online, jonas: .away, mei: .online])
+        for (jid, presence) in [(lea, ContactPresence.online), (sam, .online), (jonas, .away), (mei, .online)] {
+            session.receivePresenceForFixture(jid, presence)
+        }
         for room in [climbing, bookClub] {
             session.joinForFixture(room, occupants: [
                 RoomOccupant(nick: nickname, jid: DevFixture.account, affiliation: .member),

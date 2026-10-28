@@ -19,7 +19,7 @@ struct AppModelSessionTests {
 
         #expect(await stays(for: .milliseconds(700)) { fixture.lock.isLocked && FileManager.default.fileExists(atPath: fixture.databaseFile.path) })
         let peer = JID("peer@example.com")!
-        session.presences.send([peer: .away])
+        session.peerUpdates.send(PeerUpdate(jid: peer, presence: .away, status: nil))
         await eventually("the new session's presences reach the model") { model.live.peer(peer).presence == .away }
     }
 

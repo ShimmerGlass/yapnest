@@ -225,49 +225,49 @@ struct ProfileTests {
 
     @Test func aContactsStatusIsKept() {
         receive(presence("phone", status: "At the beach"))
-        #expect(session.statuses.value[alice] == "At the beach")
+        #expect(session.status(of: alice) == "At the beach")
         #expect(session.presence(of: alice) == .online)
     }
 
     @Test func noStatusMeansNone() {
         receive(presence("phone", status: "At the beach"))
         receive(presence("phone", show: "away"))
-        #expect(session.statuses.value[alice] == nil)
+        #expect(session.status(of: alice) == nil)
         #expect(session.presence(of: alice) == .away)
     }
 
     @Test func theMostAvailableResourceSpeaks() {
         receive(presence("phone", show: "away", status: "Back soon"))
         receive(presence("laptop", status: "Working"))
-        #expect(session.statuses.value[alice] == "Working")
+        #expect(session.status(of: alice) == "Working")
         // Equally available: the newest.
         receive(presence("phone", status: "On the train"))
-        #expect(session.statuses.value[alice] == "On the train")
+        #expect(session.status(of: alice) == "On the train")
         // Less available again.
         receive(presence("phone", show: "dnd", status: "Busy"))
-        #expect(session.statuses.value[alice] == "Working")
+        #expect(session.status(of: alice) == "Working")
         // The laptop leaves, and the phone speaks.
         receive(presence("laptop", type: "unavailable"))
-        #expect(session.statuses.value[alice] == "Busy")
+        #expect(session.status(of: alice) == "Busy")
         #expect(session.presence(of: alice) == .busy)
     }
 
     @Test func goingOfflineClearsTheStatus() {
         receive(presence("phone", status: "Hi"))
         receive(presence("phone", status: "Gone", type: "unavailable"))
-        #expect(session.statuses.value[alice] == nil)
+        #expect(session.status(of: alice) == nil)
         #expect(session.presence(of: alice) == .offline)
     }
 
     @Test func clearingPresencesClearsStatuses() {
         receive(presence("phone", status: "Hi"))
         session.clearPresences()
-        #expect(session.statuses.value.isEmpty)
-        #expect(session.presences.value.isEmpty)
+        #expect(session.status(of: alice) == nil)
+        #expect(session.presence(of: alice) == .offline)
     }
 
     @Test func aContactsStatusIsOneBoundedLine() {
         receive(presence("phone", status: String(repeating: "x", count: 2000)))
-        #expect(session.statuses.value[alice]?.count == XMPPSession.maxContactStatusLength)
+        #expect(session.status(of: alice)?.count == XMPPSession.maxContactStatusLength)
     }
 }

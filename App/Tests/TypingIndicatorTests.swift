@@ -21,21 +21,21 @@ struct TypingIndicatorTests {
     @Test func anOfflinePresenceEndsTheIndicator() async throws {
         let fixture = AppModelFixture()
         let session = try await signedIn(fixture)
-        session.presences.send([peer: .online])
+        session.peerUpdates.send(PeerUpdate(jid: peer, presence: .online, status: nil))
         await startTyping(session, fixture.model)
 
-        session.presences.send([peer: .offline])
+        session.peerUpdates.send(PeerUpdate(jid: peer, presence: .offline, status: nil))
 
         await eventually("typing ends") { fixture.model.typingPeers.isEmpty }
     }
 
-    @Test func aPeerThatDropsOutOfThePresencesStopsTyping() async throws {
+    @Test func aPeerThePresencesNoLongerHoldStopsTyping() async throws {
         let fixture = AppModelFixture()
         let session = try await signedIn(fixture)
-        session.presences.send([peer: .online])
+        session.peerUpdates.send(PeerUpdate(jid: peer, presence: .online, status: nil))
         await startTyping(session, fixture.model)
 
-        session.presences.send([:])
+        session.peerUpdates.send(PeerUpdate(jid: peer, presence: nil, status: nil))
 
         await eventually("typing ends") { fixture.model.typingPeers.isEmpty }
     }
@@ -45,7 +45,7 @@ struct TypingIndicatorTests {
         let session = try await signedIn(fixture)
         await startTyping(session, fixture.model)
 
-        session.presences.send([JID("friend@example.com")!: .online])
+        session.peerUpdates.send(PeerUpdate(jid: JID("friend@example.com")!, presence: .online, status: nil))
 
         #expect(await stays { fixture.model.live.peer(peer).isTyping })
     }

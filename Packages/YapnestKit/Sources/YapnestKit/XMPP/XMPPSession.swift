@@ -101,12 +101,6 @@ public final class XMPPSession: @unchecked Sendable {
     /// How the room answered a subject change, which only comes back as a
     /// message: its echo, or an error.
     let subjectOutcomes = PassthroughSubject<SubjectOutcome, Never>()
-    /// Availability of contacts whose presence we receive. Missing means offline.
-    public let presences = CurrentValueSubject<[JID: ContactPresence], Never>([:])
-    /// The status message of each contact's most available resource, where
-    /// they've set one. Kept apart from `presences`, which many views read
-    /// for availability alone.
-    public let statuses = CurrentValueSubject<[JID: String], Never>([:])
     /// What went wrong on this account that the user should hear of, shown above the chat list.
     public let warnings = AccountWarnings()
     /// Contacts who are online with a device we can call (`canCall`), which
@@ -133,6 +127,11 @@ public final class XMPPSession: @unchecked Sendable {
     /// that's gone. The app follows this rather than `rooms`, as handing it
     /// whole dictionaries would have it compare every room at every change.
     public let roomUpdates = PassthroughSubject<RoomUpdate, Never>()
+    /// Each change to one contact's availability or status as it's published,
+    /// with a nil presence once the session has none for them. The app follows
+    /// this rather than whole tables, as comparing every contact's at each
+    /// presence cost the square of their number at sign-in.
+    public let peerUpdates = PassthroughSubject<PeerUpdate, Never>()
     /// The call under way, or the one that just ended, until the next. Nil in
     /// sessions without media, and before the first call.
     public let callState = CurrentValueSubject<CallState?, Never>(nil)
@@ -1905,8 +1904,14 @@ public final class XMPPSession: @unchecked Sendable {
 
     // MARK: Presence and avatars
 
+    /// A contact's availability, which is offline for one we have no presence of.
     public func presence(of jid: JID) -> ContactPresence {
-        presences.value[jid] ?? .offline
+        lock.withLock { Self.best(of: $0.resources[jid])?.availability } ?? .offline
+    }
+
+    /// The status message of a contact's most available resource, if they've set one.
+    public func status(of jid: JID) -> String? {
+        lock.withLock { Self.best(of: $0.resources[jid])?.status }
     }
 
     /// One connected resource of a contact.
@@ -1939,11 +1944,11 @@ public final class XMPPSession: @unchecked Sendable {
         if isFull, (try? database.seesPresence(of: jid)) != true { return }
         let subscribed = isFull ? (try? database.presenceSubscriptions()) ?? [] : []
         presencesPublishLock.lock()
-        let wasOnline = presences.value[jid] != nil
-        // What changed, if anything: the sender's best resource, and the
-        // stranger who made way for them.
-        let change = lock.withLock { state -> (best: ResourcePresence?, evicted: JID?)? in
+        // What changed, if anything: the sender's best resource before and
+        // after, and the stranger who made way for them.
+        let change = lock.withLock { state -> (before: ResourcePresence?, best: ResourcePresence?, evicted: JID?)? in
             var evicted: JID?
+            let before = Self.best(of: state.resources[jid])
             var resources = state.resources[jid] ?? [:]
             switch presence.type {
             case .unavailable, .error:
@@ -1976,26 +1981,19 @@ public final class XMPPSession: @unchecked Sendable {
             state.resources[jid] = resources.isEmpty ? nil : resources
             // Only this sender's summary changes; recounting everyone's made
             // a flood of resources cost the square of its size.
-            return (Self.best(of: resources), evicted)
+            return (before, Self.best(of: resources), evicted)
         }
         guard let change else {
             presencesPublishLock.unlock()
             return
         }
-        // Only the touched entries can differ, so the tables are copied only
-        // when one does.
-        let touched = [jid] + (change.evicted.map { [$0] } ?? [])
-        let availability = { (key: JID) in key == jid ? change.best?.availability : nil }
-        let status = { (key: JID) in key == jid ? change.best?.status : nil }
-        if touched.contains(where: { presences.value[$0] != availability($0) }) {
-            var combined = presences.value
-            for key in touched { combined[key] = availability(key) }
-            presences.send(combined)
+        // Repeats of what's already known, which a flood of presences is
+        // mostly, publish nothing.
+        if change.before?.availability != change.best?.availability || change.before?.status != change.best?.status {
+            peerUpdates.send(PeerUpdate(jid: jid, presence: change.best?.availability, status: change.best?.status))
         }
-        if touched.contains(where: { statuses.value[$0] != status($0) }) {
-            var combinedStatuses = statuses.value
-            for key in touched { combinedStatuses[key] = status(key) }
-            statuses.send(combinedStatuses)
+        if let evicted = change.evicted {
+            peerUpdates.send(PeerUpdate(jid: evicted, presence: nil, status: nil))
         }
         presencesPublishLock.unlock()
         // Coalesced: a presence for each contact arrives at sign-in, and each
@@ -2004,7 +2002,7 @@ public final class XMPPSession: @unchecked Sendable {
 
         if change.best != nil {
             lock.withLock { $0.lastSeenSchedule.sawArriving(jid) }
-        } else if wasOnline, presence.type == .unavailable {
+        } else if change.before != nil, presence.type == .unavailable {
             contactWentOffline(jid)
         }
 
@@ -2019,8 +2017,8 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// A contact's availability and status are those of their most available
     /// resource.
-    private static func best(of resources: [String: ResourcePresence]) -> ResourcePresence? {
-        resources.values.max(by: { ($0.availability, $0.order) < ($1.availability, $1.order) })
+    private static func best(of resources: [String: ResourcePresence]?) -> ResourcePresence? {
+        resources?.values.max(by: { ($0.availability, $0.order) < ($1.availability, $1.order) })
     }
 
     /// The sender we're not subscribed to who was heard from longest ago.
@@ -2038,13 +2036,26 @@ public final class XMPPSession: @unchecked Sendable {
         defer { presencesPublishLock.unlock() }
         // Who came and went while we were away is unknown, so what we saw of
         // departures no longer rules out asking.
-        lock.withLock {
-            $0.resources = [:]
-            $0.lastSeenSchedule.forgetDepartures()
+        let gone = lock.withLock { state -> [JID] in
+            let gone = Array(state.resources.keys)
+            state.resources = [:]
+            state.lastSeenSchedule.forgetDepartures()
+            return gone
         }
-        if !presences.value.isEmpty { presences.send([:]) }
-        if !statuses.value.isEmpty { statuses.send([:]) }
+        for jid in gone { peerUpdates.send(PeerUpdate(jid: jid, presence: nil, status: nil)) }
         updateCallablePeers()
+    }
+
+    /// A contact's availability as a fixture's server would send it, kept
+    /// where the session reads it as well as published, so both agree.
+    public func receivePresenceForFixture(_ jid: JID, _ availability: ContactPresence) {
+        presencesPublishLock.lock()
+        defer { presencesPublishLock.unlock() }
+        lock.withLock { state in
+            state.presenceCounter += 1
+            state.resources[jid] = ["fixture": ResourcePresence(availability: availability, status: nil, order: state.presenceCounter)]
+        }
+        peerUpdates.send(PeerUpdate(jid: jid, presence: availability, status: nil))
     }
 
     func pepAvatarChanged(_ jid: JID, info: [PEPUserAvatarModule.Info]) {
@@ -3161,5 +3172,19 @@ final class Debouncer: @unchecked Sendable {
             guard lock.withLock({ generation == mine }) else { return }
             work()
         }
+    }
+}
+
+/// A contact's availability and status as they changed. A nil presence means
+/// the session has none for them.
+public struct PeerUpdate: Sendable {
+    public let jid: JID
+    public let presence: ContactPresence?
+    public let status: String?
+
+    public init(jid: JID, presence: ContactPresence?, status: String?) {
+        self.jid = jid
+        self.presence = presence
+        self.status = status
     }
 }

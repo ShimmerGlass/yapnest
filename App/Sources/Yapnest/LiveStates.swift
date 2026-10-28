@@ -33,9 +33,9 @@ final class RoomState {
 final class LiveStates {
     private var peers: [JID: PeerState] = [:]
     private var rooms: [JID: RoomState] = [:]
-    /// What was last applied, to find what a new whole table changes.
-    private var presences: [JID: ContactPresence] = [:]
-    private var statuses: [JID: String] = [:]
+
+    /// How many contacts have a box, for the tests.
+    var peerCount: Int { peers.count }
 
     func peer(_ jid: JID) -> PeerState {
         if let box = peers[jid] { return box }
@@ -58,21 +58,17 @@ final class LiveStates {
         if box.isTyping != typing { box.isTyping = typing }
     }
 
-    /// Applies a whole table of availabilities, touching only the boxes it
-    /// changes. Returns the table it replaces.
+    /// Applies one contact's availability and status, touching only what
+    /// differs. Returns the availability it replaces.
     @discardableResult
-    func apply(presences new: [JID: ContactPresence]) -> [JID: ContactPresence] {
-        let before = presences
-        for (jid, presence) in new where before[jid] != presence { peer(jid).presence = presence }
-        for jid in before.keys where new[jid] == nil { peers[jid]?.presence = nil }
-        presences = new
+    func apply(peer jid: JID, presence: ContactPresence?, status: String?) -> ContactPresence? {
+        // A peer nobody has asked about needs no box until someone does.
+        guard presence != nil || status != nil || peers[jid] != nil else { return nil }
+        let box = peer(jid)
+        let before = box.presence
+        if box.presence != presence { box.presence = presence }
+        if box.status != status { box.status = status }
         return before
-    }
-
-    func apply(statuses new: [JID: String]) {
-        for (jid, status) in new where statuses[jid] != status { peer(jid).status = status }
-        for jid in statuses.keys where new[jid] == nil { peers[jid]?.status = nil }
-        statuses = new
     }
 
     func apply(room jid: JID, status: RoomStatus?) {
@@ -87,9 +83,10 @@ final class LiveStates {
 
     /// Empties every box, as the account they belonged to is gone.
     func reset() {
-        apply(presences: [:])
-        apply(statuses: [:])
+        for (jid, box) in peers {
+            apply(peer: jid, presence: nil, status: nil)
+            if box.isTyping { box.isTyping = false }
+        }
         for jid in rooms.keys { apply(room: jid, status: nil) }
-        for box in peers.values where box.isTyping { box.isTyping = false }
     }
 }

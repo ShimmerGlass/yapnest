@@ -47,26 +47,52 @@ struct LiveStatesTests {
         #expect(live.peer(ben).isTyping)
     }
 
-    @Test func aPresenceTableOnlyChangesTheBoxesItChanges() {
+    @Test func onePresenceOnlyChangesItsOwnBox() {
         let live = LiveStates()
-        live.apply(presences: [anna: .online, ben: .online])
+        live.apply(peer: anna, presence: .online, status: nil)
+        live.apply(peer: ben, presence: .online, status: nil)
         let annaBox = live.peer(anna)
 
-        #expect(!invalidates(reading: { _ = annaBox.presence }, by: { live.apply(presences: [anna: .online, ben: .away]) }))
-        #expect(invalidates(reading: { _ = annaBox.presence }, by: { live.apply(presences: [anna: .offline, ben: .away]) }))
+        #expect(!invalidates(reading: { _ = annaBox.presence }, by: { live.apply(peer: ben, presence: .away, status: nil) }))
+        #expect(!invalidates(reading: { _ = annaBox.presence }, by: { live.apply(peer: anna, presence: .online, status: nil) }))
+        #expect(invalidates(reading: { _ = annaBox.presence }, by: { live.apply(peer: anna, presence: .offline, status: nil) }))
         #expect(live.peer(ben).presence == .away)
-        #expect(invalidates(reading: { _ = annaBox.presence }, by: { live.apply(presences: [ben: .away]) }))
+    }
+
+    @Test func applyingAPresenceReturnsTheOneItReplaces() {
+        let live = LiveStates()
+
+        #expect(live.apply(peer: anna, presence: .online, status: nil) == nil)
+        #expect(live.apply(peer: anna, presence: .away, status: nil) == .online)
+    }
+
+    @Test func aPeerWithNothingLeftEmptiesItsBox() {
+        let live = LiveStates()
+        live.apply(peer: anna, presence: .online, status: "busy")
+        let annaBox = live.peer(anna)
+
+        #expect(invalidates(reading: { _ = annaBox.presence }, by: { live.apply(peer: anna, presence: nil, status: nil) }))
+
         #expect(annaBox.presence == nil)
+        #expect(annaBox.status == nil)
+    }
+
+    @Test func anEmptyUpdateForAPeerNobodyAskedAboutMakesNoBox() {
+        let live = LiveStates()
+        _ = live.peer(ben)
+        live.apply(peer: anna, presence: nil, status: nil)
+
+        #expect(live.peerCount == 1)
     }
 
     @Test func aStatusIsKeptApartFromAvailability() {
         let live = LiveStates()
-        live.apply(presences: [anna: .online])
+        live.apply(peer: anna, presence: .online, status: nil)
         let annaBox = live.peer(anna)
 
-        #expect(!invalidates(reading: { _ = annaBox.presence }, by: { live.apply(statuses: [anna: "out for lunch"]) }))
+        #expect(!invalidates(reading: { _ = annaBox.presence }, by: { live.apply(peer: anna, presence: .online, status: "out for lunch") }))
         #expect(annaBox.status == "out for lunch")
-        #expect(!invalidates(reading: { _ = annaBox.status }, by: { live.apply(presences: [anna: .away]) }))
+        #expect(!invalidates(reading: { _ = annaBox.status }, by: { live.apply(peer: anna, presence: .away, status: "out for lunch") }))
     }
 
     @Test func oneRoomChangingLeavesTheOthersViewsAlone() {
@@ -107,8 +133,7 @@ struct LiveStatesTests {
 
     @Test func resettingEmptiesTheBoxesViewsHold() {
         let live = LiveStates()
-        live.apply(presences: [anna: .online])
-        live.apply(statuses: [anna: "busy"])
+        live.apply(peer: anna, presence: .online, status: "busy")
         live.apply(room: cake, status: room())
         live.setTyping(anna, true)
         let annaBox = live.peer(anna), cakeBox = live.room(cake)
@@ -130,7 +155,7 @@ struct LiveStatesTests {
         withObservationTracking({ _ = annaBox.isTyping; _ = annaBox.presence }) { flag.raise() }
 
         session.events.send(.chatState(ben, .composing))
-        session.presences.send([ben: .away])
+        session.peerUpdates.send(PeerUpdate(jid: ben, presence: .away, status: nil))
         await eventually("ben's state arrives") { benBox.isTyping && benBox.presence == .away }
 
         #expect(!flag.isRaised)
