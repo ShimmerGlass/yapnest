@@ -152,6 +152,57 @@ struct ConversationRegressionTests {
         #expect(bar.mentionSuggestions.isEmpty)
     }
 
+    private func barSuggesting(_ nicks: [String]) -> ConversationInputBar {
+        let bar = ConversationInputBar()
+        bar.onMentionQuery = { [weak bar] query in
+            bar?.setSuggestions(query.map { typed in nicks.filter { $0.hasPrefix(typed) } } ?? [])
+        }
+        return bar
+    }
+
+    @Test func returnPutsInTheHighlightedNicknameInsteadOfSending() {
+        let bar = barSuggesting(["anna", "alex"])
+        var sent: [String] = []
+        bar.onSend = { sent.append($0) }
+        bar.setText("hi @a")
+        bar.handleSuggestionKey(.next)
+
+        bar.returnPressed()
+        #expect(bar.text == "hi @alex ")
+        #expect(sent.isEmpty)
+
+        bar.returnPressed()
+        #expect(sent == ["hi @alex "])
+    }
+
+    @Test func escapeLeavesReturnToSendPastTheNicknames() {
+        let bar = barSuggesting(["anna"])
+        var sent: [String] = []
+        bar.onSend = { sent.append($0) }
+        bar.setText("@a")
+        #expect(bar.mentionSuggestions == ["anna"])
+
+        bar.handleSuggestionKey(.dismiss)
+        #expect(bar.mentionSuggestions.isEmpty)
+        bar.returnPressed()
+        #expect(sent == ["@a"])
+
+        // Back once the word changes.
+        bar.setText("@an")
+        #expect(bar.mentionSuggestions == ["anna"])
+    }
+
+    @Test func tabAndPreviousPickAmongTheNicknames() {
+        let bar = barSuggesting(["anna", "alex", "aziz"])
+        bar.setText("@a")
+
+        // Back from the first wraps round to the last.
+        bar.handleSuggestionKey(.previous)
+        bar.handleSuggestionKey(.accept)
+
+        #expect(bar.text == "@aziz ")
+    }
+
     // MARK: Drafts
 
     @Test func typedTextSurvivesTheChatBeingTornDownAndComesBackOnReopen() async throws {

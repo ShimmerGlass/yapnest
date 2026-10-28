@@ -98,8 +98,8 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     /// needs nothing from the session.
     private var emojiMatches: [EmojiShortcodes.Match] = []
     private var emojiTrigger: EmojiShortcodes.Trigger?
-    /// The highlighted emoji, for the keyboard.
-    private var selectedEmoji = 0
+    /// The highlighted suggestion, emoji or nickname, for the keyboard.
+    private var selectedSuggestion = 0
     /// What the buttons in the suggestions row stand for.
     private var shownSuggestions: [String] = []
     /// The text and selection the queries were last worked out for. One
@@ -107,6 +107,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     private var lastQueried: (text: String, selection: NSRange)?
     /// Escape hides the suggestions until the word being typed changes.
     private var dismissedEmoji: EmojiShortcodes.Trigger?
+    private var dismissedMention: MentionWord?
     private var lastTextLength = 0
 
     var text: String { textView.text }
@@ -135,10 +136,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     // MARK: Building
 
     private func build() {
-        textView.onReturn = { [weak self] in
-            guard let self, !acceptSelectedEmoji() else { return }
-            send()
-        }
+        textView.onReturn = { [weak self] in self?.returnPressed() }
         textView.onPasteAttachments = { [weak self] providers in
             guard self?.voice?.isRecording != true else { return }
             self?.onAttachments?(providers)
@@ -152,7 +150,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         textView.textDropDelegate = self
         textView.addInteraction(UIDropInteraction(delegate: self))
         addInteraction(UIDropInteraction(delegate: self))
-        textView.capturesSuggestionKeys = { [weak self] in self?.emojiMatches.isEmpty == false }
+        textView.capturesSuggestionKeys = { [weak self] in self?.shownSuggestions.isEmpty == false }
         textView.onSuggestionKey = { [weak self] key in self?.handleSuggestionKey(key) }
 
         let content: UIView
@@ -375,6 +373,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         // The same buttons stay, with whatever the user has highlighted.
         if shown != shownSuggestions {
             shownSuggestions = shown
+            selectedSuggestion = 0
             rebuildSuggestionButtons()
         }
         let isEmpty = shown.isEmpty
@@ -415,7 +414,6 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
                 button.accessibilityLabel = ":\(match.shortcode):"
                 suggestions.addArrangedSubview(button)
             }
-            highlightEmoji()
         } else {
             for nick in mentionNicks {
                 let button = makeSuggestionButton { [weak self] in self?.insertMention(nick) }
@@ -426,6 +424,8 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
                 suggestions.addArrangedSubview(button)
             }
         }
+        // Only colours: the row is put at its start once it's laid out.
+        highlightSuggestion(scrolling: false)
     }
 
     private func makeSuggestionButton(_ action: @escaping () -> Void) -> UIButton {
@@ -437,16 +437,16 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         return button
     }
 
-    private func highlightEmoji() {
+    private func highlightSuggestion(scrolling: Bool = true) {
         for (index, view) in suggestions.arrangedSubviews.enumerated() {
             guard let button = view as? UIButton else { continue }
-            button.configuration?.background.backgroundColor = index == selectedEmoji
+            button.configuration?.background.backgroundColor = index == selectedSuggestion
                 ? UIColor.tintColor.withAlphaComponent(0.3)
                 : UIColor.tertiarySystemFill
         }
-        if suggestions.arrangedSubviews.indices.contains(selectedEmoji) {
+        if scrolling, suggestions.arrangedSubviews.indices.contains(selectedSuggestion) {
             suggestionsRow.layoutIfNeeded()
-            suggestionsRow.scrollRectToVisible(suggestions.arrangedSubviews[selectedEmoji].frame.insetBy(dx: -6, dy: 0), animated: true)
+            suggestionsRow.scrollRectToVisible(suggestions.arrangedSubviews[selectedSuggestion].frame.insetBy(dx: -6, dy: 0), animated: true)
         }
     }
 
@@ -484,22 +484,33 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         // Whichever word is nearest the cursor wins.
         if let found = trigger, let mention = mentionRange, mention.range.location > found.range.location { trigger = nil }
         let matches = trigger.map { EmojiShortcodes.shared.matches(for: $0.query, recents: emojiOrder) } ?? []
-        // Not a new query while the same one is still being typed.
-        if matches != emojiMatches { selectedEmoji = 0 }
         emojiTrigger = matches.isEmpty ? nil : trigger
         emojiMatches = matches
     }
 
-    private func insertEmoji(_ match: EmojiShortcodes.Match) {
-        guard let range = emojiTrigger?.range else { return }
+    @discardableResult
+    private func insertEmoji(_ match: EmojiShortcodes.Match) -> Bool {
+        guard let range = emojiTrigger?.range else { return false }
         recordRecent(match.emoji)
         replace(range, with: match.emoji)
+        return true
     }
 
-    private func acceptSelectedEmoji() -> Bool {
-        guard emojiMatches.indices.contains(selectedEmoji) else { return false }
-        insertEmoji(emojiMatches[selectedEmoji])
-        return true
+    /// Puts in the highlighted emoji, or else the highlighted nickname.
+    private func acceptSelectedSuggestion() -> Bool {
+        guard shownSuggestions.indices.contains(selectedSuggestion) else { return false }
+        // A row left over from a word the cursor has left inserts nothing,
+        // and Return then sends.
+        return emojiMatches.isEmpty
+            ? insertMention(mentionNicks[selectedSuggestion])
+            : insertEmoji(emojiMatches[selectedSuggestion])
+    }
+
+    /// A hardware Return picks the highlighted suggestion if there is one, as
+    /// Tab does, and sends otherwise.
+    func returnPressed() {
+        guard !acceptSelectedSuggestion() else { return }
+        send()
     }
 
     /// Typing the closing colon of a known code swaps it for the emoji.
@@ -510,17 +521,21 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         return true
     }
 
-    private func handleSuggestionKey(_ key: ComposerTextView.SuggestionKey) {
+    func handleSuggestionKey(_ key: ComposerTextView.SuggestionKey) {
         switch key {
         case .previous, .next:
-            let count = emojiMatches.count
+            let count = shownSuggestions.count
             guard count > 0 else { return }
-            selectedEmoji = (selectedEmoji + (key == .next ? 1 : count - 1)) % count
-            highlightEmoji()
+            selectedSuggestion = (selectedSuggestion + (key == .next ? 1 : count - 1)) % count
+            highlightSuggestion()
         case .accept:
-            _ = acceptSelectedEmoji()
+            _ = acceptSelectedSuggestion()
         case .dismiss:
-            dismissedEmoji = emojiTrigger
+            if emojiTrigger != nil {
+                dismissedEmoji = emojiTrigger
+            } else {
+                dismissedMention = mentionRange
+            }
             notifyQueries(force: true)
         }
     }
@@ -536,8 +551,13 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         textViewDidChange(textView)
     }
 
+    private struct MentionWord: Equatable {
+        let range: NSRange
+        let query: String
+    }
+
     /// The "@" word the cursor is in, if any.
-    private var mentionRange: (range: NSRange, query: String)? {
+    private var mentionRange: MentionWord? {
         let text = textView.text as NSString
         let cursor = textView.selectedRange
         guard cursor.length == 0, cursor.location <= text.length else { return nil }
@@ -553,16 +573,18 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         // Only at the start of a word.
         if at > 0, !isWhitespace(text.character(at: at - 1)) { return nil }
         let query = text.substring(with: NSRange(location: at + 1, length: cursor.location - at - 1))
-        return (NSRange(location: at, length: cursor.location - at), query)
+        return MentionWord(range: NSRange(location: at, length: cursor.location - at), query: query)
     }
 
     private func isWhitespace(_ unit: unichar) -> Bool {
         CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(unit) ?? "x")
     }
 
-    private func insertMention(_ nick: String) {
-        guard let (range, _) = mentionRange else { return }
-        replace(range, with: "@\(nick) ")
+    @discardableResult
+    private func insertMention(_ nick: String) -> Bool {
+        guard let mention = mentionRange else { return false }
+        replace(mention.range, with: "@\(nick) ")
+        return true
     }
 
     func textViewDidChangeSelection(_ textView: UITextView) {
@@ -577,7 +599,10 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         lastQueried = (textView.text, selection)
         updateEmojiSuggestions()
         if emojiMatches.isEmpty {
-            onMentionQuery?(mentionRange?.query)
+            var mention = mentionRange
+            if mention != dismissedMention { dismissedMention = nil }
+            if mention != nil, mention == dismissedMention { mention = nil }
+            onMentionQuery?(mention?.query)
         } else {
             onMentionQuery?(nil)
             mentionNicks = []
@@ -968,8 +993,8 @@ final class ComposerTextView: UITextView {
     /// Where Paste reads from; a test swaps it.
     var pasteboard = UIPasteboard.general
     var onSuggestionKey: ((SuggestionKey) -> Void)?
-    /// True while there are emoji to pick, when the arrow, Tab and Escape
-    /// keys belong to them rather than to the text.
+    /// True while there are emoji or nicknames to pick, when the arrow, Tab,
+    /// Return and Escape keys belong to them rather than to the text.
     var capturesSuggestionKeys: () -> Bool = { false }
     /// Called when the width or the font size actually changes, so the bar can
     /// re-measure. The bar's own layout runs before this view is given its
@@ -1010,7 +1035,7 @@ final class ComposerTextView: UITextView {
                 commands.append(UIKeyCommand(input: "\r", modifierFlags: flags, action: #selector(insertNewLine)))
             }
         } else if capturing {
-            // A hardware Return picks the emoji instead of starting a line.
+            // A hardware Return picks the suggestion instead of starting a line.
             commands.append(UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(sendFromKeyboard)))
         }
         if returnSends, !capturing, onEditLast != nil, text.isEmpty, markedTextRange == nil {
