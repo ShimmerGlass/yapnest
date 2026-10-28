@@ -58,4 +58,19 @@ struct LocationSnapshotCacheTests {
         #expect(disk.image(for: key, scale: 2) == nil)
         #expect(!FileManager.default.fileExists(atPath: disk.directory.path))
     }
+
+    /// A picture read from disk, or drawn, as its account signs out must not go back into memory.
+    @Test func aPictureLoadedAcrossASignOutIsNotKept() async throws {
+        let disk = cache()
+        let key = LocationSnapshotCache.key(place, dark: false, scale: 2)
+        disk.store(picture(), for: key, generation: disk.generation.withLock { $0 })
+        LocationSnapshotCache.removeAll()
+        let load = Task { await LocationSnapshotCache.load(place, dark: false, scale: 2, key: key, disk: disk) }
+        // The load runs to its wait for the disk read, which can't resume while this holds the main actor.
+        await Task.yield()
+        disk.removeAll()
+        LocationSnapshotCache.removeAll()
+        #expect(await load.value == nil)
+        #expect(LocationSnapshotCache.cached(key) == nil)
+    }
 }

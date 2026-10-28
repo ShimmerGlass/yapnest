@@ -156,24 +156,27 @@ enum LocationSnapshotCache {
         cache.object(forKey: key as NSString)
     }
 
-    static func load(_ location: GeoLocation, dark: Bool, scale: CGFloat, key: String) async -> UIImage? {
+    static func load(_ location: GeoLocation, dark: Bool, scale: CGFloat, key: String, disk: SnapshotDiskCache = .standard) async -> UIImage? {
         if let image = cached(key) { return image }
-        let disk = SnapshotDiskCache.standard
         let generation = disk.generation.withLock { $0 }
+        // The cache was emptied for a sign-out while this waited: what it holds is the old account's.
+        func current() -> Bool { disk.generation.withLock { $0 } == generation }
         if let image = await Task.detached(priority: .utility, operation: {
             // Decoded here, as drawing it for the first time would do it on the main thread.
             disk.image(for: key, scale: scale).map { $0.preparingForDisplay() ?? $0 }
         }).value {
+            guard current() else { return nil }
             cache.setObject(image, forKey: key as NSString, cost: Self.bytes(of: image))
             return image
         }
+        guard current() else { return nil }
         let options = MKMapSnapshotter.Options()
         let coordinate = CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
         options.region = MKCoordinateRegion(center: coordinate, latitudinalMeters: span / 1.6, longitudinalMeters: span)
         options.size = size
         options.traitCollection = UITraitCollection(traitsFrom: [UITraitCollection(userInterfaceStyle: dark ? .dark : .light), UITraitCollection(displayScale: scale)])
         let image = await snapshotWithPin(options: options, at: coordinate)
-        guard let image else { return nil }
+        guard let image, current() else { return nil }
         cache.setObject(image, forKey: key as NSString, cost: Self.bytes(of: image))
         Task.detached(priority: .utility) { disk.store(image, for: key, generation: generation) }
         return image
