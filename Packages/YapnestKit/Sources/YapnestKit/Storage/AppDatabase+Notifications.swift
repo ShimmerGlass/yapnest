@@ -214,20 +214,35 @@ extension AppDatabase {
     /// once, when the message is stored or our nickname changes, and kept in
     /// `Message.addressesMe`, so that counting what notifies never reads a body.
     static func isMention(_ db: Database, _ message: Message, nickname: String, word: NSRegularExpression? = nil) throws -> Bool {
-        if message.mentionsMe { return true }
+        try addressesUs(
+            db, conversationId: message.conversationId, body: message.body, mentionsMe: message.mentionsMe,
+            replyToId: message.replyToId, nickname: nickname, word: word,
+        )
+    }
+
+    /// `isMention` from the few columns it reads and in plain SQL, so that
+    /// the migration that first stored the decision can use it: it must not
+    /// depend on `Message`, whose columns later migrations change.
+    static func addressesUs(
+        _ db: Database, conversationId: Int64, body: String, mentionsMe: Bool, replyToId: String?,
+        nickname: String, word: NSRegularExpression? = nil,
+    ) throws -> Bool {
+        if mentionsMe { return true }
         // An empty nickname has no text to look for. Most group messages
         // don't contain the nickname at all, so only those that do pay for
         // a regex.
-        if !nickname.isEmpty, message.body.range(of: nickname, options: .caseInsensitive) != nil {
+        if !nickname.isEmpty, body.range(of: nickname, options: .caseInsensitive) != nil {
             if let regex = word ?? nicknameRegex(nickname),
-               regex.firstMatch(in: message.body, range: NSRange(message.body.startIndex..., in: message.body)) != nil {
+               regex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil {
                 return true
             }
         }
-        guard let replyId = message.replyToId else { return false }
+        guard let replyToId else { return false }
         // Rooms reference messages by their stanza-id; some clients by ours.
-        return try referenceRequest(conversationId: message.conversationId, id: replyId, direction: .outgoing)
-            .isEmpty(db) == false
+        return try Bool.fetchOne(db, sql: """
+            SELECT EXISTS (SELECT 1 FROM message WHERE conversationId = ? AND direction = ?
+                AND (remoteId = ? OR originId = ? OR serverId = ?))
+            """, arguments: [conversationId, Message.Direction.outgoing.rawValue, replyToId, replyToId, replyToId]) ?? false
     }
 
     /// Sets `addressesMe` on a message about to be stored or changed. Only a
@@ -245,21 +260,31 @@ extension AppDatabase {
     /// no longer count for anything, so they keep the decision they had.
     static func refreshAddressesMe(_ db: Database, conversationId: Int64, nickname: String) throws {
         let word = nicknameRegex(nickname)
-        var unread = Message.filter(Column("conversationId") == conversationId && Column("isRead") == false)
+        var arguments: StatementArguments = [conversationId]
+        var narrowing = ""
         // A busy room can have thousands of unread messages and most mention
-        // nobody. SQL clears those that can't match and `isMention` decides
+        // nobody. SQL clears those that can't match and `addressesUs` decides
         // the rest. SQLite lowercases ASCII only, so a nickname beyond that,
-        // which `isMention` matches by Unicode case, narrows nothing.
+        // which `addressesUs` matches by Unicode case, narrows nothing.
         if !nickname.isEmpty, nickname.allSatisfy(\.isASCII) {
-            let mightMention = Column("mentionsMe") == true || Column("replyToId") != nil
-                || SQL("instr(lower(body), lower(\(nickname))) > 0").sqlExpression
-            try unread.filter(!mightMention && Column("addressesMe") == true).updateAll(db, Column("addressesMe").set(to: false))
-            unread = unread.filter(mightMention)
+            let mightMention = "(mentionsMe = 1 OR replyToId IS NOT NULL OR instr(lower(body), lower(?)) > 0)"
+            try db.execute(
+                sql: "UPDATE message SET addressesMe = 0 WHERE conversationId = ? AND isRead = 0 AND addressesMe = 1 AND NOT \(mightMention)",
+                arguments: [conversationId, nickname])
+            narrowing = " AND \(mightMention)"
+            arguments += [nickname]
         }
-        for message in try unread.fetchAll(db) {
-            let mention = try isMention(db, message, nickname: nickname, word: word)
-            if mention != message.addressesMe {
-                try Message.filter(key: message.id).updateAll(db, Column("addressesMe").set(to: mention))
+        let unread = try Row.fetchAll(db, sql: """
+            SELECT id, body, mentionsMe, replyToId, addressesMe FROM message
+            WHERE conversationId = ? AND isRead = 0\(narrowing)
+            """, arguments: arguments)
+        for row in unread {
+            let mention = try addressesUs(
+                db, conversationId: conversationId, body: row["body"], mentionsMe: row["mentionsMe"], replyToId: row["replyToId"],
+                nickname: nickname, word: word,
+            )
+            if mention != (row["addressesMe"] as Bool) {
+                try db.execute(sql: "UPDATE message SET addressesMe = ? WHERE id = ?", arguments: [mention, row["id"] as Int64])
             }
         }
     }

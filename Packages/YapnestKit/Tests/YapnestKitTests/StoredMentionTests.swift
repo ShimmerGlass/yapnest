@@ -137,4 +137,39 @@ struct StoredMentionTests {
         let flags = try queue.read { try Bool.fetchAll($0, sql: "SELECT addressesMe FROM message ORDER BY id") }
         #expect(flags == [true, false])
     }
+
+    /// The migration reads and writes the columns it needs and nothing of `Message`, so a column a later
+    /// migration adds to it can't stop an old database from opening. Here `encryption`, which `Message`
+    /// decodes and the migration has no use for, is gone from the table: decoding a `Message` fails.
+    @Test func theMigrationNeedsNothingOfMessageButTheColumnsItUses() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v46-signed-prekey-date")
+        try queue.write { db in
+            try db.execute(sql: "INSERT INTO conversation (id, peer, kind, lastActivityAt) VALUES (1, 'cake@rooms.example.org', 'groupchat', 0)")
+            try db.execute(sql: "INSERT INTO groupChat (conversationId, jid, nickname) VALUES (1, 'cake@rooms.example.org', 'me')")
+            let rows: [(String, String, String, String?, Bool)] = [
+                ("word", "hey me, look", "incoming", nil, false),
+                ("inside", "something about home", "incoming", nil, false),
+                ("reply", "agreed", "incoming", "ours", false),
+                ("stranger", "agreed", "incoming", "theirs", false),
+                ("flag", "nothing", "incoming", nil, true),
+                ("mine", "my own", "outgoing", nil, false),
+            ]
+            for (id, body, direction, replyTo, mentions) in rows {
+                try db.execute(sql: """
+                    INSERT INTO message (conversationId, direction, sender, body, timestamp, status, isRead, encryption, remoteId, serverId, replyToId, mentionsMe)
+                    VALUES (1, ?, 'alice@example.org', ?, 0, 'received', ?, 'none', ?, ?, ?, ?)
+                    """, arguments: [direction, body, direction == "outgoing", id, id == "mine" ? "ours" : nil, replyTo, mentions])
+            }
+            try db.execute(sql: "ALTER TABLE message DROP COLUMN encryption")
+            #expect(throws: (any Error).self) { try Message.fetchAll(db) }
+        }
+        // The altered table would make the migrator, which erases a database whose schema changed, start over.
+        var migrator = AppDatabase.migrator
+        migrator.eraseDatabaseOnSchemaChange = false
+        try migrator.migrate(queue, upTo: "v47-addresses-me")
+        let flags = try queue.read { try Row.fetchAll($0, sql: "SELECT remoteId, addressesMe FROM message ORDER BY id") }
+        #expect(flags.map { $0["remoteId"] as String } == ["word", "inside", "reply", "stranger", "flag", "mine"])
+        #expect(flags.map { $0["addressesMe"] as Bool } == [true, false, true, false, true, false])
+    }
 }
