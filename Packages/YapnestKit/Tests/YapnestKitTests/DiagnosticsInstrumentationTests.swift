@@ -89,6 +89,7 @@ struct DiagnosticsInstrumentationTests {
             DiagLog.info(.receive, "Download finished", .id("file", transfer), .int("status", 200), .size("bytes", 987_654), .duration("took", 0.9))
             DiagLog.error(.send, "Stanza over the server's limit", .size("bytes", 70_000), .int("limit", 65_536))
             DiagLog.error(.upload, "Upload failed", .id("msg", transfer), .error(NSError(domain: NSURLErrorDomain, code: -1009, userInfo: [NSLocalizedDescriptionKey: "Could not reach https://upload.secret-domain.example/alice@secret-domain.example"])))
+            DiagLog.error(.upload, "Upload failed", .id("msg", transfer), .error(ServerError(condition: "internal-server-error")))
         }
         let body = try #require(text.range(of: "Exported:").map { text[$0.upperBound...].drop { $0 != "\n" }.dropFirst() })
         let lines = body.split(separator: "\n")
@@ -98,8 +99,11 @@ struct DiagnosticsInstrumentationTests {
             "[A-Za-z0-9-]+\\.[A-Za-z]{2,}",
             "T[0-9:]{8}\\.[0-9]",
         ]
-        for line in lines.map({ $0.replacingOccurrences(of: "Martin.XMPPError", with: "Martin_XMPPError") }) {
-            // The error domain of a server's error is a type name that looks like a host.
+        // The error domain of a server's error is a Swift type name, `Martin.XMPPError` or
+        // `YapnestKit.ServerError`, which looks like a host and names none. The log is the process's, so
+        // a line another test writes while this one has the store can be one, such as a failed upload.
+        let domains = try Regex("error=(Martin|YapnestKit)\\.[A-Za-z]+/")
+        for line in lines.map({ $0.replacing(domains, with: "error=type/") }) {
             for pattern in patterns {
                 #expect(line.range(of: pattern, options: .regularExpression) == nil, "\(pattern) in \(line)")
             }
