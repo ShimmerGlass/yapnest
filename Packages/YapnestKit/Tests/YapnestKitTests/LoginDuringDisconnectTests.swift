@@ -6,11 +6,8 @@ import Testing
 
 /// A connector that is driven by the test, and finds its way to it through its context.
 private final class DrivenConnector: Connector {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var made: [ObjectIdentifier: [DrivenConnector]] = [:]
-    static func connectors(of context: Context) -> [DrivenConnector] {
-        lock.withLock { made[ObjectIdentifier(context)] ?? [] }
-    }
+    private static let registry = ConnectorRegistry<DrivenConnector>()
+    static func connectors(of context: Context) -> [DrivenConnector] { registry.connectors(of: context) }
 
     static var supportedProtocols: [ConnectorProtocol] { [] }
     @Published var state: ConnectorState = .disconnected()
@@ -22,7 +19,7 @@ private final class DrivenConnector: Connector {
     var currentEndpoint: ConnectorEndpoint?
 
     required init(context: Context) {
-        Self.lock.withLock { Self.made[ObjectIdentifier(context), default: []].append(self) }
+        Self.registry.add(self, of: context)
     }
     func activate(feature: ConnectorFeature) {}
     func start(endpoint: ConnectorEndpoint?) {}

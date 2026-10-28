@@ -10,11 +10,8 @@ private struct Location: ConnectorEndpoint {
 
 /// A connector the test drives, which accepts any resumption location the server names.
 private final class ScriptedConnector: Connector {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var made: [ObjectIdentifier: [ScriptedConnector]] = [:]
-    static func connectors(of context: Context) -> [ScriptedConnector] {
-        lock.withLock { made[ObjectIdentifier(context)] ?? [] }
-    }
+    private static let registry = ConnectorRegistry<ScriptedConnector>()
+    static func connectors(of context: Context) -> [ScriptedConnector] { registry.connectors(of: context) }
 
     static var supportedProtocols: [ConnectorProtocol] { [] }
     @Published var state: ConnectorState = .disconnected()
@@ -26,7 +23,7 @@ private final class ScriptedConnector: Connector {
     var currentEndpoint: ConnectorEndpoint?
 
     required init(context: Context) {
-        Self.lock.withLock { Self.made[ObjectIdentifier(context), default: []].append(self) }
+        Self.registry.add(self, of: context)
     }
     func activate(feature: ConnectorFeature) {}
     func start(endpoint: ConnectorEndpoint?) {}

@@ -7,11 +7,8 @@ import Testing
 /// A connector that records where it was told to connect, and finds its way
 /// to the test through its context.
 private final class RecordingConnector: Connector {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var made: [ObjectIdentifier: [RecordingConnector]] = [:]
-    static func connectors(of context: Context) -> [RecordingConnector] {
-        lock.withLock { made[ObjectIdentifier(context)] ?? [] }
-    }
+    private static let registry = ConnectorRegistry<RecordingConnector>()
+    static func connectors(of context: Context) -> [RecordingConnector] { registry.connectors(of: context) }
 
     static var supportedProtocols: [ConnectorProtocol] { [] }
     @Published var state: ConnectorState = .disconnected()
@@ -26,7 +23,7 @@ private final class RecordingConnector: Connector {
     var starts: [String?] { startsLock.withLock { _starts } }
 
     required init(context: Context) {
-        Self.lock.withLock { Self.made[ObjectIdentifier(context), default: []].append(self) }
+        Self.registry.add(self, of: context)
     }
     func activate(feature: ConnectorFeature) {}
     func start(endpoint: ConnectorEndpoint?) {
