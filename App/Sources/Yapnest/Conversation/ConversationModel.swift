@@ -1830,7 +1830,18 @@ final class ConversationModel {
                 scrollToBottom(animated: false, reason: "settled.room")
             } else {
                 roomChangedWhileInteracting = false
-                followsBottom = isAtBottomEdge && !isBounded
+                if followsBottom, !isAtBottomEdge, !isBounded {
+                    // A flick that coasted to the newest end let the window
+                    // end go, and the rows it brought were followed down in an
+                    // animated scroll started mid-coast. The two animations
+                    // can end together short of the end, and the list would
+                    // rest there with the newest message under the composer's
+                    // room. Nothing has touched the list since, as that would
+                    // have cleared the follow.
+                    scrollToBottom(animated: false, reason: "settled.short")
+                } else {
+                    followsBottom = isAtBottomEdge && !isBounded
+                }
             }
         } else if followsBottom, !isAtBottomEdge {
             // An animated scroll aims at where the lazy stack guessed the
