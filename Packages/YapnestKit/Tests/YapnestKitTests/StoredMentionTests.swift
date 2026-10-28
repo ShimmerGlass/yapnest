@@ -172,4 +172,26 @@ struct StoredMentionTests {
         #expect(flags.map { $0["remoteId"] as String } == ["word", "inside", "reply", "stranger", "flag", "mine"])
         #expect(flags.map { $0["addressesMe"] as Bool } == [true, false, true, false, true, false])
     }
+
+    @Test func aReplyStoredBeforeTheMessageItAnswersStillAddressesUs() throws {
+        let id = try db.joinGroupChat(room, nickname: "me").conversationId
+        try db.updateGroupChat(room) { $0.notify = .onMention }
+        try incoming("agreed", in: id, "reply", replyTo: "ours")
+        try incoming("agreed with the archived one", in: id, "reply2", replyTo: "ours-stanza")
+        #expect(try !stored("reply") && !stored("reply2"))
+        #expect(try notifying() == 0)
+
+        try db.insert(Message(conversationId: id, direction: .outgoing, sender: alice, body: "mine", isRead: true, remoteId: "ours", serverId: "ours-stanza"))
+        #expect(try stored("reply") && stored("reply2"))
+        #expect(try notifying() == 2)
+    }
+
+    @Test func aReplyStoredBeforeTheServerIdOfOurMessageIsKnownAddressesUs() throws {
+        let id = try db.joinGroupChat(room, nickname: "me").conversationId
+        try db.insert(Message(conversationId: id, direction: .outgoing, sender: alice, body: "mine", isRead: true, remoteId: "ours"))
+        try incoming("agreed", in: id, "reply", replyTo: "ours-stanza")
+        #expect(try !stored("reply"))
+        try db.insert(Message(conversationId: id, direction: .outgoing, sender: alice, body: "mine", isRead: true, remoteId: "ours", serverId: "ours-stanza"))
+        #expect(try stored("reply"))
+    }
 }

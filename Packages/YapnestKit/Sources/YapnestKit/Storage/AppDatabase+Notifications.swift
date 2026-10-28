@@ -289,6 +289,21 @@ extension AppDatabase {
         }
     }
 
+    /// A reply can be stored before the message of ours it answers: archive
+    /// pages come newest first, and our copy from another device comes when
+    /// it comes. Once that message is here, unread replies naming it in a
+    /// room we have a nickname in address us.
+    static func refreshReplies(_ db: Database, toOutgoing message: Message) throws {
+        guard message.direction == .outgoing else { return }
+        let ids = [message.remoteId, message.originId, message.serverId].compactMap { $0 }
+        guard !ids.isEmpty,
+              try GroupChat.filter(Column("conversationId") == message.conversationId).isEmpty(db) == false else { return }
+        let marks = Array(repeating: "?", count: ids.count).joined(separator: ", ")
+        try db.execute(
+            sql: "UPDATE message SET addressesMe = 1 WHERE conversationId = ? AND isRead = 0 AND addressesMe = 0 AND direction != ? AND replyToId IN (\(marks))",
+            arguments: StatementArguments([message.conversationId]) + StatementArguments([Message.Direction.outgoing.rawValue]) + StatementArguments(ids))
+    }
+
     private static func nicknameRegex(_ nickname: String) -> NSRegularExpression? {
         let name = NSRegularExpression.escapedPattern(for: nickname)
         return try? NSRegularExpression(pattern: "(?<![\\p{L}\\p{N}_])\(name)(?![\\p{L}\\p{N}_])", options: .caseInsensitive)

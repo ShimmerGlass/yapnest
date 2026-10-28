@@ -53,6 +53,7 @@ extension AppDatabase {
         }
         try refreshAddressesMe(db, &message)
         try message.insert(db)
+        try refreshReplies(db, toOutgoing: message)
         // Older history leaves a chat where it is in the list, so it only
         // moves one that has no place yet: one restored from the archive.
         // Its newest message is when it last had news, and it mustn't sort
@@ -86,6 +87,7 @@ extension AppDatabase {
             existing.status = .sent
         }
         try existing.update(db)
+        try refreshReplies(db, toOutgoing: existing)
         return existing
     }
 
