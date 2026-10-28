@@ -24,10 +24,12 @@ struct CallMartinTests {
     @Test func aProposeWeHaveNoDescriptionForIsNotRejectedByTheModule() throws {
         let h = try CallSessionHarness()
         let jingle = try #require(h.session.client.modulesManager.moduleOrNil(JingleModule.IDENTIFIER))
-        let before = h.wire.written.count
         let message: Martin.Message = parseStanza("<message from='alice@example.org/phone' to='me@example.org' type='chat' id='p'><propose xmlns='urn:xmpp:jingle-message:0' id='s9'><description xmlns='urn:example:other' media='audio'/></propose></message>")
         try jingle.process(stanza: message)
-        #expect(h.wire.written.count == before)
+        // The connection writes stanzas of its own meanwhile (the roster, features), so what is checked is
+        // that nothing was said about this call: no message with its id, no Jingle request.
+        #expect(h.sentSignals.filter { $0.sid == "s9" }.isEmpty)
+        #expect(h.wire.written.compactMap { $0 as? Iq }.allSatisfy { $0.firstChild(name: "jingle", xmlns: "urn:xmpp:jingle:1") == nil })
     }
 
     // MARK: SDP
