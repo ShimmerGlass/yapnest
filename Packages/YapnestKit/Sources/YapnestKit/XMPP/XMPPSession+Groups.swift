@@ -1478,6 +1478,8 @@ extension XMPPSession {
                 }
             } else {
                 // Without the sender's address there's no session to use.
+                let archived = if case .archive = source { true } else { false }
+                DiagLog.notice(.omemo, "Couldn't decrypt", .value("error", DecryptFailure.noSender), .bool("archived", archived), .bool("nonAnonymous", context.isNonAnonymous))
                 encryption = .omemoUndecryptable
             }
             if encryption == .omemoUndecryptable, stanza.body?.isEmpty ?? true { stanza.body = "🔒" }

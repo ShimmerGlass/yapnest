@@ -82,7 +82,10 @@ final class OMEMOEncryption: @unchecked Sendable {
         // Signal checks trust only when it builds a session, so a device with
         // a session would go on being read. Not decoding also leaves the
         // ratchet alone and starts no session repair.
-        if status?.trust == .compromised { return .failed("sent from a device marked compromised") }
+        if status?.trust == .compromised {
+            logFailure(.compromised, stanza, device: device, isHistory: isHistory)
+            return .failed("sent from a device marked compromised")
+        }
         switch module.decode(message: stanza, from: sender.martin, serverMsgId: isHistory ? nil : "") {
         case .successMessage:
             guard let device else { return .decrypted(device: nil, trust: nil) }
@@ -100,8 +103,22 @@ final class OMEMOEncryption: @unchecked Sendable {
             // before this one existed, were never encrypted for us; there's
             // nothing to recover.
             if ownCopy { return .ownCopy }
+            logFailure(DecryptFailure(error), stanza, device: device, isHistory: isHistory)
             return .failed("\(error)")
         }
+    }
+
+    /// Martin's own reason only reaches the private system log, which the
+    /// diagnostics export can't carry. A message with no key for this device
+    /// was never readable here; a prekey message points at our published keys.
+    private func logFailure(_ failure: DecryptFailure, _ stanza: Martin.Message, device: Int32?, isHistory: Bool) {
+        let ours = String(deviceId)
+        let key = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
+            .filterChildren(name: "key", xmlns: nil).first { $0.getAttribute("rid") == ours }
+        let prekey = key.map { ["true", "1"].contains($0.getAttribute("prekey")) } ?? false
+        var fields: [DiagField] = [.value("error", failure), .bool("keyForUs", key != nil), .bool("preKey", prekey), .bool("history", isHistory)]
+        if let device { fields.append(.id("device", Redacted.id(String(device)))) }
+        DiagLog.notice(.omemo, "Couldn't decrypt", fields: fields)
     }
 
     // MARK: Outbound

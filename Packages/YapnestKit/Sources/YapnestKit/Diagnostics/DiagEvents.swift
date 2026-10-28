@@ -1,5 +1,6 @@
 import Foundation
 import Martin
+import MartinOMEMO
 
 extension DiagEnum where Self: RawRepresentable, RawValue == String {
     public var description: String { rawValue }
@@ -46,6 +47,27 @@ enum EncryptFailure: String, DiagEnum {
         case .noTrustedDevices: self = .noTrustedDevices
         case .setupFailed: self = .setupFailed
         case .fetchFailed: self = .fetchFailed
+        }
+    }
+}
+
+/// Why OMEMO couldn't decrypt a message, from libsignal's code.
+enum DecryptFailure: String, DiagEnum {
+    case compromised, noSender, noSession, invalidMac, invalidKeyId, invalidKey, invalidMessage, untrustedIdentity, signature, staleKeyExchange, legacyMessage, version, other
+
+    init(_ error: SignalError) {
+        switch error {
+        case .noSession: self = .noSession
+        case .invalidMac: self = .invalidMac
+        case .invalidKeyId: self = .invalidKeyId
+        case .invalidKey: self = .invalidKey
+        case .invalidMessage, .invalidProtoBuf: self = .invalidMessage
+        case .unstrustedIdentity: self = .untrustedIdentity
+        case .signatureVerificationFailed: self = .signature
+        case .staleKeyExchange: self = .staleKeyExchange
+        case .legacyMessage: self = .legacyMessage
+        case .invalidVersion: self = .version
+        default: self = .other
         }
     }
 }

@@ -1,5 +1,5 @@
 import Foundation
-import Martin
+@preconcurrency import Martin
 import Testing
 @testable import YapnestKit
 
@@ -178,6 +178,42 @@ extension DiagnosticsInstrumentationTests {
         #expect(mine.contains("sinceAnswered="))
         #expect(text.contains("Call relays ready"))
         for secret in [sid, "alice", "example.org", "10.0.0.2", "198.51.100.7", "203.0.113.9", "FakeU", "anothersecret"] {
+            #expect(!text.contains(secret), "\(secret)")
+        }
+    }
+
+    /// The reason only reached the private system log, so an export showed a
+    /// 🔒 with nothing to say why.
+    @Test func aMessageThatWontDecryptSaysWhyButNotFromWhom() throws {
+        let database = try AppDatabase.inMemory()
+        let omemo = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        // The module decodes only once it's registered with a client.
+        let client = XMPPClient()
+        client.connectionConfiguration.userJid = BareJID(me.description)
+        client.writer = FakeWire()
+        _ = client.modulesManager.register(DiscoveryModule(identity: .init(category: "client", type: "pc", name: "Test")))
+        _ = client.modulesManager.register(PubSubModule())
+        _ = client.modulesManager.register(omemo.module)
+        defer { withExtendedLifetime(client) {} }
+        func stanza(for rid: UInt32, prekey: Bool) -> Martin.Message {
+            let header = Element(name: "header", attributes: ["sid": "4242"])
+            let key = Element(name: "key", attributes: prekey ? ["rid": String(rid), "prekey": "true"] : ["rid": String(rid)])
+            key.value = "AAAA"
+            header.addChild(key)
+            let payload = Element(name: "payload")
+            payload.value = "AAAA"
+            let message = Martin.Message()
+            message.addChild(Element(name: "encrypted", xmlns: NS.omemoLegacy, children: [header, payload]))
+            return message
+        }
+        let text = try withStore { _ in
+            _ = omemo.decrypt(stanza(for: omemo.deviceId, prekey: true), from: alice, ownCopy: false)
+            _ = omemo.decrypt(stanza(for: omemo.deviceId &+ 1, prekey: false), from: alice, ownCopy: false)
+        }
+        // Version 0, from the zero bytes.
+        #expect(text.contains("Couldn't decrypt error=legacyMessage keyForUs=true preKey=true history=false device="))
+        #expect(text.contains("Couldn't decrypt error=invalidMessage keyForUs=false preKey=false history=false device="))
+        for secret in ["alice", "secret-domain", "4242"] {
             #expect(!text.contains(secret), "\(secret)")
         }
     }
