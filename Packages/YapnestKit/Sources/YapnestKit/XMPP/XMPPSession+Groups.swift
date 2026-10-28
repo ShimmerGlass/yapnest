@@ -396,6 +396,7 @@ extension XMPPSession {
 
     func clearRooms() {
         cancelAllRejoins()
+        rosterReset()
         publish(rooms, under: roomsPublishLock, after: { gone in
             for room in gone { roomUpdates.send(RoomUpdate(room: room, status: nil)) }
         }) { state -> (result: [JID], snapshot: [JID: RoomStatus]?) in
@@ -434,6 +435,7 @@ extension XMPPSession {
             started = true
         }
         guard started else { return }
+        rosterJoinStarted(room)
         cancelRejoin(room)
         guard discover else {
             sendJoin(room, nickname: nickname, hasArchive: false)
@@ -540,6 +542,9 @@ extension XMPPSession {
                     if let participantsMayChangeSubject { $0?.participantsMayChangeSubject = participantsMayChangeSubject }
                 }
                 self.roomAvatarAnnounced(room, form: info.form)
+                if let before, before.isNonAnonymous != features.contains("muc_nonanonymous") {
+                    self.rosterKeysChanged(room, isJoined: self.roomStatus(room)?.isJoined == true)
+                }
                 self.roomInfoChanged(room, from: before)
                 done?(.info(hasArchive: features.contains("urn:xmpp:mam:2")))
             case .failure(let error):
@@ -635,6 +640,9 @@ extension XMPPSession {
                     if isSelf { status?.nickname = newNick }
                 }
             }
+            if !isSelf {
+                rosterDeparted(room, nick: nick, jid: itemJID, statuses: statuses, newNick: newNick, ownNick: status.nickname, isJoined: status.phase == .joined)
+            }
             // Our own change of nickname is read at once by what follows it.
             if isSelf { updateRoom(room, leave) } else { updateOccupants(room, leave) }
             return
@@ -664,6 +672,7 @@ extension XMPPSession {
         // Someone else's arrival waits for the others'; ours ends the join, so it
         // comes after, and applies those first.
         guard isSelf else {
+            rosterArrived(room, nick: nick, jid: occupant.jid, ownNick: status.nickname, isJoined: status.phase == .joined)
             updateOccupants(room, arrive)
             return
         }
@@ -687,6 +696,7 @@ extension XMPPSession {
         }
         if status.phase != .joined, joinedNow?.isJoined == true {
             cancelRejoin(room, resettingBackoff: true)
+            rosterSelfJoined(room)
             didJoin(room)
         }
     }
@@ -742,8 +752,21 @@ extension XMPPSession {
         return ["remote-server-timeout", "remote-server-not-found", "internal-server-error", "resource-constraint"].contains(condition)
     }
 
+    /// Records that we're out of the group, whose people are counted afresh if we return.
+    func markLeft(_ room: JID) {
+        try? database.updateGroupChat(room) { $0.hasLeft = true }
+        rosterForget(room)
+    }
+
     /// The statuses that say an occupant was taken out of the room (XEP-0045 §8).
     static let removalStatuses: Set<Int> = [301, 307, 321, 322, 332, 333]
+
+    /// What takes another occupant out of the room for good or for now, so
+    /// that it counts at once. 332 and 333 are left out: they are temporary.
+    static let departureStatuses = removalStatuses.subtracting([332, 333])
+
+    /// Of those, what also takes their membership: a kick (307) leaves it.
+    static let membershipEndStatuses: Set<Int> = [301, 321, 322]
 
     /// Only a restart of the room's service (332) or a technical failure
     /// on the way to it (333) is temporary. A kick (307) is a moderator's
@@ -888,8 +911,11 @@ extension XMPPSession {
         if retryable { scheduleRejoin(room) }
         // Kicks and restarts end this visit; the rest end membership.
         if statuses.contains(301) || statuses.contains(321) || statuses.contains(322) {
-            try? database.updateGroupChat(room) { $0.hasLeft = true }
+            markLeft(room)
             retractBookmark(room)
+        } else {
+            // Those who leave while we are out are compared with on the rejoin.
+            rosterJoinStarted(room)
         }
     }
 
@@ -928,7 +954,7 @@ extension XMPPSession {
             $0?.canRetry = false
         }
         cancelRejoin(room, resettingBackoff: true)
-        try? database.updateGroupChat(room) { $0.hasLeft = true }
+        markLeft(room)
         retractBookmark(room)
     }
 
@@ -988,12 +1014,15 @@ extension XMPPSession {
     /// is warned that encrypted messages may miss members.
     func fetchMembers(_ room: JID, lists: [RoomAffiliation], then done: (@Sendable () -> Void)? = nil) {
         Task { [weak self] in
-            await self?.fetchMembersWarning(room, lists: lists)
+            let listed = await self?.fetchMembersWarning(room, lists: lists) ?? false
+            // After the lists, which `listReceived` has told the roster of.
+            if listed { self?.rosterListingDone(room) }
             done?()
         }
     }
 
-    private func fetchMembersWarning(_ room: JID, lists: [RoomAffiliation]) async {
+    /// Whether the member lists all came.
+    private func fetchMembersWarning(_ room: JID, lists: [RoomAffiliation]) async -> Bool {
         let attempt = lock.withLock { $0.attempt }
         let key = "room-members:\(room)"
         let members = lists.filter(Self.memberLists.contains)
@@ -1001,24 +1030,26 @@ extension XMPPSession {
         // and shows what goes wrong.
         let others = lists.filter { !Self.memberLists.contains($0) }
         if !others.isEmpty { try? await requestLists(others, of: room) }
-        guard !members.isEmpty else { return }
+        guard !members.isEmpty else { return false }
         do {
             try await requestLists(members, of: room)
             warnings.clear(key)
+            return true
         } catch {
             // A dropped connection is redone by the next session.
-            guard isConnected, lock.withLock({ $0.attempt }) == attempt else { return }
+            guard isConnected, lock.withLock({ $0.attempt }) == attempt else { return false }
             let reason = ServerError.classify(error)
             logger.warning("Couldn't list the members of \(room, privacy: .private): \(reason.condition, privacy: .private)")
             // A room that doesn't show its list to members forbids it: that is
             // the room's setting, and the occupants' addresses stand in.
-            guard reason.condition != "forbidden" else { return }
+            guard reason.condition != "forbidden" else { return false }
             warnings.post(
                 key, title: String(localized: "Encrypted messages may not reach all members"),
                 friendly: String(localized: "A group's members couldn't be listed, so encrypted messages may not reach all of them"), error: error,
             ) { [weak self] in
                 try await self?.requestLists(members, of: room)
             }
+            return false
         }
     }
 
@@ -1052,6 +1083,7 @@ extension XMPPSession {
             if affiliation == .outcast { status?.banned = [] }
             for jid in jids { status?.setAffiliation(affiliation, of: jid) }
         }
+        if affiliation.isMember { rosterListed(room, members: jids) }
     }
 
     // MARK: Room archive
@@ -1734,7 +1766,7 @@ extension XMPPSession {
             if bookmark?.autojoin == true { continue }
             if group.isBookmarked {
                 // Left on another device.
-                try? database.updateGroupChat(group.jid) { $0.hasLeft = true }
+                markLeft(group.jid)
             } else {
                 publishBookmark(group)
             }
@@ -2125,7 +2157,7 @@ extension XMPPSession {
         cancelRejoin(room, resettingBackoff: true)
         updateRoom(room) { $0 = nil }
         dropDeferred(in: room)
-        try? database.updateGroupChat(room) { $0.hasLeft = true }
+        markLeft(room)
         ShareSuggestions.remove([room])
         warnings.clear(room: room)
     }

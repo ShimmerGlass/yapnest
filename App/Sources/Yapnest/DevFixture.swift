@@ -48,6 +48,8 @@ enum DevFixture: String, CaseIterable {
     /// a plain member. The room's state is set
     /// by hand, as the session never connects; see `configure(_:)`.
     case moderation
+    /// A private group whose history has people joining and leaving in it.
+    case groupEvents = "group-events"
     /// Seeded chats of every kind of content, set with `fuzz:<seed>`; see `FuzzFixture`.
     case fuzz
     /// Photos not downloaded yet, announced with their shapes and previews; see `PreviewsFixture`.
@@ -96,6 +98,7 @@ enum DevFixture: String, CaseIterable {
         case .devices: try Self.fillDevices(database)
         case .lastSeen: try Self.fillLastSeen(database)
         case .moderation: try Self.fillModeration(database)
+        case .groupEvents: try Self.fillGroupEvents(database)
         case .fuzz: try FuzzFixture.requested?.fill(database)
         case .previews:
             try PreviewsFixture.fill(database)
@@ -209,6 +212,17 @@ enum DevFixture: String, CaseIterable {
                 ))
             }
         }
+    }
+
+    private static func fillGroupEvents(_ database: AppDatabase) throws {
+        let group = try database.joinGroupChat(memberRoom, nickname: "fixture", name: "Roster")
+        try database.updateGroupChat(memberRoom) { $0.isMembersOnly = true; $0.isNonAnonymous = true }
+        try database.setHistoryState(peer: memberRoom, isComplete: true, cursor: nil)
+        _ = try database.insert(Message(
+            conversationId: group.conversationId, direction: .incoming, sender: anna, nick: "anna", body: othersWords,
+            timestamp: Date().addingTimeInterval(-600), isRead: true, serverId: "roster-anna",
+        ))
+        try database.addRosterLinesForFixture(room: memberRoom, joined: [("ben", ben)], left: [("anna", anna)])
     }
 
     private static func fillDevices(_ database: AppDatabase) throws {

@@ -118,6 +118,7 @@ extension XMPPSession {
         updateRoom(room) { status in
             for (jid, affiliation) in changes { status?.setAffiliation(affiliation, of: jid) }
         }
+        for (jid, affiliation) in changes { rosterAffiliated(room, jid: jid, affiliation: affiliation) }
     }
 
     // MARK: Messages

@@ -1097,6 +1097,7 @@ final class ConversationModel {
     /// contacts' names or the link preview choices (`inputsEpoch`).
     private struct RowEnvironment: Sendable {
         var account: JID
+        var peer: JID
         var isGroup: Bool
         var contactNames: [JID: String]
         var linkPreviewSetting: LinkPreviewSetting
@@ -1111,7 +1112,7 @@ final class ConversationModel {
 
     private func rowEnvironment() -> RowEnvironment {
         RowEnvironment(
-            account: session.account, isGroup: isGroup, contactNames: contactNames,
+            account: session.account, peer: peer, isGroup: isGroup, contactNames: contactNames,
             linkPreviewSetting: linkPreviewSetting, linkPreviewsAllowed: linkPreviewsAllowed,
             showsEveryBodyWhole: showsEveryBodyWhole, attachments: session.attachments, previews: previews,
             now: now(), calendar: Calendar.current, locale: Locale.current,
@@ -1353,7 +1354,12 @@ final class ConversationModel {
 
         let time = message.timestamp.formatted(date: .omitted, time: .shortened)
         if let event = message.event {
-            let name = authorName(for: message.author, in: environment)
+            var name = authorName(for: message.author, in: environment)
+            // A nickname is anyone's to take, so the address that came with
+            // it stays on the line.
+            if event.isGroupPeople, environment.isGroup, message.sender != environment.peer, let nick = message.nick {
+                name = "\(nick) (\(message.sender))"
+            }
             let words = [event.words(of: name), time].joined(separator: ", ")
             let content = MessageRow.Content(
                 item: item, kind: .event(event, name: name), layout: layout, quoteAuthor: "", quoteText: "", time: time,

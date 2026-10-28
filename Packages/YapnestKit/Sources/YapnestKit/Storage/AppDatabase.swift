@@ -770,6 +770,29 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v49-group-roster") { db in
+            // Who we count as being in each group, so that someone the room
+            // adds or loses shows in the chat: see `AppDatabase.rosterArrived`.
+            try db.create(table: "groupRoster") { t in
+                t.column("conversationId", .integer).notNull().references("conversation", onDelete: .cascade)
+                t.column("key", .text).notNull()
+                t.column("nick", .text)
+                t.column("jid", .text)
+                t.column("isPresent", .boolean).notNull()
+                // Someone who left and may still be a member: not counted
+                // as in the group, but not new when listed again.
+                t.column("hasLeft", .boolean).notNull().defaults(to: false)
+                t.primaryKey(["conversationId", "key"])
+            }
+            // Present for the groups whose first join has been recorded.
+            // `listed` is whether the members listed after that join, which
+            // are counted without a word, have all come.
+            try db.create(table: "groupRosterTaken") { t in
+                t.primaryKey("conversationId", .integer).references("conversation", onDelete: .cascade)
+                t.column("listed", .boolean).notNull().defaults(to: false)
+            }
+        }
+
         return migrator
     }
 

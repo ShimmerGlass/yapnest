@@ -54,9 +54,7 @@ extension AppDatabase {
     }
 
     private static func newDeviceEvent(conversationId: Int64, peer: JID, deviceId: Int32, fingerprint: String, at date: Date) -> Message {
-        var event = Message(conversationId: conversationId, direction: .event, sender: peer, body: "", timestamp: date, status: .received, isRead: true)
-        event.event = .newDevice(deviceId: deviceId, fingerprint: fingerprint)
-        return event
+        Message.eventLine(conversationId: conversationId, sender: peer, event: .newDevice(deviceId: deviceId, fingerprint: fingerprint), at: date)
     }
 
     /// Our devices announced since their list was first seen, not yet dismissed, oldest first.

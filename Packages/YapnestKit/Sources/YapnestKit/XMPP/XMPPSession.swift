@@ -160,6 +160,12 @@ public final class XMPPSession: @unchecked Sendable {
     let occupantQueue = DispatchQueue(label: "Yapnest.occupants")
     /// How long occupants' presences are gathered before they are applied.
     var occupantWindow: TimeInterval = 0.05
+    /// Runs the count of who is in each group: see `XMPPSession+Roster.swift`.
+    let rosterQueue = DispatchQueue(label: "Yapnest.roster")
+    /// Touched only on `rosterQueue`.
+    let roster = RosterState()
+    /// How long someone who left a group may be away before the chat says so.
+    var rosterGrace: TimeInterval = 120
     let callableUpdatePending = OSAllocatedUnfairLock(initialState: false)
     /// The relays found for calls.
     let iceServerCache = IceServerCache()
