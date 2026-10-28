@@ -35,8 +35,19 @@ struct AdHocTests {
 
     private func form(_ xml: String) -> Element { Element.from(string: xml)! }
 
+    /// The requests written that `matches`. The session sends others of its own when it connects, a roster
+    /// or a feature lookup, at a time the test doesn't choose, so the last request written is not always
+    /// the one the test asked for.
+    private func requests(where matches: (Iq) -> Bool) -> [Iq] {
+        wire.written.compactMap { $0 as? Iq }.filter(matches)
+    }
+
+    private func sentCommands() -> [Iq] {
+        requests { $0.firstChild(name: "command", xmlns: NS.commands) != nil }
+    }
+
     private func sent(_ n: Int = -1) throws -> Element {
-        let iqs = wire.written.compactMap { $0 as? Iq }.filter { $0.firstChild(name: "command", xmlns: NS.commands) != nil }
+        let iqs = sentCommands()
         return try #require((n < 0 ? iqs.last : iqs[n])?.firstChild(name: "command", xmlns: NS.commands))
     }
 
@@ -59,11 +70,11 @@ struct AdHocTests {
             AdHocCommand(jid: "example.org", node: "ping", name: "Ping"),
             AdHocCommand(jid: "example.org", node: "bare", name: "bare"),
         ])
-        let request = try #require(wire.written.last as? Iq)
+        let listing = requests { $0.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#items")?.getAttribute("node") == NS.commands }
+        #expect(listing.count == 1)
+        let request = try #require(listing.last)
         #expect(request.type == .get)
         #expect(request.to?.stringValue == "example.org")
-        let query = try #require(request.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#items"))
-        #expect(query.getAttribute("node") == NS.commands)
     }
 
     @Test func aListFromAnotherEntityIsRejected() async throws {
@@ -86,8 +97,9 @@ struct AdHocTests {
             return reply
         }
         #expect(await session.offersCommands(at: "room@conference.example.org/bot"))
-        let request = try #require(wire.written.last as? Iq)
-        #expect(request.to?.stringValue == "room@conference.example.org/bot")
+        let probes = requests { $0.to?.stringValue == "room@conference.example.org/bot" }
+        #expect(probes.count == 1)
+        let request = try #require(probes.last)
         #expect(request.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#info")?.getAttribute("node") == nil)
     }
 
@@ -128,6 +140,8 @@ struct AdHocTests {
         session.connectForTesting(wire)
         let step = OSAllocatedCounter()
         wire.answer { [self] iq in
+            // Only the commands count: the session's own requests aren't steps of this one.
+            guard iq.firstChild(name: "command", xmlns: NS.commands) != nil else { return nil }
             switch step.next() {
             case 0:
                 return FakeWire.result(to: iq, commandElement(status: "executing", actions: actions("next", "complete", execute: "next"), form: form("""
@@ -145,7 +159,7 @@ struct AdHocTests {
         #expect(start.getAttribute("node") == "add-user")
         #expect(start.getAttribute("action") == "execute")
         #expect(start.getAttribute("sessionid") == nil)
-        #expect((wire.written.last as? Iq)?.type == .set)
+        #expect(sentCommands().first?.type == .set)
         #expect(first.sessionID == "s1")
         #expect(first.status == .executing)
         #expect(first.allowed == [.next, .complete])
