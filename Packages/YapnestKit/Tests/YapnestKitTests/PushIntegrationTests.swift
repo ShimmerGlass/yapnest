@@ -179,6 +179,64 @@ extension LiveServer {
             try await b.leaveGroup(room)
         }
 
+        @Test func extensionDecryptsEncryptedGroupThenAppResumes() async throws {
+            let a = try session(alice, device: "alice-push"), b = try session(bob, device: "bob-push")
+            try await connected(a, b)
+            defer { a.disconnect(); b.disconnect() }
+            a.addContact(bob)
+            b.addContact(alice)
+            try await waitUntil("each other in the roster") { try a.database.isInRoster(bob) && b.database.isInRoster(alice) }
+            let room = try await a.createGroup(name: "Night owls", inviting: [bob])
+            try await LiveServer.accept(invitationTo: room, on: b)
+            try await waitUntil("bob to join") { b.roomStatus(room)?.isJoined == true && b.roomStatus(room)?.isSyncing == false }
+            try await waitUntil("alice to see bob as a member") { a.groupRecipients(room) == [bob] }
+            try await waitUntil("bob to see alice as a member") { b.groupRecipients(room) == [alice] }
+            let group = try #require(try a.database.groupChat(room))
+            #expect(try a.database.conversation(id: group.conversationId)?.isEncrypted == true)
+
+            let tag = UUID().uuidString.prefix(6)
+            let hiA = "hi from alice \(tag)", hiB = "hi from bob \(tag)"
+            try a.send(hiA, to: room)
+            try await waitUntil("bob to decrypt alice") { try message(hiA, in: b).first?.encryption == .omemo }
+            try b.send(hiB, to: room)
+            try await waitUntil("alice to decrypt bob") { try message(hiB, in: a).first?.encryption == .omemo }
+            _ = try a.database.claimNotifications()
+
+            a.suspend()
+            try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
+            var bodies: [String] = []
+            for n in 1...2 {
+                let secret = "anyone up? #\(n) \(tag)"
+                bodies.append(secret)
+                let sent = try b.send(secret, to: room)
+                #expect(sent.encryption == .omemo)
+                try await waitUntil("the room to echo bob's message") { try message(secret, in: b).first?.serverId != nil }
+
+                let outcome = await fetcher(alice, device: "alice-push").fetch(timeout: 15)
+                guard case .notifications(let notifications, _, _) = outcome else {
+                    Issue.record("Fetch failed: \(outcome)")
+                    return
+                }
+                let notification = notifications.first { $0.peer == room && $0.body == secret }
+                #expect(notification != nil, "extension notification for \(n)")
+                let rows = try message(secret, in: a)
+                #expect(rows.count == 1 && rows.first?.encryption == .omemo, "stored after fetch \(n)")
+
+                a.connect()
+                try await waitUntil("alice to resume") { a.state.value == .connected(isSyncing: false) }
+                try await Task.sleep(for: .seconds(3))
+                let after = try message(secret, in: a)
+                #expect(after.count == 1 && after.first?.encryption == .omemo, "stored after resume \(n)")
+                if n == 1 {
+                    a.suspend()
+                    try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
+                }
+            }
+            let all = try await a.database.reader.read { try Message.filter(Column("body").like("anyone up?%\(tag)")).fetchAll($0) }
+            try await a.leaveGroup(room)
+            try await b.leaveGroup(room)
+        }
+
         /// Needs the relay on the local Prosody: `dev/relay.sh`.
         @Test(.enabled(if: ProcessInfo.processInfo.environment["YAPNEST_RELAY"] == "1"))
         func enablesPushThroughTheRelay() async throws {
