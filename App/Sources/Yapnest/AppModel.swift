@@ -461,6 +461,7 @@ final class AppModel {
         let task = Task {
             await environment.disablePush(session)
             teardown(session)
+            LocationSnapshotCache.removeAll()
             // The folder holds the database and every attachment.
             await offMain {
                 try? FileManager.default.removeItem(at: folder)

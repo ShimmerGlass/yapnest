@@ -1,5 +1,6 @@
 import CryptoKit
 import MapKit
+import os
 import SwiftUI
 import YapnestKit
 
@@ -83,17 +84,29 @@ struct SnapshotDiskCache: Sendable {
         return image
     }
 
-    func store(_ image: UIImage, for key: String) {
+    /// Bumped by `removeAll`. A snapshot drawn for an account that has
+    /// since signed out would be stored after the folder went, so a store
+    /// checks it was asked for in the same generation, under the same lock.
+    /// Copies of the cache share it.
+    let generation = OSAllocatedUnfairLock(initialState: 0)
+
+    func store(_ image: UIImage, for key: String, generation asked: Int) {
         guard let data = image.pngData() else { return }
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: url(for: key), options: .atomic)
+        generation.withLock { current in
+            guard current == asked else { return }
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? data.write(to: url(for: key), options: .atomic)
+        }
         trim()
     }
 
     /// Signing out deletes what the account left on the device, and a
     /// snapshot shows a place someone shared.
     func removeAll() {
-        try? FileManager.default.removeItem(at: directory)
+        generation.withLock { current in
+            current += 1
+            try? FileManager.default.removeItem(at: directory)
+        }
     }
 
     func trim() {
@@ -134,6 +147,11 @@ enum LocationSnapshotCache {
         image.cgImage.map { $0.bytesPerRow * $0.height } ?? Int(image.size.width * image.size.height * image.scale * image.scale * 4)
     }
 
+    /// What signing out leaves in memory goes with the files.
+    static func removeAll() {
+        cache.removeAllObjects()
+    }
+
     static func cached(_ key: String) -> UIImage? {
         cache.object(forKey: key as NSString)
     }
@@ -141,6 +159,7 @@ enum LocationSnapshotCache {
     static func load(_ location: GeoLocation, dark: Bool, scale: CGFloat, key: String) async -> UIImage? {
         if let image = cached(key) { return image }
         let disk = SnapshotDiskCache.standard
+        let generation = disk.generation.withLock { $0 }
         if let image = await Task.detached(priority: .utility, operation: {
             // Decoded here, as drawing it for the first time would do it on the main thread.
             disk.image(for: key, scale: scale).map { $0.preparingForDisplay() ?? $0 }
@@ -156,7 +175,7 @@ enum LocationSnapshotCache {
         let image = await snapshotWithPin(options: options, at: coordinate)
         guard let image else { return nil }
         cache.setObject(image, forKey: key as NSString, cost: Self.bytes(of: image))
-        Task.detached(priority: .utility) { disk.store(image, for: key) }
+        Task.detached(priority: .utility) { disk.store(image, for: key, generation: generation) }
         return image
     }
 

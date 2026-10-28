@@ -28,7 +28,7 @@ struct LocationSnapshotCacheTests {
         let disk = cache()
         let key = LocationSnapshotCache.key(place, dark: false, scale: 2)
         #expect(disk.image(for: key, scale: 2) == nil)
-        disk.store(picture(), for: key)
+        disk.store(picture(), for: key, generation: 0)
         let found = try #require(disk.image(for: key, scale: 2))
         #expect(found.scale == 2)
         #expect(disk.image(for: LocationSnapshotCache.key(place, dark: true, scale: 2), scale: 2) == nil)
@@ -38,7 +38,7 @@ struct LocationSnapshotCacheTests {
         let disk = cache(limit: 4, keep: 2)
         let keys = (0..<5).map { LocationSnapshotCache.key(GeoLocation(latitude: Double($0), longitude: 0), dark: false, scale: 2) }
         for (index, key) in keys.enumerated() {
-            disk.store(picture(), for: key)
+            disk.store(picture(), for: key, generation: 0)
             try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(1000 + index))], ofItemAtPath: disk.url(for: key).path)
         }
         let left = try FileManager.default.contentsOfDirectory(at: disk.directory, includingPropertiesForKeys: nil)
@@ -46,5 +46,16 @@ struct LocationSnapshotCacheTests {
         for key in keys[0..<3] { #expect(disk.image(for: key, scale: 2) == nil) }
         #expect(disk.image(for: keys[3], scale: 2) != nil)
         #expect(disk.image(for: keys[4], scale: 2) != nil)
+    }
+
+    /// A snapshot can finish drawing just as its account signs out.
+    @Test func aPictureDrawnBeforeTheCacheWasEmptiedIsNotStored() {
+        let disk = cache()
+        let key = LocationSnapshotCache.key(place, dark: false, scale: 2)
+        let asked = disk.generation.withLock { $0 }
+        disk.removeAll()
+        disk.store(picture(), for: key, generation: asked)
+        #expect(disk.image(for: key, scale: 2) == nil)
+        #expect(!FileManager.default.fileExists(atPath: disk.directory.path))
     }
 }
