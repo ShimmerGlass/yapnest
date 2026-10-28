@@ -69,6 +69,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         module = OMEMOModule(aesGCMEngine: CryptoKitAESGCM(), signalContext: context, signalStorage: storage)
         if rotatesSignedPreKey { module.signedPreKeyRotationDue = { [store] in store.signedPreKeyRotationDue() } }
         module.limitDevices = { [store] jid, ids in store.limited(ids, of: jid.stringValue) }
+        module.diagnostics = { OMEMOEvent.log($0) }
         module.defaultBody = "This message is encrypted with OMEMO, which your client doesn't support."
     }
 
@@ -122,9 +123,11 @@ final class OMEMOEncryption: @unchecked Sendable {
             logFailure(.compromised, stanza, device: device, isHistory: isHistory)
             return .failed("sent from a device marked compromised")
         }
+        let prekey = carriesPreKey(for: stanza)
         switch module.decode(message: stanza, from: sender.martin, serverMsgId: isHistory ? nil : "") {
         case .successMessage:
             guard let device else { return .decrypted(device: nil, trust: nil) }
+            DiagLog.debug(.omemo, "Decrypted", .id("device", Redacted.id(String(device))), .bool("ownAccount", sender == account), .bool("preKey", prekey), .bool("history", isHistory))
             if claim == .roomUnchecked, status == nil, !isLocalDevice(sender, device) {
                 _ = store.setStatus(.undecidedActive, forIdentity: SignalAddress(name: sender.description, deviceId: device))
                 return .decrypted(device: device, trust: .undecided)
@@ -141,8 +144,12 @@ final class OMEMOEncryption: @unchecked Sendable {
         case .failure(let error):
             // Copies of what this device sent, or what our other devices sent
             // before this one existed, were never encrypted for us; there's
-            // nothing to recover.
-            if ownCopy { return .ownCopy }
+            // nothing to recover. One with a key for us was meant to be read
+            // here, so its failure is logged like anyone's.
+            if ownCopy {
+                if !keysForUs(in: stanza).isEmpty { logFailure(DecryptFailure(error), stanza, device: device, isHistory: isHistory) }
+                return .ownCopy
+            }
             logFailure(DecryptFailure(error), stanza, device: device, isHistory: isHistory)
             return .failed("\(error)")
         }
@@ -270,6 +277,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         }
 
         var usable: [SignalAddress] = []
+        var skipped = 0
         var allVerified = true
         for recipient in recipients {
             let devices = Set(fetched.filter { $0.name == recipient.description })
@@ -291,10 +299,12 @@ final class OMEMOEncryption: @unchecked Sendable {
                 }
                 return .failure(hasSessions ? .noTrustedDevices(recipient) : .setupFailed(recipient))
             }
+            skipped += devices.count - trusted.count
             usable += trusted
             allVerified = allVerified && trusted.allSatisfy { identities[$0.deviceId]?.trust == .verified }
         }
         let own = store.ownDevicesToEncryptTo().map { SignalAddress(name: account.description, deviceId: $0) }
+        DiagLog.info(.omemo, "Encrypting", .int("recipients", recipients.count), .int("recipientDevices", usable.count), .int("ownDevices", own.count), .int("skipped", skipped))
         return encode(stanza, for: usable + own, verified: allVerified, checking: recipients)
     }
 

@@ -72,6 +72,63 @@ enum DecryptFailure: String, DiagEnum {
     }
 }
 
+extension OMEMOEvent.ListSource: DiagEnum {
+    public var description: String {
+        switch self {
+        case .fetch: "fetch"
+        case .notification: "notification"
+        }
+    }
+}
+
+extension OMEMOEvent.ListPublishReason: DiagEnum {
+    public var description: String {
+        switch self {
+        case .registration: "registration"
+        case .readdedSelf: "readdedSelf"
+        case .droppedWithoutBundles: "droppedWithoutBundles"
+        case .removalRequested: "removalRequested"
+        }
+    }
+}
+
+extension ServerError.ErrorType: DiagEnum {
+    public var description: String { rawValue }
+}
+
+extension OMEMOEvent {
+    /// Logs what the module read or published of our own keys. Device ids are
+    /// hashed, and nothing else that names a person is in an event.
+    static func log(_ event: OMEMOEvent) {
+        func failure(_ message: StaticString, _ condition: String, _ type: String?) {
+            let error = ServerError(condition: condition, type: type.flatMap(ServerError.ErrorType.init(rawValue:)))
+            DiagLog.error(.omemo, message, .error(error), .value("type", error.type))
+        }
+        switch event {
+        case let .ownListRead(count, includesThisDevice, source):
+            DiagLog.info(.omemo, "Own device list read", .int("devices", count), .bool("includesThisDevice", includesThisDevice), .value("source", source))
+        case let .ownListPublished(count, includesThisDevice, reason):
+            DiagLog.notice(.omemo, "Own device list published", .int("devices", count), .bool("includesThisDevice", includesThisDevice), .value("reason", reason))
+        case let .ownListPublishFailed(condition, type):
+            failure("Own device list publish failed", condition, type)
+        case let .ownDevicesDropped(count):
+            DiagLog.notice(.omemo, "Own devices without bundles dropped", .int("devices", count))
+        case let .ownDropDeferred(count):
+            DiagLog.info(.omemo, "Drop of own devices without bundles deferred", .int("devices", count))
+        case let .bundlePublished(signedPreKeyId, rotated, flushed, preKeys):
+            DiagLog.notice(.omemo, "Own bundle published", .int("signedPreKey", Int(signedPreKeyId)), .bool("rotated", rotated), .bool("flushed", flushed), .int("preKeys", preKeys))
+        case let .bundlePublishFailed(condition, type):
+            failure("Own bundle publish failed", condition, type)
+        case let .registrationEnded(resumed, pepAvailable, ready, seconds):
+            var fields: [DiagField] = [.bool("resumed", resumed), .bool("pep", pepAvailable), .bool("ready", ready)]
+            if let seconds { fields.append(.duration("after", seconds)) }
+            DiagLog.notice(.omemo, "OMEMO registration ended", fields: fields)
+        case let .sessionRepairStarted(deviceId, ownAccount):
+            DiagLog.notice(.omemo, "Session repair started", .id("device", Redacted.id(String(deviceId))), .bool("ownAccount", ownAccount))
+        }
+    }
+}
+
 enum UploadPhase: String, DiagEnum {
     case prepare, service, slot, put, store
 }

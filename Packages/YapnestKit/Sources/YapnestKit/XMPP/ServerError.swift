@@ -7,7 +7,7 @@ import Martin
 /// shown to the user.
 public struct ServerError: Error, Equatable, Sendable {
     /// RFC 6120 §8.3.2: what the sender should do about the error.
-    public enum ErrorType: String, Sendable {
+    public enum ErrorType: String, Sendable, CaseIterable {
         case cancel, `continue`, modify, auth, wait
     }
 

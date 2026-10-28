@@ -745,6 +745,21 @@ Each entry gives what went wrong for users, why, and what changed.
   `SignalContext` sends libsignal's log text to a private debug `Logger`
   instead of `print`.
 
+**Nothing about publishing our keys was logged** (`OMEMOModule.diagnostics`,
+`OMEMOEvent`)
+- *Symptom:* a device whose keys went missing from its account's device list
+  or bundle left an export with nothing to say what it had published or seen.
+- *Change:* the module reports `OMEMOEvent`s through an optional closure the
+  app sets, as Martin's connector does: our device list read (from a fetch or
+  a notification) or published (and why), the list publish or bundle publish
+  that failed (condition and type), own devices dropped for having no bundle
+  or deferred, our bundle published (signed prekey id, whether it was rotated
+  or flushed, prekey count), a session repair started (device, and whether
+  it's our account's) and how each connection's registration ended (resumed
+  or fresh, PEP, ready, how long, including a stream that went away first).
+  Only counts, flags and a device id, which the app hashes. Behaviour is
+  unchanged. Pinned by `DiagnosticsInstrumentationTests`.
+
 **Our keys were published twice at once on a new device**
 (`isPepAvailable`, `publishDeviceBundleIfNeeded`)
 - *Symptom:* the first message to a brand-new device often couldn't be

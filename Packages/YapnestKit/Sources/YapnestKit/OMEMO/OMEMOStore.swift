@@ -279,7 +279,10 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         return write { db in
             if let stored = try Data.fetchOne(db, sql: "SELECT key FROM omemoIdentity WHERE name = ? AND deviceId = ?", arguments: [address.name, address.deviceId]) {
                 // A device's identity never changes; isTrusted refuses a different one.
-                guard stored == key else { throw OMEMOError.identityChanged }
+                guard stored == key else {
+                    DiagLog.notice(.omemo, "Different key for a known device refused", .id("device", Redacted.id(String(address.deviceId))), .bool("ownAccount", address.name == account))
+                    throw OMEMOError.identityChanged
+                }
                 return
             }
             let seen = try Row.fetchOne(db, sql: """
