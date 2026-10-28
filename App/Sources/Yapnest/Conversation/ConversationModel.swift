@@ -322,6 +322,10 @@ final class ConversationModel {
     /// drawn as they were though their message changed. See `holdsRowsBelow`.
     @ObservationIgnored private var heldIDs: Set<Int64> = []
     @ObservationIgnored private var userMoved = false
+    /// Whether the follow in `followsBottom` was asked for after the finger
+    /// lifted, while the list coasted. One asked for under the finger is
+    /// the user's to override, by where they let go.
+    @ObservationIgnored private var followedAfterLift = false
     /// Whether the list followed the bottom when the current interaction started.
     @ObservationIgnored private var followedBeforeInteraction = false
     /// Whether the list's room (container height or top inset) changed during
@@ -1830,14 +1834,13 @@ final class ConversationModel {
                 scrollToBottom(animated: false, reason: "settled.room")
             } else {
                 roomChangedWhileInteracting = false
-                if followsBottom, !isAtBottomEdge, !isBounded {
+                if followsBottom, followedAfterLift, !isAtBottomEdge, !isBounded {
                     // A flick that coasted to the newest end let the window
                     // end go, and the rows it brought were followed down in an
                     // animated scroll started mid-coast. The two animations
                     // can end together short of the end, and the list would
                     // rest there with the newest message under the composer's
-                    // room. Nothing has touched the list since, as that would
-                    // have cleared the follow.
+                    // room.
                     scrollToBottom(animated: false, reason: "settled.short")
                 } else {
                     followsBottom = isAtBottomEdge && !isBounded
@@ -1856,6 +1859,7 @@ final class ConversationModel {
 
     func userStartedScrolling() {
         followedBeforeInteraction = followsBottom
+        followedAfterLift = false
         nudges = 0
         roomChangedWhileInteracting = false
         userMoved = true
@@ -1870,6 +1874,7 @@ final class ConversationModel {
         guard let last = order.last else { return }
         FrameLog.event("scrollToBottom animated=\(animated) reason=\(reason)")
         followsBottom = !isBounded
+        followedAfterLift = followsBottom && scrollPhase != .interacting
         if animated {
             withAnimation { scrollToNewestRow(last, byID: byID) }
         } else {
@@ -1883,6 +1888,7 @@ final class ConversationModel {
         guard let last = order.last else { return }
         FrameLog.event("scrollToBottom withRows reason=rowsChanged.follow")
         followsBottom = !isBounded
+        followedAfterLift = followsBottom && scrollPhase != .interacting
         scrollToNewestRow(last)
     }
 
