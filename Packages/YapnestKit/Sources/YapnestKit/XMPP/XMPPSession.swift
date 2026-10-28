@@ -195,7 +195,6 @@ public final class XMPPSession: @unchecked Sendable {
     }
     private var cancellables = Set<AnyCancellable>()
     private var pathMonitor: NWPathMonitor?
-    lazy var pathGate = PathUpdateGate { [weak self] changed in self?.pathBecameSatisfied(changed: changed) }
 
     /// Holds a Combine subscription in `Mutable`, which must be Sendable.
     final class SubscriptionBox: @unchecked Sendable {
@@ -975,6 +974,8 @@ public final class XMPPSession: @unchecked Sendable {
     private func monitorNetwork() {
         guard policy.verifiesLiveness else { return }
         let monitor = NWPathMonitor()
+        // Made before the monitor starts: its updates arrive on a concurrent queue.
+        let pathGate = PathUpdateGate { [weak self] changed in self?.pathBecameSatisfied(changed: changed) }
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
             // The first update only reports the starting path, and the gate
