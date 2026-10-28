@@ -76,7 +76,10 @@ private final class Harness {
     let sm: StreamManagementModule
     let recorder = MessageRecorder()
     let blocker = QueueBlocker()
-    var states: [XMPPClient.State] = []
+    /// Appended on the session logic's queue and read by the test, so under a lock.
+    private let statesLock = NSLock()
+    private var _states: [XMPPClient.State] = []
+    var states: [XMPPClient.State] { statesLock.withLock { _states } }
     private var subscription: AnyCancellable?
 
     init() throws {
@@ -85,7 +88,7 @@ private final class Harness {
         // The stub connector has no TLS for PLAIN to be sent over.
         client.connectionConfiguration.disableTLS = true
         client.writer = writer
-        let features = client.modulesManager.register(StreamFeaturesModule())
+        _ = client.modulesManager.register(StreamFeaturesModule())
         _ = client.modulesManager.register(AuthModule())
         _ = client.modulesManager.register(Sasl2Module())
         _ = client.modulesManager.register(ResourceBinderModule())
@@ -96,7 +99,7 @@ private final class Harness {
         connector = FeedConnector(context: client)
         logic = SocketSessionLogic(connector: connector, responseManager: ResponseManager(), context: client, seeOtherHost: nil)
         logic.bind()
-        subscription = logic.$state.sink { [weak self] in self?.states.append($0) }
+        subscription = logic.$state.sink { [weak self] state in self?.statesLock.withLock { self?._states.append(state) } }
 
         // Stream management from an earlier connection: three stanzas
         // went out, and the server will say it handled the first.
@@ -116,8 +119,13 @@ private final class Harness {
         ])
         let featuresElement = Element(name: "features", xmlns: "http://etherx.jabber.org/streams")
         featuresElement.addChild(authentication)
-        features.setStreamFeatures(featuresElement)
-        client.module(.auth).login()
+        // As the stream delivers them, on the session logic's queue, which then signs in by itself.
+        // Setting them and calling `login()` from here instead raced the logic's own reaction to
+        // them: when it saw the sign-in already under way it set the session up at once, and sent a
+        // `<resume>` before the server had answered.
+        connector.events.send(.stanza(Stanza.from(element: featuresElement)))
+        let deadline = Date().addingTimeInterval(3)
+        while client.module(.auth).state != .inProgress, Date() < deadline { Thread.sleep(forTimeInterval: 0.001) }
     }
 
     func receive(_ element: Element) {
@@ -190,6 +198,8 @@ struct Sasl2SessionTests {
     /// follow it carry on from there once.
     @Test func bindingConnectsOnceWithFeatures() async throws {
         let h = try Harness()
+        // Signing in is the only thing sent before the server answers.
+        #expect(h.writer.written.map(\.name) == ["authenticate"])
         h.receive(element("success", "urn:xmpp:sasl:2", [:], [
             Element(name: "authorization-identifier", cdata: "alice@localhost/phone"),
             element("bound", "urn:xmpp:bind:0", [:], [
@@ -202,6 +212,7 @@ struct Sasl2SessionTests {
         #expect(h.states.contains(.connected(resumed: false)))
         #expect(h.connectedCount == 1)
         #expect(h.client.context.boundJid == JID("alice@localhost/phone"))
+        #expect(!h.writer.written.contains { $0.name == "resume" })
     }
 
     /// A server sends the features right after `<success>`, and what comes
