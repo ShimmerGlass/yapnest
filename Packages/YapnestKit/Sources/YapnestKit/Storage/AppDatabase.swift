@@ -755,6 +755,21 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v48-held-group-messages") { db in
+            try db.create(table: "heldGroupMessage") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("messageId", .integer).notNull().unique().references("message", onDelete: .cascade)
+                t.column("sender", .text).notNull()
+                t.column("deviceId", .integer).notNull()
+                t.column("stanza", .text).notNull()
+                t.column("source", .text).notNull()
+                t.column("serverId", .text)
+                t.column("archivedAt", .datetime)
+                t.column("isHistory", .boolean).notNull()
+                t.column("heldAt", .datetime).notNull()
+            }
+        }
+
         return migrator
     }
 

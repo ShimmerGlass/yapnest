@@ -16,6 +16,22 @@ final class OMEMOEncryption: @unchecked Sendable {
         /// decrypt: nothing to show, but we wrote it.
         case ownCopy
         case failed(String)
+        /// A group message from a device we've never seen, left undecoded
+        /// until the sender's own server says the device is theirs.
+        case unvouched(device: Int32)
+    }
+
+    /// Who says the stanza is from `sender`.
+    enum SenderClaim {
+        /// The stanza's own address, which their server stands behind.
+        case stanza
+        /// A room, which could name anyone: a device we've never seen must
+        /// first be vouched for by the sender's own server.
+        case room
+        /// A room, for a sender whose server won't show us their devices.
+        /// Read on the room's word alone, a new device is left undecided, so
+        /// its messages show as from a device nobody has vouched for.
+        case roomUnchecked
     }
 
     let store: OMEMOStore
@@ -26,6 +42,11 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// Chats send at the same time; one message encrypts at a time, as each
     /// advances the sessions it uses.
     private let encodeLock = NSLock()
+    /// Held group messages are decrypted off the queue that decrypts what
+    /// arrives, and two decodes of one device's messages at once would each
+    /// store the session as they left it. Not `encodeLock`, which is held
+    /// while device lists and bundles are fetched.
+    private let decodeLock = NSLock()
 
     /// How long to wait for device lists and bundles before giving up on a send.
     var setupTimeout: TimeInterval = 45
@@ -64,7 +85,10 @@ final class OMEMOEncryption: @unchecked Sendable {
     ///     only our other devices could decrypt if this one sent it.
     ///   - sentAt: when the message was sent, for the device's last use. An
     ///     archived message is from its day, not today.
-    func decrypt(_ stanza: Martin.Message, from sender: JID, ownCopy: Bool, isHistory: Bool = false, sentAt: Date = Date()) -> DecryptResult {
+    ///   - claim: who names `sender` as the author.
+    func decrypt(_ stanza: Martin.Message, from sender: JID, ownCopy: Bool, isHistory: Bool = false, sentAt: Date = Date(), claim: SenderClaim = .stanza) -> DecryptResult {
+        decodeLock.lock()
+        defer { decodeLock.unlock() }
         // Martin only rebuilds broken sessions for messages that came through
         // the server, which it recognizes by a server id; ours are all such,
         // except old history. Sessions have moved on since then, so most of
@@ -72,13 +96,25 @@ final class OMEMOEncryption: @unchecked Sendable {
         // would start another rebuild.
         let device = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
             .getAttribute("sid").flatMap { Int32(omemoId: $0) }
+        let status = device.flatMap { store.status(forName: sender.description, deviceId: $0) }
+        // Decoding a prekey message for us stores the identity it carries, so
+        // a room could otherwise give any member a device of its own, which
+        // would then also count among theirs in use and push real ones past
+        // the cap. Nothing else from an unknown device can be decoded, and
+        // goes on as before: our own messages from before this device
+        // existed must still be taken as ours.
+        if claim == .room, let device, status == nil, !isLocalDevice(sender, device), carriesPreKey(for: stanza) {
+            // One with no payload only sets up a session, which would store
+            // the key all the same, and has nothing to show once vouched for.
+            let payload = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "payload")
+            return payload == nil ? .ignore : .unvouched(device: device)
+        }
         // Whatever becomes of the message, it shows the device exists and is
         // in use. Recorded on the way out, after decoding, which is where a
         // new device's identity is first stored.
         defer {
             if let device { store.noteUsed(name: sender.description, deviceId: device, at: sentAt) }
         }
-        let status = device.flatMap { store.status(forName: sender.description, deviceId: $0) }
         // Signal checks trust only when it builds a session, so a device with
         // a session would go on being read. Not decoding also leaves the
         // ratchet alone and starts no session repair.
@@ -89,6 +125,10 @@ final class OMEMOEncryption: @unchecked Sendable {
         switch module.decode(message: stanza, from: sender.martin, serverMsgId: isHistory ? nil : "") {
         case .successMessage:
             guard let device else { return .decrypted(device: nil, trust: nil) }
+            if claim == .roomUnchecked, status == nil, !isLocalDevice(sender, device) {
+                _ = store.setStatus(.undecidedActive, forIdentity: SignalAddress(name: sender.description, deviceId: device))
+                return .decrypted(device: device, trust: .undecided)
+            }
             // Decoding is where a first message's identity is saved, so read
             // the status again: a new device of a verified contact is
             // undecided only from here on.
@@ -108,14 +148,67 @@ final class OMEMOEncryption: @unchecked Sendable {
         }
     }
 
+    /// The keys in `stanza` for this device. Martin tries each of them.
+    private func keysForUs(in stanza: Martin.Message) -> [Element] {
+        let ours = String(deviceId)
+        return stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
+            .filterChildren(name: "key", xmlns: nil).filter { $0.getAttribute("rid") == ours } ?? []
+    }
+
+    private static func isPreKey(_ key: Element) -> Bool {
+        ["true", "1"].contains(key.getAttribute("prekey"))
+    }
+
+    /// Any of them, not the first: one that isn't would fail and Martin go
+    /// on to the next.
+    private func carriesPreKey(for stanza: Martin.Message) -> Bool {
+        keysForUs(in: stanza).contains(where: Self.isPreKey)
+    }
+
+    private func isLocalDevice(_ sender: JID, _ device: Int32) -> Bool {
+        sender == account && UInt32(bitPattern: device) == deviceId
+    }
+
+    /// How long a read of a held message's sender's keys waits. Martin may
+    /// never answer a request whose stream went away, and the run waiting on
+    /// it would hold up every held message until the app is restarted.
+    var heldReadTimeout: TimeInterval = 30
+
+    /// The devices the sender's own server lists for them now.
+    func readDeviceList(of sender: JID) async -> Result<[Int32], PubSubError> {
+        let (module, timeout) = (module, heldReadTimeout)
+        return await withCheckedContinuation { continuation in
+            let once = OnceResume(continuation)
+            module.readDeviceList(of: sender.martin) { once.resume($0) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { once.resume(.failure(.remote_server_timeout)) }
+        }
+    }
+
+    /// The identity key the sender's own server publishes for `device`.
+    func readIdentityKey(of device: Int32, of sender: JID) async -> OMEMOModule.IdentityKeyRead {
+        let (module, timeout) = (module, heldReadTimeout)
+        return await withCheckedContinuation { continuation in
+            let once = OnceResume(continuation)
+            module.readIdentityKey(of: device, of: sender.martin) { once.resume($0) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { once.resume(.unavailable(.remote_server_timeout)) }
+        }
+    }
+
+    /// Keeps the identity key the sender's own server published for `device`,
+    /// which a prekey message from it must then carry to be read. A key we
+    /// already hold for it stays. Whether one is now kept: a failed write
+    /// would leave the device to be read on the room's word.
+    func vouch(for device: Int32, of sender: JID, identityKey: Data) -> Bool {
+        _ = store.save(identity: SignalAddress(name: sender.description, deviceId: device), publicKeyData: identityKey)
+        return store.status(forName: sender.description, deviceId: device) != nil
+    }
+
     /// Martin's own reason only reaches the private system log, which the
     /// diagnostics export can't carry. A message with no key for this device
     /// was never readable here; a prekey message points at our published keys.
     private func logFailure(_ failure: DecryptFailure, _ stanza: Martin.Message, device: Int32?, isHistory: Bool) {
-        let ours = String(deviceId)
-        let key = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
-            .filterChildren(name: "key", xmlns: nil).first { $0.getAttribute("rid") == ours }
-        let prekey = key.map { ["true", "1"].contains($0.getAttribute("prekey")) } ?? false
+        let key = keysForUs(in: stanza).first
+        let prekey = key.map(Self.isPreKey) ?? false
         var fields: [DiagField] = [.value("error", failure), .bool("keyForUs", key != nil), .bool("preKey", prekey), .bool("history", isHistory)]
         if let device { fields.append(.id("device", Redacted.id(String(device)))) }
         DiagLog.notice(.omemo, "Couldn't decrypt", fields: fields)
@@ -261,7 +354,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         case .decrypted(let device?, let trust):
             guard let text = message.body, !text.isEmpty else { return .failure(.undecryptable) }
             return .success(.init(fingerprint: text, device: device, trust: trust ?? .undecided))
-        case .decrypted(nil, _), .ignore, .ownCopy:
+        case .decrypted(nil, _), .ignore, .ownCopy, .unvouched:
             return .failure(.undecryptable)
         case .failed:
             let device = encrypted.firstChild(name: "header")?.getAttribute("sid").flatMap { Int32(omemoId: $0) }

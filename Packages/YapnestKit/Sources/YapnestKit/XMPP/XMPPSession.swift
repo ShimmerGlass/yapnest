@@ -206,8 +206,12 @@ public final class XMPPSession: @unchecked Sendable {
         var token: Int
     }
 
+    /// Where the run that checks held group messages' devices is.
+    enum HeldRun { case idle, running, runAgain }
+
     struct Mutable {
         var isSyncing = false
+        var heldRun = HeldRun.idle
         /// What the send queues have taken up, and edits made before that.
         var sends = SendClaims()
         /// Ids of reactions stanzas written this session and not yet
@@ -1378,6 +1382,7 @@ public final class XMPPSession: @unchecked Sendable {
                 return $0.attempt
             }
             callStep(.connectionRestored)
+            runOnceConnected(attempt: attempt) { [self] in resolveHeldGroupMessages() }
             runOnceConnected(attempt: attempt) { [self] in sendUnsentCallMessages() }
             // A ping sent on the old stream says nothing about this one.
             livenessPending.send(false)
@@ -1701,8 +1706,11 @@ public final class XMPPSession: @unchecked Sendable {
                     if case .ownCopy = result { try? database.markRead(before: inbound) }
                 }
                 return
-            case .failed(let reason):
-                logger.warning("Couldn't decrypt message \(stanza.id ?? "?", privacy: .private): \(reason, privacy: .private)")
+            case .failed, .unvouched:
+                // Only a room's claim is held back, so this is a failure.
+                if case .failed(let reason) = result {
+                    logger.warning("Couldn't decrypt message \(stanza.id ?? "?", privacy: .private): \(reason, privacy: .private)")
+                }
                 encryption = .omemoUndecryptable
                 // Keep a placeholder even if the sender sent no fallback body.
                 if stanza.body?.isEmpty ?? true { stanza.body = "🔒" }

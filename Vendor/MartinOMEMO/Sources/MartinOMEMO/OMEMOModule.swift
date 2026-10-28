@@ -1597,6 +1597,61 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         });
     }
     
+    /// What `jid`'s own server says of the identity key of one of their devices.
+    public enum IdentityKeyRead {
+        case published(Data)
+        case unavailable(PubSubError)
+        /// A bundle with no identity key we can read.
+        case unusable
+    }
+
+    /// `jid`'s device list as their own server has it now, whole: before any
+    /// cap, as the cap is about what we send to, not about which devices are
+    /// theirs. Empty when they have none. A group's messages name their
+    /// sender only on the room's word; this is where the member's own account
+    /// says which devices are theirs.
+    public func readDeviceList(of jid: BareJID, completionHandler: @escaping (Result<[Int32], PubSubError>) -> Void) {
+        guard let pubsubModule: PubSubModule = context?.module(.pubsub) else {
+            completionHandler(.failure(.remote_server_timeout));
+            return;
+        }
+        pubsubModule.retrieveItems(from: jid, for: OMEMOModule.DEVICES_LIST_NODE, limit: .lastItems(1), completionHandler: { result in
+            switch result {
+            case .success(let items):
+                let listEl = items.items.first?.payload;
+                let listed = listEl.flatMap { $0.name == "list" && $0.xmlns == OMEMOModule.XMLNS ? $0 : nil }?
+                    .mapChildren(transform: { $0.getAttribute("id") }).compactMap({ Int32(omemoId: $0) }) ?? [];
+                completionHandler(.success(listed));
+            case .failure(let error) where error.error == .item_not_found:
+                completionHandler(.success([]));
+            case .failure(let error):
+                completionHandler(.failure(error));
+            }
+        });
+    }
+
+    /// The identity key `jid`'s bundle for `deviceId` publishes. It builds no
+    /// session, so it uses none of their one-time prekeys and leaves the
+    /// session a prekey message sets up alone.
+    public func readIdentityKey(of deviceId: Int32, of jid: BareJID, completionHandler: @escaping (IdentityKeyRead) -> Void) {
+        guard let pubsubModule: PubSubModule = context?.module(.pubsub) else {
+            completionHandler(.unavailable(.remote_server_timeout));
+            return;
+        }
+        pubsubModule.retrieveItems(from: jid, for: bundleNode(for: UInt32(bitPattern: deviceId)), limit: .lastItems(1), completionHandler: { result in
+            switch result {
+            case .success(let items):
+                guard let key = OMEMOBundle.identityKey(in: items.items.first?.payload) else {
+                    completionHandler(.unusable);
+                    return;
+                }
+                completionHandler(.published(key));
+            case .failure(let error):
+                completionHandler(.unavailable(error));
+            }
+        });
+    }
+
     fileprivate func markDeviceAsFailed(for jid: BareJID, andDeviceId deviceId: Int32) {
         devicesQueue.sync {
             self.devicesFetchError[jid, default: [:]][deviceId] = Date();
@@ -1608,6 +1663,24 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
     }
     
     open class OMEMOBundle {
+
+        /// The identity key a bundle publishes, as libsignal serializes it.
+        /// Read on its own, as a bundle whose prekeys have all been used up
+        /// still says whose device it is.
+        static func identityKey(in el: Element?) -> Data? {
+            guard let el, el.name == "bundle" && el.xmlns == OMEMOModule.XMLNS,
+                  let value = el.findChild(name: "identityKey")?.value,
+                  let key = Data(base64Encoded: value, options: [.ignoreUnknownCharacters]) else {
+                return nil;
+            }
+            // Some clients publish the bare 32-byte Curve25519 key, without
+            // the type byte libsignal puts in front.
+            switch key.count {
+            case 33 where key.first == 0x05: return key;
+            case 32: return Data([0x05]) + key;
+            default: return nil;
+            }
+        }
         
         let preKeys: [OMEMOPreKey];
         

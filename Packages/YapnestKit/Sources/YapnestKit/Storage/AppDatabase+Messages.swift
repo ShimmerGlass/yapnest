@@ -114,7 +114,7 @@ extension AppDatabase {
         }
     }
 
-    private static func duplicate(of message: Message, _ db: Database) throws -> Message? {
+    static func duplicate(of message: Message, _ db: Database) throws -> Message? {
         if let serverId = message.serverId,
            let found = try Message
             .filter(Column("serverId") == serverId && Column("conversationId") == message.conversationId)

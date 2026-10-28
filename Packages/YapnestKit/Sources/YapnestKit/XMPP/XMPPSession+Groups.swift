@@ -1455,10 +1455,11 @@ extension XMPPSession {
 
         var encryption = Message.Encryption.none
         var device: (id: Int32?, trust: OMEMODevice.Trust?)?
+        var held: HeldStanza?
         if stanza.type == .groupchat, stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) != nil, let nick = stanza.from?.resource {
             let real = Self.encryptedSender(of: stanza, nick: nick, in: context, account: account, source: source)
             if let real {
-                let result = omemo.decrypt(stanza, from: real, ownCopy: real == account, isHistory: isHistory, sentAt: source.archivedAt ?? Date())
+                let result = omemo.decrypt(stanza, from: real, ownCopy: real == account, isHistory: isHistory, sentAt: source.archivedAt ?? Date(), claim: .room)
                 switch result {
                 case .decrypted(let id, let trust):
                     encryption = .omemo
@@ -1474,6 +1475,10 @@ extension XMPPSession {
                     return
                 case .failed(let reason):
                     logger.warning("Couldn't decrypt group message \(stanza.id ?? "?", privacy: .private): \(reason, privacy: .private)")
+                    encryption = .omemoUndecryptable
+                case .unvouched(let id):
+                    // As it came, before the placeholder's body goes in.
+                    held = HeldStanza(sender: real, device: id, stanza: stanza.element.stringValue, source: source, isHistory: isHistory)
                     encryption = .omemoUndecryptable
                 }
             } else {
@@ -1496,7 +1501,8 @@ extension XMPPSession {
         if isHistory || Self.isDelayed(stanza) { inbound.presenceSession = nil }
         let isPrivate = group.isPrivate
         if case .archive = source {
-            bufferArchived(inbound, query: query) { [weak self, inbound] result in
+            bufferArchived(inbound, query: query) { [weak self, inbound, held] result in
+                self?.storedEncrypted(inbound, result, held: held, isPrivate: isPrivate)
                 guard !isHistory else {
                     if let attachment = result.retractedAttachment { self?.attachments.remove(attachment) }
                     return
@@ -1511,6 +1517,7 @@ extension XMPPSession {
         let followsArchive = Self.followsArchive(source: source, isHistory: isHistory, status: status)
         do {
             let result = followsArchive ? try database.ingestLive(inbound, in: group) : try database.ingest(inbound)
+            storedEncrypted(inbound, result, held: held, isPrivate: isPrivate)
             storedRoomMessage(inbound, result, isPrivate: isPrivate)
         } catch {
             logger.error("Failed to store group message: \(error)")
@@ -1529,7 +1536,7 @@ extension XMPPSession {
         source == .live && !isHistory && status?.isJoined == true && status?.isSyncing == false && status?.catchUpReachedEnd == true
     }
 
-    private func storedRoomMessage(_ inbound: InboundMessage, _ result: IngestResult, isPrivate: Bool) {
+    func storedRoomMessage(_ inbound: InboundMessage, _ result: IngestResult, isPrivate: Bool) {
         if let attachment = result.retractedAttachment { attachments.remove(attachment) }
         if let message = result.editedMessage { events.send(.editedMessage(message)) }
         if let message = result.newMessage {

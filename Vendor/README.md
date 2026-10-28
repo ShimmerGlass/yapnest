@@ -1009,6 +1009,21 @@ Each entry gives what went wrong for users, why, and what changed.
   rotates it weekly and keeps the replaced one for four weeks. Pinned by
   `OMEMOPreKeyTests`.
 
+**A room could give any member a device of its own** (`readDeviceList`,
+`readIdentityKey`, `OMEMOBundle.identityKey`)
+- *Symptom:* a group's service could post an encrypted message as any
+  member, from a device it made up, and it read as theirs.
+- *Cause:* a group message names its sender only on the room's word, and
+  decoding a prekey message stores whatever identity key it carries.
+  Nothing asked the member's own server whether the device was theirs.
+- *Fix:* `readDeviceList` reads the member's device list fresh from their
+  server, whole, and `readIdentityKey` the identity key a device's bundle
+  publishes. Neither builds a session, so they use none of the member's
+  one-time prekeys. YapnestKit holds a
+  group message from a device it has never seen until this answers (see
+  `XMPPSession+HeldMessages`), then stores that key, which the message must
+  carry to be read.
+
 **The Signal wrappers leaked libsignal objects and cached keys unsafely**
 (`SignalPreKey`, `SignalSignedPreKey`, `generatePreKeys`,
 `SignalIdentityKeyPair`, `SignalIdentityKey`, `SignalContext`)
