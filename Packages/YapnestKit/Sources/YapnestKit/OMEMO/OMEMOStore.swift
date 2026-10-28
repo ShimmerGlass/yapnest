@@ -183,13 +183,18 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         (read { db in try UInt32.fetchOne(db, sql: "SELECT MAX(id) FROM omemoPreKey") } ?? nil) ?? 0
     }
 
-    /// A prekey libsignal has deleted is gone, though its row stays until
-    /// `flushDeletedPreKeys`: that waits for a catch-up to end, and for an
-    /// extension that dies first it may never come. Several messages built
-    /// from one prekey still decrypt, as libsignal sets the session up from
-    /// the first and recognizes the rest by their base key without loading it.
+    /// A prekey libsignal has deleted stays readable until
+    /// `flushDeletedPreKeys`, which runs at the end of the catch-up that used
+    /// it, on a reset or disconnect, and at the next start for one an
+    /// extension left. Two people who fetched the same bundle can pick the
+    /// same prekey, and the second's messages would otherwise never decrypt.
+    /// It is never published again meanwhile (`isPreKeyDeleted`).
     func loadPreKey(withId id: UInt32) -> Data? {
-        read { db in try Data.fetchOne(db, sql: "SELECT data FROM omemoPreKey WHERE id = ? AND isDeleted = 0", arguments: [id]) } ?? nil
+        read { db in try Data.fetchOne(db, sql: "SELECT data FROM omemoPreKey WHERE id = ?", arguments: [id]) } ?? nil
+    }
+
+    func isPreKeyDeleted(withId id: UInt32) -> Bool {
+        read { db in try Bool.fetchOne(db, sql: "SELECT isDeleted FROM omemoPreKey WHERE id = ?", arguments: [id]) } == true
     }
 
     func storePreKey(_ data: Data, withId id: UInt32) -> Bool {
@@ -199,7 +204,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func containsPreKey(withId id: UInt32) -> Bool {
-        read { db in try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM omemoPreKey WHERE id = ? AND isDeleted = 0)", arguments: [id]) } == true
+        read { db in try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM omemoPreKey WHERE id = ?)", arguments: [id]) } == true
     }
 
     func deletePreKey(withId id: UInt32) -> Bool {

@@ -68,8 +68,9 @@ private final class Clock: @unchecked Sendable {
     func advance(days: Double) { lock.withLock { date = date.addingTimeInterval(days * 86_400) } }
 }
 
-/// One-time and signed prekeys: a used one is gone at once, the bundle is
-/// republished without it however the catch-up ends, and the signed one rotates.
+/// One-time and signed prekeys: a used one is read until its catch-up ends
+/// and never published again, the bundle is republished without it however the
+/// catch-up ends, and the signed one rotates.
 struct OMEMOPreKeyTests {
     let me = JID("me@example.org")!
     let alice = "alice@example.org"
@@ -148,27 +149,61 @@ struct OMEMOPreKeyTests {
         try database.reader.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM omemoPreKey WHERE isDeleted = 1") ?? 0 }
     }
 
-    @Test func aUsedPreKeyCannotStartAnotherSessionButItsOwnSessionContinues() async throws {
-        let (bob, server, client, _) = try await setUp()
+    /// Two people who fetched the same bundle can pick the same prekey. Both
+    /// are read during the catch-up that used it; once it is flushed nobody
+    /// else can use it, and it is never published again.
+    @Test func aPreKeyTwoSendersPickedServesBothUntilTheCatchUpEnds() async throws {
+        let (bob, server, client, database) = try await setUp()
         defer { withExtendedLifetime(client) {} }
         let bundle = try #require(server.published)
         let first = try sender(from: bundle, to: bob, name: alice)
-        let stranger = try sender(from: bundle, to: bob, name: carol)
-        #expect(first.preKeyId == stranger.preKeyId)
+        let second = try sender(from: bundle, to: bob, name: carol)
+        #expect(first.preKeyId == second.preKeyId)
 
         // Two messages built from the same prekey, before any reply.
         let firstKey = try nextKey(first)
         let secondKey = try nextKey(first)
         bob.module.mamSyncStarted(for: nil)
         _ = bob.decrypt(stanza(firstKey, device: first.deviceId, to: bob, from: alice), from: JID(alice)!, ownCopy: false)
-        #expect(!bob.store.containsPreKey(withId: first.preKeyId))
-        #expect(bob.store.loadPreKey(withId: first.preKeyId) == nil, "gone while the flush still waits for the catch-up")
+        #expect(try markedDeleted(database) == 1)
 
         let sameSession = try #require(SignalSessionCipher(withAddress: SignalAddress(name: alice, deviceId: first.deviceId), andContext: bob.module.signalContext))
         #expect((try? sameSession.decrypt(key: secondKey).get()) != nil, "the sender's next message, built from the same prekey, still decrypts")
 
-        let strangerCipher = try #require(SignalSessionCipher(withAddress: SignalAddress(name: carol, deviceId: stranger.deviceId), andContext: bob.module.signalContext))
-        #expect((try? strangerCipher.decrypt(key: try nextKey(stranger)).get()) == nil, "another sender can't use a prekey that was used")
+        let secondCipher = try #require(SignalSessionCipher(withAddress: SignalAddress(name: carol, deviceId: second.deviceId), andContext: bob.module.signalContext))
+        #expect((try? secondCipher.decrypt(key: try nextKey(second)).get()) != nil, "someone else who picked it in the same catch-up is read too")
+
+        let before = server.bundlePublishes
+        bob.module.mamSyncFinished(for: nil)
+        await eventually("the bundle to be published") { server.bundlePublishes > before }
+        #expect(try markedDeleted(database) == 0)
+        #expect(!bob.store.containsPreKey(withId: first.preKeyId))
+        #expect(!server.publishedPreKeyIds.contains(first.preKeyId))
+
+        let late = try sender(from: bundle, to: bob, name: "dave@example.org")
+        #expect(late.preKeyId == first.preKeyId)
+        let lateCipher = try #require(SignalSessionCipher(withAddress: SignalAddress(name: "dave@example.org", deviceId: late.deviceId), andContext: bob.module.signalContext))
+        #expect((try? lateCipher.decrypt(key: try nextKey(late)).get()) == nil, "after the catch-up it is gone for good")
+    }
+
+    /// A bundle published while a used prekey waits for its flush, here for a
+    /// signed prekey rotation, leaves it out.
+    @Test func aPreKeyWaitingForItsFlushIsNotPublishedAgain() async throws {
+        let clock = Clock()
+        let (bob, server, client, _) = try await setUp(clock: clock)
+        defer { withExtendedLifetime(client) {} }
+        let first = try sender(from: try #require(server.published), to: bob, name: alice)
+        bob.module.mamSyncStarted(for: nil)
+        _ = bob.decrypt(stanza(try nextKey(first), device: first.deviceId, to: bob, from: alice), from: JID(alice)!, ownCopy: false)
+        #expect(bob.store.isPreKeyDeleted(withId: first.preKeyId))
+
+        let before = server.bundlePublishes
+        clock.advance(days: 8)
+        // Not a registration or a reset, which flush first.
+        bob.module.publishDeviceBundleIfNeeded(completionHandler: nil)
+        await eventually("the rotated bundle to be published") { server.bundlePublishes > before }
+        #expect(bob.store.isPreKeyDeleted(withId: first.preKeyId), "still waiting for its flush")
+        #expect(!server.publishedPreKeyIds.contains(first.preKeyId))
         bob.module.mamSyncFinished(for: nil)
     }
 

@@ -134,6 +134,14 @@ public protocol SignalPreKeyStoreProtocol: AnyObject {
     func deletePreKey(withId: UInt32) -> Bool;
     
     func flushDeletedPreKeys() -> Bool;
+
+    /// Whether libsignal deleted it and it only waits for the flush: it can
+    /// still be read, but must not be published again.
+    func isPreKeyDeleted(withId: UInt32) -> Bool;
+}
+
+extension SignalPreKeyStoreProtocol {
+    public func isPreKeyDeleted(withId: UInt32) -> Bool { false }
 }
 
 public protocol SignalSignedPreKeyStoreProtocol: AnyObject {

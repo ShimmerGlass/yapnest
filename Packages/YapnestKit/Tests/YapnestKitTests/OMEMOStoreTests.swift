@@ -66,18 +66,22 @@ struct OMEMOStoreTests {
         #expect(Set(store.allDevices(for: bob, activeAndTrusted: false)) == [1, 2, 3])
     }
 
-    @Test func usedPreKeysAreGoneAtOnceAndRemovedWhenFlushed() throws {
+    /// Another sender may have picked the same key, so it stays readable until the flush, but isn't offered again.
+    @Test func usedPreKeysWaitForTheFlushAndAreThenRemoved() throws {
         let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
         #expect(store.storePreKey(Data([1]), withId: 1))
         #expect(store.storePreKey(Data([2]), withId: 2))
         #expect(store.currentPreKeyId() == 2)
 
         #expect(store.deletePreKey(withId: 1))
-        #expect(store.loadPreKey(withId: 1) == nil, "a flush that never comes must not leave it usable")
-        #expect(!store.containsPreKey(withId: 1))
+        #expect(store.loadPreKey(withId: 1) == Data([1]))
+        #expect(store.isPreKeyDeleted(withId: 1))
+        #expect(!store.isPreKeyDeleted(withId: 2))
         #expect(store.loadPreKey(withId: 2) == Data([2]))
         #expect(store.flushDeletedPreKeys())
         #expect(store.loadPreKey(withId: 1) == nil)
+        #expect(!store.containsPreKey(withId: 1))
+        #expect(!store.isPreKeyDeleted(withId: 1))
         #expect(!store.flushDeletedPreKeys())
     }
 

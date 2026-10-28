@@ -982,24 +982,26 @@ Each entry gives what went wrong for users, why, and what changed.
   sessions. Off, the module publishes neither the bundle nor the device list
   and drops no device of ours, and registers nothing; it still reads lists and
   bundles to encrypt. The one exception is the bundle after a prekey message:
-  the used prekey is already gone from the store and from what the app would
-  republish for, so the bundle is republished there and then
+  the used prekey is already left out of what the app would republish for, so
+  the bundle is republished there and then
   (`publishDeviceBundleIfNeeded(afterPreKeyUse:)`). Pinned by
   `ExtensionOMEMOPublishTests`.
 
 **A used prekey stayed usable and published until a flush that might not come**
 (`reset`, `registerDevice`, `signedPreKeyRotationDue`)
 - *Symptom:* a one-time prekey used during a catch-up, or in an extension
-  that ended before it, could be used again, and after a reset of the
+  that ended before it, could be published again, and after a reset of the
   session it stayed in our published bundle for good. The signed prekey was
   never replaced.
 - *Cause:* the store only marks a prekey deleted, and the module removes it
   and republishes after a prekey message, or when the catch-up ends if the
   session was held back. A reset forgets what was held back, and an
   extension that dies never gets there.
-- *Fix:* the store treats a prekey marked deleted as gone (several messages
-  built from one prekey still decrypt, as libsignal sets the session up from
-  the first and recognizes the rest by their base key). A reset of the stream
+- *Fix:* the bundle leaves out a prekey the store marked deleted
+  (`SignalPreKeyStoreProtocol.isPreKeyDeleted`), so it is never offered again.
+  It stays readable until the flush: two senders can pick the same prekey
+  from one bundle, and the second's first messages, often in the same
+  catch-up, still decrypt. A reset of the stream
   or session flushes and republishes if sessions were held back, and
   registering flushes what is left marked, so the bundle is rebuilt without
   it. `signedPreKeyRotationDue` is a hook asked whenever the bundle is

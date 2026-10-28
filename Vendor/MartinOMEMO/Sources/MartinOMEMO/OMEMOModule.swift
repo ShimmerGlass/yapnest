@@ -1451,7 +1451,9 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             });
             
             var validKeys = currentKeys?.map({ (preKeyId) -> SignalPreKey? in
-                guard let key = self.storage.preKeyStore.loadPreKey(withId: preKeyId) else {
+                // A used one stays readable until the flush, for others who picked it too, but is
+                // never offered again.
+                guard !self.storage.preKeyStore.isPreKeyDeleted(withId: preKeyId), let key = self.storage.preKeyStore.loadPreKey(withId: preKeyId) else {
                     return nil;
                 }
                 return SignalPreKey(fromSerializedData: key);
