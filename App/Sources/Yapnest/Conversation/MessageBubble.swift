@@ -104,10 +104,16 @@ struct MessageBubble: View {
             // bottom, and the edge catches the light at the top and falls
             // into shade at the bottom. Strong enough only to give the bubble
             // some depth; no shadow, which would cost every row a blur.
+            let fill = isOutgoing ? Color.accentColor : Color(.secondarySystemBackground)
+            // The edge is the gradient left showing around an inset fill,
+            // not a gradient stroke: SwiftUI draws a gradient stroke in
+            // software on the main thread, for every bubble as it appears,
+            // but fills a plain shape with one on the GPU.
             shape
-                .fill(isOutgoing ? Color.accentColor : Color(.secondarySystemBackground))
+                .fill(fill)
+                .overlay { shape.fill(bubbleEdge) }
+                .overlay { shape.inset(by: 1).fill(fill) }
                 .overlay { shape.fill(bubbleShading) }
-                .overlay { shape.strokeBorder(bubbleEdge, lineWidth: 1) }
         }
         .contentShape(.contextMenuPreview, UnevenRoundedRectangle(cornerRadii: Self.corners(isOutgoing: isOutgoing, layout: content.layout)))
         .onTapGesture {
