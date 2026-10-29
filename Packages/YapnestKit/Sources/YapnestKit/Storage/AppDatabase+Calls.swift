@@ -61,7 +61,7 @@ extension AppDatabase {
         // as when read back from the archive.
         if signal.isTieBreak {
             // Only an unanswered one, and only in the chat with whoever sent it.
-            if let peer = signal.peer, let id = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id {
+            if let peer = signal.peer, let id = try Self.conversationId(db, peer: peer) {
                 try Message
                     .filter(Column("conversationId") == id && Column("remoteId") == signal.sid
                             && Column("callOutcome") != nil && Column("callOutcome") != CallOutcome.answered.rawValue)
@@ -124,7 +124,7 @@ extension AppDatabase {
     }
 
     private static func knownCall(_ db: Database, peer: JID, sid: String) throws -> KnownCall {
-        let conversation = try Conversation.filter(Column("peer") == peer).fetchOne(db)
+        let conversation = try Self.existingConversation(db, peer: peer)
         return KnownCall(conversation: conversation, row: try conversation?.id.flatMap { try callRow(db, conversationId: $0, sid: sid) })
     }
 

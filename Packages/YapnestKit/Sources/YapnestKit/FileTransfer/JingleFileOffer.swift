@@ -130,35 +130,17 @@ struct JingleFileOffer: Equatable, Sendable {
 
     // MARK: Stanzas
 
-    static func jingleIq(to jid: Martin.JID, action: String, sid: String, attributes: [String: String] = [:], children: [Element] = []) -> Iq {
-        let iq = Iq()
-        iq.to = jid
-        iq.type = .set
-        let jingle = Element(name: "jingle", xmlns: JingleFile.jingle)
-        jingle.setAttribute("action", value: action)
-        jingle.setAttribute("sid", value: sid)
-        for (name, value) in attributes { jingle.setAttribute(name, value: value) }
-        for child in children { jingle.addChild(child) }
-        iq.addChild(jingle)
-        return iq
-    }
-
     func sessionInitiate(to jid: Martin.JID, sid: String, initiator: Martin.JID) -> Iq {
-        Self.jingleIq(to: jid, action: "session-initiate", sid: sid, attributes: ["initiator": initiator.stringValue], children: [content()])
+        Iq.jingle(to: jid, action: "session-initiate", sid: sid, attributes: ["initiator": initiator.stringValue], children: [content()])
     }
 
     func sessionAccept(to jid: Martin.JID, sid: String, responder: Martin.JID) -> Iq {
-        Self.jingleIq(to: jid, action: "session-accept", sid: sid, attributes: ["responder": responder.stringValue], children: [content()])
+        Iq.jingle(to: jid, action: "session-accept", sid: sid, attributes: ["responder": responder.stringValue], children: [content()])
     }
 
     static func sessionTerminate(to jid: Martin.JID, sid: String, reason: JingleSessionTerminateReason) -> Iq {
-        jingleIq(to: jid, action: "session-terminate", sid: sid, children: [
+        Iq.jingle(to: jid, action: "session-terminate", sid: sid, children: [
             Element(name: "reason", children: [Element(name: reason.rawValue)]),
         ])
-    }
-
-    /// The reason in a session-terminate, if it names one we know.
-    static func reason(in jingle: Element) -> JingleSessionTerminateReason? {
-        jingle.firstChild(name: "reason")?.children.lazy.compactMap { JingleSessionTerminateReason(rawValue: $0.name) }.first
     }
 }

@@ -18,3 +18,16 @@ func withTimeout<T: Sendable>(
         return try await group.next()!
     }
 }
+
+/// True for the first caller only: one of an answer and a timeout wins.
+final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+
+    func first() -> Bool {
+        lock.withLock {
+            defer { done = true }
+            return !done
+        }
+    }
+}

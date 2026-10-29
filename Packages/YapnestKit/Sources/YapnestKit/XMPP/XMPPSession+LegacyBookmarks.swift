@@ -3,19 +3,6 @@ import Foundation
 @preconcurrency import Martin
 import os
 
-/// True for the first caller only: one of an answer and a timeout wins.
-final class Once: @unchecked Sendable {
-    private let lock = NSLock()
-    private var done = false
-
-    func first() -> Bool {
-        lock.withLock {
-            defer { done = true }
-            return !done
-        }
-    }
-}
-
 /// XEP-0048 bookmarks in PEP, the kind Conversations keeps. Servers that
 /// don't mirror XEP-0402 bookmarks to them (no `#compat`) leave a new device
 /// no other way to find its groups.
@@ -127,10 +114,7 @@ extension XMPPSession {
                 return
             }
             change(storage)
-            let options = Self.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options", fields: [
-                "pubsub#persist_items": ["true"],
-                "pubsub#access_model": ["whitelist"],
-            ])
+            let options = ProfileStanza.publishOptions(accessModel: "whitelist")
             let result = waitFor { (finish: @escaping @Sendable (Result<Iq, PubSubError>) -> Void) in
                 pubsub.publishItem(at: nil, to: NS.legacyBookmarks, itemId: "current", payload: storage,
                                    publishOptions: options, errorDecoder: PubSubError.from(stanza:), completionHandler: finish)

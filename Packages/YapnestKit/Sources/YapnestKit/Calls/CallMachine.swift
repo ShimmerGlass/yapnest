@@ -87,7 +87,6 @@ struct CallMachine: Sendable, Equatable {
         /// The peer's server confirmed that the propose arrived.
         case proposeDelivered
         case answer
-        case decline
         /// Ends a call that rings here without a word to anyone.
         case dismiss
         /// Our outgoing call lost the tie-break against the peer's propose.
@@ -251,7 +250,6 @@ struct CallMachine: Sendable, Equatable {
             return []
         case .answer: return answer(now: now)
         case .relayChecked(let found): return relayChecked(found)
-        case .decline: return direction == .incoming && phase == .incoming ? decline() : []
         case .dismiss: return direction == .incoming && phase == .incoming ? end(.dismissed) : []
         case .yieldToTieBreak:
             guard direction == .outgoing, phase.isAwaitingAnswer else { return [] }

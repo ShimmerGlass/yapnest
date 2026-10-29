@@ -59,7 +59,7 @@ struct MessageMenu: View {
 
     /// The quick reactions, in a row, with one more to pick any emoji.
     private var reactions: some View {
-        let mine = Set(item.reactions.filter(\.includesMe).map(\.emoji))
+        let mine = item.myReactionEmoji
         return ControlGroup {
             ForEach(model.quickReactions, id: \.self) { emoji in
                 Toggle(isOn: Binding(get: { mine.contains(emoji) }, set: { _ in react(emoji) })) {
@@ -170,5 +170,12 @@ struct MessageMenu: View {
         return UIGraphicsImageRenderer(size: size).image { _ in
             text.draw(at: .zero, withAttributes: [.font: font])
         }.withRenderingMode(.alwaysOriginal)
+    }
+}
+
+extension ConversationItem {
+    /// The emoji we have reacted with.
+    var myReactionEmoji: Set<String> {
+        Set(reactions.filter(\.includesMe).map(\.emoji))
     }
 }

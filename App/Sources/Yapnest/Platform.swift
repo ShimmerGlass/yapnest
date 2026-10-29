@@ -40,7 +40,7 @@ enum Platform {
     /// in front whenever the app is active.
     static var isWindowVisible: Bool {
         #if targetEnvironment(macCatalyst)
-        guard let app = (NSClassFromString("NSApplication") as? NSObject.Type)?.value(forKey: "sharedApplication") as? NSObject,
+        guard let app = AppKit.application,
               let state = app.value(forKey: "occlusionState") as? UInt else { return true }
         // NSApplication.OcclusionState.visible
         return state & (1 << 1) != 0

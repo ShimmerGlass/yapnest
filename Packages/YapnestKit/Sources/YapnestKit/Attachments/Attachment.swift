@@ -137,7 +137,7 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
         guard let (url, name) = AttachmentLink.parse(body: text, oob: text) else { return nil }
         // Any https URL passes `parse` here, so only trust ones that name a
         // file of a known type; a bare link to a web page is ordinary text.
-        if url.scheme?.lowercased() != "aesgcm", UTType(filenameExtension: (name as NSString).pathExtension) == nil { return nil }
+        if url.scheme?.lowercased() != "aesgcm", UTTypeLookup.type(forName: name) == nil { return nil }
         return Attachment(messageId: 0, url: url.absoluteString, name: name, state: .remote).summary
     }
 }
@@ -145,7 +145,7 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
 /// Resolving a type is an XPC call to LaunchServices, and a row's body reads
 /// `Attachment.type` several times per evaluation, so answers are kept for the
 /// life of the process. Misses are kept too.
-private enum UTTypeLookup {
+enum UTTypeLookup {
     private struct Key: Hashable {
         var mimeType: String?
         var filenameExtension: String
@@ -159,5 +159,10 @@ private enum UTTypeLookup {
         let resolved = filenameExtension.isEmpty ? mimeType.flatMap { UTType(mimeType: $0) } : UTType(filenameExtension: filenameExtension)
         cache.withLock { $0[key] = .some(resolved) }
         return resolved
+    }
+
+    /// What a file name's extension says it is, ignoring any media type.
+    static func type(forName name: String) -> UTType? {
+        type(mimeType: nil, filenameExtension: (name as NSString).pathExtension)
     }
 }

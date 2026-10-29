@@ -80,12 +80,7 @@ public final class AvatarStore: Sendable {
     /// stored before the size check may be.
     public static func thumbnail(of source: CGImageSource, pixels: Int) -> CGImage? {
         guard hasAcceptableSize(source) else { return nil }
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: pixels,
-        ] as CFDictionary)
+        return source.thumbnail(maxPixelSize: pixels, cacheImmediately: true)
     }
 
     public static func thumbnail(at url: URL, pixels: Int) -> CGImage? {

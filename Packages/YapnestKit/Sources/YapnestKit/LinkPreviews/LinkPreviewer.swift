@@ -162,23 +162,15 @@ public final class LinkPreviewer: Sendable {
     private func saveImage(_ data: Data, for key: String) -> (file: String, width: Double, height: Double)? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let (width, height) = AttachmentStore.pixelSize(of: source), width * height <= Self.maxImagePixels else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: min(max(width, height), Self.maxImageDimension),
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        guard let image = source.thumbnail(maxPixelSize: min(max(width, height), Self.maxImageDimension)) else { return nil }
 
         let hasAlpha = ![.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo)
         let type = hasAlpha ? UTType.png : UTType.jpeg
         let file = Self.fileName(for: key) + (hasAlpha ? ".png" : ".jpg")
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(output, type.identifier as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { return nil }
+        guard let encoded = image.encoded(as: type, quality: 0.85) else { return nil }
         do {
             try FileManager.default.createProtectedDirectory(at: directory)
-            try (output as Data).write(to: directory.appending(path: file), options: .atomic)
+            try encoded.write(to: directory.appending(path: file), options: .atomic)
         } catch {
             return nil
         }

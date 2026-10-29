@@ -56,7 +56,7 @@ enum UploadSlotParser {
 
     /// The error decoder for a slot request. No answer is a timeout.
     static func error(from stanza: Stanza?) -> Error {
-        guard let stanza else { return UploadSlotError(error: ServerError(condition: "remote-server-timeout", type: .wait), isFileTooLarge: false) }
+        guard let stanza else { return UploadSlotError(error: ServerError.timedOut, isFileTooLarge: false) }
         let details = stanza.firstChild(name: "error")
         let tooLarge = details?.firstChild(name: "file-too-large", xmlns: namespace)
         let retry = details?.firstChild(name: "retry", xmlns: namespace)

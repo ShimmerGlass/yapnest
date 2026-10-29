@@ -12,6 +12,10 @@ public struct InboundMessage: Sendable, Equatable {
         /// A XEP-0313 archive result.
         case archive(serverId: String, timestamp: Date?)
 
+        var isArchived: Bool {
+            if case .archive = self { true } else { false }
+        }
+
         /// When the archive says the message was sent.
         var archivedAt: Date? {
             if case .archive(_, let timestamp) = self { timestamp } else { nil }
@@ -221,7 +225,7 @@ extension InboundMessage {
             return
         }
         guard stanza.type == .groupchat, let nick = from.resource else { return nil }
-        let isArchived = if case .archive = source { true } else { false }
+        let isArchived = source.isArchived
         // Current occupants say nothing about who wrote an archived message,
         // and anyone may have held our nick before we joined.
         let real = Self.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous) ?? (isArchived ? nil : room.occupants[nick]?.jid)
@@ -425,7 +429,7 @@ extension InboundMessage {
     static func trustedStamp(in stanza: Martin.Message, stamper: JID, account: JID) -> Date? {
         var trusted: Set<JID> = [stamper]
         if stamper == account { trusted.insert(JID(account.domain)!) }
-        let stamps = stanza.element.filterChildren(name: "delay", xmlns: "urn:xmpp:delay")
+        let stamps = stanza.element.filterChildren(name: "delay", xmlns: NS.delay)
             .map { Delay(element: $0) }
             .filter { delay in delay.from.flatMap { JID($0.stringValue) }.map(trusted.contains) ?? false }
             .compactMap(\.stamp)

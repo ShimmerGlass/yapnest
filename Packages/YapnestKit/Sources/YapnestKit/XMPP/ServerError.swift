@@ -11,6 +11,11 @@ public struct ServerError: Error, Equatable, Sendable {
         case cancel, `continue`, modify, auth, wait
     }
 
+    /// A request that got no answer, such as one the connection dropped under.
+    /// It is a `wait` error because nothing says it won't work later, and it
+    /// is what the server itself answers when it can't reach another.
+    static let timedOut = ServerError(condition: "remote-server-timeout", type: .wait)
+
     /// The defined condition's name, such as `forbidden`; one we don't know
     /// is kept as the server wrote it.
     public var condition: String
@@ -107,7 +112,7 @@ public struct ServerError: Error, Equatable, Sendable {
         case let error as URLError:
             switch error.code {
             case .timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost, .dnsLookupFailed, .cannotFindHost, .dataNotAllowed:
-                return ServerError(condition: "remote-server-timeout", type: .wait)
+                return .timedOut
             default: break
             }
         default: break

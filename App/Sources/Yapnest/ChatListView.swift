@@ -64,8 +64,7 @@ struct ChatListView: View {
                 } detail: {
                     NavigationStack {
                         if let selection {
-                            ConversationView(session: session, peer: selection, openingAt: selectedMessage, initial: openedItems[selection])
-                                .id(OpenChat(peer: selection, message: selectedMessage))
+                            conversation(selection, at: selectedMessage)
                         } else {
                             ContentUnavailableView("No Chat Selected", systemImage: "bubble.left.and.bubble.right")
                         }
@@ -77,10 +76,7 @@ struct ChatListView: View {
                         .navigationDestination(for: ChatRoute.self) { route in
                             switch route {
                             case .conversation(let peer, let message):
-                                // Its controller and state are made for one peer; a
-                                // notification can swap the peer under an open chat.
-                                ConversationView(session: session, peer: peer, openingAt: message, initial: openedItems[peer])
-                                    .id(OpenChat(peer: peer, message: message))
+                                conversation(peer, at: message)
                             case .archive:
                                 archive
                             }
@@ -215,11 +211,7 @@ struct ChatListView: View {
         switch shownConnection ?? .connected(isSyncing: false) {
         case .connected:
             guard let ownStatus else { return (nil, nil) }
-            let label = switch ownStatus.availability {
-            case .available: String(localized: "Available")
-            case .away: String(localized: "Away")
-            case .dnd: String(localized: "Do Not Disturb")
-            }
+            let label = String(localized: ownStatus.availability.label)
             let presence: ContactPresence = switch ownStatus.availability {
             case .available: .online
             case .away: .away
@@ -229,6 +221,13 @@ struct ChatListView: View {
         case .connecting: return (.offline, String(localized: "Connecting…"))
         case .disconnected, .failed: return (.offline, String(localized: "Offline"))
         }
+    }
+
+    /// Its controller and state are made for one peer; a notification can
+    /// swap the peer under an open chat.
+    private func conversation(_ peer: JID, at message: Int64?) -> some View {
+        ConversationView(session: session, peer: peer, openingAt: message, initial: openedItems[peer])
+            .id(OpenChat(peer: peer, message: message))
     }
 
     @ViewBuilder
@@ -473,8 +472,7 @@ private struct ChatListContent: View {
                         ContactRequestRow(session: session, contact: contact) {
                             open(.conversation(contact.jid), nil)
                         }
-                        .listRowInsets(ChatRowButtonStyle.rowInsets)
-                        .listRowBackground(Color.clear)
+                        .chatRowStyle()
                     }
                 } header: {
                     Text("Contact Requests")
@@ -485,8 +483,7 @@ private struct ChatListContent: View {
                 Section {
                     ForEach(invitations, id: \.room) { invitation in
                         GroupInvitationRow(session: session, invitation: invitation)
-                            .listRowInsets(ChatRowButtonStyle.rowInsets)
-                            .listRowBackground(Color.clear)
+                            .chatRowStyle()
                     }
                 } header: {
                     Text("Group Invitations")
@@ -506,9 +503,7 @@ private struct ChatListContent: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(ChatRowButtonStyle(isSelected: item.conversation.peer == selection, selectionTrack: selectionTrack))
-                .listRowInsets(ChatRowButtonStyle.rowInsets)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
+                .chatRowStyle(hidesSeparator: true)
                 .swipeActions(edge: .leading) {
                     readButton(item).tint(.blue)
                     if !archived { pinButton(item).tint(.orange) }
@@ -540,9 +535,7 @@ private struct ChatListContent: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(ChatRowButtonStyle())
-                        .listRowInsets(ChatRowButtonStyle.rowInsets)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
+                        .chatRowStyle(hidesSeparator: true)
                     }
                 } header: {
                     HStack {
@@ -770,6 +763,18 @@ private struct ChatListBackdrop: View {
 
 /// Highlights the row while pressed, like a table cell, without a chevron,
 /// and while its chat is open beside the list.
+private extension View {
+    @ViewBuilder
+    func chatRowStyle(hidesSeparator: Bool = false) -> some View {
+        let row = listRowInsets(ChatRowButtonStyle.rowInsets).listRowBackground(Color.clear)
+        if hidesSeparator {
+            row.listRowSeparator(.hidden)
+        } else {
+            row
+        }
+    }
+}
+
 private struct ChatRowButtonStyle: ButtonStyle {
     static let rowInsets = EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
     /// How far the highlight reaches past the row on either side.
@@ -903,6 +908,16 @@ private struct MacTopMargin: ViewModifier {
 private struct ConnectionWatch: Equatable {
     let isDown: Bool
     let isActive: Bool
+}
+
+extension XMPPSession.Availability {
+    var label: LocalizedStringResource {
+        switch self {
+        case .available: "Available"
+        case .away: "Away"
+        case .dnd: "Do Not Disturb"
+        }
+    }
 }
 
 private extension XMPPSession.State {

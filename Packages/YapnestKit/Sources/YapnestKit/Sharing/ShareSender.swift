@@ -67,12 +67,8 @@ public struct ShareSender: Sendable {
 
     /// For the signed-in account, or nil if the app hasn't been signed in.
     public static func current() -> ShareSender? {
-        guard let credentials = try? CredentialStore().load(), let deviceId = SharedContainer.existingDeviceId else { return nil }
-        return ShareSender(
-            credentials: credentials,
-            directory: SharedContainer.directory(for: credentials.jid),
-            resource: "yapnest-\(deviceId)-share",
-        )
+        guard let account = ExtensionAccount.current(role: "share") else { return nil }
+        return ShareSender(credentials: account.credentials, directory: account.directory, resource: account.resource)
     }
 
     private static let logger = Logger(subsystem: "Yapnest", category: "Share")

@@ -104,6 +104,24 @@ struct FetchTarget: Equatable {
     }
 }
 
+extension AddressPolicy {
+    enum Vetting {
+        case allowed([IPAddress])
+        case blocked(IPAddress)
+    }
+
+    /// Reads the local networks, right after the name was resolved, and
+    /// checks every address. One bad address among the answers is enough to
+    /// distrust the rest.
+    static func vet(_ candidates: [IPAddress], transport: FetchTransport) throws -> Vetting {
+        let prefixes: [AddressPrefix]
+        do { prefixes = try transport.localPrefixes() } catch { throw FetchError.refused("interfaces unknown") }
+        guard !candidates.isEmpty else { throw FetchError.unreachable("no address") }
+        if let blocked = candidates.first(where: { isBlocked($0, localPrefixes: prefixes) }) { return .blocked(blocked) }
+        return .allowed(candidates)
+    }
+}
+
 final class SafeFetcher: LinkFetching {
     static let maxRedirects = 5
     private static let redirectStatuses: Set<Int> = [301, 302, 303, 307, 308]
@@ -144,12 +162,10 @@ final class SafeFetcher: LinkFetching {
         case .name(let name): candidates = try await transport.resolve(name, timeout: timeout)
         }
         // The networks are read after resolving, right before connecting.
-        let prefixes: [AddressPrefix]
-        do { prefixes = try transport.localPrefixes() } catch { throw FetchError.refused("interfaces unknown") }
-        // One bad address among the answers is enough to distrust the rest.
-        guard let address = candidates.first else { throw FetchError.unreachable("no address") }
-        if let blocked = candidates.first(where: { AddressPolicy.isBlocked($0, localPrefixes: prefixes) }) {
-            throw FetchError.refused("address \(blocked.bytes) is local")
+        let address: IPAddress
+        switch try AddressPolicy.vet(candidates, transport: transport) {
+        case .blocked(let blocked): throw FetchError.refused("address \(blocked.bytes) is local")
+        case .allowed(let addresses): address = addresses[0]
         }
 
         let connection = transport.makeConnection(to: address, serverName: target.hostName)

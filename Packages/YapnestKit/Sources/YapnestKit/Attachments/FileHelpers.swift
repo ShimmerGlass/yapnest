@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 extension URL {
     /// The file's size in bytes, or 0 if it can't be read.
@@ -56,5 +58,30 @@ public enum SafeFileName {
             }
         }
         return result.isEmpty ? fallback : result
+    }
+}
+
+extension CGImage {
+    /// The image encoded as `type`, with `quality` (0 to 1) for lossy ones.
+    func encoded(as type: UTType, quality: Double? = nil) -> Data? {
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, type.identifier as CFString, 1, nil) else { return nil }
+        let options = quality.map { [kCGImageDestinationLossyCompressionQuality: $0] as CFDictionary }
+        CGImageDestinationAddImage(destination, self, options)
+        return CGImageDestinationFinalize(destination) ? output as Data : nil
+    }
+}
+
+extension CGImageSource {
+    /// Frame `index` decoded no larger than `maxPixelSize` on its longest
+    /// side, with its orientation applied and without decoding it in full.
+    func thumbnail(at index: Int = 0, maxPixelSize: Int, cacheImmediately: Bool = false) -> CGImage? {
+        var options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ]
+        if cacheImmediately { options[kCGImageSourceShouldCacheImmediately] = true }
+        return CGImageSourceCreateThumbnailAtIndex(self, index, options as CFDictionary)
     }
 }

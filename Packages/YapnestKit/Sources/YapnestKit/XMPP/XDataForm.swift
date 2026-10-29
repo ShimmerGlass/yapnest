@@ -59,7 +59,7 @@ public struct XDataForm: Hashable, Sendable {
             }
 
             /// What to show for the option: its label, or else its value.
-            public var title: String { label.flatMap { $0.isEmpty ? nil : $0 } ?? value }
+            public var title: String { label.nonEmpty ?? value }
         }
 
         /// The field's name. A `fixed` field, which is only text to read, has none.
@@ -85,7 +85,7 @@ public struct XDataForm: Hashable, Sendable {
         }
 
         /// What to call the field: its label, or else its name.
-        public var title: String { label.flatMap { $0.isEmpty ? nil : $0 } ?? name ?? "" }
+        public var title: String { label.nonEmpty ?? name ?? "" }
 
         /// Whether the user is shown the field as something to fill in.
         public var isEditable: Bool { type != .fixed && type != .hidden }
@@ -260,5 +260,30 @@ extension XDataForm.Field {
         default:
             return values.filter { !$0.isEmpty }
         }
+    }
+}
+
+extension XMPPSession {
+    /// A form of the given type with `FORM_TYPE` first and the fields sorted
+    /// by name, so the same fields always make the same stanza.
+    static func dataForm(type: String, formType: String, fields: [String: [String]]) -> Element {
+        let x = Element(name: "x", xmlns: NS.dataForms)
+        x.setAttribute("type", value: type)
+        var all = [("FORM_TYPE", [formType])]
+        all += fields.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+        for (name, values) in all {
+            let field = Element(name: "field")
+            field.setAttribute("var", value: name)
+            for value in values { field.addChild(Element(name: "value", cdata: value)) }
+            x.addChild(field)
+        }
+        return x
+    }
+}
+
+extension Optional where Wrapped == String {
+    /// The text, or nil if there is none.
+    var nonEmpty: String? {
+        flatMap { $0.isEmpty ? nil : $0 }
     }
 }

@@ -87,16 +87,20 @@ struct SheetCancelButton: View {
 /// for VoiceOver.
 struct SheetConfirmButton: View {
     let title: LocalizedStringKey
+    let isBusy: Bool
     let action: () -> Void
 
-    init(_ title: LocalizedStringKey, action: @escaping () -> Void) {
+    init(_ title: LocalizedStringKey, isBusy: Bool = false, action: @escaping () -> Void) {
         self.title = title
+        self.isBusy = isBusy
         self.action = action
     }
 
     @ViewBuilder
     var body: some View {
-        if Platform.isMac {
+        if isBusy {
+            ProgressView()
+        } else if Platform.isMac {
             SheetIconButton(title: title, systemImage: "checkmark", action: action)
         } else if #available(iOS 26, *) {
             Button(action: action) { Label(title, systemImage: "checkmark") }
@@ -193,7 +197,12 @@ struct SheetEditButton: View {
 #if targetEnvironment(macCatalyst)
 /// What UIKit and SwiftUI have no way to ask of AppKit on Catalyst, reached
 /// through the ObjC runtime.
-private enum AppKit {
+enum AppKit {
+    /// The shared NSApplication.
+    static var application: NSObject? {
+        object(of: "NSApplication", "sharedApplication")
+    }
+
     /// What the AppKit class `className` returns for a selector that takes
     /// nothing and returns an object. Never use it for a void selector.
     static func object(of className: String, _ selector: String) -> NSObject? {
@@ -214,7 +223,7 @@ enum DockBadge {
     /// Discord's dot, for what's unread but doesn't notify. Set after the
     /// badge count, which replaces the label.
     @MainActor static func showDot(_ dot: Bool) {
-        let tile = AppKit.object(of: "NSApplication", "sharedApplication")?.value(forKey: "dockTile") as? NSObject
+        let tile = AppKit.application?.value(forKey: "dockTile") as? NSObject
         tile?.perform(NSSelectorFromString("setBadgeLabel:"), with: dot ? "•" : nil)
     }
 }
@@ -249,7 +258,7 @@ enum CharacterPalette {
         // UIKit doesn't pass this on, so ask AppKit, as Edit › Emoji &
         // Symbols does, once focus has settled on the field it fills.
         DispatchQueue.main.async {
-            AppKit.send("orderFrontCharacterPalette:", to: AppKit.object(of: "NSApplication", "sharedApplication"))
+            AppKit.send("orderFrontCharacterPalette:", to: AppKit.application)
         }
     }
 }

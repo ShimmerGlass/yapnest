@@ -1,6 +1,14 @@
 import Foundation
 import GRDB
 
+extension AppDatabase {
+    /// Whether the GIF picker is offered. On unless turned off.
+    public func observeGifsEnabled() -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<Bool>>> {
+        ValueObservation.tracking { db in try Self.flag(db, .gifs, default: true) }
+        .removeDuplicates()
+    }
+}
+
 /// The GIF service behind the account's consent. KLIPY is run from the
 /// United States, which the EU has no adequacy decision for, so the first
 /// request is only made once the user has agreed (GDPR Art. 49(1)(a)).

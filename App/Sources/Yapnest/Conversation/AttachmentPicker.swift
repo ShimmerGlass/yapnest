@@ -218,9 +218,11 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
         var name = CNContactFormatter.string(from: contact, style: .fullName) ?? ""
         if name.isEmpty { name = contact.organizationName }
         // The name becomes a path component and the file's name in the message.
-        name = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if name.isEmpty { name = String(localized: "Contact") }
+        // Slashes turn into dashes first, as the safe name would keep only what follows the last.
+        name = SafeFileName.make(
+            name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: "\\", with: "-"),
+            fallback: String(localized: "Contact"),
+        )
         model.preparing {
             await model.stage(isPhoto: false) { try await Self.writeVCard(data, named: name) }
         }
@@ -229,19 +231,19 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
     /// Writes a contact's vCard off the main thread, in a folder of its own
     /// like `writeJPEG`.
     static func writeVCard(_ data: Data, named name: String) async throws -> URL {
-        try await Task.detached(priority: .userInitiated) {
+        try await offMain {
             try writeIntoOwnFolder(data, named: name + ".vcf")
-        }.value
+        }
     }
 
     /// Encodes and writes a picture that only exists in memory, off the main
     /// thread. It goes in a folder of its own, which is what clearing a
     /// staged attachment removes.
     static func writeJPEG(_ image: UIImage) async throws -> URL {
-        try await Task.detached(priority: .userInitiated) {
+        try await offMain {
             guard let data = image.jpegData(compressionQuality: 0.95) else { throw CocoaError(.fileWriteUnknown) }
             return try writeIntoOwnFolder(data, named: "photo-\(UUID().uuidString.prefix(8)).jpg")
-        }.value
+        }
     }
 
     /// Writes `data` as `name` in a new folder directly under the temporary
@@ -258,9 +260,9 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
     /// Copies a file the system handed over into a folder of our own, off the
     /// main thread, so `discardCopy` may delete it later.
     static func copyIntoOwnFolder(_ file: URL) async throws -> URL {
-        try await Task.detached(priority: .userInitiated) {
+        try await offMain {
             try FileManager.default.copyIntoUniqueFolder(file, under: FileManager.default.temporaryDirectory)
-        }.value
+        }
     }
 
     /// Removes the folder `writeJPEG`, `writeVCard` or `copy` made for a file, once nothing
@@ -344,9 +346,9 @@ enum MacFileActions {
 
     /// Off the main thread: a file can be a large video.
     private static func named(_ file: URL, _ name: String) async -> URL? {
-        await Task.detached(priority: .userInitiated) {
+        await offMain {
             try? FileManager.default.copyIntoUniqueFolder(file, named: name, under: FileManager.default.temporaryDirectory)
-        }.value
+        }
     }
 }
 

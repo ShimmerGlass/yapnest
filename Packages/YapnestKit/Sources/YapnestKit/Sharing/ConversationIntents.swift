@@ -115,10 +115,7 @@ public enum ConversationIntents {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let image = AvatarStore.thumbnail(of: source, pixels: pixels)
         else { return nil }
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, nil)
-        return CGImageDestinationFinalize(destination) ? output as Data : nil
+        return image.encoded(as: .png)
     }
 
     /// Tells the system about this chat's message. Incoming, that is what makes
@@ -144,13 +141,10 @@ extension MessageNotification {
     public static func replaceDelivered(_ edited: [MessageNotification], badge: Int?, avatars: AvatarStore) async {
         guard !edited.isEmpty else { return }
         let center = UNUserNotificationCenter.current()
-        let delivered = await center.deliveredNotifications().map { (identifier: $0.request.identifier, userInfo: $0.request.content.userInfo) }
+        let delivered = await center.deliveredUserInfo()
         for (notification, identifier) in deliveredIdentifiers(replacing: edited, among: delivered) {
             let content = await notification.content(badge: badge, avatars: avatars)
-            let silent = (content.mutableCopy() as? UNMutableNotificationContent) ?? notification.content(badge: badge)
-            silent.sound = nil
-            silent.interruptionLevel = .passive
-            try? await center.add(UNNotificationRequest(identifier: identifier, content: silent, trigger: nil))
+            await center.replaceSilently(identifier, with: content, fallback: notification.content(badge: badge))
         }
     }
 
@@ -172,10 +166,7 @@ extension MessageNotification {
             guard let identifier = deliveredIdentifier(forHeldIn: peer, among: delivered) else { continue }
             let summary = notification.summary
             let content = await summary.content(badge: badge, avatars: avatars)
-            let silent = (content.mutableCopy() as? UNMutableNotificationContent) ?? summary.content(badge: badge)
-            silent.sound = nil
-            silent.interruptionLevel = .passive
-            try? await center.add(UNNotificationRequest(identifier: identifier, content: silent, trigger: nil))
+            await center.replaceSilently(identifier, with: content, fallback: summary.content(badge: badge))
         }
     }
 

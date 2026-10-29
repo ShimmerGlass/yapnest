@@ -53,11 +53,15 @@ enum InteractionsFixture {
 
     private static let account = DevFixture.account
 
-    private static func chat(_ database: AppDatabase, _ peer: JID, _ name: String) throws -> Conversation {
-        try database.updateRosterItem(jid: peer, name: name, subscription: .both, isPending: false)
-        let conversation = try database.conversation(with: peer)
-        try database.setHistoryState(peer: peer, isComplete: true, cursor: nil)
-        return conversation
+    /// Timestamps a minute apart, from `start`.
+    private struct Clock {
+        var time: Date
+        init(start: Date) { time = start }
+
+        mutating func next() -> Date {
+            time.addTimeInterval(60)
+            return time
+        }
     }
 
     @discardableResult
@@ -73,19 +77,18 @@ enum InteractionsFixture {
     }
 
     private static func fillNest(_ database: AppDatabase, files: URL) throws {
-        let conversation = try chat(database, nest, "Nest")
-        var time = Date().addingTimeInterval(-3600)
-        func next() -> Date { time.addTimeInterval(60); return time }
+        let conversation = try DevFixture.prepare(database, peer: nest, name: "Nest")
+        var clock = Clock(start: Date().addingTimeInterval(-3600))
 
-        let link = try add(database, conversation, from: nest, "Morning! Notes are at https://example.com/nest-notes", at: next())
+        let link = try add(database, conversation, from: nest, "Morning! Notes are at https://example.com/nest-notes", at: clock.next())
         // A stored preview, an empty one, so nothing is fetched.
         try database.writer.write { db in
             try LinkPreview(url: link.link ?? "https://example.com/nest-notes", kind: .none, fetchedAt: Date(timeIntervalSince1970: 1_790_000_000)).save(db)
         }
 
-        let photo = try add(database, conversation, from: nest, "https://files.fixture.test/twig.png", at: next())
+        let photo = try add(database, conversation, from: nest, "https://files.fixture.test/twig.png", at: clock.next())
         try png(width: 200, height: 120).write(to: files.appending(path: "interactions-twig.png"), options: .atomic)
-        let file = try add(database, conversation, from: nest, "https://files.fixture.test/eggs.txt", at: next())
+        let file = try add(database, conversation, from: nest, "https://files.fixture.test/eggs.txt", at: clock.next())
         try Data("Three eggs, one nest.\n".utf8).write(to: files.appending(path: "interactions-eggs.txt"), options: .atomic)
         try database.writer.write { db in
             for (message, name, type, localFile, size) in [
@@ -99,36 +102,35 @@ enum InteractionsFixture {
             }
         }
 
-        try add(database, conversation, from: nest, "React to this one.", at: next())
-        try add(database, conversation, from: nest, "Copy me please.", outgoing: true, at: next())
+        try add(database, conversation, from: nest, "React to this one.", at: clock.next())
+        try add(database, conversation, from: nest, "Copy me please.", outgoing: true, at: clock.next())
         // Not yet sent, as the account is offline: editing or deleting it
         // then needs no server, which one that was sent would.
-        try add(database, conversation, from: nest, "Edit me please.", outgoing: true, at: next(), status: .pending)
-        try add(database, conversation, from: nest, "Delete me please.", outgoing: true, at: next(), status: .pending)
-        try add(database, conversation, from: nest, "Sent already.", outgoing: true, at: next())
-        let reacted = try add(database, conversation, from: nest, "Already reacted to.", at: next())
+        try add(database, conversation, from: nest, "Edit me please.", outgoing: true, at: clock.next(), status: .pending)
+        try add(database, conversation, from: nest, "Delete me please.", outgoing: true, at: clock.next(), status: .pending)
+        try add(database, conversation, from: nest, "Sent already.", outgoing: true, at: clock.next())
+        let reacted = try add(database, conversation, from: nest, "Already reacted to.", at: clock.next())
         try database.writer.write { db in
             try Reaction(messageId: reacted.id!, sender: account, emoji: "👍").insert(db)
         }
     }
 
     private static func fillQuotes(_ database: AppDatabase) throws {
-        let conversation = try chat(database, quotes, "Quotes")
-        var time = Date().addingTimeInterval(-7200)
-        func next() -> Date { time.addTimeInterval(60); return time }
-        try add(database, conversation, from: quotes, quotedWords, at: next(), remoteId: "quoted-start")
+        let conversation = try DevFixture.prepare(database, peer: quotes, name: "Quotes")
+        var clock = Clock(start: Date().addingTimeInterval(-7200))
+        try add(database, conversation, from: quotes, quotedWords, at: clock.next(), remoteId: "quoted-start")
         for index in 1...fillerCount {
-            try add(database, conversation, from: quotes, String(format: "Filler %02d to push the start off screen.", index), outgoing: index.isMultiple(of: 3), at: next())
+            try add(database, conversation, from: quotes, String(format: "Filler %02d to push the start off screen.", index), outgoing: index.isMultiple(of: 3), at: clock.next())
         }
         try add(
-            database, conversation, from: quotes, replyWords, outgoing: true, at: next(),
+            database, conversation, from: quotes, replyWords, outgoing: true, at: clock.next(),
             replyTo: (id: "quoted-start", sender: quotes, text: quotedWords),
         )
     }
 
     /// Strikethrough, nested spans and preformatted blocks of every shape.
     private static func fillStyling(_ database: AppDatabase) throws {
-        let conversation = try chat(database, styling, "Styling")
+        let conversation = try DevFixture.prepare(database, peer: styling, name: "Styling")
         var time = Date().addingTimeInterval(-5400)
         let wide = (1...12).map { "argument\($0)" }.joined(separator: ", ")
         let longBlock = (1...40).map { "block line \($0)" }.joined(separator: "\n")
@@ -148,7 +150,7 @@ enum InteractionsFixture {
     }
 
     private static func fillUnread(_ database: AppDatabase) throws {
-        let conversation = try chat(database, unread, "Unread")
+        let conversation = try DevFixture.prepare(database, peer: unread, name: "Unread")
         var time = Date().addingTimeInterval(-1800)
         for body in ["First unread.", "Second unread.", "Third unread."] {
             time.addTimeInterval(60)
@@ -166,7 +168,7 @@ enum InteractionsFixture {
     }
 
     private static func fillBlocked(_ database: AppDatabase) throws {
-        let conversation = try chat(database, blocked, "Blocked")
+        let conversation = try DevFixture.prepare(database, peer: blocked, name: "Blocked")
         try add(database, conversation, from: blocked, "You blocked me.", at: Date().addingTimeInterval(-2400))
         try database.writer.write { db in
             var contact = try Contact.fetchOne(db, key: blocked) ?? Contact(jid: blocked)
@@ -177,38 +179,35 @@ enum InteractionsFixture {
 
     /// A short message, then a long one as the newest.
     private static func fillLong(_ database: AppDatabase) throws {
-        let conversation = try chat(database, long, "Long")
-        var time = Date().addingTimeInterval(-600)
-        func next() -> Date { time.addTimeInterval(60); return time }
-        try add(database, conversation, from: long, "Just a short one.", at: next())
-        try add(database, conversation, from: long, longBody, at: next())
+        let conversation = try DevFixture.prepare(database, peer: long, name: "Long")
+        var clock = Clock(start: Date().addingTimeInterval(-600))
+        try add(database, conversation, from: long, "Just a short one.", at: clock.next())
+        try add(database, conversation, from: long, longBody, at: clock.next())
     }
 
     /// Emoji alone in each direction, which are drawn without a bubble, and
     /// one as a reply, which keeps its bubble.
     private static func fillEmoji(_ database: AppDatabase) throws {
-        let conversation = try chat(database, emoji, "Emoji")
-        var time = Date().addingTimeInterval(-600)
-        func next() -> Date { time.addTimeInterval(60); return time }
-        try add(database, conversation, from: emoji, "Words to reply to.", at: next(), remoteId: "emoji-words")
-        try add(database, conversation, from: emoji, "🪺🐣", at: next())
-        try add(database, conversation, from: emoji, "🥚", outgoing: true, at: next())
-        try add(database, conversation, from: emoji, "🐦", outgoing: true, at: next(), replyTo: (id: "emoji-words", sender: emoji, text: "Words to reply to."))
+        let conversation = try DevFixture.prepare(database, peer: emoji, name: "Emoji")
+        var clock = Clock(start: Date().addingTimeInterval(-600))
+        try add(database, conversation, from: emoji, "Words to reply to.", at: clock.next(), remoteId: "emoji-words")
+        try add(database, conversation, from: emoji, "🪺🐣", at: clock.next())
+        try add(database, conversation, from: emoji, "🥚", outgoing: true, at: clock.next())
+        try add(database, conversation, from: emoji, "🐦", outgoing: true, at: clock.next(), replyTo: (id: "emoji-words", sender: emoji, text: "Words to reply to."))
     }
 
     /// A call of each outcome, among words, so the rows can be told apart and
     /// the last one is a call, as the chat list's preview shows.
     private static func fillCalls(_ database: AppDatabase) throws {
-        let conversation = try chat(database, calls, "Calls")
-        var time = Date().addingTimeInterval(-900)
-        func next() -> Date { time.addTimeInterval(60); return time }
-        try add(database, conversation, from: calls, "Words before the calls.", at: next())
+        let conversation = try DevFixture.prepare(database, peer: calls, name: "Calls")
+        var clock = Clock(start: Date().addingTimeInterval(-900))
+        try add(database, conversation, from: calls, "Words before the calls.", at: clock.next())
         let kinds: [(CallOutcome, Message.Direction, TimeInterval?)] = [
             (.answered, .outgoing, 151), (.answered, .incoming, 42), (.missed, .incoming, nil), (.declined, .outgoing, nil),
             (.cancelled, .outgoing, nil), (.busy, .outgoing, nil), (.failed, .incoming, nil),
         ]
         for (index, (outcome, direction, duration)) in kinds.enumerated() {
-            try DevFixture.addCall(database, conversation, peer: calls, outcome: outcome, direction: direction, duration: duration, at: next(), sid: "calls-\(index)")
+            try DevFixture.addCall(database, conversation, peer: calls, outcome: outcome, direction: direction, duration: duration, at: clock.next(), sid: "calls-\(index)")
         }
     }
 
@@ -217,16 +216,15 @@ enum InteractionsFixture {
     /// failed, and Opus, which is shown as a file. All of them must be the
     /// same height, so the list doesn't move when one downloads.
     private static func fillVoice(_ database: AppDatabase, files: URL) throws {
-        let conversation = try chat(database, voice, "Voice")
+        let conversation = try DevFixture.prepare(database, peer: voice, name: "Voice")
         try writeSound(to: files.appending(path: "fixture-voice.caf"), seconds: 30)
         // Days old, so the chat sorts below the others and doesn't push one of
         // them out of the chat list's first screen.
-        var time = Date().addingTimeInterval(-3 * 24 * 3600)
-        func next() -> Date { time.addTimeInterval(60); return time }
-        try add(database, conversation, from: voice, "Words before the voice messages.", at: next())
+        var clock = Clock(start: Date().addingTimeInterval(-3 * 24 * 3600))
+        try add(database, conversation, from: voice, "Words before the voice messages.", at: clock.next())
         func clip(_ id: String, _ name: String, _ mimeType: String, outgoing: Bool = false, duration: TimeInterval? = nil, state: Attachment.State, local: Bool = false) throws {
             let url = "https://files.fixture.test/\(id)/\(name)"
-            let message = try add(database, conversation, from: voice, url, outgoing: outgoing, at: next(), remoteId: id)
+            let message = try add(database, conversation, from: voice, url, outgoing: outgoing, at: clock.next(), remoteId: id)
             try database.writer.write { db in
                 try Attachment(
                     messageId: message.id!, url: url, name: name, mimeType: mimeType, size: 48_000, duration: duration,
@@ -240,7 +238,7 @@ enum InteractionsFixture {
         try clip("v-failed", "voice-message-20260101-101010.m4a", "audio/mp4", duration: 5, state: .downloadFailed)
         try clip("v-song", "Song.mp3", "audio/mpeg", duration: 200, state: .remote)
         try clip("v-opus", "RECORDING_20260101_101011123.oga", "audio/ogg", state: .remote)
-        try add(database, conversation, from: voice, "Voice chat newest.", at: next())
+        try add(database, conversation, from: voice, "Voice chat newest.", at: clock.next())
     }
 
     /// A file the player can open: a tone, quiet enough to leave running in a
@@ -257,12 +255,11 @@ enum InteractionsFixture {
 
     /// A long message with others after it, so it grows above the newest.
     private static func fillWordy(_ database: AppDatabase) throws {
-        let conversation = try chat(database, wordy, "Wordy")
-        var time = Date().addingTimeInterval(-500)
-        func next() -> Date { time.addTimeInterval(60); return time }
-        try add(database, conversation, from: wordy, longBody, outgoing: true, at: next())
-        try add(database, conversation, from: wordy, "Short and sweet.", at: next())
-        try add(database, conversation, from: wordy, "Wordy newest.", at: next())
+        let conversation = try DevFixture.prepare(database, peer: wordy, name: "Wordy")
+        var clock = Clock(start: Date().addingTimeInterval(-500))
+        try add(database, conversation, from: wordy, longBody, outgoing: true, at: clock.next())
+        try add(database, conversation, from: wordy, "Short and sweet.", at: clock.next())
+        try add(database, conversation, from: wordy, "Wordy newest.", at: clock.next())
     }
 
     private static func png(width: Int, height: Int) -> Data {

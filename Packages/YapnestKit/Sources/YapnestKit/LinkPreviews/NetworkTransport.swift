@@ -3,6 +3,14 @@ import Network
 import os
 import Security
 
+extension OSAllocatedUnfairLock where State == Bool {
+    /// True for the first caller only, so one of several racing callbacks
+    /// resumes a continuation.
+    func claim() -> Bool {
+        withLock { was in defer { was = true }; return !was }
+    }
+}
+
 /// The real transport: our own `getaddrinfo` and a Network.framework
 /// connection to the address we picked.
 struct SystemTransport: FetchTransport {
@@ -12,7 +20,7 @@ struct SystemTransport: FetchTransport {
         try await withCheckedThrowingContinuation { continuation in
             let done = OSAllocatedUnfairLock(initialState: false)
             let finish: @Sendable (Result<[IPAddress], Error>) -> Void = { result in
-                guard done.withLock({ was in defer { was = true }; return !was }) else { return }
+                guard done.claim() else { return }
                 continuation.resume(with: result)
             }
             DispatchQueue.global(qos: .utility).async { finish(Result { try Self.lookup(host) }) }
@@ -104,7 +112,7 @@ final class NWFetchConnection: FetchConnection, @unchecked Sendable {
     func start() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let resumed = OSAllocatedUnfairLock(initialState: false)
-            let first: @Sendable () -> Bool = { resumed.withLock { was in defer { was = true }; return !was } }
+            let first: @Sendable () -> Bool = { resumed.claim() }
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:

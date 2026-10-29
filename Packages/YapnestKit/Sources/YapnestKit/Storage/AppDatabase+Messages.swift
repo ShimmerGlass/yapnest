@@ -8,8 +8,16 @@ extension AppDatabase {
         try writer.write { db in try Self.conversation(db, with: peer, kind: kind) }
     }
 
+    static func existingConversation(_ db: Database, peer: JID) throws -> Conversation? {
+        try Conversation.filter(Column("peer") == peer).fetchOne(db)
+    }
+
+    static func conversationId(_ db: Database, peer: JID) throws -> Int64? {
+        try Conversation.filter(Column("peer") == peer).select(Column("id"), as: Int64.self).fetchOne(db)
+    }
+
     static func conversation(_ db: Database, with peer: JID, kind: Conversation.Kind = .chat) throws -> Conversation {
-        if let existing = try Conversation.filter(Column("peer") == peer).fetchOne(db) {
+        if let existing = try Self.existingConversation(db, peer: peer) {
             return existing
         }
         // Sorts last until its first message sets the real time.
@@ -94,7 +102,7 @@ extension AppDatabase {
     /// Marks what came before `inbound`, a message of ours, read.
     func markRead(before inbound: InboundMessage) throws {
         try writer.write { db in
-            guard let id = try Conversation.filter(Column("peer") == inbound.peer).fetchOne(db)?.id else { return }
+            guard let id = try Self.conversationId(db, peer: inbound.peer) else { return }
             try Self.markRead(db, conversationId: id, through: inbound.timestamp)
         }
     }
@@ -105,7 +113,7 @@ extension AppDatabase {
     public func confirmArchived(_ inbound: InboundMessage) throws {
         guard let serverId = inbound.serverId else { return }
         try writer.write { db in
-            guard let conversation = try Conversation.filter(Column("peer") == inbound.peer).fetchOne(db), let id = conversation.id else { return }
+            guard let id = try Self.conversationId(db, peer: inbound.peer) else { return }
             let probe = Message(conversationId: id, direction: inbound.isOutgoing ? .outgoing : .incoming, sender: inbound.sender, body: "",
                                 remoteId: inbound.id, originId: inbound.originId, serverId: serverId)
             if let existing = try Self.duplicate(of: probe, db) {
@@ -141,7 +149,7 @@ extension AppDatabase {
     /// When several match, `Message.ReferenceRank` says which is meant.
     public static func referencedMessage(_ db: Database, conversationId: Int64, id: String, direction: Message.Direction? = nil) throws -> Message? {
         try referencedMessages(db, conversationId: conversationId, id: id, direction: direction)
-            .max { $0.referenceRank(for: id)! < $1.referenceRank(for: id)! }
+            .bestMatch(for: id)
     }
 
     /// Every message the reference could mean, in no particular order.
@@ -174,10 +182,17 @@ extension AppDatabase {
     /// Only while it is pending or sent: once the recipient's side confirmed
     /// it, an error naming it is not to be believed.
     static func bounceOutgoing(_ db: Database, conversationId: Int64, remoteId: String, to status: Message.Status, error: String?) throws {
-        guard var message = try outgoingMessage(db, conversationId: conversationId, remoteId: remoteId),
-              message.status == .pending || message.status == .sent else { return }
-        message.status = status
-        message.error = error
+        try updateOutgoing(db, conversationId: conversationId, remoteId: remoteId) { message in
+            guard message.status == .pending || message.status == .sent else { return false }
+            message.status = status
+            message.error = error
+            return true
+        }
+    }
+
+    /// Saves our message `remoteId` as `change` leaves it, if it returns true.
+    static func updateOutgoing(_ db: Database, conversationId: Int64, remoteId: String, _ change: (inout Message) -> Bool) throws {
+        guard var message = try outgoingMessage(db, conversationId: conversationId, remoteId: remoteId), change(&message) else { return }
         try message.update(db)
     }
 
@@ -234,17 +249,11 @@ extension AppDatabase {
     }
 
     static func updateStatus(_ db: Database, _ status: Message.Status, conversationId: Int64, remoteId: String, force: Bool = false) throws {
-        guard var message = try outgoingMessage(db, conversationId: conversationId, remoteId: remoteId) else { return }
-        let allowed = force || status > message.status || (status == .failed && message.status == .pending)
-        guard allowed, status != message.status else { return }
-        message.status = status
-        try message.update(db)
-    }
-
-    /// How far each of our messages (by row id) has got, and why it failed.
-    func deliveryStates(ids: [Int64]) throws -> [Int64: (status: Message.Status, error: String?)] {
-        try reader.read { db in
-            Dictionary(uniqueKeysWithValues: try Message.filter(ids.contains(Column("id"))).fetchAll(db).map { ($0.id!, ($0.status, $0.error)) })
+        try updateOutgoing(db, conversationId: conversationId, remoteId: remoteId) { message in
+            let allowed = force || status > message.status || (status == .failed && message.status == .pending)
+            guard allowed, status != message.status else { return false }
+            message.status = status
+            return true
         }
     }
 
@@ -283,19 +292,21 @@ extension AppDatabase {
     /// Marks an outgoing message as failed for a reason worth showing.
     public func markFailed(conversationId: Int64, remoteId: String, error: String) throws {
         try writer.write { db in
-            guard var message = try Self.outgoingMessage(db, conversationId: conversationId, remoteId: remoteId) else { return }
-            message.status = .failed
-            message.error = error
-            try message.update(db)
+            try Self.updateOutgoing(db, conversationId: conversationId, remoteId: remoteId) { message in
+                message.status = .failed
+                message.error = error
+                return true
+            }
         }
     }
 
     /// Records the trust of the devices an outgoing message was encrypted for.
     public func setTrust(_ trust: OMEMODevice.Trust, conversationId: Int64, remoteId: String) throws {
         try writer.write { db in
-            guard var message = try Self.outgoingMessage(db, conversationId: conversationId, remoteId: remoteId) else { return }
-            message.omemoTrust = trust
-            try message.update(db)
+            try Self.updateOutgoing(db, conversationId: conversationId, remoteId: remoteId) { message in
+                message.omemoTrust = trust
+                return true
+            }
         }
     }
 
@@ -310,16 +321,17 @@ extension AppDatabase {
 
     public func markPending(conversationId: Int64, remoteId: String) throws {
         try writer.write { db in
-            guard var message = try Self.outgoingMessage(db, conversationId: conversationId, remoteId: remoteId) else { return }
-            message.status = .pending
-            message.error = nil
-            try message.update(db)
+            try Self.updateOutgoing(db, conversationId: conversationId, remoteId: remoteId) { message in
+                message.status = .pending
+                message.error = nil
+                return true
+            }
         }
     }
 
     public func isEncrypted(with peer: JID) throws -> Bool {
         try reader.read { db in
-            try Conversation.filter(Column("peer") == peer).fetchOne(db)?.isEncrypted ?? Self.encryptsByDefault(db, with: peer)
+            try Self.existingConversation(db, peer: peer)?.isEncrypted ?? Self.encryptsByDefault(db, with: peer)
         }
     }
 
@@ -385,7 +397,7 @@ extension AppDatabase {
     /// has made sure the room itself said so. Returns its file to delete.
     public func applyModeratedRetraction(in room: JID, target: String) throws -> Attachment? {
         try writer.write { db in
-            guard let conversation = try Conversation.filter(Column("peer") == room).fetchOne(db), let conversationId = conversation.id,
+            guard let conversationId = try Self.conversationId(db, peer: room),
                   var message = try Message.filter(Column("conversationId") == conversationId && Column("serverId") == target && Column("isRetracted") == false).fetchOne(db)
             else { return nil }
             message.actionPendingId = nil
@@ -404,7 +416,7 @@ extension AppDatabase {
     }
 
     private static func applyDisplayed(_ db: Database, peer: JID, stanzaId: String) throws -> Bool {
-        guard let conversation = try Conversation.filter(Column("peer") == peer).fetchOne(db), let id = conversation.id,
+        guard let id = try Self.conversationId(db, peer: peer),
               let message = try Message.filter(Column("conversationId") == id && Column("serverId") == stanzaId).fetchOne(db) else { return false }
         try markRead(db, conversationId: id, through: message.timestamp)
         return true

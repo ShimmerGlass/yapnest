@@ -346,16 +346,36 @@ extension XMPPSession {
         guard let group = try? database.groupChat(room), !group.hasLeft else { throw GroupError.notConnected }
         let grace = lock.withLock { $0.connectionGrace }
         let remaining = max(0, grace - Date().timeIntervalSince(started))
-        let status = try? await withTimeout(remaining) { [self] () -> RoomStatus? in
-            for await all in rooms.values {
-                guard let status = all[room] else { continue }
-                if case .failed = status.phase { return nil }
-                if status.isJoined { return status }
-            }
-            return nil
+        guard case .reached(let status) = await awaitRoom(room, timeout: remaining, until: { $0.isJoined }), isConnected else {
+            throw GroupError.notConnected
         }
-        guard let status, isConnected else { throw GroupError.notConnected }
         return status
+    }
+
+    /// What waiting for a room's status ended with.
+    enum RoomWait: Sendable {
+        case reached(RoomStatus)
+        case failed(String)
+        /// The rooms stream finished.
+        case ended
+        case timedOut
+    }
+
+    /// Waits until `reached` holds for the room's status, or its join fails,
+    /// or `timeout` passes. Each caller words the other outcomes its own way.
+    func awaitRoom(_ room: JID, timeout: TimeInterval, until reached: @escaping @Sendable (RoomStatus) -> Bool) async -> RoomWait {
+        do {
+            return try await withTimeout(timeout) { [self] () -> RoomWait in
+                for await all in rooms.values {
+                    guard let status = all[room] else { continue }
+                    if case .failed(let reason) = status.phase { return .failed(reason) }
+                    if reached(status) { return .reached(status) }
+                }
+                return .ended
+            }
+        } catch {
+            return .timedOut
+        }
     }
 
     /// Changes one room's live state and publishes the result, after the
@@ -593,11 +613,16 @@ extension XMPPSession {
         vCardAvatarAnnounced(room, hash: hash)
     }
 
+    /// The codes of the `<status/>` elements in a MUC user `<x/>` (XEP-0045 §15.6).
+    static func statusCodes(in x: Element?) -> Set<Int> {
+        Set(x?.filterChildren(name: "status", xmlns: nil).compactMap { $0.getAttribute("code").flatMap(Int.init) } ?? [])
+    }
+
     func roomPresence(_ presence: Presence, room: JID) {
         let nick = presence.from?.resource
         let x = presence.firstChild(name: "x", xmlns: NS.mucUser)
         let item = x?.firstChild(name: "item")
-        let statuses = Set(x?.filterChildren(name: "status", xmlns: nil).compactMap { $0.getAttribute("code").flatMap(Int.init) } ?? [])
+        let statuses = Self.statusCodes(in: x)
         // Not `roomStatus`, which would apply the waiting occupants for each presence.
         guard let status = lock.withLock({ $0.rooms[room] }) else { return }
 
@@ -931,15 +956,7 @@ extension XMPPSession {
         logger.warning("Joining \(room, privacy: .private) created it; cancelling")
         // Gone for good, or every new session would create it and cancel it again.
         groupDestroyed(room)
-        let iq = Iq()
-        iq.type = .set
-        iq.to = Martin.JID(room.martin)
-        let query = Element(name: "query", xmlns: NS.mucOwner)
-        let cancel = Element(name: "x", xmlns: NS.dataForms)
-        cancel.setAttribute("type", value: "cancel")
-        query.addChild(cancel)
-        iq.addChild(query)
-        client.context.writer.write(iq, completionHandler: { [weak self] result in
+        client.context.writer.write(OutboundStanza.cancelConfiguration(of: room), completionHandler: { [weak self] result in
             // The room is gone from our side either way; one that stays is
             // an empty locked room under a name nobody has, and nothing for
             // the user to act on.
@@ -1151,14 +1168,11 @@ extension XMPPSession {
     }
 
     private func fetchRoomArchivePage(_ room: JID, rsm: RSM.Query, after: String? = nil, _ visit: RoomCatchUp, onePage: Bool = false, pagesRead: Int = 0) {
-        // The room's archive, which discovery found speaks MAM 2.
-        let queryId = UUID().uuidString
-        client.module(.mam).queryItems(version: .MAM2, componentJid: Martin.JID(room.martin), queryId: queryId, rsm: rsm) { [weak self] result in
+        queryRoomArchive(room, rsm) { [weak self] result in
             guard let self else { return }
-            let stored = self.flushArchive(query: queryId)
             guard self.roomCatchUpMayProceed(room, visit) else { return }
             switch result {
-            case .success(let page): self.roomArchivePageRead(room, page, stored: stored, after: after, visit, onePage: onePage, pagesRead: pagesRead)
+            case .success(let read): self.roomArchivePageRead(room, read.page, stored: read.stored, after: after, visit, onePage: onePage, pagesRead: pagesRead)
             case .failure(let error): self.roomArchivePageFailed(room, rsm: rsm, after: after, error, visit, onePage: onePage, pagesRead: pagesRead)
             }
         }
@@ -1206,16 +1220,8 @@ extension XMPPSession {
         }
         Task { [weak self] in
             guard let self else { return }
-            // The failure that brought us here is the first attempt.
-            var first: Error? = error
             do {
-                let read = try await retryingPassingErrors {
-                    if let earlier = first {
-                        first = nil
-                        throw earlier
-                    }
-                    return try await queryRoomArchive(room, rsm)
-                }
+                let read = try await retryingPassingErrors(afterFailure: error) { try await queryRoomArchive(room, rsm) }
                 guard roomCatchUpMayProceed(room, visit) else { return }
                 roomArchivePageRead(room, read.page, stored: read.stored, after: after, visit, onePage: onePage, pagesRead: pagesRead)
             } catch {
@@ -1241,16 +1247,19 @@ extension XMPPSession {
         var stored: Bool
     }
 
-    private func queryRoomArchive(_ room: JID, _ rsm: RSM.Query) async throws -> ArchivePage {
+    /// Asks the room's archive, which discovery found speaks MAM 2, for a
+    /// page. What it carried is stored before the result is reported.
+    private func queryRoomArchive(_ room: JID, _ rsm: RSM.Query, completion: @escaping (Result<ArchivePage, XMPPError>) -> Void) {
         let queryId = UUID().uuidString
-        return try await withCheckedThrowingContinuation { continuation in
-            client.module(.mam).queryItems(version: .MAM2, componentJid: Martin.JID(room.martin), queryId: queryId, rsm: rsm) { [weak self] result in
-                let stored = self?.flushArchive(query: queryId) ?? true
-                switch result {
-                case .success(let page): continuation.resume(returning: ArchivePage(page: page, stored: stored))
-                case .failure(let error): continuation.resume(throwing: error)
-                }
-            }
+        client.module(.mam).queryItems(version: .MAM2, componentJid: Martin.JID(room.martin), queryId: queryId, rsm: rsm) { [weak self] result in
+            let stored = self?.flushArchive(query: queryId) ?? true
+            completion(result.map { ArchivePage(page: $0, stored: stored) })
+        }
+    }
+
+    private func queryRoomArchive(_ room: JID, _ rsm: RSM.Query) async throws -> ArchivePage {
+        try await withCheckedThrowingContinuation { continuation in
+            queryRoomArchive(room, rsm) { continuation.resume(with: $0) }
         }
     }
 
@@ -1474,8 +1483,7 @@ extension XMPPSession {
         reportSubjectOutcome(of: stanza, in: room)
         if stanza.type == .groupchat, stanza.from?.resource == nil {
             // The room itself: status code 104 announces a configuration change.
-            let codes = stanza.firstChild(name: "x", xmlns: NS.mucUser)?.filterChildren(name: "status", xmlns: nil).compactMap { $0.getAttribute("code") } ?? []
-            if codes.contains("104") { refreshRoomInfo(room) }
+            if Self.statusCodes(in: stanza.firstChild(name: "x", xmlns: NS.mucUser)).contains(104) { refreshRoomInfo(room) }
             if let target = Self.moderatedRetraction(in: stanza) {
                 // Only the room itself can speak for its moderators: its
                 // bare address, which no occupant's stanza can carry.
@@ -1533,7 +1541,7 @@ extension XMPPSession {
                 // Keys alone (a device introducing itself) have nothing to show, with or without a sender.
                 if OMEMOEncryption.isKeyTransport(stanza), stanza.body?.isEmpty ?? true { return }
                 // Without the sender's address there's no session to use.
-                let archived = if case .archive = source { true } else { false }
+                let archived = source.isArchived
                 DiagLog.notice(.omemo, "Couldn't decrypt", .value("error", DecryptFailure.noSender), .bool("archived", archived), .bool("nonAnonymous", context.isNonAnonymous))
                 encryption = .omemoUndecryptable
             }
@@ -1578,7 +1586,7 @@ extension XMPPSession {
     /// by their XEP-0203 delay. Any delay counts: ignoring a notice wrongly is
     /// the safe mistake.
     static func isDelayed(_ stanza: Martin.Message) -> Bool {
-        !stanza.element.filterChildren(name: "delay", xmlns: "urn:xmpp:delay").isEmpty
+        !stanza.element.filterChildren(name: "delay", xmlns: NS.delay).isEmpty
     }
 
     /// Not after a catch-up that gave up: the cursor would skip what it missed.
@@ -1706,19 +1714,15 @@ extension XMPPSession {
         if let direct = stanza.firstChild(name: "x", xmlns: NS.conference) {
             guard let room = direct.getAttribute("jid").flatMap(JID.init(_:)), room.localPart != nil,
                   let inviter = stanza.from.flatMap({ JID($0) }) else { return nil }
-            return Invitation(room: room, inviter: inviter, isDirect: true, password: Self.nonEmpty(direct.getAttribute("password")))
+            return Invitation(room: room, inviter: inviter, isDirect: true, password: direct.getAttribute("password").nonEmpty)
         }
         guard let invite = stanza.firstChild(name: "x", xmlns: NS.mucUser)?.firstChild(name: "invite"),
               let from = stanza.from, from.resource == nil,
               let room = JID(from), room.localPart != nil,
               let inviter = invite.getAttribute("from").flatMap(JID.init(_:)) else { return nil }
-        let reason = invite.firstChild(name: "reason")?.value.flatMap { $0.isEmpty ? nil : $0 }
+        let reason = invite.firstChild(name: "reason")?.value.nonEmpty
         let password = stanza.firstChild(name: "x", xmlns: NS.mucUser)?.firstChild(name: "password")?.value
-        return Invitation(room: room, inviter: inviter, isDirect: false, reason: reason, password: Self.nonEmpty(password))
-    }
-
-    private static func nonEmpty(_ text: String?) -> String? {
-        text.flatMap { $0.isEmpty ? nil : $0 }
+        return Invitation(room: room, inviter: inviter, isDirect: false, reason: reason, password: password.nonEmpty)
     }
 
     /// Holds the invitations our contacts send for the user's answer: joining
@@ -1900,29 +1904,22 @@ extension XMPPSession {
             publishLegacyBookmark(bookmark, for: group)
             return
         }
-        let options = Self.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options", fields: Self.settingsNodeFields(maxItems: "max"))
+        let options = Self.dataForm(type: "submit", formType: NS.publishOptions, fields: Self.settingsNodeFields(maxItems: "max"))
         // Some servers never answer a publish with max_items=max (Openfire),
         // so the wait is bounded, and the old kind of bookmark takes over.
-        let once = Once()
-        let failed: @Sendable (String) -> Void = { [weak self] reason in
+        Task { [weak self] in
             guard let self else { return }
-            self.logger.warning("Couldn't bookmark \(group.jid, privacy: .private): \(reason, privacy: .private)")
-            self.publishLegacyBookmark(bookmark, for: group)
-        }
-        client.module(.pubsub).publishItem(
-            at: nil, to: NS.bookmarks, itemId: group.jid.description, payload: bookmark.element,
-            publishOptions: options, errorDecoder: PubSubError.from(stanza:),
-        ) { [weak self] (result: Result<Iq, PubSubError>) in
-            guard once.first() else { return }
-            switch result {
-            case .success:
-                try? self?.database.updateGroupChat(group.jid) { $0.isBookmarked = true }
-            case .failure(let error):
-                failed(error.localizedDescription)
+            do {
+                try await publishPEPItem(
+                    node: NS.bookmarks, itemId: group.jid.description, payload: bookmark.element,
+                    options: options, timeout: Self.bookmarkTimeout,
+                )
+                try? database.updateGroupChat(group.jid) { $0.isBookmarked = true }
+            } catch {
+                let reason = error is TimeoutError ? "no answer" : error.localizedDescription
+                logger.warning("Couldn't bookmark \(group.jid, privacy: .private): \(reason, privacy: .private)")
+                publishLegacyBookmark(bookmark, for: group)
             }
-        }
-        DispatchQueue.global().asyncAfter(deadline: .now() + Self.bookmarkTimeout) {
-            if once.first() { failed("no answer") }
         }
     }
 
@@ -1940,20 +1937,6 @@ extension XMPPSession {
             }
         }
         try? database.updateGroupChat(room) { $0.isBookmarked = false }
-    }
-
-    static func dataForm(type: String, formType: String, fields: [String: [String]]) -> Element {
-        let x = Element(name: "x", xmlns: NS.dataForms)
-        x.setAttribute("type", value: type)
-        var all = [("FORM_TYPE", [formType])]
-        all += fields.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
-        for (name, values) in all {
-            let field = Element(name: "field")
-            field.setAttribute("var", value: name)
-            for value in values { field.addChild(Element(name: "value", cdata: value)) }
-            x.addChild(field)
-        }
-        return x
     }
 
     // MARK: Public API
@@ -2140,22 +2123,15 @@ extension XMPPSession {
     /// had the stream's acknowledgement and `grace` after it without bouncing
     /// the message with an error (forbidden, say, if invitations are off).
     private func askRoomToInvite(_ invitees: [JID], to room: JID, grace: TimeInterval) async throws {
-        let message = Martin.Message()
-        message.to = Martin.JID(room.martin)
         let id = OutboundStanza.newId()
-        message.id = id
-        let x = Element(name: "x", xmlns: NS.mucUser)
-        for invitee in invitees {
-            x.addChild(Element(name: "invite", attributes: ["to": invitee.description]))
-        }
-        message.addChild(x)
+        let message = OutboundStanza.mediatedInvitation(of: invitees, to: room, id: id)
 
         let (bounces, bounced) = AsyncStream.makeStream(of: ServerError.self)
         expectBounce(
             of: id, key: .message(id), peer: room,
             release: {},
             // The router doesn't pass on what a bounce that may pass said.
-            repend: { bounced.yield(ServerError(condition: "remote-server-timeout", type: .wait)) },
+            repend: { bounced.yield(ServerError.timedOut) },
             fail: { bounced.yield($0) },
         )
         let (acknowledgements, acknowledged) = AsyncStream.makeStream(of: Void.self)
@@ -2294,12 +2270,8 @@ extension XMPPSession {
     }
 
     private func sendSubject(_ subject: String, in room: JID) async throws {
-        let message = Martin.Message()
-        message.to = Martin.JID(room.martin)
-        message.type = .groupchat
         let id = OutboundStanza.newId()
-        message.id = id
-        message.subject = subject
+        let message = OutboundStanza.subject(subject, in: room, id: id)
         // Listening starts before writing: the answer may be quick.
         let (outcomes, continuation) = AsyncStream.makeStream(of: SubjectOutcome.self)
         let subscription = subjectOutcomes.sink { continuation.yield($0) }
@@ -2326,19 +2298,10 @@ extension XMPPSession {
     static let subjectTimeout: TimeInterval = 15
 
     private func waitForRoom(_ room: JID, timeout: TimeInterval = 30) async throws -> RoomStatus {
-        do {
-            return try await withTimeout(timeout) { [self] in
-                for await all in rooms.values {
-                    switch all[room]?.phase {
-                    case .joined?: return all[room]!
-                    case .failed(let reason)?: throw GroupError.joinFailed(reason)
-                    case .joining?, nil: continue
-                    }
-                }
-                throw GroupError.timedOut
-            }
-        } catch is TimeoutError {
-            throw GroupError.timedOut
+        switch await awaitRoom(room, timeout: timeout, until: { $0.isJoined }) {
+        case .reached(let status): return status
+        case .failed(let reason): throw GroupError.joinFailed(reason)
+        case .ended, .timedOut: throw GroupError.timedOut
         }
     }
 

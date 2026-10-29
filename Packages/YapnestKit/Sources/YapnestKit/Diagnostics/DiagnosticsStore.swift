@@ -18,7 +18,8 @@ public final class DiagnosticsStore: @unchecked Sendable {
     private var size = 0
     // To the second: the milliseconds would let someone match a send to a
     // message they received.
-    private let formatter: ISO8601DateFormatter = {
+    // Formatting with an ISO8601DateFormatter is thread-safe, and it is never changed.
+    nonisolated(unsafe) static let timestamps: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         formatter.timeZone = TimeZone(identifier: "UTC")
@@ -39,7 +40,7 @@ public final class DiagnosticsStore: @unchecked Sendable {
     /// `text` is the message with its fields, already rendered.
     func append(date: Date, category: DiagCategory, level: DiagLevel, text: String) {
         queue.async {
-            let line = "\(self.formatter.string(from: date)) \(self.process.rawValue) \(category.rawValue) \(level.rawValue) \(text)\n"
+            let line = "\(Self.timestamps.string(from: date)) \(self.process.rawValue) \(category.rawValue) \(level.rawValue) \(text)\n"
             self.buffer.append(contentsOf: line.utf8)
             if self.buffer.count >= 64 * 1024 {
                 self.writeBuffer()

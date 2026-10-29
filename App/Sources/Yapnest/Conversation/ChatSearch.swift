@@ -74,9 +74,9 @@ final class ChatSearch {
         task = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            let conversationId = await Task.detached(priority: .userInitiated) {
+            let conversationId = await offMain {
                 try? database.reader.read { try Conversation.filter(Column("peer") == peer).fetchOne($0)?.id }
-            }.value
+            }
             guard !Task.isCancelled else { return }
             guard let conversationId else {
                 self?.noMatches()

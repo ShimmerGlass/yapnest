@@ -101,12 +101,7 @@ public final class AttachmentStore: Sendable {
             let jpegName = (base.isEmpty ? "photo" : base) + ".jpg"
             let file = UUID().uuidString.lowercased() + ".jpg"
             let destination = directory.appending(path: file)
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: min(max(width, height), Self.maxPhotoDimension),
-            ]
-            if let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+            if let image = source.thumbnail(maxPixelSize: min(max(width, height), Self.maxPhotoDimension)),
                let output = CGImageDestinationCreateWithURL(destination as CFURL, UTType.jpeg.identifier as CFString, 1, nil) {
                 CGImageDestinationAddImage(output, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
                 if CGImageDestinationFinalize(output) {
@@ -149,6 +144,11 @@ public final class AttachmentStore: Sendable {
 
     struct MetadataError: Error {}
 
+    /// A name for the rewritten file beside `url`, so it can replace it in place.
+    private static func siblingTemporary(of url: URL) -> URL {
+        url.deletingLastPathComponent().appending(path: UUID().uuidString.lowercased() + "." + url.pathExtension)
+    }
+
     /// Rewrites the image at `url` without the metadata that says who took it
     /// and where: location, camera make, model and serial, capture time,
     /// software, owner and IPTC fields. Every frame is kept, and so are the
@@ -161,7 +161,7 @@ public final class AttachmentStore: Sendable {
         let count = CGImageSourceGetCount(source)
         let frames = (0..<count).map { frameProperties(source, at: $0) }
         guard frames.contains(where: hasRemovableMetadata) else { return }
-        let temporary = url.deletingLastPathComponent().appending(path: UUID().uuidString.lowercased() + "." + url.pathExtension)
+        let temporary = siblingTemporary(of: url)
         defer { try? FileManager.default.removeItem(at: temporary) }
         guard let output = CGImageDestinationCreateWithURL(temporary as CFURL, type, count, nil) else { throw MetadataError() }
         // The container's own properties (a GIF's loop count) go along.
@@ -259,7 +259,7 @@ public final class AttachmentStore: Sendable {
         case "m4v": .m4v
         default: .mov
         }
-        let temporary = url.deletingLastPathComponent().appending(path: UUID().uuidString.lowercased() + "." + url.pathExtension)
+        let temporary = siblingTemporary(of: url)
         defer { try? FileManager.default.removeItem(at: temporary) }
         try await session.export(to: temporary, as: type)
         _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
@@ -276,9 +276,8 @@ public final class AttachmentStore: Sendable {
     }
 
     private static func orientedSize(of source: CGImageSource) -> (width: Int, height: Int)? {
-        guard let (width, height) = pixelSize(of: source) else { return nil }
-        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        let orientation = properties?[kCGImagePropertyOrientation] as? Int ?? 1
+        guard let (width, height, properties) = frameSize(of: source) else { return nil }
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
         return orientation >= 5 ? (height, width) : (width, height)
     }
 
@@ -296,11 +295,11 @@ public final class AttachmentStore: Sendable {
     }
 
     static func isVideo(name: String) -> Bool {
-        UTType(filenameExtension: (name as NSString).pathExtension)?.conforms(to: .movie) ?? false
+        UTTypeLookup.type(forName: name)?.conforms(to: .movie) ?? false
     }
 
     static func isImage(name: String) -> Bool {
-        UTType(filenameExtension: (name as NSString).pathExtension)?.conforms(to: .image) ?? false
+        UTTypeLookup.type(forName: name)?.conforms(to: .image) ?? false
     }
 
     /// Displayed size of a video: its first track's natural size, turned by
@@ -315,17 +314,22 @@ public final class AttachmentStore: Sendable {
     }
 
     static func pixelSize(of source: CGImageSource) -> (Int, Int)? {
+        frameSize(of: source).map { ($0.width, $0.height) }
+    }
+
+    /// The first frame's size and all its properties, read once.
+    private static func frameSize(of source: CGImageSource) -> (width: Int, height: Int, properties: [CFString: Any])? {
         guard CGImageSourceGetCount(source) > 0,
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
               width > 0, height > 0 else { return nil }
-        return (width, height)
+        return (width, height, properties)
     }
 
     static func mimeType(for name: String) -> String? {
         // The system calls an .m4a "audio/x-m4a", which other clients don't
         // know as a voice message; it is MPEG-4 audio.
         if (name as NSString).pathExtension.lowercased() == "m4a" { return "audio/mp4" }
-        return UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType
+        return UTTypeLookup.type(forName: name)?.preferredMIMEType
     }
 }

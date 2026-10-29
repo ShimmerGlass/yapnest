@@ -67,7 +67,7 @@ extension XMPPSession {
             reply(to: iq)
         case "session-terminate":
             reply(to: iq)
-            fileTransferTerminated(ft, reason: JingleFileOffer.reason(in: jingle))
+            fileTransferTerminated(ft, reason: jingle.reason(as: JingleSessionTerminateReason.self))
         case "transport-info":
             // In-band bytestreams have nothing to add after the offer.
             reply(to: iq)

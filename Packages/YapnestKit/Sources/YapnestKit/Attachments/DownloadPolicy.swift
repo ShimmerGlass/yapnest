@@ -38,10 +38,7 @@ struct DownloadPolicy: Sendable {
         case .literal(let address): candidates = [address]
         case .name(let name): candidates = try await transport.resolve(name, timeout: 15)
         }
-        let prefixes: [AddressPrefix]
-        do { prefixes = try transport.localPrefixes() } catch { throw FetchError.refused("interfaces unknown") }
-        guard !candidates.isEmpty else { throw FetchError.unreachable("no address") }
-        if candidates.contains(where: { AddressPolicy.isBlocked($0, localPrefixes: prefixes) }) {
+        if case .blocked = try AddressPolicy.vet(candidates, transport: transport) {
             throw FetchError.refused("address is local")
         }
     }

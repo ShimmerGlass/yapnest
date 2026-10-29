@@ -33,13 +33,23 @@ enum ServerRetry {
     /// is false (the connection dropped, or a new session began and redoes
     /// its own work); the error that was last seen is thrown then. A
     /// cancelled task ends it too.
+    ///
+    /// `failure` is a first attempt that already failed, for a caller that
+    /// made it through a callback: it counts as an attempt, and the run begins
+    /// with the wait before the next.
     static func run<T>(
         attempts: Int = ServerRetry.attempts, backoff: TimeInterval = ServerRetry.backoff,
-        onlyRefusals: Bool = false, isStillWanted: () -> Bool, operation: () async throws -> T,
+        onlyRefusals: Bool = false, afterFailure failure: Error? = nil,
+        isStillWanted: () -> Bool, operation: () async throws -> T,
     ) async throws -> T {
         var attempt = 1
+        var failure = failure
         while true {
             do {
+                if let earlier = failure {
+                    failure = nil
+                    throw earlier
+                }
                 return try await operation()
             } catch {
                 guard attempt < attempts, (onlyRefusals ? isRefusal(error) : isPassing(error)), !(error is CancellationError) else { throw error }
@@ -82,10 +92,18 @@ extension XMPPSession {
         }
     }
 
-    func retryingPassingErrors<T>(attempts: Int, backoff: TimeInterval, onlyRefusals: Bool = false, _ operation: () async throws -> T) async throws -> T {
+    /// After a first attempt that failed with `failure` outside this helper;
+    /// `attempts` counts it.
+    func retryingPassingErrors<T>(afterFailure failure: Error, attempts: Int = ServerRetry.attempts, _ operation: () async throws -> T) async throws -> T {
+        try await retryingPassingErrors(attempts: attempts, backoff: lock.withLock { $0.retryBackoff }, afterFailure: failure, operation)
+    }
+
+    func retryingPassingErrors<T>(
+        attempts: Int, backoff: TimeInterval, onlyRefusals: Bool = false, afterFailure failure: Error? = nil, _ operation: () async throws -> T,
+    ) async throws -> T {
         let started = lock.withLock { $0.attempt }
         return try await ServerRetry.run(
-            attempts: attempts, backoff: backoff, onlyRefusals: onlyRefusals,
+            attempts: attempts, backoff: backoff, onlyRefusals: onlyRefusals, afterFailure: failure,
             isStillWanted: { isConnected && lock.withLock { $0.attempt } == started },
             operation: operation,
         )

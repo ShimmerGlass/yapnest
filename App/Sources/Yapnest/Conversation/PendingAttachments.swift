@@ -91,9 +91,9 @@ extension ConversationModel {
         guard refuseUnlessCanSend() else { return true }
         preparing {
             await self.stage(isPhoto: false) {
-                try await Task.detached(priority: .userInitiated) {
+                try await offMain {
                     try LongText.write(text, under: FileManager.default.temporaryDirectory)
-                }.value
+                }
             }
         }
         return true
@@ -174,9 +174,9 @@ enum GifDownload {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetType(source) as String? == UTType.gif.identifier
         else { throw NotAGif() }
-        return try await Task.detached(priority: .userInitiated) {
+        return try await offMain {
             try AttachmentPicker.writeIntoOwnFolder(data, named: fileName(for: gif) + ".gif")
-        }.value
+        }
     }
 
     /// The slug as a file name: letters, digits, dashes and underscores only.

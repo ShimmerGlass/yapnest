@@ -273,32 +273,20 @@ struct ChatSettingsView: View {
 
                 if let group, !group.hasLeft {
                     Section {
-                        Button(role: .destructive) { confirmsLeave = true } label: {
-                            BusyLabel(title: "Leave Group", systemImage: "rectangle.portrait.and.arrow.right", isBusy: leave.isBusy)
-                                .labelStyle(.destructiveRow)
-                        }
-                        .disabled(leave.isBusy)
+                        destructiveRow("Leave Group", systemImage: "rectangle.portrait.and.arrow.right", action: leave, confirming: $confirmsLeave)
                     }
                 }
 
                 if group != nil, room?.canDestroy == true {
                     Section {
-                        Button(role: .destructive) { confirmsDestroy = true } label: {
-                            BusyLabel(title: "Delete Group", systemImage: "trash", isBusy: destroy.isBusy)
-                                .labelStyle(.destructiveRow)
-                        }
-                        .disabled(destroy.isBusy)
+                        destructiveRow("Delete Group", systemImage: "trash", action: destroy, confirming: $confirmsDestroy)
                     }
                 }
 
                 if group == nil, peer != session.account, contact?.isBlocked != true {
                     Section {
                         if contact?.isInRoster == true {
-                            Button(role: .destructive) { confirmsRemove = true } label: {
-                                BusyLabel(title: "Remove from Contacts", systemImage: "person.badge.minus", isBusy: remove.isBusy)
-                                    .labelStyle(.destructiveRow)
-                            }
-                            .disabled(remove.isBusy)
+                            destructiveRow("Remove from Contacts", systemImage: "person.badge.minus", action: remove, confirming: $confirmsRemove)
                         } else if contact?.hasContactRequest != true {
                             AddContactButton(session: session, peer: peer)
                                 .labelStyle(.row)
@@ -383,7 +371,7 @@ struct ChatSettingsView: View {
                 }
             }
             .task(id: group?.nickname) { await watchRoom() }
-            .task(id: CommandProbeKey(nicks: probeNickList)) {
+            .task(id: probeNickList) {
                 await probeCommands()
             }
             .sheet(item: $commandsTarget) { target in
@@ -572,10 +560,6 @@ struct ChatSettingsView: View {
         var id: String { jid }
     }
 
-    private struct CommandProbeKey: Hashable {
-        var nicks: [String]
-    }
-
     /// The nicks of present occupants other than us, once we're in the room,
     /// sorted so the probe restarts only when someone comes or goes.
     private func probeNicks(of room: RoomStatus?) -> [String] {
@@ -676,13 +660,26 @@ struct ChatSettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private func destructiveRow(_ title: LocalizedStringKey, systemImage: String, action: ServerAction, confirming: Binding<Bool>) -> some View {
+        Button(role: .destructive) { confirming.wrappedValue = true } label: {
+            BusyLabel(title: title, systemImage: systemImage, isBusy: action.isBusy)
+                .labelStyle(.destructiveRow)
+        }
+        .disabled(action.isBusy)
+    }
+
     /// The toggle moves at once; the write follows off the main thread, and
     /// the toggle goes back if it fails.
     private func setEncrypted(_ encrypted: Bool) {
-        let previous = isEncrypted
-        isEncrypted = encrypted
-        saves.run({ [session, peer] in try session.setEncrypted(encrypted, with: peer) }, onFailure: { error in
-            isEncrypted = previous
+        setOptimistically($isEncrypted, to: encrypted) { [session, peer] in try session.setEncrypted(encrypted, with: peer) }
+    }
+
+    private func setOptimistically<Value>(_ field: Binding<Value>, to value: Value, _ work: @escaping @Sendable () throws -> Void) {
+        let previous = field.wrappedValue
+        field.wrappedValue = value
+        saves.run(work, onFailure: { error in
+            field.wrappedValue = previous
             saveError = error.localizedDescription
         })
     }
@@ -703,12 +700,7 @@ struct ChatSettingsView: View {
     }
 
     private func setNotificationSound(_ sound: String?) {
-        let previous = notificationSound
-        notificationSound = sound
-        saves.run({ [database = session.database, peer] in try database.setNotificationSound(sound, peer: peer) }, onFailure: { error in
-            notificationSound = previous
-            saveError = error.localizedDescription
-        })
+        setOptimistically($notificationSound, to: sound) { [database = session.database, peer] in try database.setNotificationSound(sound, peer: peer) }
     }
 
     /// "15 minutes", "1 hour", in the user's language.
@@ -717,21 +709,11 @@ struct ChatSettingsView: View {
     }
 
     private func setNotificationInterval(_ minutes: Int?) {
-        let previous = notificationInterval
-        notificationInterval = minutes
-        saves.run({ [database = session.database, peer] in try database.setNotificationInterval(minutes, peer: peer) }, onFailure: { error in
-            notificationInterval = previous
-            saveError = error.localizedDescription
-        })
+        setOptimistically($notificationInterval, to: minutes) { [database = session.database, peer] in try database.setNotificationInterval(minutes, peer: peer) }
     }
 
     private func setLinkPreviews(_ allowed: Bool?) {
-        let previous = linkPreviews
-        linkPreviews = allowed
-        saves.run({ [database = session.database, peer] in try database.setLinkPreviews(allowed, peer: peer) }, onFailure: { error in
-            linkPreviews = previous
-            saveError = error.localizedDescription
-        })
+        setOptimistically($linkPreviews, to: allowed) { [database = session.database, peer] in try database.setLinkPreviews(allowed, peer: peer) }
     }
 }
 

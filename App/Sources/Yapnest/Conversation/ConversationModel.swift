@@ -442,7 +442,7 @@ final class ConversationModel {
         // it arrives nothing is loaded, which the screen shows as its
         // placeholder, and the calls that wait on a loaded list do nothing.
         tasks["start"] = Task { [weak self] in
-            let initial = await Task.detached(priority: .userInitiated) { () -> Initial in
+            let initial = await offMain { () -> Initial in
                 let database = session.database
                 var initial = Initial(
                     linkPreviewsAllowed: (try? database.linkPreviews(peer: peer)) ?? nil,
@@ -461,7 +461,7 @@ final class ConversationModel {
                     initial.targetWindow = window
                 }
                 return initial
-            }.value
+            }
             FrameLog.event("start read")
             guard !Task.isCancelled else { return }
             self?.finishStart(initial)
@@ -592,7 +592,7 @@ final class ConversationModel {
                     self.textKey(for: item, in: environment).flatMap { key in self.textCache[item.id]?.key == key ? nil : (item.id, key) }
                 }
                 if !missing.isEmpty {
-                    let rendered = await Task.detached(priority: .userInitiated) { Self.renderTexts(missing) }.value
+                    let rendered = await offMain { Self.renderTexts(missing) }
                     FrameLog.event("rendered texts=\(missing.count)")
                     guard generation == self.generation else { return }
                     for (id, cached) in rendered { self.textCache[id] = cached }
@@ -600,7 +600,7 @@ final class ConversationModel {
                 // The rows' contents are worked out here too: for a long chat
                 // that took tens of milliseconds of `apply`, in the push into it.
                 let snapshot = self.prebuildSnapshot(for: items)
-                let prebuilt = await Task.detached(priority: .userInitiated) { Self.prebuild(snapshot) }.value
+                let prebuilt = await offMain { Self.prebuild(snapshot) }
                 FrameLog.event("prebuilt rows=\(prebuilt.rows.count)")
                 guard generation == self.generation else { return }
                 self.apply(items, generation: generation, prebuilt: prebuilt)
@@ -2150,14 +2150,14 @@ final class ConversationModel {
               pendingJump == nil, !isWidening, let newest = order.last.flatMap({ items[$0] })?.cursor else { return }
         let session = session, peer = peer, growth = Self.windowGrowth, generation = generation
         tasks["newer"] = Task { [weak self] in
-            let step = await Task.detached(priority: .userInitiated) { () -> NewerStep in
+            let step = await offMain { () -> NewerStep in
                 do {
                     guard let newer = try session.database.newerCursor(peer: peer, after: newest, count: growth) else { return .reachedNewest }
                     return newer.found < growth ? .reachedNewest : .extend(newer.cursor)
                 } catch {
                     return .failed
                 }
-            }.value
+            }
             guard let self, !Task.isCancelled else { return }
             self.tasks.finish("newer")
             guard self.generation == generation, self.pendingJump == nil, self.isBounded else { return }
@@ -2228,9 +2228,9 @@ final class ConversationModel {
         // Stored, but outside the window.
         let session = session, peer = peer, limit = Self.windowLimit
         tasks["reveal"] = Task { [weak self] in
-            let window = await Task.detached(priority: .userInitiated) {
+            let window = await offMain {
                 try? session.database.window(peer: peer, around: target, boundedBeyond: limit)
-            }.value
+            }
             guard let self, !Task.isCancelled else { return }
             self.tasks.finish("reveal")
             guard let window else { return }
@@ -2264,7 +2264,7 @@ final class ConversationModel {
             var pages = 0
             var isExhausted = false
             while !Task.isCancelled {
-                found = await Task.detached(priority: .userInitiated) { try? session.database.referencedMessage(peer: peer, id: reference)?.id }.value
+                found = await offMain { try? session.database.referencedMessage(peer: peer, id: reference)?.id }
                 // Once the archive has no more pages, this look was at what the last one held.
                 if found != nil || pages >= Self.quoteSearchPages || isExhausted { break }
                 do {
@@ -2327,13 +2327,11 @@ final class ConversationModel {
         // what was being typed before it, which stays the draft.
         noteDraft()
         flushDraft()
-        let previous = sendTail
         // Holds the model until it's done: the user already sent these, so
         // leaving the chat mustn't drop the rest, and nothing else would
         // discard their copies once `pendingAttachments` is empty. The task
         // ends on its own, which releases the model.
-        sendTail = Task { [self] in
-            await previous?.value
+        enqueue { [self] in
             for item in staged {
                 switch item.content {
                 case .file(let file, let isPhoto): await sendFile(file, asPhoto: isPhoto, isTemporaryCopy: true)
@@ -2342,13 +2340,13 @@ final class ConversationModel {
             }
             guard !trimmed.isEmpty else { return }
             do {
-                try await Task.detached(priority: .userInitiated) {
+                try await offMain {
                     if let editing {
                         try session.edit(editing.message, to: trimmed)
                     } else {
                         _ = try session.send(trimmed, to: peer, replyingTo: replying?.message)
                     }
-                }.value
+                }
             } catch {
                 restoreComposer(text: trimmed, editing: editing, replying: replying, error: error)
             }
@@ -2386,9 +2384,9 @@ final class ConversationModel {
         showNewest()
         followsOwnSend = true
         do {
-            try await Task.detached(priority: .userInitiated) {
+            try await offMain {
                 _ = try session.send(body, to: peer)
-            }.value
+            }
         } catch {
             reportSendFailure(error)
         }
@@ -2432,9 +2430,7 @@ final class ConversationModel {
 
     /// Sent at once, in its place among what is being sent, rather than staged.
     private func sendVoice(_ file: URL) {
-        let previous = sendTail
-        sendTail = Task { [self] in
-            await previous?.value
+        enqueue { [self] in
             await sendFile(file, asPhoto: false, isTemporaryCopy: true)
         }
     }
@@ -2591,11 +2587,9 @@ final class ConversationModel {
         then success: @escaping () -> Void = {},
         onFailure: ((Error) -> Void)? = nil,
     ) {
-        let previous = sendTail
-        sendTail = Task { [weak self] in
-            await previous?.value
+        enqueue { [weak self] in
             do {
-                try await Task.detached(priority: .userInitiated, operation: work).value
+                try await offMain(work)
                 success()
             } catch {
                 if let onFailure {
@@ -2604,6 +2598,15 @@ final class ConversationModel {
                     self?.prompt = .error(error.localizedDescription)
                 }
             }
+        }
+    }
+
+    /// Runs `body` after everything enqueued before it has finished.
+    private func enqueue(_ body: @escaping @MainActor () async -> Void) {
+        let previous = sendTail
+        sendTail = Task {
+            await previous?.value
+            await body()
         }
     }
 
@@ -2885,7 +2888,7 @@ final class ConversationModel {
     private func loadDevices(of jid: JID) {
         guard loadingDevices.insert(jid).inserted else { return }
         Task { [session, weak self] in
-            let devices = await Task.detached(priority: .userInitiated) { session.devices(of: jid) }.value
+            let devices = await offMain { session.devices(of: jid) }
             guard let self else { return }
             loadingDevices.remove(jid)
             if senderDevices[jid] != devices { senderDevices[jid] = devices }
@@ -3064,7 +3067,7 @@ final class ConversationModel {
         let previous = chatStateTail
         chatStateTail = Task { [session, peer] in
             await previous?.value
-            await Task.detached(priority: .userInitiated) { session.sendChatState(state, to: peer) }.value
+            await offMain { session.sendChatState(state, to: peer) }
         }
     }
 

@@ -73,22 +73,14 @@ final class IBBModule: XmppModuleBase, AbstractIQModule, @unchecked Sendable {
     // MARK: Stanzas we send
 
     static func open(to jid: Martin.JID, sid: String, blockSize: Int) -> Iq {
-        iq(to: jid, Element(name: "open", attributes: ["xmlns": JingleFile.ibb, "sid": sid, "block-size": String(blockSize), "stanza": "iq"]))
+        Iq.set(to: jid, Element(name: "open", attributes: ["xmlns": JingleFile.ibb, "sid": sid, "block-size": String(blockSize), "stanza": "iq"]))
     }
 
     static func data(to jid: Martin.JID, sid: String, seq: Int, bytes: Data) -> Iq {
-        iq(to: jid, Element(name: "data", cdata: bytes.base64EncodedString(), attributes: ["xmlns": JingleFile.ibb, "sid": sid, "seq": String(seq)]))
+        Iq.set(to: jid, Element(name: "data", cdata: bytes.base64EncodedString(), attributes: ["xmlns": JingleFile.ibb, "sid": sid, "seq": String(seq)]))
     }
 
     static func close(to jid: Martin.JID, sid: String) -> Iq {
-        iq(to: jid, Element(name: "close", attributes: ["xmlns": JingleFile.ibb, "sid": sid]))
-    }
-
-    private static func iq(to jid: Martin.JID, _ child: Element) -> Iq {
-        let iq = Iq()
-        iq.to = jid
-        iq.type = .set
-        iq.addChild(child)
-        return iq
+        Iq.set(to: jid, Element(name: "close", attributes: ["xmlns": JingleFile.ibb, "sid": sid]))
     }
 }

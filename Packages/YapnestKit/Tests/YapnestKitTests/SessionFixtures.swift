@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import Testing
 @testable import YapnestKit
 
@@ -185,6 +186,15 @@ extension LiveServer {
             try await waitUntil("\(other.account) and \(owner.account) in each other's roster") {
                 try owner.database.isInRoster(other.account) && other.database.isInRoster(owner.account)
             }
+        }
+    }
+}
+
+extension AppDatabase {
+    /// How far each of our messages (by row id) has got, and why it failed.
+    func deliveryStates(ids: [Int64]) throws -> [Int64: (status: Message.Status, error: String?)] {
+        try reader.read { db in
+            Dictionary(uniqueKeysWithValues: try Message.filter(ids.contains(Column("id"))).fetchAll(db).map { ($0.id!, ($0.status, $0.error)) })
         }
     }
 }

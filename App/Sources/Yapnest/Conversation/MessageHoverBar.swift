@@ -37,7 +37,7 @@ struct MessageHoverBar: View {
     }
 
     var body: some View {
-        let mine = Set(row.item.reactions.filter(\.includesMe).map(\.emoji))
+        let mine = row.item.myReactionEmoji
         bar(mine: mine)
             .onHover(perform: onHover)
             .accessibilityHidden(true)

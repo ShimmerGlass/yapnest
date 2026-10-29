@@ -76,16 +76,8 @@ struct GifPicker: View {
             .task {
                 await database.forEachValue(of: database.observeGifFavorites(), "GIF favorites") { favorites = $0 }
             }
-            .alert("Couldn't Update Favorites", isPresented: Binding(get: { favoriteError != nil }, set: { if !$0 { favoriteError = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(favoriteError ?? "")
-            }
-            .alert("Couldn't Save Your Choice", isPresented: Binding(get: { consentError != nil }, set: { if !$0 { consentError = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(consentError ?? "")
-            }
+            .errorAlert("Couldn't Update Favorites", $favoriteError)
+            .errorAlert("Couldn't Save Your Choice", $consentError)
         }
     }
 
@@ -462,7 +454,7 @@ private struct GifStill: View {
             }
             // Decoded here rather than when first drawn, which would be on
             // the main thread.
-            let decoded = await Task.detached(priority: .userInitiated) { UIImage(data: data)?.preparingForDisplay() }.value
+            let decoded = await offMain { UIImage(data: data)?.preparingForDisplay() }
             guard !Task.isCancelled else { return }
             image = decoded
         }

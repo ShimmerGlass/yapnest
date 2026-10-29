@@ -172,18 +172,14 @@ final class CallRun: @unchecked Sendable {
         }
     }
 
-    func setTimer(_ task: Task<Void, Never>?) {
-        let old = lock.withLock {
-            defer { timer = task }
-            return timer
-        }
-        old?.cancel()
-    }
+    func setTimer(_ task: Task<Void, Never>?) { replace(\.timer, with: task) }
 
-    func setConnectionTimer(_ task: Task<Void, Never>?) {
+    func setConnectionTimer(_ task: Task<Void, Never>?) { replace(\.connectionTimer, with: task) }
+
+    private func replace(_ timer: ReferenceWritableKeyPath<CallRun, Task<Void, Never>?>, with task: Task<Void, Never>?) {
         let old = lock.withLock {
-            defer { connectionTimer = task }
-            return connectionTimer
+            defer { self[keyPath: timer] = task }
+            return self[keyPath: timer]
         }
         old?.cancel()
     }

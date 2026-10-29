@@ -228,7 +228,7 @@ struct ConversationView: View {
         }
         .background { EmojiPickerHost(model: conversation).frame(width: 1, height: 1) }
         .conversationPrompts(conversation)
-        .sheet(isPresented: Binding(get: { conversation.devicesSheet != nil }, set: { if !$0 { conversation.devicesSheet = nil } })) {
+        .sheet(isPresented: Binding(isPresent: Bindable(conversation).devicesSheet)) {
             if let peer = conversation.devicesSheet {
                 DevicesView(session: session, peer: peer)
                     .countsAsConversationSheet()

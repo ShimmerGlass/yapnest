@@ -94,6 +94,10 @@ final class AppModel {
     private(set) var conversationSheets = SheetCounter()
     var hasConversationSheet: Bool { conversationSheets.isPresenting }
 
+    /// Whether the Mac's menu commands act: a session is open and no sheet
+    /// of a conversation is up.
+    var acceptsMenuCommands: Bool { session != nil && !hasConversationSheet }
+
     func conversationSheetAppeared() { conversationSheets.presented() }
     func conversationSheetDisappeared() { conversationSheets.dismissed() }
 
@@ -561,9 +565,8 @@ final class AppModel {
         #endif
         AppDatabase.resume()
         // The extension may have stored messages this process hasn't seen.
-        let database = session.database
-        badgeSync.forget()
-        Task { await offMain { try? database.notifyExternalChanges() } }
+        let (database, badgeSync) = (session.database, badgeSync)
+        Task { await offMain { badgeSync.externalChangesMayHaveArrived(in: database) } }
         if sessionLock.tryLock(as: .app) {
             environment.connect(session)
             return
@@ -586,9 +589,8 @@ final class AppModel {
                     return
                 }
                 if locked {
-                    let database = session.database
-                    badgeSync.forget()
-                    await offMain { try? database.notifyExternalChanges() }
+                    let (database, badgeSync) = (session.database, badgeSync)
+                    await offMain { badgeSync.externalChangesMayHaveArrived(in: database) }
                     environment.connect(session)
                     return
                 }
@@ -699,10 +701,11 @@ final class AppModel {
         // connection sends what the extension wrote.
         guard let session, sessionLock.isLocked else { return }
         let badgeSync = badgeSync
-        Task.detached(priority: .userInitiated) {
-            badgeSync.forget()
-            try? session.database.notifyExternalChanges()
-            session.resendPending()
+        Task {
+            await offMain {
+                badgeSync.externalChangesMayHaveArrived(in: session.database)
+                session.resendPending()
+            }
         }
     }
 
@@ -1100,4 +1103,11 @@ final class BadgeSync: Sendable {
     }
 
     func forget() { last.withLock { $0 = nil } }
+
+    /// For when the extension may have written to `database`: the count is
+    /// forgotten and the database's observers are told.
+    func externalChangesMayHaveArrived(in database: AppDatabase) {
+        forget()
+        try? database.notifyExternalChanges()
+    }
 }

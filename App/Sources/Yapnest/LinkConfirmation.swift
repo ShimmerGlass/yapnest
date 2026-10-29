@@ -82,11 +82,7 @@ private struct AddContactLinkView: View {
                         .disabled(add.isBusy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if add.isBusy {
-                        ProgressView()
-                    } else {
-                        SheetConfirmButton("Add", action: addContact)
-                    }
+                    SheetConfirmButton("Add", isBusy: add.isBusy, action: addContact)
                 }
             }
             .actionAlert("Couldn't add contact", add)

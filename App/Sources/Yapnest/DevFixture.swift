@@ -448,7 +448,7 @@ enum DevFixture: String, CaseIterable {
 
     /// A known contact, so the chat has no stranger banner, and an archive
     /// with nothing older, so nothing waits for a server.
-    private static func prepare(_ database: AppDatabase, peer: JID, name: String) throws -> Conversation {
+    static func prepare(_ database: AppDatabase, peer: JID, name: String) throws -> Conversation {
         try database.updateRosterItem(jid: peer, name: name, subscription: .both, isPending: false)
         let conversation = try database.conversation(with: peer)
         try database.setHistoryState(peer: peer, isComplete: true, cursor: nil)

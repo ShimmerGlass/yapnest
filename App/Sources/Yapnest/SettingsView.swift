@@ -92,9 +92,7 @@ struct SettingsView: View {
 
                 Section {
                     Picker("Availability", selection: Binding(get: { availability }, set: setAvailability)) {
-                        Text("Available").tag(XMPPSession.Availability.available)
-                        Text("Away").tag(XMPPSession.Availability.away)
-                        Text("Do Not Disturb").tag(XMPPSession.Availability.dnd)
+                        ForEach(XMPPSession.Availability.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
                     HStack {
                         TextField("Status Message", text: $status)
@@ -176,7 +174,7 @@ struct SettingsView: View {
                     Section {
                         Toggle("GIFs", isOn: Binding(get: { gifsEnabled }, set: { on in setFlag(.gifs, on) { gifsEnabled = on } }))
                     } footer: {
-                        Text("Searches go to KLIPY, a company in the United States, which sees what you search for, your region and your IP address. You are asked before the first one.")
+                        Text(Klipy.disclosure)
                     }
                     .disabled(!isLoaded)
                 }

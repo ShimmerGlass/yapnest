@@ -576,7 +576,7 @@ struct CallSessionIncomingTests {
     @Test func decliningRejectsAndRecordsIt() async throws {
         let h = try CallSessionHarness()
         h.receive(h.propose())
-        h.session.declineCall()
+        h.session.hangUpCall()
         #expect(h.phase == .ended(.declined))
         await eventually("the reject") { h.sentSignals.contains { $0.action == "reject" } }
         #expect(h.sentSignals.first { $0.action == "reject" }?.to == aliceDevice)

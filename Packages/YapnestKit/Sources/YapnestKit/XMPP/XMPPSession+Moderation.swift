@@ -149,12 +149,12 @@ extension XMPPSession {
     static func moderatedRetraction(in stanza: Martin.Message) -> String? {
         guard stanza.type == .groupchat, let from = stanza.from, from.resource == nil else { return nil }
         if let retract = stanza.firstChild(name: "retract", xmlns: NS.retraction), retract.firstChild(name: "moderated", xmlns: NS.moderation) != nil {
-            return retract.getAttribute("id").flatMap { $0.isEmpty ? nil : $0 }
+            return retract.getAttribute("id").nonEmpty
         }
         // The older form, wrapped in XEP-0422 apply-to.
         if let applyTo = stanza.firstChild(name: "apply-to", xmlns: NS.fasten),
            applyTo.firstChild(name: "moderated", xmlns: NS.moderationV0)?.firstChild(name: "retract", xmlns: NS.retractionV0) != nil {
-            return applyTo.getAttribute("id").flatMap { $0.isEmpty ? nil : $0 }
+            return applyTo.getAttribute("id").nonEmpty
         }
         return nil
     }

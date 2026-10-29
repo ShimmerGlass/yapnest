@@ -214,12 +214,6 @@ extension XMPPSession {
         return try AdHocStanza.response(in: reply, node: command.node, sessionID: sessionID)
     }
 
-    /// Tells the entity to drop a run the user walked away from, so it frees
-    /// what it holds for it. Best effort: nobody is waiting for the answer.
-    public func cancelAdHoc(_ command: AdHocCommand, sessionID: String) async {
-        _ = try? await execute(command, action: .cancel, sessionID: sessionID)
-    }
-
     /// Writes a request and returns the answer, if it comes from `entity`.
     /// A reply from anyone else could be a hostile entity's trying to answer
     /// for another, so it is dropped. A missing `from` is our own server's,
@@ -268,7 +262,7 @@ enum AdHocStanza {
         return query.filterChildren(name: "item", xmlns: nil).compactMap { item in
             guard let node = item.getAttribute("node"), !node.isEmpty, let jid = item.getAttribute("jid"), Martin.JID(jid) == entity else { return nil }
             let name = item.getAttribute("name")
-            return AdHocCommand(jid: jid, node: node, name: name.flatMap { $0.isEmpty ? nil : $0 } ?? node)
+            return AdHocCommand(jid: jid, node: node, name: name.nonEmpty ?? node)
         }
     }
 
@@ -283,7 +277,7 @@ enum AdHocStanza {
     static func response(in reply: Iq, node: String, sessionID: String?) throws -> AdHocResponse {
         guard let command = reply.firstChild(name: "command", xmlns: NS.commands), command.getAttribute("node") == node,
               let status = command.getAttribute("status").flatMap(AdHocResponse.Status.init(rawValue:)) else { throw AdHocError.unexpectedReply }
-        let session = command.getAttribute("sessionid").flatMap { $0.isEmpty ? nil : $0 }
+        let session = command.getAttribute("sessionid").nonEmpty
         if let sessionID, let session, session != sessionID { throw AdHocError.unexpectedReply }
 
         var allowed: [AdHocAction] = []

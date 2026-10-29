@@ -144,8 +144,4 @@ extension AppDatabase {
                 """, arguments: [peer])
         }
     }
-
-    public func conversation(id: Int64) throws -> Conversation? {
-        try reader.read { db in try Conversation.fetchOne(db, key: id) }
-    }
 }

@@ -190,7 +190,7 @@ extension XMPPSession {
     ) async throws {
         let options = config.map { fields in
             XMPPSession.dataForm(
-                type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options",
+                type: "submit", formType: NS.publishOptions,
                 fields: fields.filter { $0.key != "pubsub#max_items" || $0.value == ["max"] },
             )
         }
@@ -206,7 +206,7 @@ extension XMPPSession {
         }
     }
 
-    private func publishPEPItem(node: String, itemId: String?, payload: Element, options: Element?, timeout: TimeInterval?) async throws {
+    func publishPEPItem(node: String, itemId: String?, payload: Element, options: Element?, timeout: TimeInterval?) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let once = Once()
             client.module(.pubsub).publishItem(
@@ -227,22 +227,14 @@ extension XMPPSession {
     /// form the node handed out: that carries read-only and fixed fields,
     /// which servers like ejabberd refuse in a submission.
     func configurePEPNode(_ node: String, fields: [String: [String]]) async throws {
-        let set = Iq()
-        set.type = .set
-        let pubsub = Element(name: "pubsub", xmlns: "http://jabber.org/protocol/pubsub#owner")
-        let configure = Element(name: "configure")
-        configure.setAttribute("node", value: node)
-        configure.addChild(XMPPSession.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#node_config", fields: fields))
-        pubsub.addChild(configure)
-        set.addChild(pubsub)
-        _ = try await client.context.writer.write(iq: set, errorDecoder: PubSubError.from(stanza:))
+        _ = try await client.context.writer.write(iq: OutboundStanza.configureNode(node, fields: fields), errorDecoder: PubSubError.from(stanza:))
     }
 }
 
 /// The PEP payloads and publish-options for our profile.
 enum ProfileStanza {
     static func publishOptions(accessModel: String) -> Element {
-        XMPPSession.dataForm(type: "submit", formType: "http://jabber.org/protocol/pubsub#publish-options", fields: [
+        XMPPSession.dataForm(type: "submit", formType: NS.publishOptions, fields: [
             "pubsub#persist_items": ["true"],
             "pubsub#access_model": [accessModel],
         ])

@@ -65,16 +65,10 @@ extension AppDatabase {
     /// mark moved, but stamped by a slow clock, from being missed.
     public func claimNotificationsAndEdits(now: Date = Date(), notifies: Bool = true) throws -> (new: [MessageNotification], edited: [MessageNotification]) {
         try writer.write { db in
-            func setting(_ key: SettingKey) throws -> String? {
-                try Self.setting(db, key)
-            }
-            func set(_ key: SettingKey, _ value: String) throws {
-                try Self.setSetting(db, key, value)
-            }
             let newest = try Int64.fetchOne(db, sql: "SELECT MAX(id) FROM message") ?? 0
-            let markId = try setting(.lastNotifiedMessageId).flatMap { Int64($0) }
+            let markId = try Self.setting(db, .lastNotifiedMessageId).flatMap { Int64($0) }
             let markDate = try Self.date(db, .lastNotifiedAt)
-            try set(.lastNotifiedMessageId, String(max(newest, markId ?? 0)))
+            try Self.setSetting(db, .lastNotifiedMessageId, String(max(newest, markId ?? 0)))
             try Self.setDate(db, .lastNotifiedAt, max(now, markDate ?? now))
             guard let markId, let markDate else { return ([], []) }
 
@@ -293,7 +287,7 @@ extension AppDatabase {
     /// room we have a nickname in address us.
     static func refreshReplies(_ db: Database, toOutgoing message: Message) throws {
         guard message.direction == .outgoing else { return }
-        let ids = [message.remoteId, message.originId, message.serverId].compactMap { $0 }
+        let ids = message.referenceIds
         guard !ids.isEmpty,
               try GroupChat.filter(Column("conversationId") == message.conversationId).isEmpty(db) == false else { return }
         try db.execute(

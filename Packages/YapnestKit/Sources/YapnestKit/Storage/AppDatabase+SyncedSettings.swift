@@ -60,10 +60,10 @@ extension AppDatabase {
     ) -> SyncedKey {
         SyncedKey(
             read: { db, peer in
-                try peer.flatMap { try Conversation.filter(Column("peer") == $0).fetchOne(db) }.flatMap(read)
+                try peer.flatMap { try Self.existingConversation(db, peer: $0) }.flatMap(read)
             },
             apply: { db, peer, value in
-                guard let peer, let conversation = try Conversation.filter(Column("peer") == peer).fetchOne(db) else { return }
+                guard let peer, let conversation = try Self.existingConversation(db, peer: peer) else { return }
                 try apply(db, conversation, value)
             },
             ofConversation: read,

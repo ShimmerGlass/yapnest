@@ -1652,7 +1652,7 @@ public final class XMPPSession: @unchecked Sendable {
             // A resumed stream replays what the server held for it with a
             // `<delay>` on the wrapper. Without it the message, and a call
             // offer in it, would read as happening now.
-            forwarded.addChildren(stanza.element.filterChildren(name: "delay", xmlns: "urn:xmpp:delay"))
+            forwarded.addChildren(stanza.element.filterChildren(name: "delay", xmlns: NS.delay))
             guard let inner = Stanza.from(element: forwarded) as? Martin.Message else { return }
             handle(inner, source: .carbon(sent: carbon.name == "sent"))
             return
@@ -1700,7 +1700,7 @@ public final class XMPPSession: @unchecked Sendable {
         var sender: (device: Int32?, trust: OMEMODevice.Trust?)?
         if stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) != nil {
             let from = from ?? account
-            let archived = if case .archive = source { true } else { false }
+            let archived = source.isArchived
             let result = omemo.decrypt(stanza, from: from, ownCopy: archived && from == account, isHistory: isHistory, sentAt: source.archivedAt ?? Date())
             switch result {
             case .decrypted(let device, let trust):
@@ -2185,7 +2185,7 @@ public final class XMPPSession: @unchecked Sendable {
             return
         }
         let after = try? database.setting(.lastArchiveId)
-        if after == nil, policy.syncsAccountState { markChatRestorePending() }
+        if Self.beginsChatRestore(cursor: after), policy.syncsAccountState { markChatRestorePending() }
         let start = after == nil ? Date().addingTimeInterval(-accountSyncWindow) : nil
         let attempt = lock.withLock { $0.attempt }
         fetchArchivePage(after: after, start: start, attempt: attempt) { [weak self] error in
@@ -2213,7 +2213,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// Reads the archive again from the cursor, for the warning's Retry.
     private func rereadArchive() async throws {
         // The connection going away reads as the timeout it is, which can pass.
-        let dropped = ServerError(condition: "remote-server-timeout", type: .wait)
+        let dropped = ServerError.timedOut
         guard isConnected else { throw dropped }
         let after = try? database.setting(.lastArchiveId)
         let start = after == nil ? Date().addingTimeInterval(-accountSyncWindow) : nil

@@ -41,6 +41,12 @@ public struct NotificationFetcher: Sendable {
         self.identityKeys = identityKeys
     }
 
+    /// For the signed-in account, or nil if the app hasn't been signed in.
+    public static func current() -> NotificationFetcher? {
+        guard let account = ExtensionAccount.current(role: "push") else { return nil }
+        return NotificationFetcher(credentials: account.credentials, directory: account.directory, resource: account.resource)
+    }
+
     private static let logger = Logger(subsystem: "Yapnest", category: "Notifications")
 
     /// Leaves a few seconds of the extension's 30 for the rest.
@@ -227,12 +233,19 @@ extension MessageNotification {
 }
 
 extension UNNotificationContent {
-    /// A copy that makes no sound and doesn't wake the screen, marked so it can
-    /// be removed again. Delivering nothing would leave the relay's loud alert.
-    public func quietCopy() -> UNNotificationContent {
-        let copy = (mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+    /// A copy that makes no sound and doesn't wake the screen. `fallback`
+    /// stands in if the content can't be copied.
+    func silentCopy(fallback: @autoclosure () -> UNMutableNotificationContent = UNMutableNotificationContent()) -> UNMutableNotificationContent {
+        let copy = (mutableCopy() as? UNMutableNotificationContent) ?? fallback()
         copy.sound = nil
         copy.interruptionLevel = .passive
+        return copy
+    }
+
+    /// A silent copy marked so it can be removed again. Delivering nothing
+    /// would leave the relay's loud alert.
+    public func quietCopy() -> UNNotificationContent {
+        let copy = silentCopy()
         copy.userInfo[MessageNotification.quietKey] = true
         return copy
     }
@@ -245,8 +258,17 @@ extension UNNotification {
 extension UNUserNotificationCenter {
     /// Takes down the notifications of invitations no longer held.
     public func removeStaleInvitationNotifications(held: Set<JID>) async {
-        let delivered = await deliveredNotifications().map { (identifier: $0.request.identifier, userInfo: $0.request.content.userInfo) }
-        removeDeliveredNotifications(withIdentifiers: MessageNotification.staleInvitationNotifications(among: delivered, held: held))
+        removeDeliveredNotifications(withIdentifiers: MessageNotification.staleInvitationNotifications(among: await deliveredUserInfo(), held: held))
+    }
+
+    func deliveredUserInfo() async -> [(identifier: String, userInfo: [AnyHashable: Any])] {
+        await deliveredNotifications().map { (identifier: $0.request.identifier, userInfo: $0.request.content.userInfo) }
+    }
+
+    /// Shows `content` again under the identifier of a delivered notification,
+    /// without a sound or a banner.
+    func replaceSilently(_ identifier: String, with content: UNNotificationContent, fallback: @autoclosure () -> UNMutableNotificationContent) async {
+        try? await add(UNNotificationRequest(identifier: identifier, content: content.silentCopy(fallback: fallback()), trigger: nil))
     }
 
     /// Muted messages are shown silently by the notification extension, which

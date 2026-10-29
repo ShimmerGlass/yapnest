@@ -132,13 +132,13 @@ private final class AttachmentTile: UIView {
         content.accessibilityLabel = name
         if isPhoto {
             showThumbnail(placeholder: "photo") {
-                await Task.detached(priority: .userInitiated) { ImageDownsampler.downsample(file, maxPixels: 256) }.value
+                await offMain { ImageDownsampler.downsample(file, maxPixels: 256) }
             }
             content.accessibilityLabel = String(localized: "Photo")
         } else if type?.conforms(to: .vCard) == true {
             showIcon("person.crop.circle", caption: file.deletingPathExtension().lastPathComponent)
         } else if type?.conforms(to: .movie) == true {
-            showThumbnail(placeholder: "film") { await Self.videoFrame(file) }
+            showThumbnail(placeholder: "film") { await ImageDownsampler.videoFrame(of: file, maxSize: 256, toleranceBefore: 0.5, toleranceAfter: 0.5) }
             content.accessibilityLabel = String(localized: "Video")
         } else {
             showIcon("doc.fill", caption: name)
@@ -160,29 +160,6 @@ private final class AttachmentTile: UIView {
             picture.clipsToBounds = true
             pin(picture)
         }
-    }
-
-    nonisolated private static func videoFrame(_ file: URL) async -> UIImage? {
-        // The first frame is black for videos that fade in, so try one a
-        // little in with some tolerance, then fall back to the very first.
-        let asset = AVURLAsset(url: file)
-        let duration = (try? await asset.load(.duration).seconds) ?? 0
-        if duration.isFinite, duration > 0 {
-            let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
-            let time = CMTime(seconds: min(0.5, duration / 2), preferredTimescale: 600)
-            if let frame = await videoFrame(asset, at: time, tolerance: tolerance) { return frame }
-        }
-        return await videoFrame(asset, at: .zero, tolerance: .positiveInfinity)
-    }
-
-    nonisolated private static func videoFrame(_ asset: AVURLAsset, at time: CMTime, tolerance: CMTime) async -> UIImage? {
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 256, height: 256)
-        generator.requestedTimeToleranceBefore = tolerance
-        generator.requestedTimeToleranceAfter = tolerance
-        guard let frame = try? await generator.image(at: time).image else { return nil }
-        return UIImage(cgImage: frame)
     }
 
     private func showIcon(_ symbol: String, caption: String) {

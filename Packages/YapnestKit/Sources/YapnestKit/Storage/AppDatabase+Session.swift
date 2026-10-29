@@ -130,7 +130,7 @@ extension AppDatabase {
     func unconfirmedOutgoing(before: Date? = nil, since: Date? = nil) throws -> [(Message, JID)] {
         try reader.read { db in
             let chats = try Conversation.fetchAll(db, sql: "SELECT * FROM conversation WHERE kind = 'chat'")
-            let peers = Dictionary(uniqueKeysWithValues: chats.compactMap { chat in chat.id.map { ($0, chat.peer) } })
+            let peers = Self.peers(of: chats)
             // No bound at all where the caller has none: a range from the
             // dawn of time to the end of it would only slow the lookup.
             var request = Message
@@ -148,7 +148,7 @@ extension AppDatabase {
     /// The server received our message `remoteId` to `peer`.
     func markSent(peer: JID, remoteId: String) throws {
         try writer.write { db in
-            guard let id = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return }
+            guard let id = try Self.conversationId(db, peer: peer) else { return }
             try Self.updateStatus(db, .sent, conversationId: id, remoteId: remoteId)
         }
     }
@@ -170,9 +170,7 @@ extension AppDatabase {
             let messages = Dictionary(uniqueKeysWithValues: try Message.fetchAll(db, keys: Set(rows.map(\.messageId))).compactMap { message in
                 message.id.map { ($0, message) }
             })
-            let peers = Dictionary(uniqueKeysWithValues: try Conversation.fetchAll(db, keys: Set(messages.values.map(\.conversationId))).compactMap { chat in
-                chat.id.map { ($0, chat.peer) }
-            })
+            let peers = try Self.peers(db, conversationIds: Set(messages.values.map(\.conversationId)))
             return rows.compactMap { row in
                 guard let id = row.pendingId, seen.insert(row.messageId).inserted,
                       let message = messages[row.messageId], let peer = peers[message.conversationId] else { return nil }
@@ -191,7 +189,7 @@ extension AppDatabase {
         try writer.write { db in
             var request = Reaction.filter(Column("messageId") == messageId)
             if let sender { request = request.filter(Column("sender") == sender) }
-            if let bouncedId { request = request.filter(Column("pendingId") == nil || Column("pendingId") == bouncedId) }
+            if let bouncedId { request = request.filter(Self.notSuperseded("pendingId", by: bouncedId)) }
             try request.updateAll(db, Self.clearing("pendingId", errorColumn: "error", error: error))
         }
     }
@@ -211,9 +209,22 @@ extension AppDatabase {
     func clearPendingAction(messageId: Int64, error: String, unlessSupersededBy bouncedId: String) throws {
         try writer.write { db in
             try Message.filter(key: messageId)
-                .filter(Column("actionPendingId") == nil || Column("actionPendingId") == bouncedId)
+                .filter(Self.notSuperseded("actionPendingId", by: bouncedId))
                 .updateAll(db, Self.clearing("actionPendingId", errorColumn: "actionError", error: error))
         }
+    }
+
+    /// Not where a newer change is pending under an id other than `bouncedId`.
+    private static func notSuperseded(_ pending: String, by bouncedId: String) -> SQLExpression {
+        Column(pending) == nil || Column(pending) == bouncedId
+    }
+
+    private static func peers(_ db: Database, conversationIds: Set<Int64>) throws -> [Int64: JID] {
+        peers(of: try Conversation.fetchAll(db, keys: conversationIds))
+    }
+
+    private static func peers(of conversations: [Conversation]) -> [Int64: JID] {
+        Dictionary(uniqueKeysWithValues: conversations.compactMap { chat in chat.id.map { ($0, chat.peer) } })
     }
 
     /// Clears a pending id, and records why where an `error` is given.
@@ -237,12 +248,12 @@ extension AppDatabase {
             switch item {
             case .action(let messageId):
                 var request = Message.filter(key: messageId)
-                if let bouncedId { request = request.filter(Column("actionPendingId") == nil || Column("actionPendingId") == bouncedId) }
+                if let bouncedId { request = request.filter(Self.notSuperseded("actionPendingId", by: bouncedId)) }
                 try request
                     .updateAll(db, Column("actionPendingId").set(to: id), Column("actionError").set(to: nil))
             case .reactions(let messageId, let sender):
                 var request = Reaction.filter(Column("messageId") == messageId && Column("sender") == sender)
-                if let bouncedId { request = request.filter(Column("pendingId") == nil || Column("pendingId") == bouncedId) }
+                if let bouncedId { request = request.filter(Self.notSuperseded("pendingId", by: bouncedId)) }
                 try request
                     .updateAll(db, Column("pendingId").set(to: id), Column("error").set(to: nil))
             }
@@ -263,9 +274,7 @@ extension AppDatabase {
     func pendingActions() throws -> [(messageId: Int64, peer: JID, id: String)] {
         try reader.read { db in
             let messages = try Message.filter(Column("actionPendingId") != nil).fetchAll(db)
-            let peers = Dictionary(uniqueKeysWithValues: try Conversation.fetchAll(db, keys: Set(messages.map(\.conversationId))).compactMap { chat in
-                chat.id.map { ($0, chat.peer) }
-            })
+            let peers = try Self.peers(db, conversationIds: Set(messages.map(\.conversationId)))
             return messages.compactMap { message in
                 guard let messageId = message.id, let id = message.actionPendingId, let peer = peers[message.conversationId] else { return nil }
                 return (messageId, peer, id)

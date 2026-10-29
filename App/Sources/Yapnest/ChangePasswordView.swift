@@ -52,12 +52,8 @@ struct ChangePasswordView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                if change.isBusy {
-                    ProgressView()
-                } else {
-                    SheetConfirmButton("Save", action: save)
-                        .disabled(problem != nil)
-                }
+                SheetConfirmButton("Save", isBusy: change.isBusy, action: save)
+                    .disabled(problem != nil)
             }
         }
         .actionAlert("Couldn't change the password", change)

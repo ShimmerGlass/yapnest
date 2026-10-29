@@ -178,105 +178,131 @@ enum OutboundStanza {
         return message
     }
 
+    private static func iq(_ type: StanzaType, to room: JID? = nil, _ child: Element) -> Iq {
+        let iq = Iq()
+        iq.type = type
+        if let room { iq.to = Martin.JID(room.martin) }
+        iq.addChild(child)
+        return iq
+    }
+
+    /// XEP-0045 §7.8.2: asks `room` to invite `invitees` for us, which a room
+    /// that lets members invite does.
+    static func mediatedInvitation(of invitees: [JID], to room: JID, id: String) -> Martin.Message {
+        let message = Martin.Message()
+        message.to = Martin.JID(room.martin)
+        message.id = id
+        let x = Element(name: "x", xmlns: NS.mucUser)
+        for invitee in invitees {
+            x.addChild(Element(name: "invite", attributes: ["to": invitee.description]))
+        }
+        message.addChild(x)
+        return message
+    }
+
+    /// XEP-0045 §8.1: changes the subject of `room`.
+    static func subject(_ subject: String, in room: JID, id: String) -> Martin.Message {
+        let message = Martin.Message()
+        message.to = Martin.JID(room.martin)
+        message.type = .groupchat
+        message.id = id
+        message.subject = subject
+        return message
+    }
+
+    /// XEP-0045 §10.1.3: cancels the configuration of a room just created,
+    /// which destroys it.
+    static func cancelConfiguration(of room: JID) -> Iq {
+        let query = Element(name: "query", xmlns: NS.mucOwner)
+        let cancel = Element(name: "x", xmlns: NS.dataForms)
+        cancel.setAttribute("type", value: "cancel")
+        query.addChild(cancel)
+        return iq(.set, to: room, query)
+    }
+
+    /// XEP-0060 §8.2: submits `fields` as the configuration of our PEP `node`.
+    static func configureNode(_ node: String, fields: [String: [String]]) -> Iq {
+        let pubsub = Element(name: "pubsub", xmlns: NS.pubsubOwner)
+        let configure = Element(name: "configure")
+        configure.setAttribute("node", value: node)
+        configure.addChild(XMPPSession.dataForm(type: "submit", formType: NS.nodeConfig, fields: fields))
+        pubsub.addChild(configure)
+        return iq(.set, pubsub)
+    }
+
+    /// XEP-0060 §8.1: creates our PEP `node` with `fields` as its configuration.
+    static func createNode(_ node: String, fields: [String: [String]]) -> Iq {
+        let pubsub = Element(name: "pubsub", xmlns: "http://jabber.org/protocol/pubsub")
+        pubsub.addChild(Element(name: "create", attributes: ["node": node]))
+        let configure = Element(name: "configure")
+        configure.addChild(XMPPSession.dataForm(type: "submit", formType: NS.nodeConfig, fields: fields))
+        pubsub.addChild(configure)
+        return iq(.set, pubsub)
+    }
+
     /// XEP-0045 §9: sets `jid`'s affiliation with `room`. One item per
     /// request, as Prosody only applies the first.
     static func affiliation(_ affiliation: RoomAffiliation, of jid: JID, in room: JID) -> Iq {
-        let iq = Iq()
-        iq.type = .set
-        iq.to = Martin.JID(room.martin)
         let query = Element(name: "query", xmlns: NS.mucAdmin)
         query.addChild(Element(name: "item", attributes: ["affiliation": affiliation.rawValue, "jid": jid.description]))
-        iq.addChild(query)
-        return iq
+        return iq(.set, to: room, query)
     }
 
     /// XEP-0045 §8.2: takes the occupant `nickname` out of `room` for now, by
     /// setting their role to none. Their affiliation stays.
     static func kick(nickname: String, reason: String?, in room: JID) -> Iq {
-        let iq = Iq()
-        iq.type = .set
-        iq.to = Martin.JID(room.martin)
         let query = Element(name: "query", xmlns: NS.mucAdmin)
         let item = Element(name: "item", attributes: ["nick": nickname, "role": "none"])
         if let reason, !reason.isEmpty { item.addChild(Element(name: "reason", cdata: reason)) }
         query.addChild(item)
-        iq.addChild(query)
-        return iq
+        return iq(.set, to: room, query)
     }
 
     /// XEP-0045 §10.9: asks `room` to destroy itself.
     static func destroy(_ room: JID, reason: String?) -> Iq {
-        let iq = Iq()
-        iq.type = .set
-        iq.to = Martin.JID(room.martin)
         let query = Element(name: "query", xmlns: NS.mucOwner)
         let destroy = Element(name: "destroy")
         if let reason, !reason.isEmpty { destroy.addChild(Element(name: "reason", cdata: reason)) }
         query.addChild(destroy)
-        iq.addChild(query)
-        return iq
+        return iq(.set, to: room, query)
     }
 
     /// XEP-0045 §9.5: the list of those with `affiliation`.
     static func affiliationList(_ affiliation: RoomAffiliation, of room: JID) -> Iq {
-        let iq = Iq()
-        iq.type = .get
-        iq.to = Martin.JID(room.martin)
         let query = Element(name: "query", xmlns: NS.mucAdmin)
         query.addChild(Element(name: "item", attributes: ["affiliation": affiliation.rawValue]))
-        iq.addChild(query)
-        return iq
+        return iq(.get, to: room, query)
     }
 
     /// XEP-0045 §10.2: the room's configuration form.
     static func configurationRequest(of room: JID) -> Iq {
-        let iq = Iq()
-        iq.type = .get
-        iq.to = Martin.JID(room.martin)
-        iq.addChild(Element(name: "query", xmlns: NS.mucOwner))
-        return iq
+        iq(.get, to: room, Element(name: "query", xmlns: NS.mucOwner))
     }
 
     /// Submits `fields` as the room's configuration.
     static func configuration(_ fields: [String: [String]], of room: JID) -> Iq {
-        let iq = Iq()
-        iq.type = .set
-        iq.to = Martin.JID(room.martin)
         let query = Element(name: "query", xmlns: NS.mucOwner)
         query.addChild(XMPPSession.dataForm(type: "submit", formType: "http://jabber.org/protocol/muc#roomconfig", fields: fields))
-        iq.addChild(query)
-        return iq
+        return iq(.set, to: room, query)
     }
 
     /// XEP-0054: the vCard of `room`, to read before changing it.
     static func vCardRequest(of room: JID) -> Iq {
-        let iq = Iq()
-        iq.type = .get
-        iq.to = Martin.JID(room.martin)
-        iq.addChild(Element(name: "vCard", xmlns: NS.vcardTemp))
-        return iq
+        iq(.get, to: room, Element(name: "vCard", xmlns: NS.vcardTemp))
     }
 
     /// Sets `room`'s vCard to `vCard`.
     static func vCard(_ vCard: Element, of room: JID) -> Iq {
-        let iq = Iq()
-        iq.type = .set
-        iq.to = Martin.JID(room.martin)
-        iq.addChild(vCard)
-        return iq
+        iq(.set, to: room, vCard)
     }
 
     /// XEP-0425: asks `room` to retract the message it stamped `stanzaId`,
     /// for everyone. No reason: the room would show it to all.
     static func moderatedRetraction(of stanzaId: String, in room: JID) -> Iq {
-        let iq = Iq()
-        iq.type = .set
-        iq.to = Martin.JID(room.martin)
         let moderate = Element(name: "moderate", xmlns: NS.moderation)
         moderate.setAttribute("id", value: stanzaId)
         moderate.addChild(Element(name: "retract", xmlns: NS.retraction))
-        iq.addChild(moderate)
-        return iq
+        return iq(.set, to: room, moderate)
     }
 
     /// XEP-0085 standalone chat state notification. It may hold nothing

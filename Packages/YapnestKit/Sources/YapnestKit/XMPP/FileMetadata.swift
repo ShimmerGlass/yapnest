@@ -118,17 +118,7 @@ public struct FileMetadata: Sendable, Equatable {
     }
 
     private static func pngThumbnail(of source: CGImageSource, maxSide: Int) -> Data? {
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxSide,
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return output as Data
+        source.thumbnail(maxPixelSize: maxSide)?.encoded(as: .png)
     }
 
     // MARK: Sending

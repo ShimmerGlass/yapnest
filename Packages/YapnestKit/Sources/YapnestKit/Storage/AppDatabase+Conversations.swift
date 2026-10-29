@@ -38,7 +38,7 @@ extension AppDatabase {
     }
 
     public func draft(peer: JID) throws -> String? {
-        try reader.read { db in try Conversation.filter(Column("peer") == peer).fetchOne(db)?.draft }
+        try reader.read { db in try Self.existingConversation(db, peer: peer)?.draft }
     }
 
     /// Marks the latest incoming message that isn't retracted unread, so the conversation shows
@@ -77,7 +77,7 @@ extension AppDatabase {
     /// How far back the server's archive has been read for the chat with `peer`.
     public func historyState(peer: JID) throws -> (isComplete: Bool, cursor: String?) {
         try reader.read { db in
-            let conversation = try Conversation.filter(Column("peer") == peer).fetchOne(db)
+            let conversation = try Self.existingConversation(db, peer: peer)
             return (conversation?.historyComplete ?? false, conversation?.historyCursor)
         }
     }
@@ -89,6 +89,10 @@ extension AppDatabase {
             _ = try Conversation.filter(Column("peer") == peer)
                 .updateAll(db, Column("historyComplete").set(to: isComplete), Column("historyCursor").set(to: cursor))
         }
+    }
+
+    public func conversation(id: Int64) throws -> Conversation? {
+        try reader.read { db in try Conversation.fetchOne(db, key: id) }
     }
 
     public func observeArchivedCount() -> ValueObservation<ValueReducers.Fetch<Int>> {

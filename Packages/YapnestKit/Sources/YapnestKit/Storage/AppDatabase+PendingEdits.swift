@@ -66,7 +66,7 @@ extension AppDatabase {
     /// message was protected) are dropped without applying. Returns nil when
     /// nothing was waiting.
     static func applyPending(_ db: Database, to message: inout Message, room: JID?) throws -> (retracted: Bool, attachment: Attachment?)? {
-        let refs = [message.remoteId, message.originId, message.serverId].compactMap { $0 }
+        let refs = message.referenceIds
         guard !refs.isEmpty, message.id != nil else { return nil }
         let waiting = try PendingEdit
             .filter(Column("conversationId") == message.conversationId && refs.contains(Column("ref")))

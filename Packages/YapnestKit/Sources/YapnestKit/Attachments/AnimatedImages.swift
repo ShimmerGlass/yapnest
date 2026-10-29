@@ -195,12 +195,7 @@ public enum AnimatedImages {
 
         for index in 0..<count {
             try autoreleasepool {
-                guard let frame = CGImageSourceCreateThumbnailAtIndex(input, index, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceShouldCacheImmediately: true,
-                    kCGImageSourceThumbnailMaxPixelSize: side,
-                ] as CFDictionary) else { throw TranscodeError.unreadable }
+                guard let frame = input.thumbnail(at: index, maxPixelSize: side, cacheImmediately: true) else { throw TranscodeError.unreadable }
                 let properties = CGImageSourceCopyPropertiesAtIndex(input, index, nil) as? [CFString: Any]
                 let gif = properties?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
                 var delays: [CFString: Any] = [:]

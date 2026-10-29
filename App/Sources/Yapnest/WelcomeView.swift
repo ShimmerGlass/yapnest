@@ -40,8 +40,7 @@ struct WelcomeView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 8)
                 }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
+                .formHeaderRow()
 
                 Section {
                     option("Encrypt New Chats", isOn: $encryptsNewChats, detail: "New one-to-one chats are end-to-end encrypted with OMEMO, so only you and the other person can read them. Chats you already have keep their setting.")
@@ -53,25 +52,15 @@ struct WelcomeView: View {
                 }
                 if Klipy.apiKey != nil {
                     Section {
-                        option("GIFs", isOn: $gifsEnabled, detail: "Searches go to KLIPY, a company in the United States, which sees what you search for, your region and your IP address. You are asked before the first one.")
+                        option("GIFs", isOn: $gifsEnabled, detail: Klipy.disclosure)
                     }
                 }
 
                 Section {
-                    Button(action: save) {
-                        // The text stays in place, hidden, so the button keeps its size.
-                        Text("Continue")
-                            .opacity(isSaving ? 0 : 1)
-                            .overlay { if isSaving { ProgressView().tint(.white) } }
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(!isLoaded || isSaving)
-                    .accessibilityIdentifier("welcomeContinue")
+                    ProminentBusyButton("Continue", isBusy: isSaving, action: save)
+                        .disabled(!isLoaded || isSaving)
+                        .accessibilityIdentifier("welcomeContinue")
                 }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
             }
             // It fills the window, which on the Mac or an iPad is wide.
             .frame(maxWidth: 640)
@@ -129,25 +118,18 @@ struct WelcomeView: View {
             do {
                 // Each is noted as stored once written, so Continue again
                 // after a failure writes only what didn't get through.
-                if new.encryptsNewChats != old.encryptsNewChats {
-                    try await offMain { [session] in try session.database.setFlag(.encryptsNewChats, new.encryptsNewChats) }
-                    stored?.encryptsNewChats = new.encryptsNewChats
+                @MainActor func write(_ field: WritableKeyPath<Choices, Bool>, _ store: @escaping @Sendable (XMPPSession, Bool) throws -> Void) async throws {
+                    guard new[keyPath: field] != old[keyPath: field] else { return }
+                    let value = new[keyPath: field]
+                    try await offMain { [session] in try store(session, value) }
+                    stored?[keyPath: field] = value
                 }
-                if new.sendsReadMarkers != old.sendsReadMarkers {
-                    try await offMain { [session] in try session.setSendsReadMarkers(new.sendsReadMarkers) }
-                    stored?.sendsReadMarkers = new.sendsReadMarkers
-                }
-                if new.sendsChatStates != old.sendsChatStates {
-                    try await offMain { [session] in try session.setSendsChatStates(new.sendsChatStates) }
-                    stored?.sendsChatStates = new.sendsChatStates
-                }
-                if new.sharesLastSeen != old.sharesLastSeen {
-                    try await offMain { [session] in try session.setSharesLastSeen(new.sharesLastSeen) }
-                    stored?.sharesLastSeen = new.sharesLastSeen
-                }
-                if Klipy.apiKey != nil, new.gifsEnabled != old.gifsEnabled {
-                    try await offMain { [session] in try session.database.setFlag(.gifs, new.gifsEnabled) }
-                    stored?.gifsEnabled = new.gifsEnabled
+                try await write(\.encryptsNewChats) { try $0.database.setFlag(.encryptsNewChats, $1) }
+                try await write(\.sendsReadMarkers) { try $0.setSendsReadMarkers($1) }
+                try await write(\.sendsChatStates) { try $0.setSendsChatStates($1) }
+                try await write(\.sharesLastSeen) { try $0.setSharesLastSeen($1) }
+                if Klipy.apiKey != nil {
+                    try await write(\.gifsEnabled) { try $0.database.setFlag(.gifs, $1) }
                 }
                 try await model.finishWelcome()
             } catch {

@@ -48,7 +48,7 @@ final class CallJingleModule: JingleModule {
             return
         }
         guard let from = stanza.from, let sid = jingle.getAttribute("sid") else { throw XMPPError.bad_request("Missing sid") }
-        let reason = CallSignal.reason(in: jingle)
+        let reason = jingle.reason(as: CallReason.self)
         guard terminated?(from, sid, reason) == true else { throw XMPPError.item_not_found }
         write(stanza.makeResult(type: .result))
     }
@@ -106,22 +106,19 @@ extension CallJingleModule {
         initiating: Bool, to jid: Martin.JID, sid: String, contents: [Jingle.Content], bundle: [String]?, encryption: FingerprintEncryption?,
     ) async throws {
         guard let bound = context?.boundJid else { throw XMPPError.undefined_condition }
-        let iq = Iq()
-        iq.to = jid
-        iq.type = .set
-        let jingle = Element(name: "jingle", xmlns: JingleModule.XMLNS)
-        jingle.setAttribute("action", value: initiating ? "session-initiate" : "session-accept")
-        jingle.setAttribute("sid", value: sid)
-        jingle.setAttribute(initiating ? "initiator" : "responder", value: bound.stringValue)
-        iq.addChild(jingle)
-        for content in contents { jingle.addChild(content.toElement()) }
+        var children = contents.map { $0.toElement() }
         if let bundle {
             let group = Element(name: "group", xmlns: "urn:xmpp:jingle:apps:grouping:0")
             group.setAttribute("semantics", value: "BUNDLE")
             for name in bundle { group.addChild(Element(name: "content", attributes: ["name": name])) }
-            jingle.addChild(group)
+            children.append(group)
         }
-        if let encryption, let failure = await CallFingerprints.encrypt(jingle, to: encryption.peer, device: encryption.device, with: encryption.cipher) {
+        let iq = Iq.jingle(
+            to: jid, action: initiating ? "session-initiate" : "session-accept", sid: sid,
+            attributes: [initiating ? "initiator" : "responder": bound.stringValue], children: children,
+        )
+        if let encryption, let jingle = iq.firstChild(name: "jingle", xmlns: JingleModule.XMLNS),
+           let failure = await CallFingerprints.encrypt(jingle, to: encryption.peer, device: encryption.device, with: encryption.cipher) {
             throw failure
         }
         try await write(iq: iq)

@@ -35,17 +35,11 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     }
 
     private func handle(_ identifier: String) async {
-        guard let credentials = try? CredentialStore().load(), let deviceId = SharedContainer.existingDeviceId else {
+        guard let fetcher = NotificationFetcher.current() else {
             // Signed out: nothing of ours to show.
             return deliver(quiet: fallback, identifier)
         }
-        let directory = SharedContainer.directory(for: credentials.jid)
-        let avatars = AccountDirectory(url: directory).avatars
-        let fetcher = NotificationFetcher(
-            credentials: credentials,
-            directory: directory,
-            resource: "yapnest-\(deviceId)-push",
-        )
+        let avatars = AccountDirectory(url: fetcher.directory).avatars
         switch await fetcher.fetch() {
         case .notifications(let notifications, let edited, let badge):
             await MessageNotification.replaceDelivered(edited, badge: badge, avatars: avatars)

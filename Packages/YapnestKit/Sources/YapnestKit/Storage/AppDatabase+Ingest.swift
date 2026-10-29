@@ -51,7 +51,7 @@ extension AppDatabase {
         if hasContent, !inbound.isGroupChat {
             conversation = try Self.conversation(db, with: inbound.peer)
         } else {
-            conversation = try Conversation.filter(Column("peer") == inbound.peer).fetchOne(db)
+            conversation = try Self.existingConversation(db, peer: inbound.peer)
         }
         guard let conversation, let conversationId = conversation.id else { return result }
         result.conversationId = conversationId
@@ -69,13 +69,23 @@ extension AppDatabase {
         }
 
         let room = conversation.kind == .groupchat ? conversation.peer : nil
+        func fitting(_ kind: PendingEdit.Kind, _ ref: String) throws -> [PendingEdit] {
+            try Self.fittingPending(db, kind, conversationId: conversationId, ref: ref, by: inbound.author, outgoing: inbound.isOutgoing, room: room)
+        }
+        func correct(_ message: inout Message, to body: String) throws -> Message? {
+            try Self.applyCorrection(
+                db, to: &message, body: body, at: inbound.timestamp, mentionsMe: inbound.mentionsMe,
+                quickResponses: inbound.quickResponses, omemoDevice: inbound.omemoDevice, omemoTrust: inbound.omemoTrust,
+                outgoing: inbound.isOutgoing,
+            )
+        }
         if let target = inbound.retractionOf {
             if var original = try Self.ownedMessage(db, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room) {
                 // Our own change still on its way is moot now.
                 original.actionPendingId = nil
                 result.retractedAttachment = try Self.retract(db, &original)
             } else if try Self.referencedMessage(db, conversationId: conversationId, id: target) == nil {
-                try Self.retractStandIns(db, of: Self.fittingPending(db, .correct, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room))
+                try Self.retractStandIns(db, of: fitting(.correct, target))
                 try Self.keepPending(db, .retract, ref: target, inbound, conversationId: conversationId, standInId: nil)
             }
             return result
@@ -86,11 +96,7 @@ extension AppDatabase {
             // plain one of an encrypted message could come from anyone
             // able to forge the sender, such as a server.
             guard inbound.encryption == original.encryption else { return result }
-            if let edited = try Self.applyCorrection(
-                db, to: &original, body: body, at: inbound.timestamp, mentionsMe: inbound.mentionsMe,
-                quickResponses: inbound.quickResponses, omemoDevice: inbound.omemoDevice, omemoTrust: inbound.omemoTrust,
-                outgoing: inbound.isOutgoing,
-            ), !inbound.isOutgoing {
+            if let edited = try correct(&original, to: body), !inbound.isOutgoing {
                 result.editedMessage = edited
             }
             return result
@@ -106,15 +112,11 @@ extension AppDatabase {
         // A second correction of a message we still don't have changes the
         // stand-in of the first, not a message of its own.
         if let target = inbound.correctionOf, let body = inbound.body, inbound.encryption != .omemoUndecryptable,
-           try Self.fittingPending(db, .retract, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room).isEmpty {
-            for edit in try Self.fittingPending(db, .correct, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room)
+           try fitting(.retract, target).isEmpty {
+            for edit in try fitting(.correct, target)
             where edit.encryption == inbound.encryption {
                 if let id = edit.standInId, var standIn = try Message.fetchOne(db, key: id), !standIn.isRetracted {
-                    _ = try Self.applyCorrection(
-                        db, to: &standIn, body: body, at: inbound.timestamp, mentionsMe: inbound.mentionsMe,
-                        quickResponses: inbound.quickResponses, omemoDevice: inbound.omemoDevice, omemoTrust: inbound.omemoTrust,
-                        outgoing: inbound.isOutgoing,
-                    )
+                    _ = try correct(&standIn, to: body)
                     return result
                 }
             }
@@ -192,7 +194,7 @@ extension AppDatabase {
                     result.newAttachment = attachment
                 }
                 if let target = inbound.correctionOf, inbound.encryption != .omemoUndecryptable, let id = stored.id {
-                    if try Self.fittingPending(db, .retract, conversationId: conversationId, ref: target, by: inbound.author, outgoing: inbound.isOutgoing, room: room).isEmpty {
+                    if try fitting(.retract, target).isEmpty {
                         // A stand-in with a file is never linked: nothing would delete it.
                         if file == nil {
                             try Self.keepPending(db, .correct, ref: target, inbound, conversationId: conversationId, standInId: id)
@@ -291,7 +293,7 @@ extension AppDatabase {
                     && (message.direction == .outgoing) == outgoing
                     && (outgoing || message.author.isSame(as: author, room: room))
             }
-            .max { $0.referenceRank(for: ref)! < $1.referenceRank(for: ref)! }
+            .bestMatch(for: ref)
     }
 
     /// Changes `original` to the correcting message's text, unless that is

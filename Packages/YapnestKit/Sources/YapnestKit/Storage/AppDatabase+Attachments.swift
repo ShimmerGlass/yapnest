@@ -14,6 +14,19 @@ extension AppDatabase {
         )
     }
 
+    static func reactions(_ db: Database, messageIds: some Collection<Int64>) throws -> [Int64: [Reaction]] {
+        guard !messageIds.isEmpty else { return [:] }
+        return Dictionary(grouping: try Reaction.filter(messageIds.contains(Column("messageId"))).fetchAll(db), by: \.messageId)
+    }
+
+    static func linkPreviews(_ db: Database, urls: Set<String>) throws -> [String: LinkPreview] {
+        guard !urls.isEmpty else { return [:] }
+        return Dictionary(
+            try LinkPreview.fetchAll(db, keys: urls).map { ($0.url, $0) },
+            uniquingKeysWith: { a, _ in a },
+        )
+    }
+
     /// Stores an outgoing message with its not-yet-uploaded file.
     func insert(_ message: Message, attachment: Attachment) throws -> (Message, Attachment) {
         try writer.write { db in

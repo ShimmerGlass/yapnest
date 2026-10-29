@@ -30,7 +30,7 @@ final class DiagnosticsExporter {
         defer { isExporting = false }
         let make = make
         do {
-            let url = try await Task.detached { try make() }.value
+            let url = try await offMain { try make() }
             presented = url
             present(url) { [weak self] in self?.presented = nil }
         } catch {

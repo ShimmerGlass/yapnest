@@ -61,7 +61,7 @@ struct CallConnectionTests {
         h.receive(h.propose())
         await eventually("the ring") { h.phase == .incoming }
         h.session.client.update(state: .disconnected())
-        h.session.declineCall()
+        h.session.hangUpCall()
         h.session.client.update(state: .connected(resumed: true))
         await eventually("the reject") { h.sentSignals.contains { $0.action == "reject" } }
     }

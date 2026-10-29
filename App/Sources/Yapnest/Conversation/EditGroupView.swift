@@ -130,11 +130,7 @@ struct EditGroupView: View {
                     SheetCancelButton { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if isSaving {
-                        ProgressView()
-                    } else {
-                        SheetConfirmButton("Save", action: save).disabled(!canSave)
-                    }
+                    SheetConfirmButton("Save", isBusy: isSaving, action: save).disabled(!canSave)
                 }
             }
             .errorAlert("Couldn't save everything", $failures)

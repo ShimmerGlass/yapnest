@@ -146,16 +146,11 @@ struct CallSignal: Sendable, Equatable {
         case "ringing": return .ringing
         case "proceed": return .proceed
         case "accept": return .accept
-        case "reject": return .reject(reason(in: element))
-        case "retract": return .retract(reason(in: element))
-        case "finish": return .finish(reason(in: element))
+        case "reject": return .reject(element.reason(as: CallReason.self))
+        case "retract": return .retract(element.reason(as: CallReason.self))
+        case "finish": return .finish(element.reason(as: CallReason.self))
         default: return nil
         }
-    }
-
-    /// The first condition we know. Others are left alone.
-    static func reason(in element: Element) -> CallReason? {
-        element.firstChild(name: "reason")?.children.lazy.compactMap { CallReason(rawValue: $0.name) }.first
     }
 
     /// The session a delivery receipt for our `propose` is about.

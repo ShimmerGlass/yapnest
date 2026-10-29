@@ -132,11 +132,7 @@ struct DevicesList: View {
                 ? "It will stop receiving your encrypted messages. If you still use it, it adds itself back the next time it connects."
                 : "They will stop receiving your encrypted messages. Any you still use add themselves back the next time they connect.")
         }
-        .alert("Couldn't remove", isPresented: Binding(isPresent: $removalError)) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(removalError ?? "")
-        }
+        .errorAlert("Couldn't remove", $removalError)
     }
 
     private func remove(_ targets: [OMEMODevice]) {

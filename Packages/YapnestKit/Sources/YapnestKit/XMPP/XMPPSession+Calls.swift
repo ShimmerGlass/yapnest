@@ -188,8 +188,6 @@ extension XMPPSession {
         }
     }
 
-    public func declineCall() { callStep(.decline) }
-
     /// Ends a call that rings here without telling anyone, for when the
     /// system won't show it (Do Not Disturb). Declining would send a `reject`,
     /// which stops the user's other devices ringing and tells the caller it
@@ -421,7 +419,7 @@ extension XMPPSession {
 
     /// Whether the machine took the signal.
     private func routeToCall(_ signal: CallSignal, source: InboundMessage.Source, isHistory: Bool) -> Bool {
-        let isArchive = if case .archive = source { true } else { false }
+        let isArchive = source.isArchived
         let isLivePropose = if case .propose = signal.action, source == .live, !isHistory, !signal.isFromAccount { true } else { false }
         if isLivePropose, settleTieBreak(against: signal) { return true }
         // A call dismissed here goes on elsewhere, and how it ends is what the

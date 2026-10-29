@@ -52,6 +52,11 @@ public struct MessageCursor: Hashable, Sendable {
         self.init(timestamp: message.timestamp, id: message.id!)
     }
 
+    /// A row that selects `id` and `timestamp`.
+    init(row: Row) {
+        self.init(timestamp: row["timestamp"], id: row["id"])
+    }
+
     // The bound on the timestamp alone is redundant. SQLite can't make a
     // range of the index out of the OR beside it, and would scan from one
     // end of the conversation.
@@ -94,7 +99,7 @@ extension AppDatabase {
     /// like the newest `limit` do, so what the user scrolled back to stays.
     /// `until` ends it at that message, included, instead of at the newest.
     public static func conversationItems(_ db: Database, peer: JID, me: JID, limit: Int = initialWindow, since: MessageCursor? = nil, until: MessageCursor? = nil) throws -> [ConversationItem] {
-        guard let conversation = try Conversation.filter(Column("peer") == peer).fetchOne(db), let conversationId = conversation.id else {
+        guard let conversation = try Self.existingConversation(db, peer: peer), let conversationId = conversation.id else {
             return []
         }
         var request = Message.filter(Column("conversationId") == conversationId)
@@ -113,14 +118,9 @@ extension AppDatabase {
             .reversed()
 
         let ids = messages.compactMap(\.id)
-        let reactions = try Reaction.filter(ids.contains(Column("messageId"))).fetchAll(db)
-        let reactionsByMessage = Dictionary(grouping: reactions, by: \.messageId)
-        let attachments = try AppDatabase.attachments(db, messageIds: ids)
-        let links = Set(messages.compactMap(\.link))
-        let previews = links.isEmpty ? [:] : Dictionary(
-            try LinkPreview.fetchAll(db, keys: links).map { ($0.url, $0) },
-            uniquingKeysWith: { a, _ in a },
-        )
+        let reactionsByMessage = try Self.reactions(db, messageIds: ids)
+        let attachments = try Self.attachments(db, messageIds: ids)
+        let previews = try Self.linkPreviews(db, urls: Set(messages.compactMap(\.link)))
 
         // Everything replied to, in one query: as `referencedMessage` finds
         // each, by any of its ids and ranked the same way.
@@ -132,7 +132,7 @@ extension AppDatabase {
                 .filter(Self.repliedTo(replyIds, in: conversationId))
                 .fetchAll(db)
             for candidate in candidates {
-                for id in Set([candidate.remoteId, candidate.originId, candidate.serverId].compactMap({ $0 })) where replyIds.contains(id) {
+                for id in Set(candidate.referenceIds) where replyIds.contains(id) {
                     if let current = quoted[id], current.referenceRank(for: id)! >= candidate.referenceRank(for: id)! { continue }
                     quoted[id] = candidate
                 }
@@ -214,14 +214,8 @@ extension AppDatabase {
     /// older messages there are, up to `count`.
     public func olderCursor(peer: JID, before cursor: MessageCursor, count: Int) throws -> (cursor: MessageCursor, found: Int)? {
         try reader.read { db in
-            guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return nil }
-            let older = try Row.fetchAll(db, Message
-                .filter(Column("conversationId") == conversationId)
-                .filter(cursor.sqlBefore(inclusive: false))
-                .order(Column("timestamp").desc, Column("id").desc)
-                .limit(count)
-                .select(Column("id"), Column("timestamp")))
-            return older.last.map { (MessageCursor(timestamp: $0["timestamp"], id: $0["id"]), older.count) }
+            guard let conversationId = try Self.conversationId(db, peer: peer) else { return nil }
+            return try Self.cursor(db, conversationId: conversationId, from: cursor, count: count, newer: false)
         }
     }
 
@@ -230,15 +224,19 @@ extension AppDatabase {
     /// messages there are, up to `count`.
     public func newerCursor(peer: JID, after cursor: MessageCursor, count: Int) throws -> (cursor: MessageCursor, found: Int)? {
         try reader.read { db in
-            guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return nil }
-            let newer = try Row.fetchAll(db, Message
-                .filter(Column("conversationId") == conversationId)
-                .filter(cursor.sqlAfter(inclusive: false))
-                .order(Column("timestamp"), Column("id"))
-                .limit(count)
-                .select(Column("id"), Column("timestamp")))
-            return newer.last.map { (MessageCursor(timestamp: $0["timestamp"], id: $0["id"]), newer.count) }
+            guard let conversationId = try Self.conversationId(db, peer: peer) else { return nil }
+            return try Self.cursor(db, conversationId: conversationId, from: cursor, count: count, newer: true)
         }
+    }
+
+    private static func cursor(_ db: Database, conversationId: Int64, from cursor: MessageCursor, count: Int, newer: Bool) throws -> (cursor: MessageCursor, found: Int)? {
+        let request = Message.filter(Column("conversationId") == conversationId)
+        let rows = try Row.fetchAll(db, (newer
+            ? request.filter(cursor.sqlAfter(inclusive: false)).order(Column("timestamp"), Column("id"))
+            : request.filter(cursor.sqlBefore(inclusive: false)).order(Column("timestamp").desc, Column("id").desc))
+            .limit(count)
+            .select(Column("id"), Column("timestamp")))
+        return rows.last.map { (MessageCursor(row: $0), rows.count) }
     }
 
     /// The window to show `messageId` in: nil if it isn't in the conversation
@@ -248,24 +246,22 @@ extension AppDatabase {
     /// whole stretch, so the window is bounded: `boundedMargin` messages
     /// either side, with an `end`.
     public func window(peer: JID, around messageId: Int64, boundedBeyond limit: Int, margin: Int = 30, boundedMargin: Int = 100) throws -> (start: MessageCursor, end: MessageCursor?)? {
-        let target: (cursor: MessageCursor, newer: Int)? = try reader.read { db in
-            guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id,
+        try reader.read { db in
+            guard let conversationId = try Self.conversationId(db, peer: peer),
                   let message = try Message.fetchOne(db, key: messageId), message.conversationId == conversationId else { return nil }
-            let cursor = MessageCursor(message)
+            let target = MessageCursor(message)
             let newer = try Message
                 .filter(Column("conversationId") == conversationId)
-                .filter(cursor.sqlAfter(inclusive: false))
+                .filter(target.sqlAfter(inclusive: false))
                 .fetchCount(db)
-            return (cursor, newer)
+            guard newer > limit else {
+                return (try Self.cursor(db, conversationId: conversationId, from: target, count: margin, newer: false)?.cursor ?? target, nil)
+            }
+            return (
+                try Self.cursor(db, conversationId: conversationId, from: target, count: boundedMargin, newer: false)?.cursor ?? target,
+                try Self.cursor(db, conversationId: conversationId, from: target, count: boundedMargin, newer: true)?.cursor ?? target,
+            )
         }
-        guard let target else { return nil }
-        guard target.newer > limit else {
-            return (try olderCursor(peer: peer, before: target.cursor, count: margin)?.cursor ?? target.cursor, nil)
-        }
-        return (
-            try olderCursor(peer: peer, before: target.cursor, count: boundedMargin)?.cursor ?? target.cursor,
-            try newerCursor(peer: peer, after: target.cursor, count: boundedMargin)?.cursor ?? target.cursor,
-        )
     }
 
     /// Incoming messages of the conversation with `peer` not read yet, however
@@ -280,7 +276,7 @@ extension AppDatabase {
     }
 
     private static func unreadCount(_ db: Database, peer: JID) throws -> Int {
-        guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return 0 }
+        guard let conversationId = try Self.conversationId(db, peer: peer) else { return 0 }
         return try Message
             .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming)
             .unread()
@@ -290,13 +286,15 @@ extension AppDatabase {
     /// The start of a window that includes `messageId`, with `margin` older
     /// messages for context; nil if it isn't in the conversation with `peer`.
     public func windowStart(peer: JID, including messageId: Int64, margin: Int = 30) throws -> MessageCursor? {
-        let target: MessageCursor? = try reader.read { db in
-            guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id,
+        try reader.read { db in
+            guard let conversationId = try Self.conversationId(db, peer: peer),
                   let message = try Message.fetchOne(db, key: messageId), message.conversationId == conversationId else { return nil }
-            return MessageCursor(message)
+            return try Self.windowStart(db, conversationId: conversationId, target: MessageCursor(message), margin: margin)
         }
-        guard let target else { return nil }
-        return try olderCursor(peer: peer, before: target, count: margin)?.cursor ?? target
+    }
+
+    private static func windowStart(_ db: Database, conversationId: Int64, target: MessageCursor, margin: Int) throws -> MessageCursor {
+        try cursor(db, conversationId: conversationId, from: target, count: margin, newer: false)?.cursor ?? target
     }
 
     /// What to open the conversation with `peer` on: its first unread message
@@ -306,42 +304,38 @@ extension AppDatabase {
     /// stops reaching back, to bound what every change re-reads; the first
     /// unread one is then older than the window.
     public func openingWindow(peer: JID, limit: Int = 2500) throws -> (firstUnread: Int64?, start: MessageCursor?) {
-        let unread: Message? = try reader.read { db in
-            guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return nil }
-            return try Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming)
-                .unread()
-                .order(Column("timestamp"), Column("id"))
-                .fetchOne(db)
-        }
-        guard let unread, let id = unread.id else { return (nil, nil) }
-        let newer: Int = try reader.read { db in
-            try Message
-                .filter(Column("conversationId") == unread.conversationId)
+        try reader.read { db in
+            guard let conversationId = try Self.conversationId(db, peer: peer),
+                  let unread = try Message
+                    .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming)
+                    .unread()
+                    .order(Column("timestamp"), Column("id"))
+                    .fetchOne(db),
+                  let id = unread.id else { return (nil, nil) }
+            let newer = try Message
+                .filter(Column("conversationId") == conversationId)
                 .filter(MessageCursor(unread).sqlAfter(inclusive: true))
                 .fetchCount(db)
-        }
-        guard newer > Self.initialWindow else { return (id, nil) }
-        guard newer <= limit else {
-            // Too much unread to show: as far back as the limit goes.
-            let start: MessageCursor? = try reader.read { db in
-                try Row.fetchOne(db, Message
-                    .filter(Column("conversationId") == unread.conversationId)
+            guard newer > Self.initialWindow else { return (id, nil) }
+            guard newer <= limit else {
+                // Too much unread to show: as far back as the limit goes.
+                let start = try Row.fetchOne(db, Message
+                    .filter(Column("conversationId") == conversationId)
                     .order(Column("timestamp").desc, Column("id").desc)
                     .select(Column("id"), Column("timestamp"))
                     .limit(1, offset: limit - 1))
-                    .map { MessageCursor(timestamp: $0["timestamp"], id: $0["id"]) }
+                    .map { MessageCursor(row: $0) }
+                return (id, start)
             }
-            return (id, start)
+            return (id, try Self.windowStart(db, conversationId: conversationId, target: MessageCursor(unread), margin: 20))
         }
-        return (id, try windowStart(peer: peer, including: id, margin: 20))
     }
 
     /// The message of the conversation with `peer` that `reference` points at
     /// by any of its ids, if stored.
     public func referencedMessage(peer: JID, id reference: String) throws -> Message? {
         try reader.read { db in
-            guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return nil }
+            guard let conversationId = try Self.conversationId(db, peer: peer) else { return nil }
             return try Self.referencedMessage(db, conversationId: conversationId, id: reference)
         }
     }
@@ -349,7 +343,7 @@ extension AppDatabase {
     /// The oldest message stored for the conversation with `peer`.
     public func oldestMessage(peer: JID) throws -> Message? {
         try reader.read { db in
-            guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return nil }
+            guard let conversationId = try Self.conversationId(db, peer: peer) else { return nil }
             return try Message.filter(Column("conversationId") == conversationId).excludingEvents().order(Column("timestamp"), Column("id")).fetchOne(db)
         }
     }
@@ -361,12 +355,12 @@ extension AppDatabase {
     /// The conversation's link preview choice; nil until the user decides.
     public func observeLinkPreviews(peer: JID) -> ValueObservation<ValueReducers.Fetch<Bool?>> {
         ValueObservation.tracking { db in
-            try Conversation.filter(Column("peer") == peer).fetchOne(db)?.linkPreviews
+            try Self.existingConversation(db, peer: peer)?.linkPreviews
         }
     }
 
     public func linkPreviews(peer: JID) throws -> Bool? {
-        try reader.read { db in try Conversation.filter(Column("peer") == peer).fetchOne(db)?.linkPreviews }
+        try reader.read { db in try Self.existingConversation(db, peer: peer)?.linkPreviews }
     }
 
     public func setLinkPreviews(_ allowed: Bool?, peer: JID) throws {
@@ -378,7 +372,7 @@ extension AppDatabase {
 
     /// What `NotificationSound` stored for the chat's notifications; nil is the system's sound.
     public func notificationSound(peer: JID) throws -> String? {
-        try reader.read { db in try Conversation.filter(Column("peer") == peer).fetchOne(db)?.notificationSound }
+        try reader.read { db in try Self.existingConversation(db, peer: peer)?.notificationSound }
     }
 
     public func setNotificationSound(_ sound: String?, peer: JID) throws {
@@ -390,7 +384,7 @@ extension AppDatabase {
 
     /// The minutes a group that notifies for every message stays silent after a notification; nil is off.
     public func notificationInterval(peer: JID) throws -> Int? {
-        try reader.read { db in try Conversation.filter(Column("peer") == peer).fetchOne(db)?.notificationInterval }
+        try reader.read { db in try Self.existingConversation(db, peer: peer)?.notificationInterval }
     }
 
     public func setNotificationInterval(_ minutes: Int?, peer: JID) throws {
@@ -463,7 +457,7 @@ final class ConversationItemCache: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else {
+        guard let conversationId = try AppDatabase.conversationId(db, peer: peer) else {
             return publish([], [:])
         }
         var window = Message.filter(Column("conversationId") == conversationId)
@@ -499,13 +493,9 @@ final class ConversationItemCache: @unchecked Sendable {
             }
         }
         let ids = Array(fresh.keys)
-        let reactions = ids.isEmpty ? [:] : Dictionary(grouping: try Reaction.filter(ids.contains(Column("messageId"))).fetchAll(db), by: \.messageId)
+        let reactions = try AppDatabase.reactions(db, messageIds: ids)
         let attachments = try AppDatabase.attachments(db, messageIds: ids)
-        let links = Set(fresh.values.compactMap(\.link))
-        let previews = links.isEmpty ? [:] : Dictionary(
-            try LinkPreview.fetchAll(db, keys: links).map { ($0.url, $0) },
-            uniquingKeysWith: { a, _ in a },
-        )
+        let previews = try AppDatabase.linkPreviews(db, urls: Set(fresh.values.compactMap(\.link)))
 
         // Replies resolve as `conversationItems` does.
         func message(_ id: Int64) -> Message? { fresh[id] ?? entries[id]?.message }
@@ -538,8 +528,8 @@ final class ConversationItemCache: @unchecked Sendable {
                 if let quote { needed.insert(quote.id) }
             }
         }
-        let quotedMessages = needed.isEmpty ? [:] : Dictionary(
-            try Message.filter(needed.contains(Column("id"))).fetchAll(db).map { ($0.id!, $0) },
+        let quotedMessages = Dictionary(
+            try Message.fetchAll(db, keys: needed).map { ($0.id!, $0) },
             uniquingKeysWith: { a, _ in a },
         )
         let quotedAttachments = try AppDatabase.attachments(db, messageIds: needed)

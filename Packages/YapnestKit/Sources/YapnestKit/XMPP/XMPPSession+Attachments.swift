@@ -300,7 +300,6 @@ extension XMPPSession {
         Task.detached { [self] in
             defer { endTransfer(messageId) }
             let started = Date()
-            var delegate: ProgressDelegate?
             do {
                 var source = url
                 var fragment: String?
@@ -313,16 +312,11 @@ extension XMPPSession {
                 try await policy.check(source)
 
                 let progress = ProgressDelegate(limit: limit, policy: policy) { [weak self] progress in self?.setProgress(progress, for: messageId) }
-                delegate = progress
                 var request = URLRequest(url: source)
                 // A picture nobody asked for isn't worth the user's data in Low Data Mode.
                 if automatic { request.allowsConstrainedNetworkAccess = false }
-                let (file, response) = try await Self.transferSession.download(for: request, delegate: progress)
-                defer { try? FileManager.default.removeItem(at: file) }
-                guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-                guard (200..<300).contains(http.statusCode) else { throw HTTPStatusError(status: http.statusCode) }
-                var data = try Data(contentsOf: file, options: .mappedIfSafe)
-                guard data.count <= limit else { throw TooLarge(size: Int64(data.count)) }
+                let (downloaded, http) = try await Self.transferSession.cappedDownload(request, delegate: progress, limit: limit)
+                var data = downloaded
                 if let fragment { data = try FileCrypto.decrypt(data, fragment: fragment) }
 
                 let localFile = try attachments.save(data, name: attachment.name)
@@ -337,7 +331,7 @@ extension XMPPSession {
                 DiagLog.info(.receive, "Download finished", .id("file", transferId), .int("status", http.statusCode), .size("bytes", data.count), .duration("took", since: started))
             } catch {
                 // Over the limit isn't a failure; a tap can still fetch it.
-                if let size = (error as? TooLarge)?.size ?? delegate?.exceededSize {
+                if let size = (error as? TooLarge)?.size {
                     try? database.setTooLarge(messageId: messageId, size: size > 0 ? size : nil)
                     return
                 }

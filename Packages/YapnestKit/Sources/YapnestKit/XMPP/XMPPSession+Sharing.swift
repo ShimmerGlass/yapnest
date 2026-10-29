@@ -25,17 +25,11 @@ extension XMPPSession {
     func joinToSend(_ room: JID, timeout: TimeInterval) async -> String? {
         guard let group = try? database.groupChat(room), !group.hasLeft else { return String(localized: "You're no longer in this group.") }
         join(room, nickname: group.nickname, mayCreate: false)
-        do {
-            return try await withTimeout(timeout) { [self] () -> String? in
-                for await all in rooms.values {
-                    guard let status = all[room] else { continue }
-                    if case .failed(let reason) = status.phase { return reason }
-                    if status.isJoined, !status.isSyncing { return nil }
-                }
-                return String(localized: "The connection ended.")
-            }
-        } catch {
-            return GroupError.timedOut.localizedDescription
+        switch await awaitRoom(room, timeout: timeout, until: { $0.isJoined && !$0.isSyncing }) {
+        case .reached: return nil
+        case .failed(let reason): return reason
+        case .ended: return String(localized: "The connection ended.")
+        case .timedOut: return GroupError.timedOut.localizedDescription
         }
     }
 

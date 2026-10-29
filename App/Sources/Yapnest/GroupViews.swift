@@ -30,12 +30,8 @@ struct NewGroupView: View {
                     SheetCancelButton { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if creation.isBusy {
-                        ProgressView()
-                    } else {
-                        SheetConfirmButton("Create", action: create)
-                            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
+                    SheetConfirmButton("Create", isBusy: creation.isBusy, action: create)
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
             .actionAlert("Couldn't create the group", creation)
@@ -108,11 +104,7 @@ struct JoinGroupView: View {
                         .disabled(joining.isBusy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if joining.isBusy {
-                        ProgressView()
-                    } else {
-                        SheetConfirmButton("Join", action: join).disabled(room == nil)
-                    }
+                    SheetConfirmButton("Join", isBusy: joining.isBusy, action: join).disabled(room == nil)
                 }
             }
             .actionAlert("Couldn't join", joining)
@@ -280,11 +272,7 @@ struct InviteView: View {
                     SheetCancelButton { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if invitation.isBusy {
-                        ProgressView()
-                    } else {
-                        SheetConfirmButton("Add", action: invite).disabled(selected.isEmpty)
-                    }
+                    SheetConfirmButton("Add", isBusy: invitation.isBusy, action: invite).disabled(selected.isEmpty)
                 }
             }
             .actionAlert("Couldn't add them", invitation)

@@ -256,6 +256,16 @@ extension Message {
         guard serverId == reference || remoteId == reference || originId == reference else { return nil }
         return ReferenceRank(isServerId: serverId == reference, timestamp: timestamp, id: id ?? 0)
     }
+
+    /// The ids another message can name this one by.
+    var referenceIds: [String] { [remoteId, originId, serverId].compactMap { $0 } }
+}
+
+extension Sequence<Message> {
+    /// The one `reference` most likely means, by `Message.ReferenceRank`.
+    func bestMatch(for reference: String) -> Message? {
+        self.max { $0.referenceRank(for: reference)! < $1.referenceRank(for: reference)! }
+    }
 }
 
 extension Message {

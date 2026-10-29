@@ -67,16 +67,13 @@ public enum DiagnosticsExport {
         let info = Bundle.main.infoDictionary
         let version = info?["CFBundleShortVersionString"] as? String ?? "unknown"
         let build = info?["CFBundleVersion"] as? String ?? "unknown"
-        let format = ISO8601DateFormatter()
-        format.formatOptions = [.withInternetDateTime]
-        format.timeZone = TimeZone(identifier: "UTC")
         return """
         Yapnest diagnostics
         App: \(version) (\(build))
         Platform: \(platform)
         OS: \(ProcessInfo.processInfo.operatingSystemVersionString)
         Device: \(deviceModel)
-        Exported: \(format.string(from: date))
+        Exported: \(DiagnosticsStore.timestamps.string(from: date))
         """
     }
 

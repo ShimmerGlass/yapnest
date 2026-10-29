@@ -370,13 +370,6 @@ struct CallMachineIncomingTests {
         #expect(!effects.contains(.prepareMedia))
     }
 
-    @Test func decliningRejectsToTheCallersDevice() {
-        var machine = ringing()
-        let effects = machine.handle(.decline)
-        #expect(effects.contains(.send(.reject(to: aliceDevice, reason: .decline))))
-        #expect(endings(effects) == [.declined])
-    }
-
     @Test func hangingUpWhileRingingIsDeclining() {
         var machine = ringing()
         let effects = machine.handle(.hangUp)
@@ -521,7 +514,7 @@ struct CallMachineIncomingTests {
 
     @Test func nothingHappensToAnEndedCall() {
         var machine = ringing()
-        _ = machine.handle(.decline)
+        _ = machine.handle(.hangUp)
         for input: CallMachine.Input in [.answer, .hangUp, .timer(1), .media(.failed), fromPeer(.retract(nil))] {
             #expect(machine.handle(input).isEmpty)
         }

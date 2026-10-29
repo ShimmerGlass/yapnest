@@ -75,8 +75,6 @@ extension LiveServer {
             let cancelled = try await admin.execute(stats, action: .cancel, sessionID: session)
             #expect(cancelled.status == .canceled)
             await #expect(throws: AdHocError.self) { try await admin.execute(stats, action: .complete, sessionID: session, form: first.form) }
-            // Best effort, and quiet about a run that is already gone.
-            await admin.cancelAdHoc(stats, sessionID: session)
         }
 
         @Test func aUserIsRefusedTheAdminsCommands() async throws {

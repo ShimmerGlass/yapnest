@@ -70,7 +70,7 @@ struct YapnestApp: App {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { delegate.model.requestedSheet = .settings }
                     .keyboardShortcut(",")
-                    .disabled(delegate.model.session == nil || delegate.model.hasConversationSheet)
+                    .disabled(!delegate.model.acceptsMenuCommands)
             }
             CommandGroup(after: .help) {
                 Button("Export Logs…") { Task { await delegate.diagnostics.start() } }
@@ -79,15 +79,15 @@ struct YapnestApp: App {
             CommandGroup(after: .textEditing) {
                 Button("Find in Chat") { delegate.model.chatSearchRequests += 1 }
                     .keyboardShortcut("f")
-                    .disabled(delegate.model.session == nil || delegate.model.hasConversationSheet)
+                    .disabled(!delegate.model.acceptsMenuCommands)
                 Button("Edit Last Message") { delegate.model.editLastRequests += 1 }
                     .keyboardShortcut("e")
-                    .disabled(delegate.model.session == nil || delegate.model.hasConversationSheet)
+                    .disabled(!delegate.model.acceptsMenuCommands)
             }
             CommandGroup(replacing: .newItem) {
                 Button("New Chat") { delegate.model.requestedSheet = .compose }
                     .keyboardShortcut("n")
-                    .disabled(delegate.model.session == nil || delegate.model.hasConversationSheet)
+                    .disabled(!delegate.model.acceptsMenuCommands)
             }
         }
     }

@@ -47,8 +47,7 @@ struct LoginView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 8)
                 }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
+                .formHeaderRow()
 
                 if model.pendingLink != nil {
                     Section {
@@ -87,23 +86,13 @@ struct LoginView: View {
                 }
 
                 Section {
-                    Button {
+                    ProminentBusyButton("Sign In", isBusy: isSigningIn) {
                         Task { await signIn() }
-                    } label: {
-                        // The text stays in place, hidden, so the button keeps its size.
-                        Text("Sign In")
-                            .opacity(isSigningIn ? 0 : 1)
-                            .overlay { if isSigningIn { ProgressView().tint(.white) } }
-                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
                     // The Mac draws a disabled prominent button as a solid accent pill, so grey it out ourselves.
                     .tint(!canSignIn && !isSigningIn ? Color(.systemGray3) : .accentColor)
                     .disabled(!canSignIn)
                 }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
             }
             // Margins rather than a max width, so the background and scroll bar still span the window.
             // Nil below the cap keeps the system's own margins, which any number would replace.
@@ -160,5 +149,39 @@ struct AppIconImage: View {
             .frame(width: size, height: size)
             .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
             .accessibilityHidden(true)
+    }
+}
+
+/// A large prominent button that swaps its title for a spinner while busy.
+struct ProminentBusyButton: View {
+    let title: LocalizedStringKey
+    let isBusy: Bool
+    let action: () -> Void
+
+    init(_ title: LocalizedStringKey, isBusy: Bool, action: @escaping () -> Void) {
+        self.title = title
+        self.isBusy = isBusy
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            // The text stays in place, hidden, so the button keeps its size.
+            Text(title)
+                .opacity(isBusy ? 0 : 1)
+                .overlay { if isBusy { ProgressView().tint(.white) } }
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets())
+    }
+}
+
+extension View {
+    /// A form section's heading, drawn on the bare background.
+    func formHeaderRow() -> some View {
+        listRowBackground(Color.clear).listRowInsets(EdgeInsets())
     }
 }

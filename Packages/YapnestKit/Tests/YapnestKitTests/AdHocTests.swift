@@ -205,16 +205,6 @@ struct AdHocTests {
         #expect(request.getAttribute("action") == "cancel")
         #expect(request.firstChild(name: "x") == nil)
         #expect(response.status == .canceled)
-
-        await session.cancelAdHoc(command, sessionID: "s2")
-        let again = try sent()
-        #expect(again.getAttribute("action") == "cancel" && again.getAttribute("sessionid") == "s2")
-    }
-
-    @Test func cancellingIsBestEffort() async {
-        session.connectForTesting(wire)
-        wire.answer { FakeWire.error(to: $0, condition: "item-not-found") }
-        await session.cancelAdHoc(command, sessionID: "gone")
     }
 
     @Test func anExecutingCommandWithoutActionsCanOnlyBeCompleted() throws {

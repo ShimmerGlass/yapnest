@@ -392,17 +392,7 @@ extension XMPPSession {
     }
 
     private func createSettingsNode(maxItems: String, timeout: TimeInterval) async throws {
-        let create = Iq()
-        create.type = .set
-        let pubsub = Element(name: "pubsub", xmlns: "http://jabber.org/protocol/pubsub")
-        pubsub.addChild(Element(name: "create", attributes: ["node": NS.settings]))
-        let configure = Element(name: "configure")
-        configure.addChild(Self.dataForm(
-            type: "submit", formType: "http://jabber.org/protocol/pubsub#node_config",
-            fields: Self.settingsNodeFields(maxItems: maxItems),
-        ))
-        pubsub.addChild(configure)
-        create.addChild(pubsub)
+        let create = OutboundStanza.createNode(NS.settings, fields: Self.settingsNodeFields(maxItems: maxItems))
         do {
             _ = try await client.context.writer.write(iq: create, timeout: timeout, errorDecoder: PubSubError.from(stanza:))
         } catch let error as PubSubError where error.error.errorCondition == .conflict {
@@ -561,7 +551,7 @@ extension XMPPSession {
 
     /// For the warning's Retry: publishes the items the server refused, once more.
     private func retryRefusedSettings() async throws {
-        guard isConnected else { throw ServerError(condition: "remote-server-timeout", type: .wait) }
+        guard isConnected else { throw ServerError.timedOut }
         let refused = lock.withLock { Set($0.settingsSync.refusedItems.keys) }
         for item in try database.pendingSyncItems() where refused.contains(item.id) {
             try await publishSettingsItem(item.id, item.element)

@@ -1,17 +1,6 @@
 import Foundation
 import GRDB
 
-extension AppDatabase {
-    /// Whether the GIF picker is offered. On unless turned off.
-    public func observeGifsEnabled() -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<Bool>>> {
-        ValueObservation.tracking { db in
-            let raw = try Self.setting(db, .gifs)
-            return raw.map { $0 == "1" } ?? true
-        }
-        .removeDuplicates()
-    }
-}
-
 public struct GifServiceError: Error, Sendable, Equatable {
     /// The HTTP status, when the server answered at all.
     public var status: Int?
@@ -139,25 +128,18 @@ public struct GifService: Sendable {
     static func download(_ url: URL, session: URLSession, policy: DownloadPolicy, limit: Int = maxDownloadSize) async throws -> Data {
         guard url.scheme?.lowercased() == "https" else { throw DownloadError.notHTTPS }
         try await policy.check(url)
-        // The delegate cancels the transfer once it is over the limit and
-        // checks every redirect like the first request.
+        // The delegate checks every redirect like the first request.
         let delegate = ProgressDelegate(limit: Int64(limit), policy: policy) { _ in }
-        let file: URL
-        let response: URLResponse
         do {
-            (file, response) = try await session.download(from: url, delegate: delegate)
-        } catch {
-            if delegate.exceededSize != nil { throw DownloadError.tooLarge }
-            throw error
+            let (data, _) = try await session.cappedDownload(URLRequest(url: url), delegate: delegate, limit: Int64(limit)) { response in
+                guard response.url?.scheme?.lowercased() == "https" else { throw DownloadError.notHTTPS }
+            }
+            return data
+        } catch is TooLarge {
+            throw DownloadError.tooLarge
+        } catch let error as HTTPStatusError {
+            throw DownloadError.status(error.status)
         }
-        defer { try? FileManager.default.removeItem(at: file) }
-        guard response.url?.scheme?.lowercased() == "https" else { throw DownloadError.notHTTPS }
-        if let status = (response as? HTTPURLResponse)?.statusCode, !(200..<300).contains(status) {
-            throw DownloadError.status(status)
-        }
-        let data = try Data(contentsOf: file, options: .mappedIfSafe)
-        guard data.count <= limit else { throw DownloadError.tooLarge }
-        return data
     }
 
     private func load(_ request: URLRequest, page: Int) async throws -> GifPage {

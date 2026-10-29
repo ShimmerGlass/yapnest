@@ -94,8 +94,7 @@ enum CallFingerprints {
             case .failure(let error): return error
             case .success(let encrypted):
                 let element = Element(name: "fingerprint", xmlns: namespace, children: [encrypted])
-                if let hash = plain.getAttribute("hash") { element.setAttribute("hash", value: hash) }
-                if let setup = plain.getAttribute("setup") { element.setAttribute("setup", value: setup) }
+                copyFingerprintAttributes(from: plain, to: element)
                 transport.removeChild(plain)
                 transport.addChild(element)
             }
@@ -132,14 +131,19 @@ enum CallFingerprints {
                 if let found, found.device != opened.device { return .failure(.wrongDevice) }
                 found = (opened.device, opened.trust)
                 let plain = Element(name: "fingerprint", cdata: opened.fingerprint, xmlns: dtlsNamespace)
-                if let hash = wrapper.getAttribute("hash") { plain.setAttribute("hash", value: hash) }
-                if let setup = wrapper.getAttribute("setup") { plain.setAttribute("setup", value: setup) }
+                copyFingerprintAttributes(from: wrapper, to: plain)
                 transport.removeChild(wrapper)
                 transport.addChild(plain)
             }
         }
         guard let found else { return .failure(.malformed) }
         return .success(.encrypted(device: found.device, trust: found.trust))
+    }
+
+    private static func copyFingerprintAttributes(from source: Element, to target: Element) {
+        for name in ["hash", "setup"] {
+            if let value = source.getAttribute(name) { target.setAttribute(name, value: value) }
+        }
     }
 
     private static func singleEncrypted(in wrapper: Element) -> Element? {

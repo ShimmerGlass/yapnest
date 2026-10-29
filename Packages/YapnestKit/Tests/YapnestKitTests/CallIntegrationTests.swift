@@ -115,7 +115,7 @@ extension LiveServer {
             try aliceSession.startCall(to: bob)
             let sid = aliceSession.callState.value?.sid
             try await LiveServer.waitUntil("bob to ring") { bobSession.callState.value?.phase == .incoming }
-            bobSession.declineCall()
+            bobSession.hangUpCall()
             try await LiveServer.waitUntil("alice to be declined") { aliceSession.callState.value?.phase == .ended(.declined) }
             try await LiveServer.waitUntil("both to record it") { (try? rows(aliceSession, sid).count) == 1 && (try? rows(bobSession, sid).count) == 1 }
             #expect(try rows(aliceSession, sid).first?.callOutcome == .declined)
@@ -175,7 +175,7 @@ extension LiveServer {
             try await LiveServer.waitUntil("both of bob's devices to ring") {
                 bobs.allSatisfy { $0.0.callState.value?.phase == .incoming }
             }
-            bobs[1].0.declineCall()
+            bobs[1].0.hangUpCall()
             try await LiveServer.waitUntil("the other device to stop ringing") { bobs[0].0.callState.value?.phase == .ended(.declinedElsewhere) }
             try await LiveServer.waitUntil("alice to be declined") { aliceSession.callState.value?.phase == .ended(.declined) }
         }
