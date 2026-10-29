@@ -316,8 +316,10 @@ extension AppDatabase {
     /// it's read here or on another device, and the app's badge. Counts the
     /// same messages as `unreadCount()`: groups that never notify count none,
     /// and those that notify for mentions count only the mentions.
+    /// Watched by the tables `unreadCounts` reads, so it fetches beside the
+    /// writes rather than holding each one up (see `observeChatList`).
     public func observeUnreadBadge() -> ValueObservation<ValueReducers.Fetch<UnreadBadge>> {
-        ValueObservation.tracking { db in
+        ValueObservation.tracking(regions: Self.unreadBadgeTables) { db in
             let entries = try Self.unreadCounts(db, archived: false)
             return UnreadBadge(counts: Self.badgeCounts(entries), hasUnread: entries.contains { $0.unread > 0 })
         }
@@ -326,6 +328,11 @@ extension AppDatabase {
         // badge the app has to put right. Callers skip the costly work
         // themselves when the counts are the same.
     }
+
+    /// Every table `unreadCounts` reads.
+    static let unreadBadgeTables: [any DatabaseRegionConvertible] = [
+        Table(Message.databaseTableName), Table(Conversation.databaseTableName), Table(GroupChat.databaseTableName),
+    ]
 
     /// What the badge counts, per peer. Archived conversations are left out;
     /// the others appear, with 0 when nothing is unread.

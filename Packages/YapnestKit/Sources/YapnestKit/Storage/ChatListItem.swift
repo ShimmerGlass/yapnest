@@ -78,8 +78,19 @@ extension AppDatabase {
         try reader.read { db in try ChatListItem.fetch(db, archived: archived) }
     }
 
-    /// Emits the chat list whenever it changes.
+    /// Emits the chat list whenever it changes. Watched by table, which
+    /// `chatListTables` must list in full: an observation that works out what
+    /// it read fetches on the writer after every commit, and with a thousand
+    /// chats that held each write up by 30 ms, receipts included. Watched by
+    /// table it fetches from a reader beside the writes, and a burst of them
+    /// makes a few fetches rather than one each.
     public func observeChatList(archived: Bool = false) -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<[ChatListItem]>>> {
-        ValueObservation.tracking { db in try ChatListItem.fetch(db, archived: archived) }.removeDuplicates()
+        ValueObservation.tracking(regions: Self.chatListTables) { db in try ChatListItem.fetch(db, archived: archived) }.removeDuplicates()
     }
+
+    /// Every table `ChatListItem.fetch` reads.
+    static let chatListTables: [any DatabaseRegionConvertible] = [
+        Table(Conversation.databaseTableName), Table(Contact.databaseTableName), Table(GroupChat.databaseTableName),
+        Table(Message.databaseTableName), Table(Attachment.databaseTableName),
+    ]
 }
