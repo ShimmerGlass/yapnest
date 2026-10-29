@@ -124,6 +124,14 @@ public enum AnimatedImages {
             self.init(source: CGImageSourceCreateWithData(data as CFData, AnimatedImages.noCache))
         }
 
+        /// The canvas size, from the first frame's properties.
+        public var canvasSize: (width: Int, height: Int)? {
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            guard let width = properties?[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties?[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
+            return (width, height)
+        }
+
         public func delay(at index: Int) -> Duration {
             let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
             func seconds(_ container: CFString, _ unclamped: CFString, _ clamped: CFString) -> Double? {
@@ -148,9 +156,7 @@ public enum AnimatedImages {
         /// which took a third of a core with the GIF picker open.
         public func image(at index: Int, maxSide: Int) -> CGImage? {
             guard let frame = CGImageSourceCreateImageAtIndex(source, index, nil) else { return nil }
-            let longSide = max(frame.width, frame.height)
-            let scale = maxSide > 0 && longSide > maxSide ? Double(maxSide) / Double(longSide) : 1
-            let width = max(1, Int((Double(frame.width) * scale).rounded())), height = max(1, Int((Double(frame.height) * scale).rounded()))
+            let (width, height) = AnimatedImages.drawnSize(width: frame.width, height: frame.height, maxSide: maxSide)
             guard let context = CGContext(
                 data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue,
@@ -158,6 +164,49 @@ public enum AnimatedImages {
             context.interpolationQuality = .high
             context.draw(frame, in: CGRect(x: 0, y: 0, width: width, height: height))
             return context.makeImage() ?? frame
+        }
+    }
+
+    /// The size a frame is drawn at: scaled down to `maxSide` on its long
+    /// side, never up.
+    public static func drawnSize(width: Int, height: Int, maxSide: Int) -> (width: Int, height: Int) {
+        let longSide = max(width, height)
+        guard maxSide > 0, longSide > maxSide else { return (width, height) }
+        let scale = Double(maxSide) / Double(longSide)
+        return (max(1, Int((Double(width) * scale).rounded())), max(1, Int((Double(height) * scale).rounded())))
+    }
+
+    /// Decoded frames are kept for the next loop only when the whole
+    /// animation takes this many bytes or fewer, so a chat of GIFs stays bounded.
+    public static let frameCacheBudget = 8 * 1024 * 1024
+
+    /// Whether every frame, at the size it is drawn and not the source's,
+    /// fits the budget.
+    public static func fitsFrameCache(frames: Int, width: Int, height: Int, maxSide: Int) -> Bool {
+        let size = drawnSize(width: width, height: height, maxSide: maxSide)
+        return frames > 0 && frames * size.width * size.height * 4 <= frameCacheBudget
+    }
+
+    /// The frames one player has decoded, so a later loop draws them again
+    /// without decoding. It lives and dies with that player task: nothing is
+    /// kept once the view stops, and an animation over the budget has no
+    /// cache and decodes every frame on every loop. Used by one task at a time.
+    public final class FrameCache {
+        private var images: [CGImage?]
+        private let decode: (Int) -> CGImage?
+
+        /// Nil when the animation doesn't fit the budget.
+        public init?(frames: Int, width: Int, height: Int, maxSide: Int, decode: @escaping (Int) -> CGImage?) {
+            guard fitsFrameCache(frames: frames, width: width, height: height, maxSide: maxSide) else { return nil }
+            images = Array(repeating: nil, count: frames)
+            self.decode = decode
+        }
+
+        public func image(at index: Int) -> CGImage? {
+            if let image = images[index] { return image }
+            let image = decode(index)
+            images[index] = image
+            return image
         }
     }
 

@@ -203,8 +203,15 @@ final class AnimatedUIImageView: UIView {
             }
             var next = ContinuousClock.now
             var index = 0
+            // A single frame or a still never loops, so it keeps nothing.
+            let cache = (stillOnly || frames.count == 1) ? nil : frames.canvasSize.flatMap { size in
+                AnimatedImages.FrameCache(frames: frames.count, width: size.width, height: size.height, maxSide: side) {
+                    frames.image(at: $0, maxSide: side)
+                }
+            }
             while !Task.isCancelled {
-                guard let image = frames.image(at: index, maxSide: side) else {
+                let decoded = if let cache { cache.image(at: index) } else { frames.image(at: index, maxSide: side) }
+                guard let image = decoded else {
                     // A frame that won't decode ends the animation on the last good one.
                     return
                 }

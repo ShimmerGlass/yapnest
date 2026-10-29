@@ -166,6 +166,47 @@ struct AnimatedImagesTests {
         }
     }
 
+    @Test func theFrameCacheBudgetIsMeasuredAtTheDrawnSize() {
+        let budget = AnimatedImages.frameCacheBudget
+        #expect(budget == 8 * 1024 * 1024)
+        // 1024 x 2048 x 4 bytes is exactly the budget for one frame.
+        #expect(AnimatedImages.fitsFrameCache(frames: 1, width: 1024, height: 2048, maxSide: 0))
+        #expect(!AnimatedImages.fitsFrameCache(frames: 1, width: 1024, height: 2049, maxSide: 0))
+        #expect(AnimatedImages.fitsFrameCache(frames: 2, width: 1024, height: 1024, maxSide: 0))
+        #expect(!AnimatedImages.fitsFrameCache(frames: 3, width: 1024, height: 1024, maxSide: 0))
+        // 6 frames of 4000 x 3000 are 288 MB at the source size, 7.4 MB drawn at 640.
+        #expect(AnimatedImages.fitsFrameCache(frames: 6, width: 4000, height: 3000, maxSide: 640))
+        #expect(!AnimatedImages.fitsFrameCache(frames: 7, width: 4000, height: 3000, maxSide: 640))
+        // Never scaled up.
+        #expect(AnimatedImages.drawnSize(width: 100, height: 50, maxSide: 640) == (100, 50))
+        #expect(AnimatedImages.drawnSize(width: 4000, height: 3000, maxSide: 640) == (640, 480))
+        #expect(!AnimatedImages.fitsFrameCache(frames: 0, width: 10, height: 10, maxSide: 0))
+    }
+
+    @Test func theFrameCacheDecodesEachFrameOnce() throws {
+        let frames = try #require(AnimatedImages.Frames(data: animation(frames: 3)))
+        let size = try #require(frames.canvasSize)
+        #expect(size.width == 200 && size.height == 100)
+        var decodes = 0
+        let cache = try #require(AnimatedImages.FrameCache(frames: 3, width: size.width, height: size.height, maxSide: 0) {
+            decodes += 1
+            return frames.image(at: $0, maxSide: 0)
+        })
+        for _ in 0..<3 {
+            for index in 0..<3 { #expect(cache.image(at: index) != nil) }
+        }
+        #expect(decodes == 3)
+    }
+
+    @Test func aFrameThatFailsToDecodeIsNotCachedAsAnImage() throws {
+        let cache = try #require(AnimatedImages.FrameCache(frames: 2, width: 10, height: 10, maxSide: 0) { _ in nil })
+        #expect(cache.image(at: 1) == nil)
+    }
+
+    @Test func anAnimationOverTheBudgetHasNoCache() {
+        #expect(AnimatedImages.FrameCache(frames: 3, width: 1024, height: 1024, maxSide: 0) { _ in nil } == nil)
+    }
+
     @Test func nothingReadableGivesNoFrames() {
         #expect(AnimatedImages.Frames(data: Data("nope".utf8)) == nil)
         #expect(AnimatedImages.Frames(url: URL(filePath: "/nonexistent.gif")) == nil)
