@@ -761,8 +761,6 @@ private struct ChatListBackdrop: View {
     }
 }
 
-/// Highlights the row while pressed, like a table cell, without a chevron,
-/// and while its chat is open beside the list.
 private extension View {
     @ViewBuilder
     func chatRowStyle(hidesSeparator: Bool = false) -> some View {
@@ -775,6 +773,8 @@ private extension View {
     }
 }
 
+/// Highlights the row while pressed, like a table cell, without a chevron,
+/// and while its chat is open beside the list.
 private struct ChatRowButtonStyle: ButtonStyle {
     static let rowInsets = EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
     /// How far the highlight reaches past the row on either side.

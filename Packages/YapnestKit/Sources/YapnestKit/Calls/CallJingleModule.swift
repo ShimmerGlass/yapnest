@@ -113,14 +113,13 @@ extension CallJingleModule {
             for name in bundle { group.addChild(Element(name: "content", attributes: ["name": name])) }
             children.append(group)
         }
-        let iq = Iq.jingle(
-            to: jid, action: initiating ? "session-initiate" : "session-accept", sid: sid,
+        let jingle = Element.jingle(
+            action: initiating ? "session-initiate" : "session-accept", sid: sid,
             attributes: [initiating ? "initiator" : "responder": bound.stringValue], children: children,
         )
-        if let encryption, let jingle = iq.firstChild(name: "jingle", xmlns: JingleModule.XMLNS),
-           let failure = await CallFingerprints.encrypt(jingle, to: encryption.peer, device: encryption.device, with: encryption.cipher) {
+        if let encryption, let failure = await CallFingerprints.encrypt(jingle, to: encryption.peer, device: encryption.device, with: encryption.cipher) {
             throw failure
         }
-        try await write(iq: iq)
+        try await write(iq: .set(to: jid, jingle))
     }
 }

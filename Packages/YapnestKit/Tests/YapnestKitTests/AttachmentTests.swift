@@ -119,6 +119,7 @@ struct AttachmentTests {
         #expect(Attachment.quoteSummary(text: "https://up.example/x/clip.mp4", attachment: nil) == "🎬 Video")
         #expect(Attachment.quoteSummary(text: "https://up.example/x/notes.pdf", attachment: nil) == "📎 notes.pdf")
         #expect(Attachment.quoteSummary(text: "https://example.org/about", attachment: nil) == nil)
+        #expect(Attachment.quoteSummary(text: "https://example.org/release-1.5", attachment: nil) == nil, "an extension nothing declares")
         #expect(Attachment.quoteSummary(text: "see aesgcm://x/y.png#k", attachment: nil) == nil)
         let stored = Attachment(messageId: 1, url: nil, name: "a.pdf", state: .pendingUpload)
         #expect(Attachment.quoteSummary(text: "", attachment: stored) == "📎 a.pdf")

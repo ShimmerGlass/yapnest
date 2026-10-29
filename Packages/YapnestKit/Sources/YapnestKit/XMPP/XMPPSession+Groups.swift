@@ -359,6 +359,8 @@ extension XMPPSession {
         /// The rooms stream finished.
         case ended
         case timedOut
+        /// The task waiting was cancelled.
+        case cancelled
     }
 
     /// Waits until `reached` holds for the room's status, or its join fails,
@@ -373,8 +375,10 @@ extension XMPPSession {
                 }
                 return .ended
             }
-        } catch {
+        } catch is TimeoutError {
             return .timedOut
+        } catch {
+            return .cancelled
         }
     }
 
@@ -1907,19 +1911,29 @@ extension XMPPSession {
         let options = Self.dataForm(type: "submit", formType: NS.publishOptions, fields: Self.settingsNodeFields(maxItems: "max"))
         // Some servers never answer a publish with max_items=max (Openfire),
         // so the wait is bounded, and the old kind of bookmark takes over.
-        Task { [weak self] in
+        // Written before this returns, not from a task: a retraction sent
+        // right after it, as when the user leaves, must reach the server
+        // second, or the bookmark comes back and other devices rejoin.
+        let once = Once()
+        let failed: @Sendable (String) -> Void = { [weak self] reason in
             guard let self else { return }
-            do {
-                try await publishPEPItem(
-                    node: NS.bookmarks, itemId: group.jid.description, payload: bookmark.element,
-                    options: options, timeout: Self.bookmarkTimeout,
-                )
-                try? database.updateGroupChat(group.jid) { $0.isBookmarked = true }
-            } catch {
-                let reason = error is TimeoutError ? "no answer" : error.localizedDescription
-                logger.warning("Couldn't bookmark \(group.jid, privacy: .private): \(reason, privacy: .private)")
-                publishLegacyBookmark(bookmark, for: group)
+            self.logger.warning("Couldn't bookmark \(group.jid, privacy: .private): \(reason, privacy: .private)")
+            self.publishLegacyBookmark(bookmark, for: group)
+        }
+        client.module(.pubsub).publishItem(
+            at: nil, to: NS.bookmarks, itemId: group.jid.description, payload: bookmark.element,
+            publishOptions: options, errorDecoder: PubSubError.from(stanza:),
+        ) { [weak self] (result: Result<Iq, PubSubError>) in
+            guard once.first() else { return }
+            switch result {
+            case .success:
+                try? self?.database.updateGroupChat(group.jid) { $0.isBookmarked = true }
+            case .failure(let error):
+                failed(error.localizedDescription)
             }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.bookmarkTimeout) {
+            if once.first() { failed("no answer") }
         }
     }
 
@@ -2302,6 +2316,7 @@ extension XMPPSession {
         case .reached(let status): return status
         case .failed(let reason): throw GroupError.joinFailed(reason)
         case .ended, .timedOut: throw GroupError.timedOut
+        case .cancelled: throw CancellationError()
         }
     }
 

@@ -217,15 +217,20 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
         }
         var name = CNContactFormatter.string(from: contact, style: .fullName) ?? ""
         if name.isEmpty { name = contact.organizationName }
-        // The name becomes a path component and the file's name in the message.
-        // Slashes turn into dashes first, as the safe name would keep only what follows the last.
-        name = SafeFileName.make(
-            name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: "\\", with: "-"),
-            fallback: String(localized: "Contact"),
-        )
+        name = Self.vCardName(name)
         model.preparing {
             await model.stage(isPhoto: false) { try await Self.writeVCard(data, named: name) }
         }
+    }
+
+    /// The name becomes a path component and the file's name in the message.
+    /// Slashes turn into dashes first, as the safe name would keep only what
+    /// follows the last.
+    nonisolated static func vCardName(_ name: String) -> String {
+        SafeFileName.make(
+            name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: "\\", with: "-"),
+            fallback: String(localized: "Contact"),
+        )
     }
 
     /// Writes a contact's vCard off the main thread, in a folder of its own

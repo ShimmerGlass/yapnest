@@ -29,7 +29,7 @@ extension XMPPSession {
         case .reached: return nil
         case .failed(let reason): return reason
         case .ended: return String(localized: "The connection ended.")
-        case .timedOut: return GroupError.timedOut.localizedDescription
+        case .timedOut, .cancelled: return GroupError.timedOut.localizedDescription
         }
     }
 

@@ -179,11 +179,7 @@ enum OutboundStanza {
     }
 
     private static func iq(_ type: StanzaType, to room: JID? = nil, _ child: Element) -> Iq {
-        let iq = Iq()
-        iq.type = type
-        if let room { iq.to = Martin.JID(room.martin) }
-        iq.addChild(child)
-        return iq
+        .make(type, to: room.map { Martin.JID($0.martin) }, child)
     }
 
     /// XEP-0045 §7.8.2: asks `room` to invite `invitees` for us, which a room

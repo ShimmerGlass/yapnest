@@ -118,4 +118,12 @@ struct PendingAttachmentsTests {
         #expect(FileManager.default.fileExists(atPath: file.path))
         try FileManager.default.removeItem(at: file)
     }
+
+    @Test func aSharedContactIsNamedSafely() {
+        #expect(AttachmentPicker.vCardName("AC/DC") == "AC-DC")
+        #expect(AttachmentPicker.vCardName("AC\\DC") == "AC-DC")
+        #expect(AttachmentPicker.vCardName("Mom\u{202E}fcv.exe") == "Momfcv.exe", "an override can't reorder the name")
+        #expect(AttachmentPicker.vCardName("..hidden") == "hidden")
+        #expect(AttachmentPicker.vCardName("") == "Contact")
+    }
 }

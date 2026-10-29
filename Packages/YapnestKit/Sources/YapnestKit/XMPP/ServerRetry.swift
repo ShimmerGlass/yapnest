@@ -92,10 +92,10 @@ extension XMPPSession {
         }
     }
 
-    /// After a first attempt that failed with `failure` outside this helper;
-    /// `attempts` counts it.
-    func retryingPassingErrors<T>(afterFailure failure: Error, attempts: Int = ServerRetry.attempts, _ operation: () async throws -> T) async throws -> T {
-        try await retryingPassingErrors(attempts: attempts, backoff: lock.withLock { $0.retryBackoff }, afterFailure: failure, operation)
+    /// After a first attempt that failed with `failure` outside this helper,
+    /// which counts as one of the attempts.
+    func retryingPassingErrors<T>(afterFailure failure: Error, _ operation: () async throws -> T) async throws -> T {
+        try await retryingPassingErrors(attempts: ServerRetry.attempts, backoff: lock.withLock { $0.retryBackoff }, afterFailure: failure, operation)
     }
 
     func retryingPassingErrors<T>(

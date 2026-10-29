@@ -137,14 +137,17 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
         guard let (url, name) = AttachmentLink.parse(body: text, oob: text) else { return nil }
         // Any https URL passes `parse` here, so only trust ones that name a
         // file of a known type; a bare link to a web page is ordinary text.
-        if url.scheme?.lowercased() != "aesgcm", UTTypeLookup.type(forName: name) == nil { return nil }
+        // An extension nothing declares, like the "5" of "release-1.5", still
+        // gets a dynamic type, which says nothing.
+        if url.scheme?.lowercased() != "aesgcm", UTTypeLookup.type(forName: name)?.isDynamic != false { return nil }
         return Attachment(messageId: 0, url: url.absoluteString, name: name, state: .remote).summary
     }
 }
 
 /// Resolving a type is an XPC call to LaunchServices, and a row's body reads
 /// `Attachment.type` several times per evaluation, so answers are kept for the
-/// life of the process. Misses are kept too.
+/// life of the process. Misses are kept too. Names come from other people's
+/// messages, so the cache starts over once it holds `limit` of them.
 enum UTTypeLookup {
     private struct Key: Hashable {
         var mimeType: String?
@@ -152,12 +155,16 @@ enum UTTypeLookup {
     }
 
     private static let cache = OSAllocatedUnfairLock(initialState: [Key: UTType?]())
+    static let limit = 512
 
     static func type(mimeType: String?, filenameExtension: String) -> UTType? {
         let key = Key(mimeType: mimeType, filenameExtension: filenameExtension)
         if let known = cache.withLock({ $0[key] }) { return known }
         let resolved = filenameExtension.isEmpty ? mimeType.flatMap { UTType(mimeType: $0) } : UTType(filenameExtension: filenameExtension)
-        cache.withLock { $0[key] = .some(resolved) }
+        cache.withLock {
+            if $0.count >= limit { $0.removeAll(keepingCapacity: true) }
+            $0[key] = .some(resolved)
+        }
         return resolved
     }
 
