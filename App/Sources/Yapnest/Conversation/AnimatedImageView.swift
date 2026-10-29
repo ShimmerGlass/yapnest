@@ -55,10 +55,14 @@ struct AnimatedPlaybackGate: Equatable {
     var sceneInBackground = false
     var occluded = false
     var reducesMotion = false
+    /// The screen is sliding in or out. Every new frame is a picture to send
+    /// to the GPU while it animates the slide, and a chat of GIFs made the
+    /// slide jitter; the first frame shows, and they play once it's done.
+    var inTransition = false
 
     /// Whether frames are decoded at all. Reduce motion still shows the first.
     var showsFrames: Bool { inWindow && !sceneInBackground && !occluded }
-    var animates: Bool { showsFrames && !reducesMotion }
+    var animates: Bool { showsFrames && !reducesMotion && !inTransition }
 }
 
 final class AnimatedUIImageView: UIView {
@@ -75,6 +79,11 @@ final class AnimatedUIImageView: UIView {
 
     private let imageView = UIImageView()
     private var player: Task<Void, Never>?
+    /// The source whose first frame is on show as a still, as while the
+    /// screen slides in. Playing it then goes on from the second frame:
+    /// starting over showed the first again and waited out its delay, which
+    /// held a GIF still for a moment after the slide had ended.
+    private var stillShown: AnimatedImageView.Source?
     var isAnimating: Bool { player != nil }
     var image: UIImage? { imageView.image }
     private(set) var gate = AnimatedPlaybackGate(
@@ -114,7 +123,33 @@ final class AnimatedUIImageView: UIView {
         super.didMoveToWindow()
         gate.inWindow = window != nil
         gate.sceneInBackground = window?.windowScene?.activationState == .background
+        gate.inTransition = false
+        if window != nil, let transition = enclosingController?.transitionCoordinator {
+            gate.inTransition = true
+            // The transition ends once its spring has settled, about 300 ms
+            // after the screen looks still, and GIFs held until then seemed
+            // to start late. By this point most of the slide's motion is
+            // done; the end still starts them if it comes first.
+            let settled = transition.transitionDuration * 0.6
+            DispatchQueue.main.asyncAfter(deadline: .now() + settled) { [weak self] in
+                self?.update { $0.inTransition = false }
+            }
+            transition.animate(alongsideTransition: nil) { [weak self] _ in
+                self?.update { $0.inTransition = false }
+            }
+        }
         restart()
+    }
+
+    /// The controller this view is shown in, whose transition coordinator,
+    /// or its parent's, says when a push or a pop is under way.
+    private var enclosingController: UIViewController? {
+        var responder: UIResponder? = next
+        while let current = responder {
+            if let controller = current as? UIViewController { return controller }
+            responder = current.next
+        }
+        return nil
     }
 
     /// Only a backgrounded scene stops the animation. An inactive one is
@@ -185,6 +220,8 @@ final class AnimatedUIImageView: UIView {
             ? AnimatedImages.downsampledSide
             : Int((max(bounds.width, bounds.height) * traitCollection.displayScale).rounded(.up))
         let stillOnly = !gate.animates
+        let resumes = !stillOnly && stillShown == source
+        stillShown = nil
         player = Task.detached(priority: .userInitiated) { [weak self] in
             let playable: Bool
             if let known {
@@ -202,7 +239,7 @@ final class AnimatedUIImageView: UIView {
                 return
             }
             var next = ContinuousClock.now
-            var index = 0
+            var index = resumes && frames.count > 1 ? 1 : 0
             // A single frame or a still never loops, so it keeps nothing.
             let cache = (stillOnly || frames.count == 1) ? nil : frames.canvasSize.flatMap { size in
                 AnimatedImages.FrameCache(frames: frames.count, width: size.width, height: size.height, maxSide: side) {
@@ -215,9 +252,11 @@ final class AnimatedUIImageView: UIView {
                     // A frame that won't decode ends the animation on the last good one.
                     return
                 }
+                let isFirst = index == 0
                 let shown = await MainActor.run { () -> Bool in
                     guard let view = self, !Task.isCancelled else { return false }
                     view.imageView.image = UIImage(cgImage: image)
+                    view.stillShown = stillOnly && isFirst ? source : nil
                     return true
                 }
                 if !shown || stillOnly || frames.count == 1 { return }

@@ -167,6 +167,15 @@ struct AnimatedPlaybackGateTests {
         #expect(!AnimatedPlaybackGate(inWindow: true, sceneInBackground: true).showsFrames)
     }
 
+    /// A chat of GIFs made its slide jitter: they show their first frame
+    /// while the screen slides, and play once it's done.
+    @Test func aSlidingScreenShowsAFrameAndPlaysOnceItHasArrived() {
+        var gate = AnimatedPlaybackGate(inWindow: true, inTransition: true)
+        #expect(gate.showsFrames && !gate.animates)
+        gate.inTransition = false
+        #expect(gate.animates)
+    }
+
     @Test func aViewOutsideAWindowDoesNotPlay() {
         #expect(!AnimatedPlaybackGate(inWindow: false).showsFrames)
     }
