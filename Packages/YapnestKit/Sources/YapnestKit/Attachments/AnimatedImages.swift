@@ -141,11 +141,15 @@ public enum AnimatedImages {
         /// a thumbnail request. A frame larger than `maxSide` is scaled down
         /// here, so the main thread uploads a bitmap of the size it shows.
         /// Decoding takes a few milliseconds: call it off the main thread.
+        ///
+        /// Every frame is drawn into a bitmap, even one that needs no scaling:
+        /// ImageIO ignores `ShouldCacheImmediately` for GIF frames, and Core
+        /// Animation then decoded each one on the main thread as it committed,
+        /// which took a third of a core with the GIF picker open.
         public func image(at index: Int, maxSide: Int) -> CGImage? {
-            guard let frame = CGImageSourceCreateImageAtIndex(source, index, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return nil }
+            guard let frame = CGImageSourceCreateImageAtIndex(source, index, nil) else { return nil }
             let longSide = max(frame.width, frame.height)
-            guard maxSide > 0, longSide > maxSide else { return frame }
-            let scale = Double(maxSide) / Double(longSide)
+            let scale = maxSide > 0 && longSide > maxSide ? Double(maxSide) / Double(longSide) : 1
             let width = max(1, Int((Double(frame.width) * scale).rounded())), height = max(1, Int((Double(frame.height) * scale).rounded()))
             guard let context = CGContext(
                 data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,

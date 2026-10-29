@@ -156,6 +156,16 @@ struct AnimatedImagesTests {
         #expect(try middlePixel(of: small) == [0, 0, 255, 255])
     }
 
+    /// A frame left to ImageIO is decoded by Core Animation on the main
+    /// thread when it's shown, even one asked for with `ShouldCacheImmediately`.
+    @Test func framesComeBackDecoded() throws {
+        let frames = try #require(AnimatedImages.Frames(data: animation(frames: 3)))
+        for maxSide in [0, 200, 640, 50] {
+            let image = try #require(frames.image(at: 1, maxSide: maxSide))
+            #expect(image.utType == nil, "frame at maxSide \(maxSide) is still ImageIO's")
+        }
+    }
+
     @Test func nothingReadableGivesNoFrames() {
         #expect(AnimatedImages.Frames(data: Data("nope".utf8)) == nil)
         #expect(AnimatedImages.Frames(url: URL(filePath: "/nonexistent.gif")) == nil)
