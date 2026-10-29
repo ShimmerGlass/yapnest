@@ -906,6 +906,20 @@ Each entry gives what went wrong for users, why, and what changed.
   conversation pays the round trip once. Lists that came by notification
   stay current as before, and replace a fetched one.
 
+**A list kept by notification outlived the subscription**
+(`listNoLongerNotified(for:)`, `now`)
+- *Symptom:* someone who stopped being a contact (or was never one, and was
+  only a member of a group we share) could add a device, and our messages
+  never reached it until the app restarted.
+- *Cause:* a device list that came by notification is kept for the life of
+  the process, as notifications keep it current. The server sends them only
+  while we are subscribed to the person's presence, so once that ended the
+  list was frozen.
+- *Fix:* the app calls `listNoLongerNotified(for:)` when a roster change ends
+  the subscription (or removes the contact). A list held by notification then
+  expires like a fetched one, a minute later. It hops onto `devicesQueue`
+  with `async`. `now` is the clock for those lifetimes, so tests can move it.
+
 **Sends waited for the main thread** (`addresses(for:)`)
 - *Symptom:* a message could sit unsent while the interface was busy.
 - *Cause:* the lookup reported back on the main queue, and the send waits

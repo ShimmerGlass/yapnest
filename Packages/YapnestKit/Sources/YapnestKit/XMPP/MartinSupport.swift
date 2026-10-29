@@ -48,9 +48,15 @@ final class DatabaseRosterStore: RosterStore, @unchecked Sendable {
     typealias RosterItem = RosterItemBase
 
     private let database: AppDatabase
+    private let subscriptionEnded: @Sendable (JID) -> Void
 
-    init(database: AppDatabase) {
+    /// `subscriptionEnded` hears of every roster item we don't see the
+    /// presence of: its subscription isn't `to` or `both`, or it was removed.
+    /// Every roster push and the roster fetched on connecting come through
+    /// here, so this is the one place that sees them all.
+    init(database: AppDatabase, subscriptionEnded: @escaping @Sendable (JID) -> Void = { _ in }) {
         self.database = database
+        self.subscriptionEnded = subscriptionEnded
     }
 
     func clear(for context: Context) {
@@ -69,11 +75,13 @@ final class DatabaseRosterStore: RosterStore, @unchecked Sendable {
     func updateItem(for context: Context, jid: Martin.JID, name: String?, subscription: RosterItemSubscription, groups: [String], ask: Bool, annotations: [RosterItemAnnotation]) {
         guard let jid = JID(jid) else { return }
         try? database.updateRosterItem(jid: jid, name: name, subscription: Contact.Subscription(rawValue: subscription.rawValue) ?? .none, isPending: ask, groups: groups)
+        if subscription != .to && subscription != .both { subscriptionEnded(jid) }
     }
 
     func deleteItem(for context: Context, jid: Martin.JID) {
         guard let jid = JID(jid) else { return }
         try? database.removeRosterItem(jid: jid)
+        subscriptionEnded(jid)
     }
 
     func version(for context: Context) -> String? { try? database.setting(.rosterVersion) }

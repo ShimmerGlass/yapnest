@@ -587,7 +587,10 @@ public final class XMPPSession: @unchecked Sendable {
         // stored offline: the archive has them, and the app gets them later.
         presence.initialPresence = policy.announcesPresence
         modules.register(presence)
-        let roster = RosterModule(rosterManager: RosterManagerBase(store: DatabaseRosterStore(database: database)))
+        let roster = RosterModule(rosterManager: RosterManagerBase(store: DatabaseRosterStore(database: database, subscriptionEnded: { [omemo] jid in
+            // Their device lists stop coming by notification with their presence.
+            omemo.module.listNoLongerNotified(for: BareJID(jid.description))
+        })))
         // The session asks itself (`fetchRoster`), to retry and to say when it fails.
         roster.requestsRosterOnConnect = false
         modules.register(roster)

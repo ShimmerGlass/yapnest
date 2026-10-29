@@ -107,6 +107,9 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
     /// contact who isn't subscribed to us sends no notifications, so it can't
     /// be forever; a minute is long enough for a conversation's messages.
     public static let fetchedListLifetime: TimeInterval = 60;
+    /// The clock `fetchedListLifetime` is measured on; tests move it by hand.
+    /// Set before the module is registered.
+    public var now: @Sendable () -> Date = { Date() };
     /// Devices we couldn't build a session with, and when. They're skipped
     /// for a while rather than for the rest of the session: the failure may
     /// have been passing, and the device would otherwise never get messages.
@@ -271,10 +274,28 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
     
     public func devices(for jid: BareJID) -> [Int32]? {
         return devicesQueue.sync {
-            if let fetched = devicesFetchedAt[jid], Date().timeIntervalSince(fetched) > OMEMOModule.fetchedListLifetime {
+            if let fetched = devicesFetchedAt[jid], now().timeIntervalSince(fetched) > OMEMOModule.fetchedListLifetime {
                 return nil;
             }
             return self.devices[jid].map { self.withoutRecentFailures($0, of: jid) }
+        }
+    }
+
+    /// Tells the module that notifications for `jid`'s device list have
+    /// stopped, because we are no longer subscribed to their presence. A list
+    /// that came by notification is trusted for the life of the process; from
+    /// now on it is treated as one we fetched just now, so it is reused for
+    /// `fetchedListLifetime` and then read again before a send, and a device
+    /// they add later is found. Lists without a notification date, and our own,
+    /// are left alone. Hops onto `devicesQueue` with `async`: callers may be
+    /// on it, and a `sync` from there deadlocks.
+    public func listNoLongerNotified(for jid: BareJID) {
+        let ended = now();
+        devicesQueue.async {
+            guard self.context?.userBareJid != jid, self.devices[jid] != nil, self.devicesFetchedAt[jid] == nil else {
+                return;
+            }
+            self.devicesFetchedAt[jid] = ended;
         }
     }
 
@@ -527,7 +548,7 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                     self.bundleErrors[jid] = nil;
                     if self.devices[jid] == nil || self.devicesFetchedAt[jid] != nil {
                         self.devices[jid] = knownActiveDevices;
-                        self.devicesFetchedAt[jid] = Date();
+                        self.devicesFetchedAt[jid] = self.now();
                     }
                     return self.withoutRecentFailures(knownActiveDevices, of: jid);
                 };
