@@ -80,7 +80,7 @@ enum ThumbnailCache {
         let image: UIImage? = if video {
             await ImageDownsampler.videoFrame(of: url, maxSize: CGFloat(maxPixelSize), toleranceBefore: 0.25, toleranceAfter: 1)
         } else {
-            await offMain { ImageDownsampler.downsample(url, maxPixels: maxPixelSize) }
+            await decodeOffMain { ImageDownsampler.downsample(url, maxPixels: maxPixelSize) }
         }
         if let image { cache.setImage(image, forKey: url) }
         return image
@@ -104,7 +104,7 @@ enum PreviewImageCache {
     /// Read at the width a bubble can show, in the display's pixels.
     static func load(_ url: URL, scale: CGFloat) async -> UIImage? {
         let width = MediaLimits.maxBubbleWidth * scale
-        let image = await offMain { () -> UIImage? in
+        let image = await decodeOffMain { () -> UIImage? in
             ImageDownsampler.downsample(url) { header in
                 // The picture fills its frame, so a tall one is cropped to the
                 // width and it's the longer side that has to be larger.

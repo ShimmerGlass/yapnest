@@ -1080,7 +1080,8 @@ private struct ChatListRow: View {
         } else if GeoLocation(body: message.body) != nil {
             content = Text(GeoLocation.summary)
         } else {
-            content = Text(message.body.trimmingBlankEdgeLines.replacingOccurrences(of: "\n", with: " "))
+            // Two lines show, so only the start is read: a body can be 8,000 characters.
+            content = Text(String(message.body.prefix(500)).trimmingBlankEdgeLines.replacingOccurrences(of: "\n", with: " "))
         }
         return author.map { $0 + content } ?? content
     }

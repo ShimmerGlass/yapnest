@@ -145,32 +145,37 @@ extension ContactPresence {
 /// hash, so an entry never goes stale.
 enum AvatarImageCache {
     // NSCache is thread-safe; lookups come from `body`, decoding from a task.
-    nonisolated(unsafe) private static let cache: NSCache<NSString, UIImage> = {
-        let cache = NSCache<NSString, UIImage>()
-        // Bytes of decoded pixels, about 32 MB.
-        cache.totalCostLimit = 32_000_000
-        return cache
-    }()
+    // The larger ones have a cache of their own, so a lookup from `body` needs
+    // no key built for it. Bytes of decoded pixels, about 32 MB in all; the
+    // large ones are only on the call screen.
+    nonisolated(unsafe) private static let small = cache(limit: 28_000_000)
+    nonisolated(unsafe) private static let large = cache(limit: 4_000_000)
 
-    private static func key(_ url: URL, large: Bool) -> NSString {
-        (url.absoluteString + (large ? "#large" : "")) as NSString
+    private static func cache(limit: Int) -> NSCache<NSURL, UIImage> {
+        let cache = NSCache<NSURL, UIImage>()
+        cache.totalCostLimit = limit
+        return cache
+    }
+
+    private static func cache(large isLarge: Bool) -> NSCache<NSURL, UIImage> {
+        isLarge ? large : small
     }
 
     static func cached(at url: URL, large: Bool) -> UIImage? {
-        cache.object(forKey: key(url, large: large))
+        cache(large: large).object(forKey: url as NSURL)
     }
 
     /// Decodes at 256 px, which covers an avatar up to 80 pt at 3x, or at
     /// 512 px for the larger ones (140 pt on the call screen), as the file
     /// comes from other people and may be far larger than an avatar.
     static func load(at url: URL, large: Bool) async -> UIImage? {
-        await Task.detached(priority: .userInitiated) {
+        await decodeOffMain {
             if let image = cached(at: url, large: large) { return image }
             guard let cgImage = AvatarStore.thumbnail(at: url, pixels: large ? 512 : 256) else { return nil }
             let image = UIImage(cgImage: cgImage)
-            cache.setObject(image, forKey: key(url, large: large), cost: cgImage.bytesPerRow * cgImage.height)
+            cache(large: large).setObject(image, forKey: url as NSURL, cost: cgImage.bytesPerRow * cgImage.height)
             return image
-        }.value
+        }
     }
 }
 

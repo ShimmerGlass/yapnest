@@ -3,16 +3,23 @@ import UIKit
 import YapnestKit
 
 extension Message.Status {
-    /// Signal's delivery icons: sending, sent, delivered, read.
+    /// Signal's delivery icons: sending, sent, delivered, read. Looked up
+    /// once, as every footer and chat list row asks on each redraw.
     var indicator: UIImage? {
         switch self {
-        case .pending: UIImage(named: "message_status_sending")
-        case .sent, .received: UIImage(named: "message_status_sent")
-        case .delivered: UIImage(named: "message_status_delivered")
-        case .displayed: UIImage(named: "message_status_read")
-        case .failed: UIImage(systemName: "exclamationmark.circle.fill")
+        case .pending: Self.sending
+        case .sent, .received: Self.sent
+        case .delivered: Self.delivered
+        case .displayed: Self.read
+        case .failed: Self.failed
         }
     }
+
+    private static let sending = UIImage(named: "message_status_sending")
+    private static let sent = UIImage(named: "message_status_sent")
+    private static let delivered = UIImage(named: "message_status_delivered")
+    private static let read = UIImage(named: "message_status_read")
+    private static let failed = UIImage(systemName: "exclamationmark.circle.fill")
 }
 
 extension Message {
