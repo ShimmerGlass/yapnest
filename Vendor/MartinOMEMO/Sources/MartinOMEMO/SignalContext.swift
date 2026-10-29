@@ -48,6 +48,15 @@ open class SignalContext {
         self.storage.setup(withContext: self);
     }
 
+    /// Runs `body` holding the lock libsignal takes around each of its calls,
+    /// so that several calls, and the storage work around them, happen as one
+    /// step that no other call into this context can come between.
+    public func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock();
+        defer { lock.unlock() }
+        return try body();
+    }
+
     // The context was never destroyed, which leaked it with every session.
     deinit {
         signal_context_destroy(globalContext);

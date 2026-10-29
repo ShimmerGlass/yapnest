@@ -54,7 +54,7 @@ struct ShareTests {
         #expect(attachment.state == .pendingUpload && attachment.name == "notes.txt" && attachment.size == 5)
         #expect(FileManager.default.fileExists(atPath: store.directory.appending(path: attachment.localFile!).path))
         // The app's resend finds them, however long they've waited.
-        let found = try db.unconfirmedOutgoing(before: .distantFuture, since: .distantPast)
+        let found = try db.unconfirmedOutgoing()
         #expect(found.map(\.0.id) == messages.map(\.id))
     }
 
@@ -64,7 +64,7 @@ struct ShareTests {
         await #expect(throws: XMPPSession.AttachmentError.self) {
             try await outgoing.prepareFile(at: directory.appending(path: "missing.bin"))
         }
-        #expect(try db.unconfirmedOutgoing(before: .distantFuture, since: .distantPast).isEmpty)
+        #expect(try db.unconfirmedOutgoing().isEmpty)
     }
 
     @Test func pendingGroupMessagesAreFoundWhateverTheirAge() throws {
@@ -100,7 +100,7 @@ struct ShareTests {
         #expect(outcome == .handedToApp)
 
         let db = try AccountDirectory(url: account).openDatabase()
-        let pending = try db.unconfirmedOutgoing(before: .distantFuture, since: .distantPast)
+        let pending = try db.unconfirmedOutgoing()
         #expect(pending.map(\.0.body) == ["", "hi"])
         #expect(pending.allSatisfy { $0.1 == alice })
 

@@ -52,14 +52,17 @@ public struct MessageCursor: Hashable, Sendable {
         self.init(timestamp: message.timestamp, id: message.id!)
     }
 
+    // The bound on the timestamp alone is redundant. SQLite can't make a
+    // range of the index out of the OR beside it, and would scan from one
+    // end of the conversation.
     func sqlBefore(inclusive: Bool) -> SQLExpression {
         let ties = inclusive ? Column("id") <= id : Column("id") < id
-        return Column("timestamp") < timestamp || (Column("timestamp") == timestamp && ties)
+        return Column("timestamp") <= timestamp && (Column("timestamp") < timestamp || (Column("timestamp") == timestamp && ties))
     }
 
     func sqlAfter(inclusive: Bool) -> SQLExpression {
         let ties = inclusive ? Column("id") >= id : Column("id") > id
-        return Column("timestamp") > timestamp || (Column("timestamp") == timestamp && ties)
+        return Column("timestamp") >= timestamp && (Column("timestamp") > timestamp || (Column("timestamp") == timestamp && ties))
     }
 }
 
@@ -126,8 +129,7 @@ extension AppDatabase {
         var quotedAttachments: [Int64: Attachment] = [:]
         if !replyIds.isEmpty {
             let candidates = try Message
-                .filter(Column("conversationId") == conversationId)
-                .filter(replyIds.contains(Column("remoteId")) || replyIds.contains(Column("originId")) || replyIds.contains(Column("serverId")))
+                .filter(Self.repliedTo(replyIds, in: conversationId))
                 .fetchAll(db)
             for candidate in candidates {
                 for id in Set([candidate.remoteId, candidate.originId, candidate.serverId].compactMap({ $0 })) where replyIds.contains(id) {
@@ -148,6 +150,15 @@ extension AppDatabase {
                 quotedAttachment: message.replyToId.flatMap { quoted[$0] }.flatMap { quotedAttachments[$0.id!] },
             )
         }
+    }
+
+    /// The messages of the conversation that any of `ids` names, by any of their ids.
+    /// The conversation is in each branch: SQLite doesn't carry it into an OR.
+    static func repliedTo(_ ids: Set<String>, in conversationId: Int64) -> SQLExpression {
+        let conversation = Column("conversationId") == conversationId
+        return (conversation && ids.contains(Column("remoteId")))
+            || (conversation && ids.contains(Column("originId")))
+            || (conversation && ids.contains(Column("serverId")))
     }
 
     /// Everything that goes into one item. Both the full fetch and the cached
@@ -271,7 +282,8 @@ extension AppDatabase {
     private static func unreadCount(_ db: Database, peer: JID) throws -> Int {
         guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return 0 }
         return try Message
-            .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming && Column("isRead") == false)
+            .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming)
+            .unread()
             .fetchCount(db)
     }
 
@@ -297,7 +309,8 @@ extension AppDatabase {
         let unread: Message? = try reader.read { db in
             guard let conversationId = try Conversation.filter(Column("peer") == peer).fetchOne(db)?.id else { return nil }
             return try Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming && Column("isRead") == false)
+                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming)
+                .unread()
                 .order(Column("timestamp"), Column("id"))
                 .fetchOne(db)
         }
@@ -500,8 +513,7 @@ final class ConversationItemCache: @unchecked Sendable {
         var quoteKeys: [String: QuoteKey] = [:]
         if !replyIds.isEmpty {
             let candidates = try Row.fetchAll(db, Message
-                .filter(Column("conversationId") == conversationId)
-                .filter(replyIds.contains(Column("remoteId")) || replyIds.contains(Column("originId")) || replyIds.contains(Column("serverId")))
+                .filter(AppDatabase.repliedTo(replyIds, in: conversationId))
                 .select(Column("id"), Column("rev"), Column("timestamp"), Column("remoteId"), Column("originId"), Column("serverId")))
             var best: [String: Message.ReferenceRank] = [:]
             for row in candidates {

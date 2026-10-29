@@ -336,7 +336,7 @@ struct CorrectionTests {
         let conversation = try db.conversation(with: alice)
         let pending = try db.insert(YapnestKit.Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "never mind", timestamp: Date(), remoteId: "o1"))
         _ = try db.applyRetraction(of: pending.id!)
-        #expect(try db.unconfirmedOutgoing(before: .distantFuture, since: .distantPast).isEmpty)
+        #expect(try db.unconfirmedOutgoing().isEmpty)
     }
 
     @Test func retractionStanza() throws {

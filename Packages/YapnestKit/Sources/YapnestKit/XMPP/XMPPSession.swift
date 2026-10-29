@@ -2385,7 +2385,7 @@ public final class XMPPSession: @unchecked Sendable {
             // stanza left unacknowledged (see `blameUnacknowledged`). The writes below happen
             // on the send queues, after this request.
             requestAcknowledgement()
-            let chats = try database.unconfirmedOutgoing(before: .distantFuture, since: .distantPast).filter { !isClaimed($0.0) }
+            let chats = try database.unconfirmedOutgoing().filter { !isClaimed($0.0) }
             var rooms: [(message: Message, room: JID)] = []
             for (room, status) in lock.withLock({ $0.rooms }) where status.isJoined && !status.isSyncing {
                 guard let group = try database.groupChat(room) else { continue }

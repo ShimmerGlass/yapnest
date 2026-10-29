@@ -3,11 +3,12 @@ import GRDB
 
 extension AppDatabase {
     /// Whether the GIF picker is offered. On unless turned off.
-    public func observeGifsEnabled() -> ValueObservation<ValueReducers.Fetch<Bool>> {
+    public func observeGifsEnabled() -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<Bool>>> {
         ValueObservation.tracking { db in
             let raw = try Self.setting(db, .gifs)
             return raw.map { $0 == "1" } ?? true
         }
+        .removeDuplicates()
     }
 }
 

@@ -569,7 +569,7 @@ struct FileTransferSendingTests {
         #expect(status(h)?.id == message.id)
         // Nothing was sent as a message, and it isn't picked up to be resent.
         #expect(h.wire.messages.isEmpty)
-        #expect(try h.database.unconfirmedOutgoing(before: .distantFuture, since: .distantPast).isEmpty)
+        #expect(try h.database.unconfirmedOutgoing().isEmpty)
         #expect(h.session.transfers.value.isEmpty)
     }
 

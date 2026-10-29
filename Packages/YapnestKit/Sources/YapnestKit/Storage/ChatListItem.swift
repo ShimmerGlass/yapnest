@@ -23,23 +23,20 @@ public struct ChatListItem: Hashable, Sendable, Identifiable {
         groupChat?.displayName ?? contact?.displayName ?? conversation.peer.shortName
     }
 
-    /// Conversations with their contact and unread count; `lastMessage` is
+    /// Conversations with their contact; `lastMessage` and the unread counts are
     /// filled in by `fetch` because GRDB can't express "latest child" as an
     /// association.
     private struct Row: Decodable, FetchableRecord {
         var conversation: Conversation
         var contact: Contact?
         var groupChat: GroupChat?
-        var unreadCount: Int
     }
 
     static func fetch(_ db: Database, archived: Bool) throws -> [ChatListItem] {
-        let unread = Conversation.messages.filter(Column("isRead") == false)
         let rows = try Conversation
             .filter(Column("isArchived") == archived)
             .including(optional: Conversation.contact.forKey("contact"))
             .including(optional: Conversation.groupChat.forKey("groupChat"))
-            .annotated(with: unread.count.forKey("unreadCount"))
             .order(Column("isPinned").desc, Column("lastActivityAt").desc)
             .asRequest(of: Row.self)
             .fetchAll(db)
@@ -57,8 +54,8 @@ public struct ChatListItem: Hashable, Sendable, Identifiable {
         let latestByConversation = Dictionary(uniqueKeysWithValues: latest.map { ($0.conversationId, $0) })
         let attachments = try AppDatabase.attachments(db, messageIds: latest.compactMap(\.id))
 
-        let notifying = Dictionary(
-            try AppDatabase.notifyingCounts(db, archived: archived).map { ($0.id, $0.count) },
+        let counts = Dictionary(
+            try AppDatabase.unreadCounts(db, archived: archived).map { ($0.id, (unread: $0.unread, notifying: $0.notifying)) },
             uniquingKeysWith: { a, _ in a },
         )
 
@@ -69,8 +66,8 @@ public struct ChatListItem: Hashable, Sendable, Identifiable {
                 groupChat: row.groupChat,
                 lastMessage: latestByConversation[row.conversation.id!],
                 lastAttachment: latestByConversation[row.conversation.id!].flatMap { $0.id }.flatMap { attachments[$0] },
-                unreadCount: row.unreadCount,
-                notifyingUnreadCount: notifying[row.conversation.id!] ?? 0,
+                unreadCount: counts[row.conversation.id!]?.unread ?? 0,
+                notifyingUnreadCount: counts[row.conversation.id!]?.notifying ?? 0,
             )
         }
     }

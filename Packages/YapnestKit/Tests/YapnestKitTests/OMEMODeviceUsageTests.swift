@@ -74,7 +74,7 @@ struct OMEMODeviceUsageTests {
         let store = try store()
         add([1, 2], to: store)
         clock.advance(days: 89)
-        #expect(store.excludingInactive([1, 2], of: bob) == [1, 2])
+        #expect(store.excludingInactive([1, 2], usage: store.usage(forName: bob)) == [1, 2])
     }
 
     @Test func aDeviceThatNeverSentGoesInactiveAfterTheThreshold() throws {
@@ -84,7 +84,7 @@ struct OMEMODeviceUsageTests {
         store.noteUsed(name: bob, deviceId: 1, at: clock.now)
         clock.advance(days: 61)
         // 1 wrote 61 days ago; 2 was first seen 91 days ago and never wrote.
-        #expect(store.excludingInactive([1, 2], of: bob) == [1])
+        #expect(store.excludingInactive([1, 2], usage: store.usage(forName: bob)) == [1])
     }
 
     @Test func aDeviceWhoseLastMessageIsOldIsInactiveEvenIfItIsOldNews() throws {
@@ -93,7 +93,7 @@ struct OMEMODeviceUsageTests {
         store.noteUsed(name: bob, deviceId: 2, at: clock.now)
         clock.advance(days: 91)
         store.noteUsed(name: bob, deviceId: 1, at: clock.now)
-        #expect(store.excludingInactive([1, 2], of: bob) == [1])
+        #expect(store.excludingInactive([1, 2], usage: store.usage(forName: bob)) == [1])
     }
 
     @Test func neverAllOfAContactsDevicesAreLeftOut() throws {
@@ -101,7 +101,7 @@ struct OMEMODeviceUsageTests {
         add([1, 2], to: store)
         store.noteUsed(name: bob, deviceId: 1, at: clock.now)
         clock.advance(days: 200)
-        #expect(store.excludingInactive([1, 2], of: bob) == [1, 2])
+        #expect(store.excludingInactive([1, 2], usage: store.usage(forName: bob)) == [1, 2])
     }
 
     @Test func aMessageMakesADeviceActiveAgain() throws {
@@ -110,9 +110,9 @@ struct OMEMODeviceUsageTests {
         clock.advance(days: 50)
         store.noteUsed(name: bob, deviceId: 1, at: clock.now)
         clock.advance(days: 50)
-        #expect(store.excludingInactive([1, 2], of: bob) == [1])
+        #expect(store.excludingInactive([1, 2], usage: store.usage(forName: bob)) == [1])
         store.noteUsed(name: bob, deviceId: 2, at: clock.now)
-        #expect(store.excludingInactive([1, 2], of: bob) == [1, 2])
+        #expect(store.excludingInactive([1, 2], usage: store.usage(forName: bob)) == [1, 2])
     }
 
     @Test func theThresholdIsExactlyNinetyDays() {
@@ -264,7 +264,7 @@ struct OMEMODeviceUsageTests {
         let sent = clock.now.addingTimeInterval(-120 * 86400)
         _ = encryption.decrypt(undecryptable(from: 7, to: encryption), from: JID(bob)!, ownCopy: false, isHistory: true, sentAt: sent)
         #expect(encryption.store.usage(forName: bob)[7]?.lastUsed == sent)
-        #expect(encryption.store.excludingInactive([7], of: bob) == [7], "the only device is kept")
+        #expect(encryption.store.excludingInactive([7], usage: encryption.store.usage(forName: bob)) == [7], "the only device is kept")
     }
 
     @Test func archiveTimesComeFromTheArchiveAndOthersAreNow() {

@@ -271,7 +271,8 @@ extension AppDatabase {
     /// nothing was read of it, and it must stay pending to be sent.
     static func markDisplayed(_ db: Database, conversationId: Int64, through date: Date) throws {
         _ = try Message
-            .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.outgoing)
+            .filter(Column("conversationId") == conversationId)
+            .outgoingOnly()
             .filter(Column("timestamp") <= date && Column("isRetracted") == false)
             .filter([Message.Status.sent, .received, .delivered].contains(Column("status")))
             .updateAll(db, Column("status").set(to: Message.Status.displayed))

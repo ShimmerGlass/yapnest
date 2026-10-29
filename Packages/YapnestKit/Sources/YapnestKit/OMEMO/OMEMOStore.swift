@@ -9,7 +9,8 @@ import libsignal
 ///
 /// libsignal calls these synchronously from inside its own lock, on whatever
 /// queue is encrypting or decrypting; every call is a short database
-/// transaction, so it must never run inside another one.
+/// transaction, so it must never run inside another one. A send is the
+/// exception: see `batchingSessions`.
 ///
 /// Trust is "blind trust before verification": new devices are trusted until
 /// the user verifies one of that JID's keys, after which further new devices
@@ -24,6 +25,21 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     private var cachedRegistrationId: UInt32?
     /// The clock, so tests can move it.
     private let now: @Sendable () -> Date
+    /// The context whose lock libsignal holds while it uses these sessions.
+    /// Weak, as the context keeps the storage that keeps this store.
+    weak var signalContext: SignalContext?
+    /// The sessions of the send under way: see `batchingSessions`. Guarded
+    /// by `lock`, and only ever set by the thread holding the context's lock.
+    private var batch: SessionBatch?
+
+    private struct SessionBatch {
+        /// As read when the send began.
+        var loaded: [SignalAddress: Data] = [:]
+        /// As libsignal left them, to be written when it ends.
+        var stored: [SignalAddress: Data] = [:]
+
+        func record(for address: SignalAddress) -> Data? { stored[address] ?? loaded[address] }
+    }
 
     init(database: AppDatabase, account: JID, identityKeys: any IdentityKeyStore, now: @escaping @Sendable () -> Date = { Date() }) {
         self.database = database
@@ -206,8 +222,77 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
 
     // MARK: Sessions
 
+    /// Runs `encode`, which encrypts one message for `addresses`, as one step:
+    /// their sessions are read in one transaction before, and what libsignal
+    /// stores of them is written in one after, rather than a transaction for
+    /// each load and store of each device, which for a group came to hundreds.
+    ///
+    /// It all happens holding the lock libsignal takes for each call, so no
+    /// decrypt or other send can use these sessions in between and see them
+    /// as they were, and nothing else that writes sessions (see
+    /// `serialized`) can come between the read and the write.
+    ///
+    /// - Returns: false when the sessions couldn't be written. The message
+    ///   must then not go out: it was encrypted with keys that weren't kept,
+    ///   and the next message would use them again.
+    func batchingSessions(for addresses: [SignalAddress], _ encode: () -> Void) -> Bool {
+        serialized {
+            let wanted = Array(Set(addresses))
+            var loaded: [SignalAddress: Data] = [:]
+            _ = read { db in
+                let pairs = Array(repeating: "(?, ?)", count: wanted.count).joined(separator: ", ")
+                let arguments = StatementArguments(wanted.flatMap { [$0.name, $0.deviceId] as [(any DatabaseValueConvertible)?] })
+                for row in try Row.fetchAll(db, sql: "SELECT name, deviceId, data FROM omemoSession WHERE (name, deviceId) IN (VALUES \(pairs))", arguments: arguments) {
+                    loaded[SignalAddress(name: row["name"], deviceId: row["deviceId"])] = row["data"]
+                }
+            }
+            lock.withLock { batch = SessionBatch(loaded: loaded) }
+            encode()
+            let stored = lock.withLock {
+                defer { batch = nil }
+                return batch?.stored ?? [:]
+            }
+            guard !stored.isEmpty else { return true }
+            return write { db in
+                for (address, data) in stored {
+                    try Self.storeSession(data, for: address, in: db)
+                }
+            }
+        }
+    }
+
+    /// Runs `body` holding the lock libsignal takes for each call, so that a
+    /// change to sessions made outside libsignal can't land in the middle of
+    /// a send's batch and be overwritten by it. Taken before any database
+    /// lock, as libsignal's calls do. The lock is recursive, so libsignal's
+    /// own calls, which hold it already, go straight through.
+    private func serialized<T>(_ body: () -> T) -> T {
+        guard let signalContext else { return body() }
+        return signalContext.withLock(body)
+    }
+
+    private func batched(_ body: (inout SessionBatch) -> Void) -> Bool {
+        lock.withLock {
+            guard batch != nil else { return false }
+            body(&batch!)
+            return true
+        }
+    }
+
+    private func batchedRecord(for address: SignalAddress) -> Data? {
+        lock.withLock { batch?.record(for: address) }
+    }
+
+    private static func storeSession(_ data: Data, for address: SignalAddress, in db: Database) throws {
+        try db.execute(sql: """
+            INSERT INTO omemoSession (name, deviceId, data) VALUES (?, ?, ?)
+            ON CONFLICT(name, deviceId) DO UPDATE SET data = excluded.data
+            """, arguments: [address.name, address.deviceId, data])
+    }
+
     func sessionRecord(forAddress address: SignalAddress) -> Data? {
-        read { db in
+        if let record = batchedRecord(for: address) { return record }
+        return read { db in
             try Data.fetchOne(db, sql: "SELECT data FROM omemoSession WHERE name = ? AND deviceId = ?", arguments: [address.name, address.deviceId])
         } ?? nil
     }
@@ -227,28 +312,34 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func storeSessionRecord(_ data: Data, forAddress address: SignalAddress) -> Bool {
-        write { db in
-            try db.execute(sql: """
-                INSERT INTO omemoSession (name, deviceId, data) VALUES (?, ?, ?)
-                ON CONFLICT(name, deviceId) DO UPDATE SET data = excluded.data
-                """, arguments: [address.name, address.deviceId, data])
-        }
+        if batched({ $0.stored[address] = data }) { return true }
+        return write { db in try Self.storeSession(data, for: address, in: db) }
     }
 
     func containsSessionRecord(forAddress address: SignalAddress) -> Bool {
-        read { db in
+        if batchedRecord(for: address) != nil { return true }
+        return read { db in
             try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM omemoSession WHERE name = ? AND deviceId = ?)", arguments: [address.name, address.deviceId])
         } == true
     }
 
     func deleteSessionRecord(forAddress address: SignalAddress) -> Bool {
-        write { db in
-            try db.execute(sql: "DELETE FROM omemoSession WHERE name = ? AND deviceId = ?", arguments: [address.name, address.deviceId])
+        serialized {
+            _ = batched { $0.loaded[address] = nil; $0.stored[address] = nil }
+            return write { db in
+                try db.execute(sql: "DELETE FROM omemoSession WHERE name = ? AND deviceId = ?", arguments: [address.name, address.deviceId])
+            }
         }
     }
 
     func deleteAllSessions(for name: String) -> Bool {
-        write { db in try db.execute(sql: "DELETE FROM omemoSession WHERE name = ?", arguments: [name]) }
+        serialized {
+            _ = batched { batch in
+                batch.loaded = batch.loaded.filter { $0.key.name != name }
+                batch.stored = batch.stored.filter { $0.key.name != name }
+            }
+            return write { db in try db.execute(sql: "DELETE FROM omemoSession WHERE name = ?", arguments: [name]) }
+        }
     }
 
     // MARK: Prekeys
@@ -424,13 +515,20 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func setStatus(active: Bool, forIdentity address: SignalAddress) -> Bool {
-        write { db in
+        // Asked on every message read, and nearly always a no-op: look on a
+        // reader first, and take the write lock only for a change.
+        func changed(_ db: Database) throws -> Int? {
             guard let raw = try Int.fetchOne(db, sql: "SELECT status FROM omemoIdentity WHERE name = ? AND deviceId = ?", arguments: [address.name, address.deviceId]),
-                  let status = IdentityStatus(rawValue: raw) else { return }
+                  let status = IdentityStatus(rawValue: raw) else { return nil }
             let updated = active ? status.toActive() : status.toInactive()
-            guard updated != status else { return }
+            return updated == status ? nil : updated.rawValue
+        }
+        // A reader that fails goes on to the writer, which reports it.
+        if read({ db in try changed(db) == nil }) == true { return true }
+        return write { db in
+            guard let updated = try changed(db) else { return }
             try db.execute(sql: "UPDATE omemoIdentity SET status = ? WHERE name = ? AND deviceId = ?",
-                           arguments: [updated.rawValue, address.name, address.deviceId])
+                           arguments: [updated, address.name, address.deviceId])
         }
     }
 
@@ -515,10 +613,38 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     func usage(forName name: String) -> [Int32: Usage] {
         read { db in
             let rows = try Row.fetchAll(db, sql: "SELECT deviceId, firstSeen, lastUsed FROM omemoIdentity WHERE name = ?", arguments: [name])
-            return Dictionary(uniqueKeysWithValues: rows.map { row in
-                // A row from before the column has no day; it starts now.
-                (row["deviceId"] as Int32, Usage(firstSeen: (row["firstSeen"] as Date?) ?? now(), lastUsed: row["lastUsed"]))
-            })
+            return Dictionary(uniqueKeysWithValues: rows.map { row in (row["deviceId"] as Int32, usage(row)) })
+        } ?? [:]
+    }
+
+    private func usage(_ row: Row) -> Usage {
+        // A row from before the column has no day; it starts now.
+        Usage(firstSeen: (row["firstSeen"] as Date?) ?? now(), lastUsed: row["lastUsed"])
+    }
+
+    /// What deciding which devices of one name a message goes to takes.
+    struct SendState {
+        var statuses: [Int32: IdentityStatus] = [:]
+        var usage: [Int32: Usage] = [:]
+        var sessions: Set<Int32> = []
+    }
+
+    /// `SendState` of each of `names`, in one read for all of them rather than
+    /// a few for every device. A name with nothing stored has an empty one.
+    func sendState(forNames names: [String]) -> [String: SendState] {
+        guard !names.isEmpty else { return [:] }
+        let marks = databaseQuestionMarks(count: names.count)
+        return read { db in
+            var states: [String: SendState] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT name, deviceId, status, firstSeen, lastUsed FROM omemoIdentity WHERE name IN (\(marks))", arguments: StatementArguments(names)) {
+                let name: String = row["name"], deviceId: Int32 = row["deviceId"]
+                states[name, default: SendState()].statuses[deviceId] = IdentityStatus(rawValue: row["status"]) ?? .undecidedActive
+                states[name, default: SendState()].usage[deviceId] = usage(row)
+            }
+            for row in try Row.fetchAll(db, sql: "SELECT name, deviceId FROM omemoSession WHERE name IN (\(marks))", arguments: StatementArguments(names)) {
+                states[row["name"], default: SendState()].sessions.insert(row["deviceId"])
+            }
+            return states
         } ?? [:]
     }
 
@@ -526,13 +652,15 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// is met as new, except a compromised one: its row stays, so removing a
     /// device the user blocked doesn't let it come back trusted.
     func forget(deviceIds: [Int32], of name: String) {
-        _ = write { db in
-            for id in deviceIds {
-                try db.execute(sql: "DELETE FROM omemoSession WHERE name = ? AND deviceId = ?", arguments: [name, id])
-                // Gone from the account, so there's nothing left to warn about.
-                if name == account { try db.execute(sql: "DELETE FROM deviceNotice WHERE deviceId = ?", arguments: [id]) }
-                try db.execute(sql: "DELETE FROM omemoIdentity WHERE name = ? AND deviceId = ? AND status NOT IN (?, ?)",
-                               arguments: [name, id, IdentityStatus.compromisedActive.rawValue, IdentityStatus.compromisedInactive.rawValue])
+        serialized {
+            _ = write { db in
+                for id in deviceIds {
+                    try db.execute(sql: "DELETE FROM omemoSession WHERE name = ? AND deviceId = ?", arguments: [name, id])
+                    // Gone from the account, so there's nothing left to warn about.
+                    if name == account { try db.execute(sql: "DELETE FROM deviceNotice WHERE deviceId = ?", arguments: [id]) }
+                    try db.execute(sql: "DELETE FROM omemoIdentity WHERE name = ? AND deviceId = ? AND status NOT IN (?, ?)",
+                                   arguments: [name, id, IdentityStatus.compromisedActive.rawValue, IdentityStatus.compromisedInactive.rawValue])
+                }
             }
         }
     }
@@ -540,13 +668,13 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// `devices` of `name` without the inactive ones, unless that leaves none:
     /// a contact whose devices have all gone quiet is more likely away than
     /// gone, and a message should stay readable somewhere.
-    func excludingInactive(_ devices: [Int32], of name: String) -> [Int32] {
-        let active = withoutInactive(devices, of: name)
+    func excludingInactive(_ devices: [Int32], usage: [Int32: Usage]) -> [Int32] {
+        let active = withoutInactive(devices, usage: usage)
         return active.isEmpty ? devices : active
     }
 
-    private func withoutInactive(_ devices: [Int32], of name: String) -> [Int32] {
-        let usage = usage(forName: name), now = now()
+    private func withoutInactive(_ devices: [Int32], usage: [Int32: Usage]) -> [Int32] {
+        let now = now()
         return devices.filter { usage[$0].map { !$0.isInactive(now: now) } ?? true }
     }
 
@@ -554,7 +682,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// quiet. Unlike a contact's, they may all be left out, since we hold
     /// the plaintext ourselves.
     func ownDevicesToEncryptTo() -> [Int32] {
-        withoutInactive(allDevices(for: account, activeAndTrusted: true), of: account)
+        withoutInactive(allDevices(for: account, activeAndTrusted: true), usage: usage(forName: account))
     }
 
     func identityFingerprint(forAddress address: SignalAddress) -> String? {

@@ -100,7 +100,7 @@ extension AppDatabase {
     /// Peers of the chats that hold a message.
     func peersWithMessages() throws -> Set<JID> {
         try reader.read { db in
-            Set(try JID.fetchAll(db, sql: "SELECT DISTINCT peer FROM conversation WHERE kind = 'chat' AND id IN (SELECT conversationId FROM message WHERE \(Self.isNotEvent))"))
+            Set(try JID.fetchAll(db, sql: "SELECT peer FROM conversation WHERE kind = 'chat' AND EXISTS (SELECT 1 FROM message WHERE message.conversationId = conversation.id AND \(Self.isNotEvent))"))
         }
     }
 
@@ -127,18 +127,20 @@ extension AppDatabase {
     /// server: written to a connection that dropped before the server
     /// acknowledged them (XEP-0198). Group chats confirm by echoing, after
     /// each room's own catch-up.
-    func unconfirmedOutgoing(before: Date, since: Date) throws -> [(Message, JID)] {
+    func unconfirmedOutgoing(before: Date? = nil, since: Date? = nil) throws -> [(Message, JID)] {
         try reader.read { db in
             let chats = try Conversation.fetchAll(db, sql: "SELECT * FROM conversation WHERE kind = 'chat'")
             let peers = Dictionary(uniqueKeysWithValues: chats.compactMap { chat in chat.id.map { ($0, chat.peer) } })
-            let messages = try Message
+            // No bound at all where the caller has none: a range from the
+            // dawn of time to the end of it would only slow the lookup.
+            var request = Message
                 .filter(peers.keys.contains(Column("conversationId")))
-                .filter(Column("direction") == Message.Direction.outgoing)
-                .filter(Column("timestamp") < before && Column("timestamp") >= since)
+                .outgoingOnly()
                 .filter(Column("isRetracted") == false)
                 .filter(Column("status") == Message.Status.pending)
-                .order(Column("timestamp"))
-                .fetchAll(db)
+            if let before { request = request.filter(Column("timestamp") < before) }
+            if let since { request = request.filter(Column("timestamp") >= since) }
+            let messages = try request.order(Column("timestamp")).fetchAll(db)
             return messages.compactMap { message in peers[message.conversationId].map { (message, $0) } }
         }
     }

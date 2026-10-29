@@ -808,6 +808,43 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v50-query-indices") { db in
+            // The app never runs ANALYZE, so SQLite plans from the schema
+            // alone: an index has to be the obvious one, or it isn't used.
+            // Every lookup by serverId names the conversation too.
+            try db.execute(sql: "DROP INDEX message_on_serverId")
+            try db.execute(sql: "CREATE INDEX message_on_conversation_serverId ON message(conversationId, serverId)")
+            // Prefixes of indices that stay: the conversation's cascade uses
+            // (conversationId, timestamp), and a reaction's messageId leads its key.
+            try db.execute(sql: "DROP INDEX message_on_conversationId")
+            try db.execute(sql: "DROP INDEX newReaction_on_messageId")
+            // Pending edits are only ever read by conversation.
+            try db.execute(sql: "DROP INDEX pendingEdit_on_createdAt")
+            // Deleting a message cascades to the pending edits that stand in for it.
+            try db.execute(sql: "CREATE INDEX pendingEdit_on_standInId ON pendingEdit(standInId)")
+
+            // Unread messages are few: the index holds only them. The
+            // conditions are written as literals in every query, as SQLite
+            // can't use a partial index for a bound parameter.
+            try db.execute(sql: "DROP INDEX message_unread")
+            try db.execute(sql: "CREATE INDEX message_unread ON message(conversationId, timestamp) WHERE isRead = 0")
+            try db.execute(sql: "CREATE INDEX message_unread_mention ON message(conversationId) WHERE isRead = 0 AND addressesMe = 1")
+            try db.execute(sql: "CREATE INDEX message_outgoing_status ON message(conversationId, status, timestamp) WHERE direction = 'outgoing'")
+            try db.execute(sql: "CREATE INDEX message_pending_remoteId ON message(remoteId) WHERE status = 'pending'")
+
+            // GRDB writes every column on an update, so the trigger would
+            // re-index the message for a change of status or read state.
+            try db.execute(sql: "DROP TRIGGER messageSearch_updated")
+            try db.execute(sql: """
+                CREATE TRIGGER messageSearch_updated AFTER UPDATE OF body, encryption, isRetracted ON message
+                WHEN OLD.body IS NOT NEW.body OR OLD.encryption IS NOT NEW.encryption OR OLD.isRetracted IS NOT NEW.isRetracted
+                BEGIN
+                    INSERT INTO messageSearch(messageSearch, rowid, body) SELECT 'delete', OLD.id, OLD.body WHERE \(Self.searchable("OLD"));
+                    INSERT INTO messageSearch(rowid, body) SELECT NEW.id, NEW.body WHERE \(Self.searchable("NEW"));
+                END
+                """)
+        }
+
         return migrator
     }
 
@@ -835,6 +872,19 @@ public final class AppDatabase: Sendable {
 extension DerivableRequest<Message> {
     /// Without the rows that only mark something that happened: see `AppDatabase.isNotEvent`.
     func excludingEvents() -> Self { filter(Column("event") == nil) }
+
+    // These three are written into the SQL rather than bound as values:
+    // SQLite uses a partial index only for a condition the query spells out
+    // as the index does, and a bound `?` is not that.
+
+    /// Not read yet: what `message_unread` holds.
+    func unread() -> Self { filter(sql: "message.isRead = 0") }
+
+    /// Written by us: what `message_outgoing_status` holds.
+    func outgoingOnly() -> Self { filter(sql: "message.direction = '\(Message.Direction.outgoing.rawValue)'") }
+
+    /// Not sent yet: what `message_pending_remoteId` holds.
+    func notYetSent() -> Self { filter(sql: "message.status = '\(Message.Status.pending.rawValue)'") }
 }
 
 public enum AppDatabaseError: Error, LocalizedError, Equatable, Sendable {

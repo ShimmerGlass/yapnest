@@ -83,6 +83,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         storage = SignalStorage(sessionStore: store, preKeyStore: store, signedPreKeyStore: store, identityKeyStore: store, senderKeyStore: store)
         guard let context = SignalContext(withStorage: storage) else { throw OMEMOError.keyGenerationFailed }
         self.context = context
+        store.signalContext = context
         try store.setUpIdentityIfNeeded(context: context)
         retirement = OSAllocatedUnfairLock(initialState: Retirement(isPending: !store.replacedDeviceIds().isEmpty))
         module = OMEMOModule(aesGCMEngine: CryptoKitAESGCM(), signalContext: context, signalStorage: storage)
@@ -379,22 +380,24 @@ final class OMEMOEncryption: @unchecked Sendable {
             firstFailure = firstFailure ?? failure
             return nil
         }
+        let states = store.sendState(forNames: recipients.map(\.description))
         for recipient in recipients {
+            let state = states[recipient.description] ?? OMEMOStore.SendState()
+            let identities = state.statuses
             let devices = Set(fetched.filter { $0.name == recipient.description })
             guard !devices.isEmpty else {
                 if let failure = unreachable(Self.missingDevices(of: recipient, listError: module.deviceListError(for: recipient.martin), bundleError: module.bundleError(for: recipient.martin))) { return .failure(failure) }
                 continue
             }
-            let identities = Dictionary(store.identities(forName: recipient.description).map { ($0.address.deviceId, $0.status) }, uniquingKeysWith: { a, _ in a })
             let trustedAll = devices.filter { address in
-                guard store.containsSessionRecord(forAddress: address), let status = identities[address.deviceId] else { return false }
+                guard state.sessions.contains(address.deviceId), let status = identities[address.deviceId] else { return false }
                 return status.isActive && (status.trust == .trusted || status.trust == .verified)
             }
             // Devices that went quiet are skipped, but never all of them.
-            let current = Set(store.excludingInactive(trustedAll.map(\.deviceId), of: recipient.description))
+            let current = Set(store.excludingInactive(trustedAll.map(\.deviceId), usage: state.usage))
             let trusted = trustedAll.filter { current.contains($0.deviceId) }
             guard !trusted.isEmpty else {
-                let hasSessions = devices.contains { store.containsSessionRecord(forAddress: $0) }
+                let hasSessions = devices.contains { state.sessions.contains($0.deviceId) }
                 let failure: EncryptError
                 if !hasSessions, let error = module.bundleError(for: recipient.martin) {
                     failure = .fetchFailed(recipient, ServerError(error))
@@ -456,11 +459,7 @@ final class OMEMOEncryption: @unchecked Sendable {
 
         let message = Martin.Message()
         message.body = fingerprint
-        nonisolated(unsafe) var encoded: EncryptionResult<Martin.Message, SignalError> = .failure(.unknown)
-        encodeLock.withLock {
-            module.encode(message: message, forAddresses: [address], withStoreHint: false, forSelf: false) { encoded = $0 }
-        }
-        guard case .successMessage(let result, _) = encoded,
+        guard case .successMessage(let result, _) = encodeKeepingSessions(message, for: [address]),
               let encrypted = result.firstChild(name: "encrypted", xmlns: NS.omemoLegacy),
               encrypted.firstChild(name: "header")?.filterChildren(name: "key", xmlns: nil).contains(where: { $0.getAttribute("rid") == device.omemoId }) == true,
               encrypted.firstChild(name: "payload") != nil else { return .failure(.setupFailed) }
@@ -521,14 +520,25 @@ final class OMEMOEncryption: @unchecked Sendable {
         for recipient in recipients + [account] { module.forgetFetchFailures(for: recipient.martin) }
     }
 
-    private func encode(_ stanza: Martin.Message, for addresses: [SignalAddress], verified: Bool, checking recipients: [JID]) -> Result<(Martin.Message, OMEMODevice.Trust), EncryptError> {
+    /// Encrypts `stanza` for exactly `addresses`, with their sessions read and
+    /// written once for the message: see `OMEMOStore.batchingSessions`. A
+    /// message whose sessions couldn't be kept comes back as a failure, so it
+    /// never goes out.
+    func encodeKeepingSessions(_ stanza: Martin.Message, for addresses: [SignalAddress]) -> EncryptionResult<Martin.Message, SignalError> {
         nonisolated(unsafe) var encoded: EncryptionResult<Martin.Message, SignalError> = .failure(.unknown)
         encodeLock.withLock {
-            // `addresses` has our own devices already; MartinOMEMO would add the inactive ones too.
-            // The store hint is the one `_encode` puts on every message it encrypts.
-            module.encode(message: stanza, forAddresses: addresses, withStoreHint: false, forSelf: false) { encoded = $0 }
+            let kept = store.batchingSessions(for: addresses) {
+                // `addresses` has our own devices already; MartinOMEMO would add the inactive ones too.
+                // The store hint is the one `_encode` puts on every message it encrypts.
+                module.encode(message: stanza, forAddresses: addresses, withStoreHint: false, forSelf: false) { encoded = $0 }
+            }
+            if !kept { encoded = .failure(.unknown) }
         }
-        guard case .successMessage(let message, _) = encoded else { return .failure(.setupFailed(recipients.first ?? account)) }
+        return encoded
+    }
+
+    private func encode(_ stanza: Martin.Message, for addresses: [SignalAddress], verified: Bool, checking recipients: [JID]) -> Result<(Martin.Message, OMEMODevice.Trust), EncryptError> {
+        guard case .successMessage(let message, _) = encodeKeepingSessions(stanza, for: addresses) else { return .failure(.setupFailed(recipients.first ?? account)) }
 
         // MartinOMEMO drops devices it fails to encrypt for; make sure every
         // recipient can read it at all.

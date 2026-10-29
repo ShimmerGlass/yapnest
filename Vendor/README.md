@@ -920,6 +920,19 @@ Each entry gives what went wrong for users, why, and what changed.
   expires like a fetched one, a minute later. It hops onto `devicesQueue`
   with `async`. `now` is the clock for those lifetimes, so tests can move it.
 
+**A message to a group took hundreds of database transactions**
+(`SignalContext.withLock`)
+- *Symptom:* encrypting one message for a group of 60 people with two
+  devices each took 8 ms on a Mac, most of it spent outside libsignal.
+- *Cause:* libsignal loads and stores each recipient's session through the
+  storage callbacks, and Yapnest's storage runs each call as its own
+  database transaction: about 250 for that message.
+- *Fix:* `withLock` runs a block holding the lock libsignal takes around
+  each of its calls. Yapnest holds it for a whole send, reads the sessions
+  in one transaction before encoding and writes what libsignal stored in one
+  after, before the message is returned (2.7 ms). No other call into the
+  context can come between, so nothing sees a session as it was mid-send.
+
 **Sends waited for the main thread** (`addresses(for:)`)
 - *Symptom:* a message could sit unsent while the interface was busy.
 - *Cause:* the lookup reported back on the main queue, and the send waits

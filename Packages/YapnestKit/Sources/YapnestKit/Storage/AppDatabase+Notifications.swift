@@ -172,7 +172,8 @@ extension AppDatabase {
                             // group that notifies for every message has no
                             // unread one that doesn't.
                             heldCount = try Message
-                                .filter(Column("conversationId") == message.conversationId && Column("isRead") == false)
+                                .filter(Column("conversationId") == message.conversationId)
+                                .unread()
                                 .fetchCount(db)
                         }
                     }
@@ -239,10 +240,7 @@ extension AppDatabase {
         }
         guard let replyToId else { return false }
         // Rooms reference messages by their stanza-id; some clients by ours.
-        return try Bool.fetchOne(db, sql: """
-            SELECT EXISTS (SELECT 1 FROM message WHERE conversationId = ? AND direction = ?
-                AND (remoteId = ? OR originId = ? OR serverId = ?))
-            """, arguments: [conversationId, Message.Direction.outgoing.rawValue, replyToId, replyToId, replyToId]) ?? false
+        return try !referenceRequest(conversationId: conversationId, id: replyToId, direction: .outgoing).isEmpty(db)
     }
 
     /// Sets `addressesMe` on a message about to be stored or changed. Only a
@@ -298,9 +296,8 @@ extension AppDatabase {
         let ids = [message.remoteId, message.originId, message.serverId].compactMap { $0 }
         guard !ids.isEmpty,
               try GroupChat.filter(Column("conversationId") == message.conversationId).isEmpty(db) == false else { return }
-        let marks = Array(repeating: "?", count: ids.count).joined(separator: ", ")
         try db.execute(
-            sql: "UPDATE message SET addressesMe = 1 WHERE conversationId = ? AND isRead = 0 AND addressesMe = 0 AND direction != ? AND replyToId IN (\(marks))",
+            sql: "UPDATE message SET addressesMe = 1 WHERE conversationId = ? AND isRead = 0 AND addressesMe = 0 AND direction != ? AND replyToId IN (\(databaseQuestionMarks(count: ids.count)))",
             arguments: StatementArguments([message.conversationId]) + StatementArguments([Message.Direction.outgoing.rawValue]) + StatementArguments(ids))
     }
 
@@ -327,11 +324,8 @@ extension AppDatabase {
     /// and those that notify for mentions count only the mentions.
     public func observeUnreadBadge() -> ValueObservation<ValueReducers.Fetch<UnreadBadge>> {
         ValueObservation.tracking { db in
-            let hasUnread = try Message
-                .filter(Column("isRead") == false)
-                .joining(required: Message.conversation.filter(Column("isArchived") == false))
-                .isEmpty(db) == false
-            return UnreadBadge(counts: try Self.badgeCounts(db), hasUnread: hasUnread)
+            let entries = try Self.unreadCounts(db, archived: false)
+            return UnreadBadge(counts: Self.badgeCounts(entries), hasUnread: entries.contains { $0.unread > 0 })
         }
         // Not deduplicated: the notification extension sets the badge too,
         // so a write that leaves the counts as they were can still follow a
@@ -342,31 +336,43 @@ extension AppDatabase {
     /// What the badge counts, per peer. Archived conversations are left out;
     /// the others appear, with 0 when nothing is unread.
     static func badgeCounts(_ db: Database) throws -> [JID: Int] {
+        badgeCounts(try unreadCounts(db, archived: false))
+    }
+
+    private static func badgeCounts(_ entries: [(id: Int64, peer: JID, unread: Int, notifying: Int)]) -> [JID: Int] {
         var counts: [JID: Int] = [:]
-        for entry in try notifyingCounts(db, archived: false) { counts[entry.peer, default: 0] += entry.count }
+        for entry in entries { counts[entry.peer, default: 0] += entry.notifying }
         return counts
     }
 
     /// The one place that decides which unread messages notify, so the badge
     /// and the chat list can't disagree. Each conversation of the archived or
     /// the unarchived set appears, with 0 when nothing notifying is unread.
-    static func notifyingCounts(_ db: Database, archived: Bool) throws -> [(id: Int64, peer: JID, count: Int)] {
-        // A mention-only group counts the messages stored as addressing us.
+    /// `unread` is every unread message, `notifying` those that count.
+    static func unreadCounts(_ db: Database, archived: Bool) throws -> [(id: Int64, peer: JID, unread: Int, notifying: Int)] {
+        // One count per conversation, each an index lookup: the unread
+        // messages are the whole of a partial index. A mention-only group
+        // counts the messages stored as addressing us.
         let rows = try Row.fetchAll(db, sql: """
-            SELECT conversation.id, conversation.peer, COUNT(message.id) AS unread
+            SELECT conversation.id, conversation.peer, groupChat.notify,
+                (SELECT COUNT(*) FROM message WHERE message.conversationId = conversation.id AND message.isRead = 0) AS unread,
+                CASE groupChat.notify WHEN ? THEN
+                    (SELECT COUNT(*) FROM message WHERE message.conversationId = conversation.id AND message.isRead = 0 AND message.addressesMe = 1)
+                END AS mentions
             FROM conversation
             LEFT JOIN groupChat ON groupChat.conversationId = conversation.id
-            LEFT JOIN message ON message.conversationId = conversation.id AND message.isRead = 0
-                AND CASE groupChat.notify WHEN ? THEN 0 WHEN ? THEN message.addressesMe ELSE 1 END
             WHERE conversation.isArchived = ?
-            GROUP BY conversation.id
-            """, arguments: [GroupChat.Notify.never.rawValue, GroupChat.Notify.onMention.rawValue, archived])
-        var counts: [(id: Int64, peer: JID, count: Int)] = []
+            """, arguments: [GroupChat.Notify.onMention.rawValue, archived])
+        var counts: [(id: Int64, peer: JID, unread: Int, notifying: Int)] = []
         for row in rows {
             guard let peer = JID(row["peer"] as String) else { continue }
-            let id: Int64 = row["id"]
             let unread: Int = row["unread"]
-            counts.append((id, peer, unread))
+            let notifying: Int = switch (row["notify"] as String?).flatMap(GroupChat.Notify.init) {
+            case .never: 0
+            case .onMention: row["mentions"]
+            case .always, nil: unread
+            }
+            counts.append((row["id"], peer, unread, notifying))
         }
         return counts
     }

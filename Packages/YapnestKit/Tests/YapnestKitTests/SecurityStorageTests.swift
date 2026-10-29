@@ -203,7 +203,7 @@ struct DeliveryStateTests {
         try outgoing("sent", status: .sent)
         try outgoing("failed", status: .failed)
         try outgoing("delivered", status: .delivered, serverId: "s1")
-        let found = try db.unconfirmedOutgoing(before: .distantFuture, since: .distantPast)
+        let found = try db.unconfirmedOutgoing()
         #expect(found.map(\.0.remoteId) == ["pending"])
         #expect(found.first?.1 == alice)
     }

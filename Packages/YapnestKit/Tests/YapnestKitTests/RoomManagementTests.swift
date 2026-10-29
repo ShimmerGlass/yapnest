@@ -790,3 +790,12 @@ final class Locked<Value>: @unchecked Sendable {
         set { lock.withLock { stored = newValue } }
     }
 }
+
+/// What several threads add to, read once they're done.
+final class Collected<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [T] = []
+    func add(_ value: T) { lock.withLock { values.append(value) } }
+    func removeAll() { lock.withLock { values = [] } }
+    var all: [T] { lock.withLock { values } }
+}

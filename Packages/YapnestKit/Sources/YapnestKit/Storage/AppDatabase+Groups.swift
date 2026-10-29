@@ -95,10 +95,9 @@ extension AppDatabase {
             if !group.isPrivate {
                 conversation.isEncrypted = false
             } else if !wasPrivate {
-                let written = try Message
+                if try Message
                     .filter(Column("conversationId") == conversation.id && Column("direction") == Message.Direction.outgoing)
-                    .fetchCount(db)
-                if written == 0 { conversation.isEncrypted = true }
+                    .isEmpty(db) { conversation.isEncrypted = true }
             }
             try conversation.update(db)
         }
@@ -109,7 +108,8 @@ extension AppDatabase {
     func unconfirmedOutgoing(conversationId: Int64, before: Date, since: Date) throws -> [Message] {
         try reader.read { db in
             try Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.outgoing)
+                .filter(Column("conversationId") == conversationId)
+                .outgoingOnly()
                 .filter(Column("timestamp") < before && Column("timestamp") >= since)
                 .filter(Column("isRetracted") == false)
                 .filter(Column("status") == Message.Status.pending
@@ -124,7 +124,8 @@ extension AppDatabase {
     func pendingOutgoing(conversationId: Int64) throws -> [Message] {
         try reader.read { db in
             try Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.outgoing)
+                .filter(Column("conversationId") == conversationId)
+                .outgoingOnly()
                 .filter(Column("isRetracted") == false && Column("status") == Message.Status.pending)
                 .order(Column("timestamp"))
                 .fetchAll(db)

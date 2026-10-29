@@ -123,9 +123,12 @@ extension AppDatabase {
         }
         let ids = [message.originId, message.remoteId].compactMap { $0 }
         guard !ids.isEmpty else { return nil }
+        // The conversation is in each branch of the OR: SQLite doesn't carry
+        // it in from outside, and would scan the whole conversation.
+        let conversation = Column("conversationId") == message.conversationId
         return try Message
-            .filter(Column("conversationId") == message.conversationId && Column("sender") == message.sender)
-            .filter(ids.contains(Column("originId")) || ids.contains(Column("remoteId")))
+            .filter(Column("sender") == message.sender)
+            .filter((conversation && ids.contains(Column("originId"))) || (conversation && ids.contains(Column("remoteId"))))
             .fetchOne(db)
     }
 
@@ -147,9 +150,7 @@ extension AppDatabase {
     }
 
     static func referenceRequest(conversationId: Int64, id: String, direction: Message.Direction? = nil) -> QueryInterfaceRequest<Message> {
-        var request = Message
-            .filter(Column("conversationId") == conversationId)
-            .filter(Column("remoteId") == id || Column("originId") == id || Column("serverId") == id)
+        var request = Message.filter(repliedTo([id], in: conversationId))
         if let direction { request = request.filter(Column("direction") == direction) }
         return request
     }
@@ -158,8 +159,9 @@ extension AppDatabase {
     func pendingOutgoing(remoteId: String) throws -> Message? {
         try reader.read { db in
             try Message
-                .filter(Column("remoteId") == remoteId && Column("direction") == Message.Direction.outgoing)
-                .filter(Column("status") == Message.Status.pending)
+                .filter(Column("remoteId") == remoteId)
+                .outgoingOnly()
+                .notYetSent()
                 .fetchOne(db)
         }
     }
@@ -263,15 +265,16 @@ extension AppDatabase {
     func hasUnread(conversationId: Int64, through date: Date) throws -> Bool {
         try reader.read { db in
             try Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming
-                    && Column("isRead") == false && Column("timestamp") <= date)
-                .fetchCount(db) > 0
+                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming && Column("timestamp") <= date)
+                .unread()
+                .isEmpty(db) == false
         }
     }
 
     static func markRead(_ db: Database, conversationId: Int64, through date: Date) throws {
         _ = try Message
-            .filter(Column("conversationId") == conversationId && Column("isRead") == false && Column("timestamp") <= date)
+            .filter(Column("conversationId") == conversationId && Column("timestamp") <= date)
+            .unread()
             .updateAll(db, Column("isRead").set(to: true))
     }
 }
