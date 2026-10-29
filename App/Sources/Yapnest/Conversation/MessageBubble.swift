@@ -462,7 +462,7 @@ fileprivate struct BubbleSpacingKey: LayoutValueKey {
 /// 78% of the row; with a picture or a preview card it takes that whole
 /// width, so its shape doesn't depend on how the text happens to wrap. The
 /// footer sits at the trailing edge.
-private struct BubbleLayout: Layout {
+struct BubbleLayout: Layout {
     var fillsWidth: Bool
     var offeredWidth: CGFloat?
 
@@ -471,6 +471,24 @@ private struct BubbleLayout: Layout {
     /// pill hugging the footer. Wider than the footer on its own, which is
     /// about 50 to 70 points.
     private static let minimumContentWidth: CGFloat = 76
+
+    /// The last measurements. The list asks a bubble for its size several
+    /// times at the same width, then to place its parts, and measuring every
+    /// part again each time was most of the time spent scrolling. SwiftUI
+    /// makes a new cache whenever a part changes, even one that resizes by
+    /// itself as a picture arrives (`BubbleLayoutTests`), so a row's height
+    /// never comes from a stale measurement: the list's lazy stack takes a
+    /// wrong height for a scroll jump.
+    struct Cache {
+        /// The width worked out for the content width the row leaves.
+        var width: (limit: CGFloat, width: CGFloat)?
+        /// Each part's size at a width.
+        var sizes: (width: CGFloat, sizes: [CGSize])?
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = Cache() }
 
     /// What the row leaves for the bubble's contents: its width less the
     /// margins, then the bubble's own padding.
@@ -481,8 +499,17 @@ private struct BubbleLayout: Layout {
         return max(0, (fillsWidth ? min(bubble, MediaLimits.maxBubbleWidth) : bubble) - 24)
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let limit = contentWidth(proposal)
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let width = width(for: contentWidth(proposal), subviews: subviews, cache: &cache)
+        return CGSize(width: width, height: stack(width: width, subviews: subviews, cache: &cache, place: nil))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        stack(width: bounds.width, subviews: subviews, cache: &cache, place: bounds)
+    }
+
+    private func width(for limit: CGFloat, subviews: Subviews, cache: inout Cache) -> CGFloat {
+        if let known = cache.width, known.limit == limit { return known.width }
         // Bubbles that fill their width take the limit anyway, and measuring
         // their pictures and cards unconstrained is the costly part.
         let width: CGFloat
@@ -492,22 +519,23 @@ private struct BubbleLayout: Layout {
             let widest = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
             width = min(limit, max(Self.minimumContentWidth, widest))
         }
-        return CGSize(width: width, height: stack(width: width, subviews: subviews, place: nil))
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        stack(width: bounds.width, subviews: subviews, place: bounds)
+        cache.width = (limit, width)
+        return width
     }
 
     @discardableResult
-    private func stack(width: CGFloat, subviews: Subviews, place bounds: CGRect?) -> CGFloat {
+    private func stack(width: CGFloat, subviews: Subviews, cache: inout Cache, place bounds: CGRect?) -> CGFloat {
+        let sizes: [CGSize]
+        if let known = cache.sizes, known.width == width {
+            sizes = known.sizes
+        } else {
+            sizes = subviews.map { $0.sizeThatFits(.init(width: width, height: nil)) }
+            cache.sizes = (width, sizes)
+        }
         var y: CGFloat = 0
         var previousSpacing: CGFloat = 0
-        var first = true
-        for view in subviews {
-            let size = view.sizeThatFits(.init(width: width, height: nil))
-            if !first { y += previousSpacing }
-            first = false
+        for (index, (view, size)) in zip(subviews, sizes).enumerated() {
+            if index > 0 { y += previousSpacing }
             if let bounds {
                 let isFooter = view[BubbleFooterKey.self]
                 let x = isFooter ? bounds.maxX - min(size.width, width) : bounds.minX
