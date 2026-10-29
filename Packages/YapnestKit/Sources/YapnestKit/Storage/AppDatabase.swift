@@ -501,6 +501,16 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        // Whether a room relayed the invitation (XEP-0045). Nothing reads the
+        // column any more, but the migration stays: a database that lists a
+        // migration this build doesn't know is refused as a newer build's.
+        migrator.registerMigration("v24-invitation-mediation") { db in
+            guard try !db.columns(in: "groupInvitation").contains(where: { $0.name == "isMediated" }) else { return }
+            try db.alter(table: "groupInvitation") { t in
+                t.add(column: "isMediated", .boolean).notNull().defaults(to: true)
+            }
+        }
+
         migrator.registerMigration("v25-moderated-messages") { db in
             // Taken away by a moderator (XEP-0425), not by its author: the
             // tombstone says so. The message is retracted all the same.
