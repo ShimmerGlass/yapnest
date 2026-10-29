@@ -94,6 +94,9 @@ public struct RoomStatus: Hashable, Sendable {
     /// Ours (XEP-0421), from our own presence, if the room vouches for them.
     var occupantId: String?
     var hasArchive = false
+    /// Whether the member lists have been asked for in this visit, whether or
+    /// not they came, so the members we encrypt for are as known as they get.
+    var membersListed = false
     /// Our join created the room, which stays locked until configured.
     var wasCreated = false
     var triedOtherNickname = false
@@ -395,6 +398,7 @@ extension XMPPSession {
     }
 
     func clearRooms() {
+        lock.withLock { $0.pendingIntroductions = [:] }
         cancelAllRejoins()
         rosterReset()
         publish(rooms, under: roomsPublishLock, after: { gone in
@@ -863,6 +867,7 @@ extension XMPPSession {
                 $0?.wasCreated = false
                 $0?.canRetry = false
                 $0?.isSyncing = false
+                $0?.membersListed = false
                 $0?.catchUpReachedEnd = false
                 $0?.joinedAt = Date()
             }
@@ -958,7 +963,7 @@ extension XMPPSession {
         retractBookmark(room)
     }
 
-    private func didJoin(_ room: JID) {
+    func didJoin(_ room: JID) {
         guard let group = try? database.groupChat(room) else { return }
         if policy.readsRoomHistory {
             didJoinToRead(group)
@@ -969,7 +974,16 @@ extension XMPPSession {
 
     private func didJoinToRead(_ group: GroupChat) {
         let lists = Self.listsToFetch(isNonAnonymous: group.isNonAnonymous, isOwnerOrAdmin: roomStatus(group.jid)?.isOwnerOrAdmin ?? false)
-        if !lists.isEmpty { fetchMembers(group.jid, lists: lists) }
+        let room = group.jid
+        let attempt = lock.withLock { $0.attempt }
+        // A private group shows addresses, so it always has lists to fetch.
+        if !lists.isEmpty {
+            fetchMembers(room, lists: lists) { [weak self] in
+                guard let self, self.isConnected, self.lock.withLock({ $0.attempt }) == attempt else { return }
+                self.updateRoom(room) { $0?.membersListed = true }
+                self.introduceDevice(to: room)
+            }
+        }
         catchUpRoom(group)
     }
 
@@ -1433,6 +1447,7 @@ extension XMPPSession {
             $0?.catchUpReachedEnd = reachedEnd
         }
         sendDeferred(in: room)
+        introduceDevice(to: room)
         guard let status = synced,
               let group = try? database.groupChat(room) else { return }
         let unconfirmed = (try? database.unconfirmedOutgoing(
@@ -1497,6 +1512,7 @@ extension XMPPSession {
                     encryption = .omemo
                     device = (id, trust)
                 case .ignore, .ownCopy:
+                    if real == account { confirmIntroduction(stanza, in: room) }
                     // Our own message coming back; note the room's id for it.
                     if let inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: source) {
                         flushArchive(query: query, endsPage: false)
@@ -1514,6 +1530,8 @@ extension XMPPSession {
                     encryption = .omemoUndecryptable
                 }
             } else {
+                // Keys alone (a device introducing itself) have nothing to show, with or without a sender.
+                if OMEMOEncryption.isKeyTransport(stanza), stanza.body?.isEmpty ?? true { return }
                 // Without the sender's address there's no session to use.
                 let archived = if case .archive = source { true } else { false }
                 DiagLog.notice(.omemo, "Couldn't decrypt", .value("error", DecryptFailure.noSender), .bool("archived", archived), .bool("nonAnonymous", context.isNonAnonymous))
@@ -1581,6 +1599,78 @@ extension XMPPSession {
                 autoDownload(attachment)
             }
         }
+    }
+
+    /// Tells the members of a private group that this device exists, with an
+    /// OMEMO message that holds keys and nothing to show. Conversations only
+    /// learns of a new device of ours from a presence subscription, so
+    /// members who don't have us as a contact go on encrypting to our older
+    /// devices, and this one can't read the group until it has written there.
+    /// A message with keys for it makes their client set up a session and
+    /// include this device from then on; the room archives it, so members who
+    /// are offline get it too.
+    ///
+    /// Kept per member, once the room has echoed the message back, so a
+    /// join without a connection, a member without keys, and members who
+    /// join later are each tried again at the next join.
+    func introduceDevice(to room: JID) {
+        guard policy.publishesOMEMOKeys, omemo.module.isReady,
+              let status = roomStatus(room), status.isJoined, !status.isSyncing, status.membersListed,
+              let group = try? database.groupChat(room), group.isPrivate,
+              (try? database.conversation(id: group.conversationId))?.isEncrypted == true else { return }
+        let device = omemo.deviceId
+        guard !introductionIsPending(in: room), !membersToIntroduce(in: room, device: device).isEmpty else { return }
+        let attempt = lock.withLock { $0.attempt }
+        // On the room's send queue, as encrypting waits on the network, and so
+        // that two joins in a row find the first one's pending introduction.
+        sendQueue(for: room).async { [self] in
+            guard isConnected, lock.withLock({ $0.attempt }) == attempt, !introductionIsPending(in: room) else { return }
+            let members = membersToIntroduce(in: room, device: device)
+            guard !members.isEmpty else { return }
+            let id = OutboundStanza.newId()
+            switch omemo.keyTransport(OutboundStanza.keyTransport(to: room, id: id), for: members.sorted()) {
+            case .success(let (stanza, reached)):
+                lock.withLock { $0.pendingIntroductions[room] = PendingIntroduction(id: id, device: device, members: reached) }
+                client.context.writer.write(stanza) { [self] result in
+                    guard case .failure = result else { return }
+                    lock.withLock { state in
+                        if state.pendingIntroductions[room]?.id == id { state.pendingIntroductions[room] = nil }
+                    }
+                }
+            case .failure(let error):
+                // Safe to only log: nothing the user sent is lost and there is
+                // nothing for them to do about it; the members not reached are
+                // tried again at the next join.
+                DiagLog.error(.omemo, "Device not introduced to a group", .id("room", Redacted.id(room.description)), .value("reason", EncryptFailure(error)))
+            }
+        }
+    }
+
+    private func membersToIntroduce(in room: JID, device: UInt32) -> Set<JID> {
+        Set(groupRecipients(room)).subtracting(database.introducedMembers(in: room, device: device))
+    }
+
+    private func introductionIsPending(in room: JID) -> Bool {
+        lock.withLock { $0.pendingIntroductions[room] != nil }
+    }
+
+    /// The room reflecting our introduction back means it took it in and
+    /// archived it, which a successful write to the socket doesn't.
+    private func confirmIntroduction(_ stanza: Martin.Message, in room: JID) {
+        let ids = [stanza.originId, stanza.id].compactMap { $0 }
+        let confirmed = lock.withLock { state -> PendingIntroduction? in
+            guard let pending = state.pendingIntroductions[room], ids.contains(pending.id) else { return nil }
+            state.pendingIntroductions[room] = nil
+            return pending
+        }
+        guard let confirmed else { return }
+        do {
+            try database.markIntroduced(confirmed.members, in: room, device: confirmed.device)
+        } catch {
+            DiagLog.error(.omemo, "Device introduction not kept", .error(error))
+            return
+        }
+        DiagLog.info(.omemo, "Device introduced to a group", .id("room", Redacted.id(room.description)))
     }
 
     /// Who an encrypted group message goes to, besides our own devices.
@@ -2330,4 +2420,11 @@ extension XMPPSession {
     func submitOwnerForm(_ fields: [String: [String]], to room: JID) async throws {
         _ = try await roomRequest(OutboundStanza.configuration(fields, of: room))
     }
+}
+
+/// What `XMPPSession.introduceDevice` has written and not yet seen echoed.
+struct PendingIntroduction: Sendable {
+    var id: String
+    var device: UInt32
+    var members: Set<JID>
 }

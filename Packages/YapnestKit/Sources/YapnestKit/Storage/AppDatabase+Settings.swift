@@ -20,6 +20,9 @@ extension AppDatabase {
         /// see `OMEMOStore.findOrMakeIdentity`. Taken off the account's device
         /// list once connected.
         case omemoReplacedDeviceIds
+        /// The members of private groups this install's OMEMO device has
+        /// introduced itself to, as JSON: see `introducedMembers`.
+        case introducedGroups
         /// This device's APNs token, hex, and whether it's a development
         /// build's ("sandbox") or not ("production").
         case pushToken
@@ -125,6 +128,37 @@ extension AppDatabase {
             try db.execute(sql: "INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", arguments: [key.rawValue, value])
         } else {
             try db.execute(sql: "DELETE FROM setting WHERE key = ?", arguments: [key.rawValue])
+        }
+    }
+
+    private struct Introductions: Codable {
+        var device: UInt32
+        var rooms: [String: [String]]
+    }
+
+    /// The members of `room` that OMEMO device `device` has introduced itself
+    /// to. Another device id, from a fresh install or a new identity, has
+    /// introduced itself to none.
+    public func introducedMembers(in room: JID, device: UInt32) -> Set<JID> {
+        (try? reader.read { try Self.introducedMembers($0, in: room, device: device) }) ?? []
+    }
+
+    private static func introducedMembers(_ db: Database, in room: JID, device: UInt32) throws -> Set<JID> {
+        guard let kept = try keptIntroductions(db), kept.device == device else { return [] }
+        return Set((kept.rooms[room.description] ?? []).compactMap(JID.init(_:)))
+    }
+
+    /// A value of another shape reads as nothing introduced.
+    private static func keptIntroductions(_ db: Database) throws -> Introductions? {
+        try setting(db, .introducedGroups).flatMap { try? JSONDecoder().decode(Introductions.self, from: Data($0.utf8)) }
+    }
+
+    /// In one transaction: groups finish joining on queues of their own.
+    public func markIntroduced(_ members: Set<JID>, in room: JID, device: UInt32) throws {
+        try writer.write { db in
+            var kept = try Self.keptIntroductions(db).flatMap { $0.device == device ? $0 : nil } ?? Introductions(device: device, rooms: [:])
+            kept.rooms[room.description] = Set(kept.rooms[room.description] ?? []).union(members.map(\.description)).sorted()
+            try Self.setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
         }
     }
 

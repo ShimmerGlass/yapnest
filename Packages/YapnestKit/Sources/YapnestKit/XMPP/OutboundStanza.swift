@@ -102,6 +102,12 @@ enum OutboundStanza {
         if let metadata = metadata() { message.addChild(metadata.sharing(url: url)) }
     }
 
+    /// A body-less message into a group, for OMEMO to fill with keys alone. The
+    /// store hint is added by the encryption, so that the room archives it.
+    static func keyTransport(to room: JID, id: String) -> Martin.Message {
+        base(to: .room(room, status: nil), id: id)
+    }
+
     /// XEP-0444: the complete set of our reactions to message `target`. An
     /// empty set removes them.
     static func reactions(_ emojis: Set<String>, to route: Route, target: String, id: String) -> Martin.Message {

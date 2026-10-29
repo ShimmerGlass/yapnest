@@ -3,9 +3,9 @@ import Testing
 @testable import YapnestKit
 
 /// A session that never connects, for what runs against its database and API.
-func makeSession(_ jid: JID, database: AppDatabase? = nil) throws -> XMPPSession {
+func makeSession(_ jid: JID, database: AppDatabase? = nil, mode: XMPPSession.Mode = .app) throws -> XMPPSession {
     let database = try database ?? AppDatabase.inMemory()
-    return try XMPPSession(credentials: .init(jid: jid, password: "x"), resource: "t", database: database, identityKeys: testIdentityKeys(for: database))
+    return try XMPPSession(credentials: .init(jid: jid, password: "x"), resource: "t", database: database, mode: mode, identityKeys: testIdentityKeys(for: database))
 }
 
 extension LiveServer {

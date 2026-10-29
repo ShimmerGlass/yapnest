@@ -278,6 +278,9 @@ public final class XMPPSession: @unchecked Sendable {
         var catchUpInterrupted = false
         /// Rooms whose catch-up was cut off the same way.
         var interruptedRooms: Set<JID> = []
+        /// The introduction of this device written to a room and not yet
+        /// echoed back, with the members it holds keys for.
+        var pendingIntroductions: [JID: PendingIntroduction] = [:]
         /// Why we're tearing the connection down ourselves, which Martin
         /// would otherwise report as a plain disconnect.
         var pendingFailure: Failure?

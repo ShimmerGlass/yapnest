@@ -11,6 +11,35 @@ private let room = YapnestKit.JID("cake@rooms.example.org")!
 /// The device the room says Bob's message came from.
 private let named: Int32 = 777
 
+/// A session from `builder` to `owner`'s device, started from a bundle of the
+/// keys `owner` would publish. Returns the owner's address.
+@discardableResult
+func startSession(from builder: OMEMOEncryption, to owner: OMEMOEncryption, named name: String, keyId: UInt32 = 4242) throws -> SignalAddress {
+    let context = owner.module.signalContext, storage = owner.module.storage
+    let pair = try #require(storage.identityKeyStore.keyPair())
+    let signed = try #require(context.generateSignedPreKey(withIdentity: pair, signedPreKeyId: keyId))
+    let signedData = try #require(signed.serializedData), signedPublic = try #require(signed.publicKeyData)
+    _ = storage.signedPreKeyStore.storeSignedPreKey(signedData, withId: signed.preKeyId)
+    let preKey = try #require(context.generatePreKeys(withStartingPreKeyId: keyId, count: 1).first)
+    let preKeyData = try #require(preKey.serializedData), preKeyPublic = try #require(preKey.serializedPublicKey)
+    _ = storage.preKeyStore.storePreKey(preKeyData, withId: preKey.preKeyId)
+    let identityPublic = try #require(pair.publicKey)
+    let preKeyElement = Element(name: "preKeyPublic", cdata: preKeyPublic.base64EncodedString(), attributes: ["preKeyId": String(preKey.preKeyId)])
+    let bundle = Element(name: "bundle", xmlns: OMEMOModule.XMLNS, children: [
+        Element(name: "signedPreKeyPublic", cdata: signedPublic.base64EncodedString(), attributes: ["signedPreKeyId": String(signed.preKeyId)]),
+        Element(name: "signedPreKeySignature", cdata: signed.signature.base64EncodedString()),
+        Element(name: "identityKey", cdata: identityPublic.base64EncodedString()),
+        Element(name: "prekeys", children: [preKeyElement]),
+    ])
+    let address = SignalAddress(name: name, deviceId: Int32(bitPattern: owner.deviceId))
+    let parsedPreKey = try #require(OMEMOModule.OMEMOPreKey(from: preKeyElement))
+    let parsedBundle = try #require(OMEMOModule.OMEMOBundle(from: bundle))
+    let keys = try #require(SignalPreKeyBundle(registrationId: 0, deviceId: address.deviceId, preKey: parsedPreKey, bundle: parsedBundle))
+    let sessionBuilder = try #require(SignalSessionBuilder(withAddress: address, andContext: builder.module.signalContext))
+    #expect(sessionBuilder.processPreKeyBundle(bundle: keys))
+    return address
+}
+
 /// A device of another account that writes to ours for real, so that what
 /// decoding a prekey message stores can be seen.
 final class OtherDevice {
@@ -33,29 +62,9 @@ final class OtherDevice {
 
     /// The `<encrypted>` element of `body`, for `recipient`'s device alone,
     /// from a session started with a bundle of that device's keys.
-    func encrypt(_ body: String, to recipient: XMPPSession) throws -> Element {
-        let context = recipient.omemo.module.signalContext, storage = recipient.omemo.module.storage
-        let pair = try #require(storage.identityKeyStore.keyPair())
-        let signed = try #require(context.generateSignedPreKey(withIdentity: pair, signedPreKeyId: 4242))
-        let signedData = try #require(signed.serializedData), signedPublic = try #require(signed.publicKeyData)
-        _ = storage.signedPreKeyStore.storeSignedPreKey(signedData, withId: signed.preKeyId)
-        let preKey = try #require(context.generatePreKeys(withStartingPreKeyId: 4242, count: 1).first)
-        let preKeyData = try #require(preKey.serializedData), preKeyPublic = try #require(preKey.serializedPublicKey)
-        _ = storage.preKeyStore.storePreKey(preKeyData, withId: preKey.preKeyId)
-        let identityPublic = try #require(pair.publicKey)
-        let preKeyElement = Element(name: "preKeyPublic", cdata: preKeyPublic.base64EncodedString(), attributes: ["preKeyId": String(preKey.preKeyId)])
-        let bundle = Element(name: "bundle", xmlns: OMEMOModule.XMLNS, children: [
-            Element(name: "signedPreKeyPublic", cdata: signedPublic.base64EncodedString(), attributes: ["signedPreKeyId": String(signed.preKeyId)]),
-            Element(name: "signedPreKeySignature", cdata: signed.signature.base64EncodedString()),
-            Element(name: "identityKey", cdata: identityPublic.base64EncodedString()),
-            Element(name: "prekeys", children: [preKeyElement]),
-        ])
-        let address = SignalAddress(name: recipient.account.description, deviceId: Int32(bitPattern: recipient.omemo.deviceId))
-        let parsedPreKey = try #require(OMEMOModule.OMEMOPreKey(from: preKeyElement))
-        let parsedBundle = try #require(OMEMOModule.OMEMOBundle(from: bundle))
-        let keys = try #require(SignalPreKeyBundle(registrationId: 0, deviceId: address.deviceId, preKey: parsedPreKey, bundle: parsedBundle))
-        let builder = try #require(SignalSessionBuilder(withAddress: address, andContext: omemo.module.signalContext))
-        #expect(builder.processPreKeyBundle(bundle: keys))
+    /// Without a `body`, keys only, as a key-transport message has them.
+    func encrypt(_ body: String?, to recipient: XMPPSession) throws -> Element {
+        let address = try startSession(from: omemo, to: recipient.omemo, named: recipient.account.description)
         let message = Martin.Message()
         message.body = body
         var encrypted: Element?

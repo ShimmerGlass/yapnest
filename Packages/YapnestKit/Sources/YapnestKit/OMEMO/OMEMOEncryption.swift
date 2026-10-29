@@ -131,8 +131,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         if claim == .room, let device, status == nil, !isLocalDevice(sender, device), carriesPreKey(for: stanza) {
             // One with no payload only sets up a session, which would store
             // the key all the same, and has nothing to show once vouched for.
-            let payload = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "payload")
-            return payload == nil ? .ignore : .unvouched(device: device)
+            return Self.isKeyTransport(stanza) ? .ignore : .unvouched(device: device)
         }
         // Whatever becomes of the message, it shows the device exists and is
         // in use. Recorded on the way out, after decoding, which is where a
@@ -329,6 +328,31 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// Blocks while fetching device lists and bundles; never call it on a
     /// queue those callbacks need (Martin's or the main queue).
     func encrypt(_ stanza: Martin.Message, for recipients: [JID]) -> Result<(Martin.Message, OMEMODevice.Trust), EncryptError> {
+        encrypt(stanza, for: recipients, skippingUnreachable: false).map { ($0.message, $0.trust) }
+    }
+
+    /// Whether `stanza` has an `<encrypted>` element with keys and no
+    /// payload: it sets up sessions and has nothing to show.
+    static func isKeyTransport(_ stanza: Martin.Message) -> Bool {
+        guard let encrypted = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) else { return false }
+        return encrypted.firstChild(name: "payload") == nil
+    }
+
+    /// Encrypts the body-less `stanza` into keys alone for the devices of
+    /// `recipients` that can be reached and our own, by the rules of
+    /// `encrypt(_:for:)`. A recipient with no device to encrypt to is left
+    /// out, as the others are still to be reached; only when none can be
+    /// does it fail. `reached` is who the message holds a key for.
+    func keyTransport(_ stanza: Martin.Message, for recipients: [JID]) -> Result<(message: Martin.Message, reached: Set<JID>), EncryptError> {
+        encrypt(stanza, for: recipients, skippingUnreachable: true).map { encrypted in
+            // MartinOMEMO's `encode` puts the fallback text on every message
+            // it encrypts, which would show as one here.
+            encrypted.message.body = nil
+            return (encrypted.message, encrypted.reached)
+        }
+    }
+
+    private func encrypt(_ stanza: Martin.Message, for recipients: [JID], skippingUnreachable: Bool) -> Result<(message: Martin.Message, trust: OMEMODevice.Trust, reached: Set<JID>), EncryptError> {
         dispatchPrecondition(condition: .notOnQueue(.main))
         let done = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var fetched: [SignalAddress]?
@@ -344,12 +368,22 @@ final class OMEMOEncryption: @unchecked Sendable {
         }
 
         var usable: [SignalAddress] = []
+        var devicesOf: [JID: [SignalAddress]] = [:]
+        var reached: [JID] = []
+        var firstFailure: EncryptError?
         var skipped = 0
         var allVerified = true
+        // The failure to return, or nil for a recipient that is left out.
+        func unreachable(_ failure: EncryptError) -> EncryptError? {
+            guard skippingUnreachable else { return failure }
+            firstFailure = firstFailure ?? failure
+            return nil
+        }
         for recipient in recipients {
             let devices = Set(fetched.filter { $0.name == recipient.description })
             guard !devices.isEmpty else {
-                return .failure(Self.missingDevices(of: recipient, listError: module.deviceListError(for: recipient.martin), bundleError: module.bundleError(for: recipient.martin)))
+                if let failure = unreachable(Self.missingDevices(of: recipient, listError: module.deviceListError(for: recipient.martin), bundleError: module.bundleError(for: recipient.martin))) { return .failure(failure) }
+                continue
             }
             let identities = Dictionary(store.identities(forName: recipient.description).map { ($0.address.deviceId, $0.status) }, uniquingKeysWith: { a, _ in a })
             let trustedAll = devices.filter { address in
@@ -361,18 +395,35 @@ final class OMEMOEncryption: @unchecked Sendable {
             let trusted = trustedAll.filter { current.contains($0.deviceId) }
             guard !trusted.isEmpty else {
                 let hasSessions = devices.contains { store.containsSessionRecord(forAddress: $0) }
+                let failure: EncryptError
                 if !hasSessions, let error = module.bundleError(for: recipient.martin) {
-                    return .failure(.fetchFailed(recipient, ServerError(error)))
+                    failure = .fetchFailed(recipient, ServerError(error))
+                } else {
+                    failure = hasSessions ? .noTrustedDevices(recipient) : .setupFailed(recipient)
                 }
-                return .failure(hasSessions ? .noTrustedDevices(recipient) : .setupFailed(recipient))
+                if let failure = unreachable(failure) { return .failure(failure) }
+                continue
             }
             skipped += devices.count - trusted.count
             usable += trusted
+            devicesOf[recipient] = Array(trusted)
+            reached.append(recipient)
             allVerified = allVerified && trusted.allSatisfy { identities[$0.deviceId]?.trust == .verified }
         }
+        if skippingUnreachable, reached.isEmpty { return .failure(firstFailure ?? .setupFailed(account)) }
         let own = store.ownDevicesToEncryptTo().map { SignalAddress(name: account.description, deviceId: $0) }
-        DiagLog.info(.omemo, "Encrypting", .int("recipients", recipients.count), .int("recipientDevices", usable.count), .int("ownDevices", own.count), .int("skipped", skipped))
-        return encode(stanza, for: usable + own, verified: allVerified, checking: recipients)
+        DiagLog.info(.omemo, "Encrypting", .int("recipients", reached.count), .int("recipientDevices", usable.count), .int("ownDevices", own.count), .int("skipped", skipped))
+        // MartinOMEMO drops a device it fails to encrypt for, so a key
+        // transport counts who got a key rather than fail for one session.
+        let result = encode(stanza, for: usable + own, verified: allVerified, checking: skippingUnreachable ? [] : reached)
+        guard skippingUnreachable else { return result.map { ($0.0, $0.1, Set(reached)) } }
+        return result.flatMap { message, trust in
+            let keys = Set(message.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
+                .filterChildren(name: "key", xmlns: nil).compactMap { $0.getAttribute("rid") } ?? [])
+            let got = Set(reached.filter { recipient in devicesOf[recipient]?.contains { keys.contains($0.deviceId.omemoId) } == true })
+            guard !got.isEmpty else { return .failure(firstFailure ?? .setupFailed(reached.first ?? account)) }
+            return .success((message, trust, got))
+        }
     }
 
     // MARK: Calls
@@ -474,7 +525,8 @@ final class OMEMOEncryption: @unchecked Sendable {
         nonisolated(unsafe) var encoded: EncryptionResult<Martin.Message, SignalError> = .failure(.unknown)
         encodeLock.withLock {
             // `addresses` has our own devices already; MartinOMEMO would add the inactive ones too.
-            module.encode(message: stanza, forAddresses: addresses, forSelf: false) { encoded = $0 }
+            // The store hint is the one `_encode` puts on every message it encrypts.
+            module.encode(message: stanza, forAddresses: addresses, withStoreHint: false, forSelf: false) { encoded = $0 }
         }
         guard case .successMessage(let message, _) = encoded else { return .failure(.setupFailed(recipients.first ?? account)) }
 
