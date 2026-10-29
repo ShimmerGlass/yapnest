@@ -24,6 +24,26 @@ struct IdentityKeychainTests {
         #expect(try store.load() == nil)
     }
 
+    /// An older build once moved its key over the one contacts knew, and
+    /// nothing could bring that device back.
+    @Test func aReplacedIdentityIsKeptAside() throws {
+        defer { KeychainIdentityKeyStore.deleteAll() }
+        let first = StoredIdentity(registrationId: 1, keyPair: Data([1]))
+        try store.save(first)
+        // Saving the same one again keeps nothing aside.
+        try store.save(first)
+        #expect(try store.superseded() == [])
+
+        let identities = (2...5).map { StoredIdentity(registrationId: UInt32($0), keyPair: Data([UInt8($0)])) }
+        for identity in identities { try store.save(identity) }
+        #expect(try store.load() == identities.last)
+        // Newest first, three at most.
+        #expect(try store.superseded().map(\.registrationId) == [4, 3, 2])
+
+        KeychainIdentityKeyStore.deleteAll()
+        #expect(try store.superseded() == [])
+    }
+
     @Test func staysOnThisDeviceAndOpensAfterTheFirstUnlock() throws {
         defer { KeychainIdentityKeyStore.deleteAll() }
         try store.save(StoredIdentity(registrationId: 1, keyPair: Data([1])))

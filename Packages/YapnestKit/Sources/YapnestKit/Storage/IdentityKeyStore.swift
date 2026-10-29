@@ -68,7 +68,12 @@ public struct KeychainIdentityKeyStore: IdentityKeyStore {
         return try JSONDecoder().decode(StoredIdentity.self, from: data)
     }
 
+    /// Replacing a different identity first keeps it aside (`superseded`):
+    /// an older build installed over a newer one once moved its own key over
+    /// the one contacts knew, and with no copy left the device could never
+    /// read their messages again.
     public func save(_ identity: StoredIdentity) throws {
+        if let current = try load(), current != identity { try keepAside(current) }
         let data = try JSONEncoder().encode(identity)
         let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecSuccess { return }
@@ -81,7 +86,40 @@ public struct KeychainIdentityKeyStore: IdentityKeyStore {
         guard added == errSecSuccess else { throw KeychainError(status: added) }
     }
 
-    /// Every account's identity, when signing out.
+    /// How many replaced identities are kept, newest first.
+    static let supersededLimit = 3
+
+    private var supersededAccount: String { "\(account.description)#superseded" }
+
+    /// Identities this account's device had before, newest first, kept so a
+    /// device replaced by mistake can be put back.
+    public func superseded() throws -> [StoredIdentity] {
+        var query = Self.serviceQuery
+        query[kSecAttrAccount as String] = supersededAccount
+        query[kSecReturnData as String] = true
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess, let data = result as? Data else { throw KeychainError(status: status) }
+        return try JSONDecoder().decode([StoredIdentity].self, from: data)
+    }
+
+    private func keepAside(_ identity: StoredIdentity) throws {
+        let kept = try Array(([identity] + superseded().filter { $0 != identity }).prefix(Self.supersededLimit))
+        let data = try JSONEncoder().encode(kept)
+        var query = Self.serviceQuery
+        query[kSecAttrAccount as String] = supersededAccount
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecSuccess { return }
+        guard status == errSecItemNotFound else { throw KeychainError(status: status) }
+        query[kSecValueData as String] = data
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let added = SecItemAdd(query as CFDictionary, nil)
+        guard added == errSecSuccess else { throw KeychainError(status: added) }
+        DiagLog.notice(.omemo, "Replaced identity kept aside", .int("kept", kept.count))
+    }
+
+    /// Every account's identity, and those kept aside, when signing out.
     public static func deleteAll() {
         SecItemDelete(serviceQuery as CFDictionary)
     }
