@@ -222,6 +222,11 @@ final class OMEMOEncryption: @unchecked Sendable {
         retirement.withLock { $0.isPending = !left.isEmpty }
     }
 
+    /// Whether `stanza` carries a key for this device at all.
+    func hasKeyForThisDevice(_ stanza: Martin.Message) -> Bool {
+        !keysForUs(in: stanza).isEmpty
+    }
+
     /// The keys in `stanza` for this device. Martin tries each of them.
     private func keysForUs(in stanza: Martin.Message) -> [Element] {
         let ours = String(deviceId)

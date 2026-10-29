@@ -331,6 +331,66 @@ struct DeviceIntroductionTests {
         #expect(h.introduced == [carol])
     }
 
+    // MARK: Introducing again
+
+    /// Bob in the room with his real address, and a message from his phone
+    /// that has keys for other devices but none for this one.
+    private func messageWithNoKeyForUs(from h: IntroductionHarness, id: String, history: Bool = false) {
+        h.session.updateRoom(room) { $0?.isSyncing = false }
+        h.session.roomPresence(parseStanza("""
+            <presence from='\(room)/Bob' to='me@example.org/t'><x xmlns='http://jabber.org/protocol/muc#user'>\
+            <item affiliation='member' role='participant' jid='bob@example.org/phone'/></x></presence>
+            """), room: room)
+        h.session.applyOccupantChanges()
+        let stanza: Martin.Message = parseStanza("""
+            <message from='\(room)/Bob' type='groupchat' id='\(id)'><body>🔒</body>\
+            <encrypted xmlns='\(NS.omemoLegacy)'><header sid='\(h.bobsPhone.device.omemoId)'>\
+            <key rid='12345'>AAAA</key><iv>AAAAAAAAAAAAAAAA</iv></header><payload>AAAA</payload></encrypted></message>
+            """)
+        if history { stanza.addChild(Element(name: "delay", attributes: ["xmlns": "urn:xmpp:delay", "stamp": "2026-10-01T10:00:00Z"])) }
+        h.session.handleRoomStanza(stanza, source: .live)
+        h.session.drainSendQueue(room)
+    }
+
+    /// Introduced and echoed, yet Bob's client never took the device in, as
+    /// when he was away and his catch-up didn't reach back to it: his
+    /// messages kept coming with no key for it.
+    @Test func aMembersMessageWithNoKeyForThisDeviceIntroducesItAgain() async throws {
+        let h = try await IntroductionHarness()
+        await h.join()
+        #expect(h.introductions.count == 1)
+
+        messageWithNoKeyForUs(from: h, id: "m1")
+        #expect(h.introductions.count == 2)
+        #expect(h.keyIds(of: h.introductions.last) == [h.bobsPhone.device.omemoId])
+        #expect(h.introduced == [], "marked again only once the room echoes it")
+        h.reflectPending()
+        #expect(h.introduced == [bob])
+    }
+
+    @Test func aMemberIsIntroducedAgainAtMostEveryInterval() async throws {
+        let h = try await IntroductionHarness()
+        await h.join()
+        messageWithNoKeyForUs(from: h, id: "m1")
+        h.reflectPending()
+        messageWithNoKeyForUs(from: h, id: "m2")
+        #expect(h.introductions.count == 2)
+
+        // Later than the interval, he gets another.
+        h.session.lock.withLock { state in
+            for key in state.reintroductions.keys { state.reintroductions[key]! -= XMPPSession.reintroductionInterval + 1 }
+        }
+        messageWithNoKeyForUs(from: h, id: "m3")
+        #expect(h.introductions.count == 3)
+    }
+
+    @Test func anOldMessageWithNoKeyForThisDeviceIntroducesNothing() async throws {
+        let h = try await IntroductionHarness()
+        await h.join()
+        messageWithNoKeyForUs(from: h, id: "m1", history: true)
+        #expect(h.introductions.count == 1, "sent before this device existed, it says nothing of now")
+    }
+
     // MARK: Receiving
 
     private func transport(from sender: String, id: String, by device: OtherDevice, in h: IntroductionHarness) throws {

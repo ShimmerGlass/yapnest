@@ -1536,6 +1536,11 @@ extension XMPPSession {
                 case .failed(let reason):
                     logger.warning("Couldn't decrypt group message \(stanza.id ?? "?", privacy: .private): \(reason, privacy: .private)")
                     encryption = .omemoUndecryptable
+                    // Only what is written now: an archived or replayed one may
+                    // predate this device.
+                    if source == .live, !isHistory, !Self.isDelayed(stanza), real != account, !omemo.hasKeyForThisDevice(stanza) {
+                        introduceAgain(real, in: room)
+                    }
                 case .unvouched(let id):
                     // As it came, before the placeholder's body goes in.
                     held = HeldStanza(sender: real, device: id, stanza: stanza.element.stringValue, source: source, isHistory: isHistory)
@@ -1656,6 +1661,33 @@ extension XMPPSession {
                 DiagLog.error(.omemo, "Device not introduced to a group", .id("room", Redacted.id(room.description)), .value("reason", EncryptFailure(error)))
             }
         }
+    }
+
+    /// How long before the same member of a room is introduced to again.
+    static let reintroductionInterval: TimeInterval = 12 * 60 * 60
+
+    /// A member's message with no key for this device means their client
+    /// doesn't know it. The room echoing our introduction back only showed
+    /// the room got it; a member who was away and whose catch-up didn't reach
+    /// it never did, and kept writing to our older devices. Gajim, Monocles
+    /// and Conversations all take a device from a key transport, so the
+    /// member gets one again, at most every `reintroductionInterval`.
+    func introduceAgain(_ member: JID, in room: JID, now: Date = Date()) {
+        let key = "\(room)|\(member)"
+        let due = lock.withLock { state -> Bool in
+            if let last = state.reintroductions[key], now.timeIntervalSince(last) < Self.reintroductionInterval { return false }
+            state.reintroductions[key] = now
+            return true
+        }
+        guard due else { return }
+        do {
+            try database.forgetIntroduced(member, in: room, device: omemo.deviceId)
+        } catch {
+            DiagLog.error(.omemo, "Device introduction not kept", .error(error))
+            return
+        }
+        DiagLog.notice(.omemo, "Device introduced to a member again", .id("room", Redacted.id(room.description)))
+        introduceDevice(to: room)
     }
 
     private func membersToIntroduce(in room: JID, device: UInt32) -> Set<JID> {

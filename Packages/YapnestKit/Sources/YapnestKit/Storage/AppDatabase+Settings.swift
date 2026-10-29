@@ -162,6 +162,17 @@ extension AppDatabase {
         }
     }
 
+    /// Takes `member` off the members of `room` that `device` has introduced
+    /// itself to, so the next introduction includes them again.
+    public func forgetIntroduced(_ member: JID, in room: JID, device: UInt32) throws {
+        try writer.write { db in
+            guard var kept = try Self.keptIntroductions(db), kept.device == device,
+                  let members = kept.rooms[room.description], members.contains(member.description) else { return }
+            kept.rooms[room.description] = members.filter { $0 != member.description }
+            try Self.setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
+        }
+    }
+
     /// A setting that's on or off, `defaultValue` until set.
     public func flag(_ key: SettingKey, default defaultValue: Bool) -> Bool {
         (try? reader.read { try Self.flag($0, key, default: defaultValue) }) ?? defaultValue

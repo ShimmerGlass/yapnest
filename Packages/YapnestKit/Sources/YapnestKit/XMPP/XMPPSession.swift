@@ -281,6 +281,8 @@ public final class XMPPSession: @unchecked Sendable {
         /// The introduction of this device written to a room and not yet
         /// echoed back, with the members it holds keys for.
         var pendingIntroductions: [JID: PendingIntroduction] = [:]
+        /// When a member was last introduced to again, by room and member.
+        var reintroductions: [String: Date] = [:]
         /// Why we're tearing the connection down ourselves, which Martin
         /// would otherwise report as a plain disconnect.
         var pendingFailure: Failure?
