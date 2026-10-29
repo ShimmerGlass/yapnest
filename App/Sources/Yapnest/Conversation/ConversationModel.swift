@@ -201,6 +201,8 @@ final class ConversationModel {
     @ObservationIgnored private var textCache: [Int64: CachedText] = [:]
     @ObservationIgnored private let tasks = TaskBag()
     @ObservationIgnored private var started = false
+    /// The scroll position, for the backdrop's parallax alone.
+    @ObservationIgnored let backdropScroll: BackdropScroll
     /// Started from a tap in the chat list, before the screen is pushed.
     /// The opening scroll's tries are for the list, so they wait for it.
     @ObservationIgnored private var awaitsScreen = false
@@ -416,6 +418,7 @@ final class ConversationModel {
         self.openingMessage = openingAt
         self.isFlipped = isFlipped
         self.position = ScrollPosition(edge: isFlipped ? .top : .bottom)
+        backdropScroll = BackdropScroll(isFlipped: isFlipped)
     }
 
     deinit {

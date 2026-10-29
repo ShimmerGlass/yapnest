@@ -1,10 +1,54 @@
 import SwiftUI
 
 /// Faint low-poly Yapnest birds and leaves of a few kinds in a grey mauve
-/// behind a conversation's messages. They stay put while the messages scroll
-/// over them, so the list draws nothing more as it moves, and the pattern is
-/// one tile laid out again and again.
+/// behind a conversation's messages, one tile laid out again and again. It
+/// follows the messages at a quarter of their speed. It's drawn once, a tile
+/// taller than the screen, and only moved, never drawn again, as they scroll:
+/// the pattern repeats every tile, so the shift wraps around without a seam.
 struct ConversationBackdrop: View {
+    let scroll: BackdropScroll
+
+    var body: some View {
+        GeometryReader { proxy in
+            BackdropPattern()
+                .frame(width: proxy.size.width, height: proxy.size.height + BackdropTile.side)
+                .modifier(BackdropShift(scroll: scroll))
+        }
+        .clipped()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// How far the messages have scrolled, apart from the conversation's model:
+/// it changes every frame of a scroll, and only the backdrop's offset reads it.
+@MainActor
+@Observable
+final class BackdropScroll {
+    var offset: CGFloat = 0
+    /// Flipped, scrolling back moves the messages down the screen.
+    let isFlipped: Bool
+
+    init(isFlipped: Bool) {
+        self.isFlipped = isFlipped
+    }
+}
+
+/// Reads the scroll in a view of its own, so a scroll re-evaluates this
+/// offset only, and the pattern above it isn't drawn again.
+private struct BackdropShift: ViewModifier {
+    let scroll: BackdropScroll
+    static let speed: CGFloat = 0.25
+
+    func body(content: Content) -> some View {
+        let side = BackdropTile.side
+        let moved = scroll.offset * Self.speed * (scroll.isFlipped ? 1 : -1)
+        let phase = moved - (moved / side).rounded(.down) * side
+        content.offset(y: phase - side)
+    }
+}
+
+private struct BackdropPattern: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -26,8 +70,6 @@ struct ConversationBackdrop: View {
                 y += side
             }
         }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }
 

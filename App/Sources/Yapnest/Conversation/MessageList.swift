@@ -102,6 +102,9 @@ struct MessageList: View {
         .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
             model.geometryChanged(geometry)
         }
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
+            model.backdropScroll.offset = offset
+        }
         .onScrollGeometryChange(for: Bool.self) { ConversationModel.isAway($0, flipped: flipped) } action: { _, away in
             model.awayFromBottomChanged(away)
         }
