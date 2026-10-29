@@ -11,6 +11,9 @@ struct ConversationView: View {
     /// What the caller already knows of the chat, so the header starts out
     /// right instead of showing the bare address until the database answers.
     var initial: ChatListItem?
+    /// The chat list's chats started on a tap, of which this screen takes
+    /// its own if there is one.
+    var prepared: PreparedChats?
 
     @Environment(AppModel.self) private var model
     /// SwiftUI makes this struct again whenever the parent updates, and
@@ -39,7 +42,7 @@ struct ConversationView: View {
     /// A contact request is being answered.
     @State private var answering = ServerAction()
 
-    private var screen: ConversationScreen { holder.screen(session: session, peer: peer, openingAt: openingAt, initial: initial) }
+    private var screen: ConversationScreen { holder.screen(session: session, peer: peer, openingAt: openingAt, initial: initial, prepared: prepared) }
     private var conversation: ConversationModel { screen.conversation }
     private var picker: AttachmentPicker { screen.picker }
     private var search: ChatSearch { screen.search }
@@ -485,7 +488,7 @@ struct ConversationView: View {
 /// What the screen is built on, made once per conversation.
 @MainActor
 @Observable
-private final class ConversationScreen {
+final class ConversationScreen {
     let conversation: ConversationModel
     let picker: AttachmentPicker
     let search: ChatSearch
@@ -518,11 +521,61 @@ private final class ConversationScreen {
 private final class ScreenHolder {
     private var screen: ConversationScreen?
 
-    func screen(session: XMPPSession, peer: JID, openingAt: Int64?, initial: ChatListItem?) -> ConversationScreen {
+    func screen(session: XMPPSession, peer: JID, openingAt: Int64?, initial: ChatListItem?, prepared: PreparedChats?) -> ConversationScreen {
         if let screen { return screen }
-        let made = ConversationScreen(session: session, peer: peer, openingAt: openingAt, initial: initial)
+        let made = prepared?.take(peer: peer, openingAt: openingAt)
+            ?? ConversationScreen(session: session, peer: peer, openingAt: openingAt, initial: initial)
         screen = made
         return made
+    }
+}
+
+/// A chat opened from the chat list, made and loading from the tap. On the
+/// iPhone the push waits for its first messages, at most `pushWait`: started
+/// once the screen was there, they arrived 100 to 160 ms into its slide and
+/// popped in partway, while the main thread was busy building the screen.
+/// Side by side there's no slide, and the chat is shown at once.
+@MainActor
+final class PreparedChats {
+    /// Long enough for the first messages of most chats, short enough that
+    /// the tap doesn't feel held.
+    static let pushWait: Duration = .milliseconds(150)
+
+    private var prepared: (peer: JID, openingAt: Int64?, screen: ConversationScreen)?
+    private var push: Task<Void, Never>?
+
+    /// Makes the chat and starts it loading, then calls `show`: at once, or
+    /// once its first messages are in. A later tap replaces one still waiting.
+    func open(session: XMPPSession, peer: JID, openingAt: Int64?, initial: ChatListItem?, previews: LinkPreviewer?, waits: Bool, show: @escaping @MainActor () -> Void) {
+        clear()
+        let screen = ConversationScreen(session: session, peer: peer, openingAt: openingAt, initial: initial)
+        screen.conversation.prepare(previews: previews)
+        prepared = (peer, openingAt, screen)
+        guard waits else {
+            show()
+            return
+        }
+        push = Task { [weak self] in
+            await screen.conversation.waitUntilLoaded(atMost: Self.pushWait)
+            guard !Task.isCancelled else { return }
+            self?.push = nil
+            show()
+        }
+    }
+
+    /// The chat made for this screen, which no other screen can take after it.
+    func take(peer: JID, openingAt: Int64?) -> ConversationScreen? {
+        guard let prepared, prepared.peer == peer, prepared.openingAt == openingAt else { return nil }
+        self.prepared = nil
+        return prepared.screen
+    }
+
+    /// Drops a chat not yet shown, as when one is opened another way, so its
+    /// screen can't come from a tap made earlier.
+    func clear() {
+        push?.cancel()
+        push = nil
+        prepared = nil
     }
 }
 

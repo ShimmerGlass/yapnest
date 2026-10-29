@@ -201,6 +201,9 @@ final class ConversationModel {
     @ObservationIgnored private var textCache: [Int64: CachedText] = [:]
     @ObservationIgnored private let tasks = TaskBag()
     @ObservationIgnored private var started = false
+    /// Started from a tap in the chat list, before the screen is pushed.
+    /// The opening scroll's tries are for the list, so they wait for it.
+    @ObservationIgnored private var awaitsScreen = false
     /// Where the observed window of messages starts; nil while it's just the
     /// newest few hundred. Scrolling back moves it further back.
     @ObservationIgnored private var windowStart: MessageCursor?
@@ -426,8 +429,25 @@ final class ConversationModel {
 
     // MARK: Starting
 
-    /// Opens the observations. Done once the screen is there rather than when
-    /// the model is made, which SwiftUI may do more often than it keeps one.
+    /// Starts loading from a tap, before the screen is pushed, so that the
+    /// messages are there when it slides in rather than popping in partway.
+    func prepare(previews: LinkPreviewer?) {
+        awaitsScreen = true
+        start(previews: previews)
+    }
+
+    /// Waits for the first rows, or for `limit`, whichever comes first: the
+    /// chat list holds the push for them, but not for long.
+    func waitUntilLoaded(atMost limit: Duration) async {
+        let deadline = ContinuousClock.now + limit
+        while !hasLoaded, ContinuousClock.now < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(8))
+        }
+    }
+
+    /// Opens the observations. Done once the screen is there, or from the tap
+    /// that opens it (`prepare`), rather than when the model is made, which
+    /// SwiftUI may do more often than it keeps one.
     func start(previews: LinkPreviewer?) {
         guard !started else { return }
         started = true
@@ -911,6 +931,9 @@ final class ConversationModel {
         // With the rows, so the list's first layout already aims at it.
         scroll.scrollTo(id: id, anchor: anchor)
         tasks["opening"] = Task { [weak self] in
+            while self?.awaitsScreen == true, !Task.isCancelled {
+                try? await Task.sleep(for: Self.openingTick)
+            }
             var landed: CGFloat?
             var still = 0
             for _ in 0..<Self.openingTries {
@@ -2911,6 +2934,7 @@ final class ConversationModel {
 
     func setOnScreen(_ onScreen: Bool) {
         isOnScreen = onScreen
+        if onScreen { awaitsScreen = false }
         if onScreen {
             markVisibleRead()
             if UIApplication.shared.applicationState == .active { becomeActive() }

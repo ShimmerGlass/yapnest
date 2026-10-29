@@ -24,6 +24,7 @@ struct ChatListView: View {
     /// `navigationDestination` closure of an earlier body, which would
     /// otherwise still hold the items from before the tap.
     @State private var openedItems = OpenedItems()
+    @State private var prepared = PreparedChats()
     @State private var sidebarPath: [ChatRoute] = []
     @State private var columnVisibility = NavigationSplitViewVisibility.automatic
     @State private var sheet: ChatListSheet?
@@ -226,7 +227,7 @@ struct ChatListView: View {
     /// Its controller and state are made for one peer; a notification can
     /// swap the peer under an open chat.
     private func conversation(_ peer: JID, at message: Int64?) -> some View {
-        ConversationView(session: session, peer: peer, openingAt: message, initial: openedItems[peer])
+        ConversationView(session: session, peer: peer, openingAt: message, initial: openedItems[peer], prepared: prepared)
             .id(OpenChat(peer: peer, message: message))
     }
 
@@ -329,14 +330,22 @@ struct ChatListView: View {
 
     /// A row's tap.
     private func open(_ route: ChatRoute, item: ChatListItem? = nil) {
-        if case .conversation(let peer, _) = route { openedItems[peer] = item }
-        switch (route, isSplit) {
-        case (.conversation(let peer, let message), true):
-            selection = peer
-            selectedMessage = message
-        case (.archive, true): sidebarPath.append(.archive)
-        case (_, false): path.append(route)
+        if case .conversation(let peer, let message) = route {
+            openedItems[peer] = item
+            let isSplit = isSplit
+            // The chat already open beside the list stays as it is.
+            if isSplit, selection == peer, selectedMessage == message { return }
+            prepared.open(session: session, peer: peer, openingAt: message, initial: item, previews: model.linkPreviews, waits: !isSplit) {
+                if isSplit {
+                    selection = peer
+                    selectedMessage = message
+                } else {
+                    path.append(route)
+                }
+            }
+            return
         }
+        if isSplit { sidebarPath.append(route) } else { path.append(route) }
     }
 
     /// Opens what a link asks for, or asks the user first when it would send
@@ -396,6 +405,7 @@ struct ChatListView: View {
     /// Opens `peer`'s chat on its own, from outside the list.
     private func show(_ peer: JID) {
         openedItems[peer] = nil
+        prepared.clear()
         if isSplit {
             selection = peer
             selectedMessage = nil
