@@ -1046,8 +1046,27 @@ final class ConversationModel {
         )
     }
 
+    /// Opening a chat renders its whole window here, up to `windowLimit`
+    /// bodies, and on one core that took 400 ms on an iPhone 15 Plus, past
+    /// the 150 ms the push waits for the first rows, so they popped in after
+    /// the slide. The bodies don't depend on each other, so they're shared
+    /// out across the cores.
     private nonisolated static func renderTexts(_ keys: [(id: Int64, key: TextKey)]) -> [Int64: CachedText] {
-        Dictionary(uniqueKeysWithValues: keys.map { ($0.id, renderText($0.key)) })
+        guard keys.count > 32 else {
+            return Dictionary(uniqueKeysWithValues: keys.map { ($0.id, renderText($0.key)) })
+        }
+        var rendered = [CachedText?](repeating: nil, count: keys.count)
+        let stride = ProcessInfo.processInfo.activeProcessorCount * 2
+        rendered.withUnsafeMutableBufferPointer { buffer in
+            let buffer = buffer
+            // Each pass writes only its own indices.
+            DispatchQueue.concurrentPerform(iterations: stride) { pass in
+                for index in Swift.stride(from: pass, to: keys.count, by: stride) {
+                    buffer[index] = renderText(keys[index].key)
+                }
+            }
+        }
+        return Dictionary(uniqueKeysWithValues: zip(keys, rendered).map { ($0.id, $1!) })
     }
 
     /// The messages whose long bodies the reader opened, for as long as the
