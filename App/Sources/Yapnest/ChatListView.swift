@@ -87,6 +87,9 @@ struct ChatListView: View {
         }
         .sheet(item: $sheet) { sheet in
             switch sheet {
+            case .profile:
+                ProfileView(session: session)
+                    .sheetSizedForMac(width: 520, height: 640)
             case .settings:
                 SettingsView(session: session)
                     .sheetSizedForMac(width: 600, height: 760)
@@ -248,7 +251,7 @@ struct ChatListView: View {
             presence: ownPresence.presence,
             status: ownPresence.status,
             call: sidebarCallBar,
-        ) { sheet = .settings }
+        ) { sheet = .profile } openSettings: { sheet = .settings }
     }
 
     private var chats: some View {
@@ -299,27 +302,39 @@ struct ChatListView: View {
                         }
                     }
                 }
-                // The Mac's footer replaces it.
+                // The Mac's footer replaces them.
                 if !Platform.isMac {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            sheet = .settings
-                        } label: {
-                            AvatarView(
-                                name: session.account.shortName,
-                                seed: session.account.description,
-                                imageURL: session.avatars.url(for: me),
-                            )
-                            .frame(width: 30, height: 30)
-                        }
-                        .accessibilityLabel("Settings")
-                    }
-                    // On the Mac it sits beside the search field in the list.
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("New Chat", systemImage: "square.and.pencil") { sheet = .compose }
-                    }
+                    bottomBar
                 }
             }
+    }
+
+    /// Profile, Settings and New Chat as one capsule at the foot of the list.
+    /// On the Mac Settings and the profile are in the sidebar's footer, and
+    /// New Chat beside the search field.
+    @ToolbarContentBuilder
+    private var bottomBar: some ToolbarContent {
+        if #available(iOS 26, *) {
+            ToolbarSpacer(.flexible, placement: .bottomBar)
+        }
+        ToolbarItemGroup(placement: .bottomBar) {
+            Button {
+                sheet = .profile
+            } label: {
+                AvatarView(
+                    name: session.account.shortName,
+                    seed: session.account.description,
+                    imageURL: session.avatars.url(for: me),
+                )
+                .frame(width: 30, height: 30)
+            }
+            .accessibilityLabel("Profile")
+            Button("Settings", systemImage: "gearshape") { sheet = .settings }
+            Button("New Chat", systemImage: "square.and.pencil") { sheet = .compose }
+        }
+        if #available(iOS 26, *) {
+            ToolbarSpacer(.flexible, placement: .bottomBar)
+        }
     }
 
     private var archive: some View {
@@ -1140,7 +1155,7 @@ extension Date {
 
 /// What the chat list can present over itself, one at a time.
 enum ChatListSheet: Identifiable, Hashable {
-    case settings, compose, newGroup, joinGroup
+    case profile, settings, compose, newGroup, joinGroup
     /// An `xmpp:` link that needs the user's say before anything is sent.
     case link(XMPPURI)
 

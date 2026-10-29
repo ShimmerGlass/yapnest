@@ -194,6 +194,14 @@ final class ConversationDriver {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "\(context): Settings didn't open", file: file, line: line)
     }
 
+    /// Opens the Profile sheet from the chat list.
+    func openProfile(file: StaticString = #filePath, line: UInt = #line) {
+        let profile = app.buttons["Profile"]
+        XCTAssertTrue(profile.waitForExistence(timeout: 30), "\(context): no Profile button on the chat list", file: file, line: line)
+        profile.tap()
+        XCTAssertTrue(app.navigationBars["Profile"].waitForExistence(timeout: 10), "\(context): Profile didn't open", file: file, line: line)
+    }
+
     /// Opens the open chat's settings from its header. A group's are titled "Group Settings".
     func openChatSettings(title: String = "Chat Settings", file: StaticString = #filePath, line: UInt = #line) {
         let settings = app.buttons["Chat Settings"].firstMatch

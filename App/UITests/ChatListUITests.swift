@@ -15,6 +15,14 @@ final class ChatListUITests: InteractionsTestCase {
         return row
     }
 
+    /// The bottom bar floats over the list's last rows, where a swipe would land on it.
+    private func rowClearOfTheBar(_ name: String) -> XCUIElement {
+        let row = waitForRow(name)
+        let bar = app.buttons["Settings"]
+        for _ in 0..<3 where row.frame.midY > bar.frame.minY - 20 { app.swipeUp() }
+        return row
+    }
+
     /// A row reads as its name, the time, the last words, then the unread count.
     private func unreadCount(of row: XCUIElement) -> Int? {
         row.label.split(separator: ",").last.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }
@@ -99,13 +107,13 @@ final class ChatListUITests: InteractionsTestCase {
     }
 
     func testSwipingARowRightOffersReadAndPin() {
-        waitForRow("Nest").swipeRight()
+        rowClearOfTheBar("Nest").swipeRight()
         XCTAssertTrue(app.buttons["Pin"].waitForExistence(timeout: 5), "no Pin on the leading swipe")
         XCTAssertTrue(app.buttons["Unread"].exists, "no Unread on the leading swipe")
     }
 
     func testSwipingARowLeftOffersDeleteAndArchive() {
-        waitForRow("Nest").swipeLeft()
+        rowClearOfTheBar("Nest").swipeLeft()
         XCTAssertTrue(app.buttons["Archive"].waitForExistence(timeout: 5), "no Archive on the trailing swipe")
         XCTAssertTrue(app.buttons["Delete"].exists, "no Delete on the trailing swipe")
     }

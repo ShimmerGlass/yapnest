@@ -1,9 +1,22 @@
 import XCTest
 
-/// Settings from the chat list: opening and closing it, and the list of
-/// open source licences. Reads the licence texts bundled with the app.
+/// Settings and Profile from the chat list: opening and closing them, and the
+/// list of open source licences. Reads the licence texts bundled with the app.
 final class SettingsUITests: InteractionsTestCase {
     override var chat: String? { nil }
+
+    func testProfileOpensAndDoneClosesItAndHoldsTheAccountControls() {
+        driver.openProfile()
+        XCTAssertTrue(app.textFields["Display Name"].waitForExistence(timeout: 5), "no Display Name in Profile")
+        XCTAssertTrue(app.buttons["Sign Out"].exists, "no Sign Out in Profile")
+        app.buttons["Done"].tap()
+        waitUntilGone(app.navigationBars["Profile"], "Profile")
+        XCTAssertTrue(app.buttons["Profile"].exists, "the chat list isn't back")
+
+        driver.openSettings()
+        XCTAssertFalse(app.textFields["Display Name"].exists, "Settings still has Display Name")
+        XCTAssertFalse(app.buttons["Sign Out"].exists, "Settings still has Sign Out")
+    }
 
     func testSettingsOpensAndDoneClosesIt() {
         driver.openSettings()
@@ -82,10 +95,10 @@ final class SettingsUITests: InteractionsTestCase {
 
     /// The fixture's account never connects; the check is local, so nothing is sent.
     func testChangePasswordRefusesPasswordsThatDontMatch() {
-        driver.openSettings()
+        driver.openProfile()
         let link = app.buttons["Change Password"].firstMatch
         for _ in 0..<8 where !link.exists || !link.isHittable { app.swipeUp() }
-        XCTAssertTrue(link.exists, "no Change Password in Settings")
+        XCTAssertTrue(link.exists, "no Change Password in Profile")
         link.tap()
         XCTAssertTrue(app.navigationBars["Change Password"].waitForExistence(timeout: 10), "Change Password didn't open")
         XCTAssertTrue(app.staticTexts["Your other devices will need the new password."].exists, "the footer about other devices is missing")
