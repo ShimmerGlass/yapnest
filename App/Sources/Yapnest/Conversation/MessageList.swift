@@ -240,7 +240,33 @@ struct ScrollToEndControl: View {
         .animation(.easeInOut(duration: 0.2), value: shows)
     }
 
+    @ViewBuilder
     private var button: some View {
+        if Platform.isMac {
+            // The hosting view picks the view a press goes to from the area
+            // around the pointer, not the point, and near the edge of a
+            // SwiftUI button it picked the message below and opened a
+            // picture there. A UIKit view reaching past the circle is picked
+            // for any press on it.
+            MacScrollToEndButton(action: model.scrollToLatest)
+                .frame(width: MacScrollToEndButton.reach, height: MacScrollToEndButton.reach)
+                .frame(width: Self.size, height: Self.size)
+                .overlay(alignment: .topTrailing) { badge.allowsHitTesting(false) }
+                .accessibilityElement()
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel("Scroll to latest message")
+                .accessibilityValue(unreadValue)
+                .accessibilityAction { model.scrollToLatest() }
+        } else {
+            swiftUIButton
+        }
+    }
+
+    private var unreadValue: String {
+        model.unreadCount == 0 ? "" : String(localized: "\(model.unreadCount) unread")
+    }
+
+    private var swiftUIButton: some View {
         Button {
             model.scrollToLatest()
         } label: {
@@ -257,7 +283,7 @@ struct ScrollToEndControl: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Scroll to latest message")
-        .accessibilityValue(model.unreadCount == 0 ? "" : String(localized: "\(model.unreadCount) unread"))
+        .accessibilityValue(unreadValue)
     }
 
     @ViewBuilder
@@ -281,6 +307,82 @@ struct ScrollToEndControl: View {
                 .offset(x: 4, y: -4)
         }
     }
+}
+
+/// The Mac's scroll-to-end button: the arrow on a glass circle, in UIKit.
+private struct MacScrollToEndButton: UIViewRepresentable {
+    /// The view's size, past the circle, so the hosting view's pick near
+    /// the circle's edge lands on it rather than the list.
+    static let reach: CGFloat = 72
+
+    let action: () -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let size = ScrollToEndControl.size
+        let background: UIView
+        let contentView: UIView
+        if #available(iOS 26, *) {
+            let effectView = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+            effectView.cornerConfiguration = .uniformCorners(radius: .fixed(size / 2))
+            background = effectView
+            contentView = effectView.contentView
+        } else {
+            let effectView = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+            effectView.layer.cornerRadius = size / 2
+            effectView.clipsToBounds = true
+            background = effectView
+            contentView = effectView.contentView
+        }
+        background.isUserInteractionEnabled = false
+        let arrow = UIImageView(image: UIImage(systemName: "arrow.down", withConfiguration: UIImage.SymbolConfiguration(textStyle: .body, scale: .default).applying(UIImage.SymbolConfiguration(weight: .semibold))))
+        arrow.tintColor = .label
+        arrow.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(arrow)
+        let target = PressTarget()
+        target.addGestureRecognizer(ClaimingClick(target: context.coordinator, action: #selector(Coordinator.clicked)))
+        background.translatesAutoresizingMaskIntoConstraints = false
+        target.addSubview(background)
+        NSLayoutConstraint.activate([
+            background.centerXAnchor.constraint(equalTo: target.centerXAnchor),
+            background.centerYAnchor.constraint(equalTo: target.centerYAnchor),
+            background.widthAnchor.constraint(equalToConstant: size),
+            background.heightAnchor.constraint(equalToConstant: size),
+            arrow.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            arrow.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+        ])
+        return target
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.action = action
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func clicked() { action() }
+    }
+}
+
+/// Takes presses on the circle drawn in its middle, and no further.
+final class PressTarget: UIView {
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        hypot(point.x - bounds.midX, point.y - bounds.midY) <= ScrollToEndControl.size / 2 + 2
+    }
+}
+
+/// A click that SwiftUI's own recognizers on the hosting view wait for. They
+/// hit-test the list beneath and cancelled the button's touch whenever a click
+/// wasn't right on the arrow.
+final class ClaimingClick: UITapGestureRecognizer {
+    override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
+        guard let view, let otherView = other.view, otherView !== view else { return false }
+        return view.isDescendant(of: otherView)
+    }
+
+    override func canBePrevented(by other: UIGestureRecognizer) -> Bool { false }
 }
 
 /// Brings up the emoji keyboard, or on the Mac the character viewer, to pick
