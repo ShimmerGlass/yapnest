@@ -326,15 +326,28 @@ struct ChatListView: View {
                     seed: session.account.description,
                     imageURL: session.avatars.url(for: me),
                 )
-                .frame(width: 30, height: 30)
+                .frame(width: 34, height: 34)
+                .frame(width: Self.barItemWidth)
             }
             .accessibilityLabel("Profile")
-            Button("Settings", systemImage: "gearshape") { sheet = .settings }
-            Button("New Chat", systemImage: "square.and.pencil") { sheet = .compose }
+            Button { sheet = .settings } label: { barIcon("gearshape") }
+                .accessibilityLabel("Settings")
+            Button { sheet = .compose } label: { barIcon("square.and.pencil") }
+                .accessibilityLabel("New Chat")
         }
         if #available(iOS 26, *) {
             ToolbarSpacer(.flexible, placement: .bottomBar)
         }
+    }
+
+    /// Each item's width, so the capsule spaces its buttons wider than the
+    /// system's items.
+    private static let barItemWidth: CGFloat = 60
+
+    private func barIcon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 20))
+            .frame(width: Self.barItemWidth, height: 34)
     }
 
     private var archive: some View {
