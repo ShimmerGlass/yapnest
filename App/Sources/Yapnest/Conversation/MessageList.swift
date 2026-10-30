@@ -127,7 +127,7 @@ struct MessageList: View {
         .onScrollPhaseChange { old, phase in
             FrameLog.event("scrollPhase \(old) -> \(phase)")
             model.scrollPhase = phase
-            if phase != .idle { model.scrollStartedHidesHover() }
+            model.scrollPhaseChangedForHover(phase)
             model.backdropScroll.phaseChanged(phase)
             switch phase {
             case .interacting: model.userStartedScrolling()
@@ -179,17 +179,58 @@ private struct PointerTracker: UIViewRepresentable {
     func updateUIView(_ view: TrackerView, context: Context) {
         view.model = model
     }
+
+    static func dismantleUIView(_ view: TrackerView, coordinator: ()) {
+        view.model?.scrollingChanged = nil
+    }
 }
 
 /// Never takes a click: the hosting view picks press targets from the area
 /// around the pointer, and a platform view in the list was picked.
+///
+/// While the list scrolls it also pauses SwiftUI's own hover recognizers
+/// above it. Content moving under a still pointer is a hover event every
+/// frame, and for each one SwiftUI hit-tested the whole screen, the rows'
+/// text views included, for the few hover handlers left: a fifth of the
+/// main thread's time while scrolling. Nothing hovers while the list moves.
 private final class TrackerView: UIView, UIGestureRecognizerDelegate {
-    weak var model: ConversationModel?
+    weak var model: ConversationModel? {
+        didSet {
+            guard model !== oldValue else { return }
+            oldValue?.scrollingChanged = nil
+            model?.scrollingChanged = { [weak self] scrolling in self?.pauseHover(scrolling) }
+        }
+    }
     private var recognizer: UIHoverGestureRecognizer?
     private weak var recognizerWindow: UIWindow?
+    private var paused: [Weak] = []
+
+    private struct Weak {
+        weak var recognizer: UIGestureRecognizer?
+    }
+
+    deinit {
+        MainActor.assumeIsolated { pauseHover(false) }
+    }
+
+    private func pauseHover(_ pause: Bool) {
+        if pause {
+            guard paused.isEmpty else { return }
+            var hovers: [UIGestureRecognizer] = recognizer.map { [$0] } ?? []
+            for view in sequence(first: superview, next: { $0?.superview }).compactMap({ $0 }) {
+                hovers += (view.gestureRecognizers ?? []).filter { $0.isEnabled && ($0 is UIHoverGestureRecognizer || String(describing: type(of: $0)).contains("HoverGestureRecognizer")) }
+            }
+            for hover in hovers { hover.isEnabled = false }
+            paused = hovers.map(Weak.init)
+        } else {
+            for hover in paused { hover.recognizer?.isEnabled = true }
+            paused = []
+        }
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        pauseHover(false)
         detach()
         guard let window else { return }
         let recognizer = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))

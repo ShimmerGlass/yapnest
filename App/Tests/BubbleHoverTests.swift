@@ -69,12 +69,27 @@ struct BubbleHoverTests {
         model.bubbleFrameChanged(first, for: 1)
         model.pointerMoved(to: CGPoint(x: 150, y: 20))
         model.scrollPhase = .interacting
-        model.scrollStartedHidesHover()
+        model.scrollPhaseChangedForHover(.interacting)
         #expect(model.hoveredBubble == nil)
         model.pointerMoved(to: CGPoint(x: 150, y: 20))
         #expect(model.hoveredBubble == nil)
         model.scrollPhase = .idle
+        model.scrollPhaseChangedForHover(.idle)
         model.pointerMoved(to: CGPoint(x: 150, y: 20))
         #expect(model.hoveredBubble == 1)
+    }
+
+    /// The Mac's tracker pauses SwiftUI's hover recognizers while the list
+    /// moves, so it's told once when scrolling starts and once when it stops.
+    @Test func theTrackerIsToldWhenScrollingStartsAndStops() throws {
+        let fixture = try ConversationFixture(isFlipped: false)
+        let model = fixture.model!
+        var told: [Bool] = []
+        model.scrollingChanged = { told.append($0) }
+        model.scrollPhaseChangedForHover(.interacting)
+        model.scrollPhaseChangedForHover(.decelerating)
+        model.scrollPhaseChangedForHover(.idle)
+        model.scrollPhaseChangedForHover(.idle)
+        #expect(told == [true, false])
     }
 }

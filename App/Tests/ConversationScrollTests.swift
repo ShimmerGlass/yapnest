@@ -497,6 +497,51 @@ struct ConversationScrollTests {
         #expect(f.model.followsBottom)
     }
 
+    /// From far up the history the Mac's list jumps to a few rows short of
+    /// the end and animates only the rest: animated the whole way, the lazy
+    /// stack placed rows all along the flight, in stalls of half a second.
+    @Test func theScrollToLatestButtonJumpsMostOfALongWayAndAnimatesTheRest() async throws {
+        let f = try await opened(distance: 0, flipped: false)
+        f.model.geometryChanged(geometry(flipped: false, distanceFromBottom: 50_000, content: 60_000))
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.scrollPhase = .idle
+
+        f.model.scrollToLatest()
+        let near = f.rowIDs[f.rowIDs.count - 1 - ConversationModel.latestJumpRows]
+        #expect(f.model.scroll.messageID == near)
+        await eventually("the rest was never animated") { f.model.scroll.messageID == f.rowIDs.last }
+        #expect(f.model.followsBottom)
+    }
+
+    /// The backdrop follows the animated part of the way, even when the jump
+    /// before it was reported as a scroll of its own that ended.
+    @Test func theBackdropFollowsTheAnimationAfterTheJump() async throws {
+        let f = try await opened(distance: 0, flipped: false)
+        f.model.geometryChanged(geometry(flipped: false, distanceFromBottom: 50_000, content: 60_000))
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.scrollPhase = .idle
+
+        f.model.scrollToLatest()
+        f.model.backdropScroll.phaseChanged(.animating)
+        f.model.backdropScroll.phaseChanged(.idle)
+        await eventually("the rest was never animated") { f.model.scroll.messageID == f.rowIDs.last }
+        #expect(f.model.backdropScroll.followsNextAnimation)
+    }
+
+    @Test func aScrollByTheUserAfterTheJumpKeepsItsPlace() async throws {
+        let f = try await opened(distance: 0, flipped: false)
+        f.model.geometryChanged(geometry(flipped: false, distanceFromBottom: 50_000, content: 60_000))
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.scrollPhase = .idle
+
+        f.model.scrollToLatest()
+        f.model.userStartedScrolling()
+        #expect(await stays(for: .milliseconds(100)) { f.model.scroll.messageID != f.rowIDs.last })
+    }
+
     // MARK: A blank list far up the history
 
     @Test(arguments: [true, false]) func aListPastItsFarEndGoesBackToTheRowBeingRead(flipped: Bool) async throws {

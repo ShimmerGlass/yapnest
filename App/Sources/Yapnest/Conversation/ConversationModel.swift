@@ -159,10 +159,18 @@ final class ConversationModel {
         bubbleHover.set(frame, for: id)
     }
 
+    /// Told when the list starts and stops moving, by the Mac's pointer tracker.
+    @ObservationIgnored var scrollingChanged: ((Bool) -> Void)?
+    @ObservationIgnored private var isScrollingForHover = false
+
     /// The bar hides while the list moves, and comes back with the next
     /// pointer move.
-    func scrollStartedHidesHover() {
-        if hoveredBubble != nil { hoveredBubble = nil }
+    func scrollPhaseChangedForHover(_ phase: ScrollPhase) {
+        let scrolling = phase != .idle
+        if scrolling, hoveredBubble != nil { hoveredBubble = nil }
+        guard scrolling != isScrollingForHover else { return }
+        isScrollingForHover = scrolling
+        scrollingChanged?(scrolling)
     }
 
     /// The pointer moved to a point in the list stack's space, or left
@@ -1951,6 +1959,7 @@ final class ConversationModel {
     }
 
     func userStartedScrolling() {
+        tasks.cancel("latest")
         followedBeforeInteraction = followsBottom
         followedAfterLift = false
         nudges = 0
@@ -2035,10 +2044,32 @@ final class ConversationModel {
             scrollToBottom(animated: true, reason: "latest")
         } else if isBounded {
             showNewest()
+        } else if !isFlipped, let geometry, bottomDistance(geometry) > geometry.containerSize.height * Self.latestJumpScreens,
+                  rows.count > Self.latestJumpRows {
+            // Animated the whole way from far up the history, the lazy stack
+            // placed rows all along the flight, in stalls of half a second.
+            // It jumps to a few rows short of the end, and the rest is animated.
+            let near = rows[rows.count - 1 - Self.latestJumpRows].id
+            FrameLog.event("scroll.scrollTo latest.jump id=\(near)")
+            followsBottom = true
+            withoutAnimation { scroll.scrollTo(id: near, anchor: .bottom) }
+            tasks["latest"] = Task { [weak self] in
+                // A frame, for the lazy stack to lay out the rows it landed on.
+                try? await Task.sleep(for: .milliseconds(20))
+                guard let self, !Task.isCancelled else { return }
+                // The jump may have ended the backdrop's wait for an animation.
+                backdropScroll.followsNextAnimation = true
+                scrollToBottom(animated: true, reason: "latest", byID: true)
+            }
         } else {
             scrollToBottom(animated: true, reason: "latest", byID: true)
         }
     }
+
+    /// How many screens from the end the scroll-to-end button jumps rather than animates.
+    static let latestJumpScreens: CGFloat = 10
+    /// How many rows short of the end it jumps to.
+    static let latestJumpRows = 12
 
     /// Replaces a bounded window with the newest messages, and lands at their
     /// bottom when they arrive.
