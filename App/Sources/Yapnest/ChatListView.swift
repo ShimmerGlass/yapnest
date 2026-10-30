@@ -28,6 +28,7 @@ struct ChatListView: View {
     @State private var sidebarPath: [ChatRoute] = []
     @State private var columnVisibility = NavigationSplitViewVisibility.automatic
     @State private var sheet: ChatListSheet?
+    @FocusState private var searchFocused: Bool
     #if DEBUG
     @State private var devCommands: DevCommands?
     #endif
@@ -255,7 +256,7 @@ struct ChatListView: View {
     }
 
     private var chats: some View {
-        withSidebarFooter(ChatListContent(session: session, archived: false, selection: isSplit ? selection : nil, open: { open($0, item: $1) }, onDelete: closeIfOpen, onCompose: { sheet = .compose }))
+        withSidebarFooter(ChatListContent(session: session, archived: false, selection: isSplit ? selection : nil, open: { open($0, item: $1) }, onDelete: closeIfOpen, onCompose: { sheet = .compose }, searchFocus: $searchFocused))
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     ConnectionBanner(state: shownConnection)
@@ -304,14 +305,19 @@ struct ChatListView: View {
                 }
                 // The Mac's footer replaces them.
                 if !Platform.isMac {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { sheet = .settings } label: { Image(systemName: "gearshape") }
+                            .accessibilityLabel("Settings")
+                    }
                     bottomBar
                 }
             }
     }
 
-    /// Profile, Settings and New Chat as one capsule at the foot of the list.
-    /// On the Mac Settings and the profile are in the sidebar's footer, and
-    /// New Chat beside the search field.
+    /// Profile, Search and New Chat as one capsule at the foot of the list,
+    /// in reach of the thumb; Search opens the field at the top, which a
+    /// scrolled list hides. On the Mac Settings and the profile are in the
+    /// sidebar's footer, and New Chat beside the search field.
     @ToolbarContentBuilder
     private var bottomBar: some ToolbarContent {
         if #available(iOS 26, *) {
@@ -330,8 +336,8 @@ struct ChatListView: View {
                 .frame(width: Self.barItemWidth)
             }
             .accessibilityLabel("Profile")
-            Button { sheet = .settings } label: { barIcon("gearshape") }
-                .accessibilityLabel("Settings")
+            Button { searchFocused = true } label: { barIcon("magnifyingglass") }
+                .accessibilityLabel("Search")
             Button { sheet = .compose } label: { barIcon("square.and.pencil") }
                 .accessibilityLabel("New Chat")
         }
@@ -467,6 +473,8 @@ private struct ChatListContent: View {
     /// Shown beside the search field on the Mac, where the window toolbar
     /// has no room for it.
     var onCompose: (() -> Void)?
+    /// The bottom bar's Search button, on iOS.
+    var searchFocus: FocusState<Bool>.Binding?
 
     @Environment(AppModel.self) private var model
     // nil until the first read: the empty state and the sections that appear
@@ -604,7 +612,7 @@ private struct ChatListContent: View {
         // highlight is from the list's sides; it still scrolls under it.
         .modifier(MacTopMargin(ChatRowButtonStyle.rowInsets.leading - ChatRowButtonStyle.overhang))
         .background { ChatListBackdrop() }
-        .sidebarSearch(text: $search, onCompose: onCompose)
+        .sidebarSearch(text: $search, onCompose: onCompose, focus: searchFocus)
         .overlay {
             switch ChatListEmptyState.choose(
                 itemCount: items?.count,

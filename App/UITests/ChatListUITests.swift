@@ -18,7 +18,7 @@ final class ChatListUITests: InteractionsTestCase {
     /// The bottom bar floats over the list's last rows, where a swipe would land on it.
     private func rowClearOfTheBar(_ name: String) -> XCUIElement {
         let row = waitForRow(name)
-        let bar = app.buttons["Settings"]
+        let bar = app.buttons["New Chat"]
         for _ in 0..<3 where row.frame.midY > bar.frame.minY - 20 { app.swipeUp() }
         return row
     }
@@ -140,5 +140,20 @@ final class ChatListUITests: InteractionsTestCase {
         XCTAssertTrue(app.buttons["Join a Group"].exists, "no Join a Group in the sheet")
         sheet.buttons["Cancel"].tap()
         waitUntilGone(sheet, "the New Chat sheet")
+    }
+
+    /// The bar's Search button brings back the field a scrolled list hides,
+    /// ready to type in, and what's typed filters the list.
+    func testSearchFocusesTheSearchField() {
+        _ = waitForRow("Nest")
+        app.swipeUp()
+        let search = app.buttons["Search"]
+        XCTAssertTrue(search.waitForExistence(timeout: ConversationDriver.listTimeout), "no Search button")
+        search.tap()
+        let field = app.searchFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "the search field didn't show")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "the search field isn't focused")
+        app.typeText("Nest")
+        XCTAssertTrue(row("Nest").waitForExistence(timeout: 10), "the search didn't keep the matching chat")
     }
 }

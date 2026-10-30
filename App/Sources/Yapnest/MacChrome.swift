@@ -22,7 +22,7 @@ extension View {
     /// The list's search field. A drawer search field can't have a button
     /// beside it, so the Mac draws its own with New Chat next to it.
     @ViewBuilder
-    func sidebarSearch(text: Binding<String>, onCompose: (() -> Void)?) -> some View {
+    func sidebarSearch(text: Binding<String>, onCompose: (() -> Void)?, focus: FocusState<Bool>.Binding? = nil) -> some View {
         if Platform.isMac {
             // A plain inset has no background, so rows scroll visibly under
             // the field. A safe area bar's scroll edge effect doesn't hide
@@ -30,6 +30,9 @@ extension View {
             safeAreaInset(edge: .top, spacing: 0) {
                 SidebarSearchBar(text: text, onCompose: onCompose).background(.bar)
             }
+        } else if let focus {
+            searchable(text: text, placement: .navigationBarDrawer(displayMode: .automatic))
+                .searchFocused(focus)
         } else {
             searchable(text: text, placement: .navigationBarDrawer(displayMode: .automatic))
         }
