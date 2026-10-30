@@ -116,7 +116,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
                 // stays and the older build's goes. Only if this database
                 // signed with it: the keychain outlives a deleted app, and a
                 // key from an install before that is no one's device now.
-                try replaceDevice(registrationId, with: kept, in: db, context: context)
+                try restoreKeychainDevice(registrationId, with: kept, in: db, context: context)
                 registrationId = kept.registrationId
             } else if let registrationId, let data = Data(base64Encoded: legacy) {
                 let moved = StoredIdentity(registrationId: registrationId, keyPair: data)
@@ -182,7 +182,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// database, and notes that device for the session to take off the
     /// account's list. The sessions stay: most are the kept device's, and
     /// the few the other one set up are repaired by whoever holds them.
-    private func replaceDevice(_ replaced: UInt32?, with kept: StoredIdentity, in db: Database, context: SignalContext) throws {
+    private func restoreKeychainDevice(_ replaced: UInt32?, with kept: StoredIdentity, in db: Database, context: SignalContext) throws {
         // Its signed prekey is signed with its own key and has the highest
         // id, which the bundle publishes: every contact would refuse it. One
         // signed with the kept key goes above it. The kept device's own stay
@@ -226,7 +226,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         try AppDatabase.setSetting(db, .omemoReplacedDeviceIds, ids.isEmpty ? nil : ids.map { String(UInt32(bitPattern: $0)) }.joined(separator: ","))
     }
 
-    /// The devices `replaceDevice` gave up, not yet off the account's list.
+    /// The devices `restoreKeychainDevice` gave up, not yet off the account's list.
     func replacedDeviceIds() -> [Int32] {
         read { db in try Self.replacedDeviceIds(in: db) } ?? []
     }

@@ -444,6 +444,10 @@ final class AppModel {
     /// through `encryptionDeviceProblem`.
     func replaceEncryptionDevice() async {
         guard case .signedIn(let session) = phase else { return }
+        guard calls.screen == nil else {
+            encryptionDeviceProblem = String(localized: "End the call first: resetting encryption reconnects your account.")
+            return
+        }
         let saved: XMPPSession.Credentials
         do {
             guard let stored = try await offMain({ [credentials] in try credentials.load() }), stored.jid == session.account else {
@@ -455,10 +459,16 @@ final class AppModel {
             encryptionDeviceProblem = error.localizedDescription
             return
         }
+        // Signed out, or signed in again, while the keychain was read.
+        guard case .signedIn(let current) = phase, current === session else { return }
         phase = .loading
+        loadingIsSlow = true
+        defer { loadingIsSlow = false }
+        // Before teardown lets go of the lock: an extension taking it would
+        // set up as the old device and store sessions built on its key.
+        let result = await offMain { Result { try session.replaceEncryptionDevice() } }
         teardown(session)
         // It reopens either way: a replacement that failed left the old device whole.
-        let result = await offMain { Result { try session.replaceEncryptionDevice() } }
         await restoreSession(saved)
         if case .failure(let error) = result { encryptionDeviceProblem = error.localizedDescription }
     }
