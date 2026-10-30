@@ -75,28 +75,33 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// extensions take in turn: two processes making a device at once would
     /// leave the key of one beside the device id of the other.
     func setUpIdentityIfNeeded(context: SignalContext) throws {
+        try writeIdentity { db in try findOrMakeIdentity(in: db, context: context) }
+    }
+
+    /// Runs `body` in one immediate transaction with deleted pages zeroed,
+    /// and goes on as the identity it returns.
+    private func writeIdentity(_ body: (Database) throws -> (StoredIdentity, erasedKeys: Bool)) throws {
         let identity = try database.writer.writeWithoutTransaction { db -> StoredIdentity in
             try db.execute(sql: "PRAGMA secure_delete = ON")
             defer { try? db.execute(sql: "PRAGMA secure_delete = OFF") }
-            var found: StoredIdentity?
-            var erasedLegacyKey = false
+            var result: (StoredIdentity, erasedKeys: Bool)?
             try db.inTransaction(.immediate) {
-                (found, erasedLegacyKey) = try findOrMakeIdentity(in: db, context: context)
+                result = try body(db)
                 return .commit
             }
-            // The key's page is zeroed in the WAL; the checkpoint copies it over
+            guard let (identity, erasedKeys) = result else { throw OMEMOError.keyGenerationFailed }
+            // A key's page is zeroed in the WAL; the checkpoint copies it over
             // the file's, which holds the key until then. Readers in other
             // processes can hold it back, and the next checkpoint finishes it.
-            if erasedLegacyKey { _ = try? db.checkpoint(.truncate) }
-            guard let found else { throw OMEMOError.keyGenerationFailed }
-            return found
+            if erasedKeys { _ = try? db.checkpoint(.truncate) }
+            return identity
         }
         use(identity)
     }
 
     /// The decision, inside the transaction. Also says whether a key kept in
     /// the database by a version from before was erased from it.
-    private func findOrMakeIdentity(in db: Database, context: SignalContext) throws -> (StoredIdentity, erasedLegacyKey: Bool) {
+    private func findOrMakeIdentity(in db: Database, context: SignalContext) throws -> (StoredIdentity, erasedKeys: Bool) {
         var registrationId = try AppDatabase.setting(db, .omemoRegistrationId).flatMap { UInt32($0) }
         var erased = false
         if let legacy = try AppDatabase.setting(db, .omemoIdentityKeyPair) {
@@ -124,22 +129,28 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         if let registrationId, let stored = try identityKeys.load(), stored.registrationId == registrationId {
             return (stored, erased)
         }
-        guard let keyPair = SignalIdentityKeyPair.generateKeyPair(context: context), let data = keyPair.keyPair else {
+        return (try makeDevice(in: db, context: context), erased)
+    }
+
+    /// A new key and device id in place of the database's, whose sessions
+    /// and prekeys go with it. `taken` are ids it mustn't have.
+    ///
+    /// The key last: a keychain that refuses it rolls the transaction back,
+    /// and one that fails after it leaves the database naming a device whose
+    /// key isn't here, which `findOrMakeIdentity` replaces next time.
+    private func makeDevice(in db: Database, context: SignalContext, avoiding taken: Set<Int32> = []) throws -> StoredIdentity {
+        guard let keyPair = SignalIdentityKeyPair.generateKeyPair(context: context), let data = keyPair.keyPair,
+              let newId = (0..<8).lazy.map({ _ in context.generateRegistrationId() })
+                .first(where: { $0 != 0 && !taken.contains(Int32(bitPattern: $0)) }) else {
             throw OMEMOError.keyGenerationFailed
         }
-        let newId = context.generateRegistrationId()
-        guard newId != 0 else { throw OMEMOError.keyGenerationFailed }
         let identity = StoredIdentity(registrationId: newId, keyPair: data)
-        // The key first: should the transaction fail after it, the database
-        // still names the old device, which has no key here, and this runs again.
-        try identityKeys.save(identity)
-        if registrationId != nil {
-            try db.execute(sql: "DELETE FROM omemoSession")
-            try db.execute(sql: "DELETE FROM omemoPreKey")
-            try db.execute(sql: "DELETE FROM omemoSignedPreKey")
-        }
+        try db.execute(sql: "DELETE FROM omemoSession")
+        try db.execute(sql: "DELETE FROM omemoPreKey")
+        try db.execute(sql: "DELETE FROM omemoSignedPreKey")
         try AppDatabase.setSetting(db, .omemoRegistrationId, String(newId))
-        return (identity, erased)
+        try identityKeys.save(identity)
+        return identity
     }
 
     /// Makes this install a new device, with a new id and key, at the user's
@@ -154,43 +165,17 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     ///
     /// The session must be closed: it would go on as the old device.
     func replaceIdentity(context: SignalContext) throws {
-        let identity = try database.writer.writeWithoutTransaction { db -> StoredIdentity in
-            try db.execute(sql: "PRAGMA secure_delete = ON")
-            defer { try? db.execute(sql: "PRAGMA secure_delete = OFF") }
-            var made: StoredIdentity?
-            try db.inTransaction(.immediate) {
-                made = try makeReplacement(in: db, context: context)
-                return .commit
-            }
-            guard let made else { throw OMEMOError.keyGenerationFailed }
-            return made
+        try writeIdentity { db in
+            let replaced = try Self.replacedDeviceIds(in: db)
+            let old = try AppDatabase.setting(db, .omemoRegistrationId).flatMap { UInt32($0) }.map { Int32(bitPattern: $0) }
+            if let old { try Self.setReplacedDeviceIds(replaced + [old], in: db) }
+            // Not an id the account had: a contact still holding that device's
+            // sessions would take this one for it.
+            let owned = try Int32.fetchAll(db, sql: "SELECT deviceId FROM omemoIdentity WHERE name = ?", arguments: [account])
+            let identity = try makeDevice(in: db, context: context, avoiding: Set(owned + replaced + [old].compactMap(\.self)))
+            DiagLog.notice(.omemo, "Device replaced at the user's request", .id("device", Redacted.id(String(identity.registrationId))))
+            return (identity, true)
         }
-        use(identity)
-    }
-
-    private func makeReplacement(in db: Database, context: SignalContext) throws -> StoredIdentity {
-        let old = try AppDatabase.setting(db, .omemoRegistrationId).flatMap { UInt32($0) }
-        // Not an id the account had: a contact still holding that device's
-        // sessions would take this one for it.
-        let replaced = try Self.replacedDeviceIds(in: db)
-        let taken = Set(try Int32.fetchAll(db, sql: "SELECT deviceId FROM omemoIdentity WHERE name = ?", arguments: [account]) + replaced)
-            .union(old.map { [Int32(bitPattern: $0)] } ?? [])
-        guard let keyPair = SignalIdentityKeyPair.generateKeyPair(context: context), let data = keyPair.keyPair,
-              let newId = (0..<8).lazy.map({ _ in context.generateRegistrationId() })
-                .first(where: { $0 != 0 && !taken.contains(Int32(bitPattern: $0)) }) else {
-            throw OMEMOError.keyGenerationFailed
-        }
-        let identity = StoredIdentity(registrationId: newId, keyPair: data)
-        try db.execute(sql: "DELETE FROM omemoSession")
-        try db.execute(sql: "DELETE FROM omemoPreKey")
-        try db.execute(sql: "DELETE FROM omemoSignedPreKey")
-        try AppDatabase.setSetting(db, .omemoRegistrationId, String(newId))
-        if let old { try Self.setReplacedDeviceIds(replaced + [Int32(bitPattern: old)], in: db) }
-        // The key last: a keychain that refuses it rolls all of this back,
-        // and the old device stays whole.
-        try identityKeys.save(identity)
-        DiagLog.notice(.omemo, "Device replaced at the user's request", .id("device", Redacted.id(String(newId))))
-        return identity
     }
 
     /// Puts `kept` back in place of the device an older build made in the

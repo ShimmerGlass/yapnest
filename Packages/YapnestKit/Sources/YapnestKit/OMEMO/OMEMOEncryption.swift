@@ -104,7 +104,11 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// module stays registered as the old one, so only the next
     /// `OMEMOEncryption` over the database may be used.
     func replaceDevice() throws {
-        try store.replaceIdentity(context: context)
+        // A send or decode still under way would store its session after
+        // they're all deleted, built on the old key.
+        try encodeLock.withLock {
+            try decodeLock.withLock { try store.replaceIdentity(context: context) }
+        }
     }
 
     // MARK: Inbound

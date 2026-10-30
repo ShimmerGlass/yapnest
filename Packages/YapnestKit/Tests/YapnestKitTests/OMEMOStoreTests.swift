@@ -299,7 +299,7 @@ struct OMEMOStoreTests {
         let old = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
         let bobsDevice = SignalAddress(name: bob, deviceId: 7)
         #expect(old.store.storeSessionRecord(Data([1]), forAddress: bobsDevice))
-        let refusing = try OMEMOEncryption(database: database, account: me, identityKeys: RefusingIdentityKeys(keys))
+        let refusing = try OMEMOEncryption(database: database, account: me, identityKeys: RefusingIdentityKeys(keys: keys))
 
         #expect(throws: (any Error).self) { try refusing.replaceDevice() }
 
@@ -312,7 +312,6 @@ struct OMEMOStoreTests {
     private struct RefusingIdentityKeys: IdentityKeyStore {
         struct Refused: Error {}
         let keys: MemoryIdentityKeyStore
-        init(_ keys: MemoryIdentityKeyStore) { self.keys = keys }
         func load() throws -> StoredIdentity? { try keys.load() }
         func save(_ identity: StoredIdentity) throws { throw Refused() }
     }

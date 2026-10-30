@@ -203,11 +203,12 @@ struct OMEMODeviceUsageTests {
     // MARK: Decrypting
 
     /// - Parameter replaced: device ids an older build made, as `findOrMakeIdentity` notes them.
-    private func setUp(replaced: String? = nil) throws -> (OMEMOEncryption, XMPPClient) {
+    /// - Parameter database: an install's, with `identityKeys` its keychain; a new one if nil.
+    private func setUp(replaced: String? = nil, database: AppDatabase? = nil, identityKeys: (any IdentityKeyStore)? = nil) throws -> (OMEMOEncryption, XMPPClient) {
         let clock = clock
-        let database = try AppDatabase.inMemory()
+        let database = try database ?? AppDatabase.inMemory()
         if let replaced { try database.setSetting(.omemoReplacedDeviceIds, replaced) }
-        let encryption = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore(), now: { clock.now })
+        let encryption = try OMEMOEncryption(database: database, account: me, identityKeys: identityKeys ?? MemoryIdentityKeyStore(), now: { clock.now })
         let client = XMPPClient()
         client.connectionConfiguration.userJid = BareJID(me.description)
         client.writer = SilentWriter()
@@ -383,17 +384,9 @@ struct OMEMODeviceUsageTests {
         let oldId = Int32(bitPattern: old.deviceId)
         try old.replaceDevice()
 
-        let encryption = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
-        let client = XMPPClient()
+        let (encryption, client) = try setUp(database: database, identityKeys: keys)
         defer { withExtendedLifetime(client) {} }
-        client.connectionConfiguration.userJid = BareJID(me.description)
-        _ = client.modulesManager.register(DiscoveryModule(identity: .init(category: "client", type: "pc", name: "Test")))
-        _ = client.modulesManager.register(PubSubModule())
-        _ = client.modulesManager.register(encryption.module)
-        let server = ListServer()
-        client.writer = server
-        let own = Int32(bitPattern: encryption.deviceId)
-        server.ownDevice = own
+        let (server, own) = listServer(for: encryption, on: client, listing: [])
         server.storedList = ListServer.list([oldId, 12])
 
         encryption.module.isPepAvailable = true
