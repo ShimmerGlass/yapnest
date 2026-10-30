@@ -50,11 +50,16 @@ final class BackdropScroll {
 
     func scrolled(_ reading: Reading) {
         defer { last = reading }
-        // Rows arriving or changing height move the offset with them (the
-        // Mac keeps what's on screen in place that way) without the user
-        // having scrolled.
-        guard followsScroll, let last, last.contentHeight == reading.contentHeight else { return }
-        shift += reading.offset - last.offset
+        guard followsScroll, let last else { return }
+        let moved = reading.offset - last.offset
+        // The lazy stack measures rows as they come into view, so the content
+        // changes height in most frames of a scroll. Grown or shrunk past the
+        // end, the offset is all the user's. Grown above, with what's on
+        // screen held still (older messages paging in, or rows above measured
+        // anew), the offset jumped by that much as well, and the rest is the
+        // user's. A frame's scroll is the smaller of the two.
+        let resized = moved - (reading.contentHeight - last.contentHeight)
+        shift += abs(resized) < abs(moved) ? resized : moved
     }
 
     func phaseChanged(_ phase: ScrollPhase) {

@@ -29,13 +29,25 @@ struct BackdropScrollTests {
         #expect(scroll.shift == 0)
     }
 
-    @Test func rowsArrivingWhileTheUserScrollsDontMoveIt() {
+    @Test func olderRowsArrivingAboveWhileTheUserScrollsDontJumpIt() {
         let scroll = BackdropScroll(isFlipped: false)
         scroll.phaseChanged(.interacting)
         scroll.scrolled(reading(400))
         scroll.scrolled(reading(1600, height: 6200))
         scroll.scrolled(reading(1590, height: 6200))
         #expect(scroll.shift == -10)
+    }
+
+    /// Rows measured past the end as they come into view change the content's
+    /// height in most frames of a scroll. Skipping those frames left the
+    /// backdrop still through most of one.
+    @Test func rowsMeasuredBelowWhileTheUserScrollsStillMoveIt() {
+        let scroll = BackdropScroll(isFlipped: false)
+        scroll.phaseChanged(.interacting)
+        scroll.scrolled(reading(400))
+        scroll.scrolled(reading(420, height: 5300))
+        scroll.scrolled(reading(445, height: 5250))
+        #expect(scroll.shift == 45)
     }
 
     @Test func theScrollToEndButtonsScrollMovesItAndOnlyThatOne() {
