@@ -113,6 +113,13 @@ struct ProfileView: View {
                             Label("Change Password", systemImage: "lock.rotation")
                         }
                     }
+                    if offersCommands {
+                        NavigationLink {
+                            CommandsListView(title: "Server commands", session: session, entities: [(label: nil, jid: session.account.domain)])
+                        } label: {
+                            Label("Server commands", systemImage: "terminal")
+                        }
+                    }
                     Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
                         confirmsSignOut = true
                     }
@@ -177,6 +184,15 @@ struct ProfileView: View {
         // The features arrive after connecting; reading the state redraws this then.
         _ = model.connection
         return session.canChangePassword
+    }
+
+    /// Like `offersPasswordChange`: the server's features arrive after connecting.
+    private var offersCommands: Bool {
+        #if DEBUG
+        if DevFixture.isActive { return false }
+        #endif
+        _ = model.connection
+        return session.serverOffersCommands
     }
 
     private func setAvatar(from item: PhotosPickerItem) {

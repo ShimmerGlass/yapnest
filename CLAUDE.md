@@ -69,7 +69,7 @@ An XMPP client for iOS 18+ and the Mac (Mac Catalyst, Mac idiom). `README.md` co
 - `GroupViews.swift`: creating, joining and inviting to groups. `Conversation/MemberModeration.swift` adds the members list's remove, ban and admin actions.
 - `DevicesView.swift`: OMEMO devices and how far each is trusted.
 - `LicencesView.swift`: Open source licences, in Settings, read from the bundled `Licences` folder.
-- `Commands/`: ad-hoc commands. `CommandsListView` lists what an entity offers (from Settings, and chat settings), `CommandRunView` runs one over `AdHocRun`, and `XDataFormView` draws a form or a result. Everything the entity sends is shown verbatim, never as markup.
+- `Commands/`: ad-hoc commands. `CommandsListView` lists what an entity offers (from Profile, and chat settings), `CommandRunView` runs one over `AdHocRun`, and `XDataFormView` draws a form or a result. Everything the entity sends is shown verbatim, never as markup.
 - `BlockConfirmation.swift`, `LoginView.swift`, `NewChatView.swift`, `AvatarView.swift`.
 - `Conversation/`:
   - `ConversationView.swift`: the screen. It has the header, banners and blocked or left bars, and puts the message list over the composer.

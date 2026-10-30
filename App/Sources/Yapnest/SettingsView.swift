@@ -6,7 +6,6 @@ import YapnestKit
 struct SettingsView: View {
     let session: XMPPSession
 
-    @Environment(AppModel.self) private var model
     @State private var sendsReadMarkers = true
     @State private var linkPreviewSetting = LinkPreviewSetting.askPerConversation
     @State private var sendsChatStates = true
@@ -151,17 +150,6 @@ struct SettingsView: View {
                 } footer: {
                     Text("Connection and sending events, the app version and the device model, for finding a problem. It shows when the app was used, but not who you talked to or what was said, and it holds no addresses.")
                 }
-
-                if offersCommands {
-                    Section("Account") {
-                        NavigationLink {
-                            CommandsListView(title: "Server commands", session: session, entities: [(label: nil, jid: session.account.domain)])
-                        } label: {
-                            Label("Server commands", systemImage: "terminal")
-                        }
-                    }
-                }
-
             }
             .dismissesKeyboardOnTap()
             .navigationTitle("Settings")
@@ -219,15 +207,6 @@ struct SettingsView: View {
         }
         #endif
         .closableFromPushedScreens()
-    }
-
-    /// Read from the server's features, which arrive after connecting.
-    private var offersCommands: Bool {
-        #if DEBUG
-        if DevFixture.isActive { return false }
-        #endif
-        _ = model.connection
-        return session.serverOffersCommands
     }
 
     // Quick local writes, off the main thread all the same. The switch only

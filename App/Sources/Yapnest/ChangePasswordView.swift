@@ -1,7 +1,7 @@
 import SwiftUI
 import YapnestKit
 
-/// Settings > Account > Change Password. The passwords live only in this
+/// Profile > Account > Change Password. The passwords live only in this
 /// view's state: they're never logged, and go with the view.
 struct ChangePasswordView: View {
     @Environment(AppModel.self) private var model
