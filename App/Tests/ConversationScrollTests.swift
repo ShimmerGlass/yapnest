@@ -542,6 +542,14 @@ struct ConversationScrollTests {
         #expect(await stays(for: .milliseconds(100)) { f.model.scroll.messageID != f.rowIDs.last })
     }
 
+    /// The list's stack takes the rows from the model in its own order, so
+    /// it doesn't reverse them each time it's evaluated.
+    @Test(arguments: [false, true]) func theListsRowsAreInTheOrderItsStackHasThem(flipped: Bool) async throws {
+        let f = try await opened(distance: 0, flipped: flipped)
+        let ids = f.model.rows.map(\.id)
+        #expect(f.model.listRows.map(\.id) == (flipped ? ids.reversed() : ids))
+    }
+
     // MARK: A blank list far up the history
 
     @Test(arguments: [true, false]) func aListPastItsFarEndGoesBackToTheRowBeingRead(flipped: Bool) async throws {

@@ -23,63 +23,9 @@ struct MessageList: View {
         let _ = model.scrollRevision
         let flipped = model.isFlipped
         ScrollView {
-            LazyVStack(spacing: 0) {
-                // The list is upside down and each row turned back, so the
-                // newest message is first, at the scroll view's resting point,
-                // and the older ones and their row follow it. Whatever
-                // measures the rows' growth in the stack's own space has it the
-                // right way up; what is inside a row is as if nothing were
-                // flipped.
-                if !flipped { OlderMessagesRow(model: model) }
-                ForEach(flipped ? Array(model.rows.reversed()) : model.rows) { row in
-                    MessageRowView(row: row, model: model).equatable()
-                        // Only a message that just arrived slides in, and a
-                        // leaving row fades rather than sliding down.
-                        .transition(.asymmetric(
-                            insertion: model.arrivingIDs.contains(row.id) ? .opacity.combined(with: .move(edge: .bottom)) : .identity,
-                            removal: .opacity,
-                        ))
-                        // A little above the composer. On the row rather than
-                        // the stack, so that scrolling to the newest row by
-                        // its id reaches the very end. Unflipped, the room
-                        // under the composer is here too: as an inset or a
-                        // margin it would leave the scroll view past its end.
-                        .padding(.bottom, row.id == model.rows.last?.id ? 8 + (flipped ? 0 : bottomInset) : 0)
-                        // The scroll view only reports a row once half of it is
-                        // in view, which one taller than two screens never is, so
-                        // this reports whether the row fills the part of the view
-                        // the user sees: below the bars and above the composer.
-                        // It's worked out in the row's own coordinates, which is
-                        // the space `bounds(of:)` gives the scroll view's bounds in.
-                        .onGeometryChange(for: Bool.self) { proxy in
-                            guard let viewport = proxy.bounds(of: .scrollView) else { return false }
-                            let visibleTop = viewport.minY + topInset
-                            let visibleBottom = viewport.maxY - bottomInset
-                            let seen = visibleBottom - visibleTop
-                            let overlap = min(proxy.size.height, visibleBottom) - max(0, visibleTop)
-                            return seen > 0 && overlap >= seen * 0.5
-                        } action: { [id = row.id] fills in
-                            model.rowFillsViewChanged(id, fills)
-                        }
-                        // A row the lazy stack releases never reports again, and
-                        // a fill left behind would claim a row that isn't drawn.
-                        // Which rows are built is also what the model has when
-                        // neither report says a row at the end is in view.
-                        .onAppear { [id = row.id] in model.rowBuiltChanged(id, true) }
-                        .onDisappear { [id = row.id] in
-                            model.rowBuiltChanged(id, false)
-                            model.rowFillsViewChanged(id, false)
-                        }
-                        #if DEBUG
-                        .recordingFrame(of: row.id, model)
-                        #endif
-                        .upsideDown(flipped)
-                }
-                if flipped { OlderMessagesRow(model: model).upsideDown(true) }
-            }
-            .scrollTargetLayout()
-            .coordinateSpace(.named(BubbleHover.space))
-            .modifier(TracksPointer(model: model))
+            // A view of its own, so a scroll the model asks for, which
+            // evaluates this body again, doesn't diff every row.
+            MessageRows(model: model, topInset: topInset, bottomInset: bottomInset)
         }
         .coordinateSpace(.named("messageList"))
         .scrollPosition(Binding(get: { model.scroll }, set: { model.scrollViewMoved($0) }))
@@ -149,6 +95,75 @@ struct MessageList: View {
         #if DEBUG
         .scrollRecording(model)
         #endif
+    }
+}
+
+/// The list's rows, in its stack.
+private struct MessageRows: View {
+    let model: ConversationModel
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+
+    var body: some View {
+        let flipped = model.isFlipped
+        let newest = model.rows.last?.id
+        LazyVStack(spacing: 0) {
+            // The list is upside down and each row turned back, so the
+            // newest message is first, at the scroll view's resting point,
+            // and the older ones and their row follow it. Whatever
+            // measures the rows' growth in the stack's own space has it the
+            // right way up; what is inside a row is as if nothing were
+            // flipped.
+            if !flipped { OlderMessagesRow(model: model) }
+            ForEach(model.listRows) { row in
+                MessageRowView(row: row, model: model).equatable()
+                    // Only a message that just arrived slides in, and a
+                    // leaving row fades rather than sliding down.
+                    .transition(.asymmetric(
+                        insertion: model.arrivingIDs.contains(row.id) ? .opacity.combined(with: .move(edge: .bottom)) : .identity,
+                        removal: .opacity,
+                    ))
+                    // A little above the composer. On the row rather than
+                    // the stack, so that scrolling to the newest row by
+                    // its id reaches the very end. Unflipped, the room
+                    // under the composer is here too: as an inset or a
+                    // margin it would leave the scroll view past its end.
+                    .padding(.bottom, row.id == newest ? 8 + (flipped ? 0 : bottomInset) : 0)
+                    // The scroll view only reports a row once half of it is
+                    // in view, which one taller than two screens never is, so
+                    // this reports whether the row fills the part of the view
+                    // the user sees: below the bars and above the composer.
+                    // It's worked out in the row's own coordinates, which is
+                    // the space `bounds(of:)` gives the scroll view's bounds in.
+                    .onGeometryChange(for: Bool.self) { proxy in
+                        guard let viewport = proxy.bounds(of: .scrollView) else { return false }
+                        let visibleTop = viewport.minY + topInset
+                        let visibleBottom = viewport.maxY - bottomInset
+                        let seen = visibleBottom - visibleTop
+                        let overlap = min(proxy.size.height, visibleBottom) - max(0, visibleTop)
+                        return seen > 0 && overlap >= seen * 0.5
+                    } action: { [id = row.id] fills in
+                        model.rowFillsViewChanged(id, fills)
+                    }
+                    // A row the lazy stack releases never reports again, and
+                    // a fill left behind would claim a row that isn't drawn.
+                    // Which rows are built is also what the model has when
+                    // neither report says a row at the end is in view.
+                    .onAppear { [id = row.id] in model.rowBuiltChanged(id, true) }
+                    .onDisappear { [id = row.id] in
+                        model.rowBuiltChanged(id, false)
+                        model.rowFillsViewChanged(id, false)
+                    }
+                    #if DEBUG
+                    .recordingFrame(of: row.id, model)
+                    #endif
+                    .upsideDown(flipped)
+            }
+            if flipped { OlderMessagesRow(model: model).upsideDown(true) }
+        }
+        .scrollTargetLayout()
+        .coordinateSpace(.named(BubbleHover.space))
+        .modifier(TracksPointer(model: model))
     }
 }
 

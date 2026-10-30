@@ -73,6 +73,9 @@ final class ConversationModel {
     // MARK: What the views draw
 
     private(set) var rows: [MessageRow] = []
+    /// The rows in the order the list's stack has them: newest first when
+    /// the list is flipped. Kept with `rows` rather than reversed by the list.
+    private(set) var listRows: [MessageRow] = []
     /// Messages that have just come in at the bottom, which slide in. Any
     /// other row the list creates during an animation (one scrolled into view
     /// as the keyboard moves) appears in place.
@@ -1024,6 +1027,7 @@ final class ConversationModel {
     private func replaceRows(_ new: [MessageRow]) {
         guard new != rows else { return }
         rows = new
+        listRows = isFlipped ? new.reversed() : new
     }
 
     // MARK: Rows
