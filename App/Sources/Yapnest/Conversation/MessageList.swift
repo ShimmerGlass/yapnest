@@ -102,8 +102,8 @@ struct MessageList: View {
         .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
             model.geometryChanged(geometry)
         }
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
-            model.backdropScroll.offset = offset
+        .onScrollGeometryChange(for: BackdropScroll.Reading.self) { BackdropScroll.Reading(offset: $0.contentOffset.y, contentHeight: $0.contentSize.height) } action: { _, reading in
+            model.backdropScroll.scrolled(reading)
         }
         .onScrollGeometryChange(for: Bool.self) { ConversationModel.isAway($0, flipped: flipped) } action: { _, away in
             model.awayFromBottomChanged(away)
@@ -125,6 +125,7 @@ struct MessageList: View {
         .onScrollPhaseChange { old, phase in
             FrameLog.event("scrollPhase \(old) -> \(phase)")
             model.scrollPhase = phase
+            model.backdropScroll.phaseChanged(phase)
             switch phase {
             case .interacting: model.userStartedScrolling()
             case .idle: model.scrollSettled()

@@ -1984,6 +1984,7 @@ final class ConversationModel {
         #if DEBUG
         recorder?.update { $0.latestTapped() }
         #endif
+        backdropScroll.followsNextAnimation = true
         FrameLog.event("scrollToLatest bounded=\(isBounded) positioned=\(isPositioned) settling=\(jumpSettling) phase=\(scrollPhase)")
         if holdsNewest {
             // Flipped, the newest end is the scroll view's start, which is

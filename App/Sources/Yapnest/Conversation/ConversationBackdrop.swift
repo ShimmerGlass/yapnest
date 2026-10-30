@@ -20,17 +20,54 @@ struct ConversationBackdrop: View {
     }
 }
 
-/// How far the messages have scrolled, apart from the conversation's model:
-/// it changes every frame of a scroll, and only the backdrop's offset reads it.
+/// How far the backdrop has moved, apart from the conversation's model: it
+/// changes every frame of a scroll, and only the backdrop's offset reads it.
+/// It moves only with the user's own scrolling. Loading a chat, paging in
+/// older messages and the list putting itself back in place all move the
+/// scroll offset too, by whole screens at once, and the Mac's list, which
+/// isn't flipped, does that on every chat it opens.
 @MainActor
 @Observable
 final class BackdropScroll {
-    var offset: CGFloat = 0
+    private(set) var shift: CGFloat = 0
     /// Flipped, scrolling back moves the messages down the screen.
     let isFlipped: Bool
+    /// The user's finger, wheel or the glide after them, or the scroll-to-end
+    /// button's scroll, not a scroll the list made itself.
+    @ObservationIgnored private(set) var followsScroll = false
+    /// Set by the scroll-to-end button for the scroll it starts.
+    @ObservationIgnored var followsNextAnimation = false
+    @ObservationIgnored private var last: Reading?
+
+    struct Reading: Equatable {
+        var offset: CGFloat
+        var contentHeight: CGFloat
+    }
 
     init(isFlipped: Bool) {
         self.isFlipped = isFlipped
+    }
+
+    func scrolled(_ reading: Reading) {
+        defer { last = reading }
+        // Rows arriving or changing height move the offset with them (the
+        // Mac keeps what's on screen in place that way) without the user
+        // having scrolled.
+        guard followsScroll, let last, last.contentHeight == reading.contentHeight else { return }
+        shift += reading.offset - last.offset
+    }
+
+    func phaseChanged(_ phase: ScrollPhase) {
+        switch phase {
+        case .tracking, .interacting, .decelerating:
+            followsScroll = true
+            followsNextAnimation = false
+        case .animating:
+            followsScroll = followsNextAnimation
+        default:
+            followsScroll = false
+            followsNextAnimation = false
+        }
     }
 }
 
@@ -42,7 +79,7 @@ private struct BackdropShift: ViewModifier {
 
     func body(content: Content) -> some View {
         let side = BackdropTile.side
-        let moved = scroll.offset * Self.speed * (scroll.isFlipped ? 1 : -1)
+        let moved = scroll.shift * Self.speed * (scroll.isFlipped ? 1 : -1)
         let phase = moved - (moved / side).rounded(.down) * side
         content.offset(y: phase - side)
     }
