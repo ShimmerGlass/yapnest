@@ -146,6 +146,48 @@ final class ConversationModel {
     /// conversation since. Not observed: the rows hear of the menu closing
     /// by `hoverMenuClosed` instead, so none of them reads this.
     @ObservationIgnored var hoverMenuOpen = false
+    /// The bubble the pointer is on now, on the Mac. Unlike `hoveredRow` it
+    /// clears when the pointer leaves, and while the list scrolls.
+    private(set) var hoveredBubble: Int64?
+    /// Where across the row the pointer came into the bubble, which the hover
+    /// bar is centred on. Set on entering only: a bar that followed the
+    /// pointer would move away from the button it was heading for.
+    private(set) var hoverBarX: CGFloat = 0
+    @ObservationIgnored private var bubbleHover = BubbleHover()
+
+    func bubbleFrameChanged(_ frame: BubbleHover.Frame?, for id: Int64) {
+        bubbleHover.set(frame, for: id)
+    }
+
+    /// The bar hides while the list moves, and comes back with the next
+    /// pointer move.
+    func scrollStartedHidesHover() {
+        if hoveredBubble != nil { hoveredBubble = nil }
+    }
+
+    /// The pointer moved to a point in the list stack's space, or left
+    /// (`nil`). One recognizer reports this for the whole list.
+    func pointerMoved(to point: CGPoint?) {
+        // While a hover bar's menu is open the pointer is in the menu's own
+        // window, so the first move here after it closes says it has. The
+        // rows hear of it by notification: reading state from each row would
+        // redraw them all.
+        if hoverMenuOpen {
+            hoverMenuOpen = false
+            NotificationCenter.default.post(name: .hoverMenuClosed, object: self)
+        }
+        guard let point, scrollPhase == .idle else {
+            if hoveredBubble != nil { hoveredBubble = nil }
+            return
+        }
+        let hit = bubbleHover.hit(at: point)
+        guard hit?.id != hoveredBubble else { return }
+        hoveredBubble = hit?.id
+        if let hit {
+            hoveredRow = hit.id
+            hoverBarX = hit.barX
+        }
+    }
     /// The contact whose OMEMO devices are listed, in a sheet.
     var devicesSheet: JID?
     var showsLocationPicker = false

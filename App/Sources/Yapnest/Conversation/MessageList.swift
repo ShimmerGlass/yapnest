@@ -78,6 +78,8 @@ struct MessageList: View {
                 if flipped { OlderMessagesRow(model: model).upsideDown(true) }
             }
             .scrollTargetLayout()
+            .coordinateSpace(.named(BubbleHover.space))
+            .modifier(TracksPointer(model: model))
         }
         .coordinateSpace(.named("messageList"))
         .scrollPosition(Binding(get: { model.scroll }, set: { model.scrollViewMoved($0) }))
@@ -125,6 +127,7 @@ struct MessageList: View {
         .onScrollPhaseChange { old, phase in
             FrameLog.event("scrollPhase \(old) -> \(phase)")
             model.scrollPhase = phase
+            if phase != .idle { model.scrollStartedHidesHover() }
             model.backdropScroll.phaseChanged(phase)
             switch phase {
             case .interacting: model.userStartedScrolling()
@@ -147,6 +150,70 @@ struct MessageList: View {
         .scrollRecording(model)
         #endif
     }
+}
+
+/// Feeds the pointer's place in the list to the model, on the Mac, from one
+/// recognizer on the window.
+private struct TracksPointer: ViewModifier {
+    let model: ConversationModel
+
+    func body(content: Content) -> some View {
+        if Platform.isMac {
+            content.background { PointerTracker(model: model).allowsHitTesting(false) }
+        } else {
+            content
+        }
+    }
+}
+
+private struct PointerTracker: UIViewRepresentable {
+    let model: ConversationModel
+
+    func makeUIView(context: Context) -> TrackerView {
+        let view = TrackerView()
+        view.isUserInteractionEnabled = false
+        view.model = model
+        return view
+    }
+
+    func updateUIView(_ view: TrackerView, context: Context) {
+        view.model = model
+    }
+}
+
+/// Never takes a click: the hosting view picks press targets from the area
+/// around the pointer, and a platform view in the list was picked.
+private final class TrackerView: UIView, UIGestureRecognizerDelegate {
+    weak var model: ConversationModel?
+    private var recognizer: UIHoverGestureRecognizer?
+    private weak var recognizerWindow: UIWindow?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        detach()
+        guard let window else { return }
+        let recognizer = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
+        recognizer.delegate = self
+        window.addGestureRecognizer(recognizer)
+        self.recognizer = recognizer
+        recognizerWindow = window
+    }
+
+    private func detach() {
+        if let recognizer { recognizerWindow?.removeGestureRecognizer(recognizer) }
+        recognizer = nil
+        recognizerWindow = nil
+    }
+
+    @objc private func hovered(_ recognizer: UIHoverGestureRecognizer) {
+        switch recognizer.state {
+        case .began, .changed: model?.pointerMoved(to: recognizer.location(in: self))
+        case .ended, .cancelled: model?.pointerMoved(to: nil)
+        default: break
+        }
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
 extension View {
