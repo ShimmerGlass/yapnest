@@ -100,6 +100,13 @@ final class OMEMOEncryption: @unchecked Sendable {
 
     var deviceId: UInt32 { store.localRegistrationId() }
 
+    /// Makes the install a new device: see `OMEMOStore.replaceIdentity`. The
+    /// module stays registered as the old one, so only the next
+    /// `OMEMOEncryption` over the database may be used.
+    func replaceDevice() throws {
+        try store.replaceIdentity(context: context)
+    }
+
     // MARK: Inbound
 
     /// Decrypts `stanza` in place, replacing its `<encrypted>` element with the body.

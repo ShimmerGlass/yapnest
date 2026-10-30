@@ -17,6 +17,7 @@ struct DevicesView: View {
 
 /// The device list itself, for a sheet or a pushed screen.
 struct DevicesList: View {
+    @Environment(AppModel.self) private var model
     let session: XMPPSession
     let peer: JID?
 
@@ -30,6 +31,7 @@ struct DevicesList: View {
     @State private var pendingRemoval: [OMEMODevice]?
     @State private var isRemoving = false
     @State private var removalError: String?
+    @State private var confirmsReset = false
 
     private struct PendingVerification: Identifiable {
         let device: OMEMODevice
@@ -53,6 +55,13 @@ struct DevicesList: View {
                     Text("This device")
                 } footer: {
                     Text("Compare this with what your contacts see for you, in person or over another trusted channel.")
+                }
+
+                Section {
+                    Button("Reset Encryption for This Device", role: .destructive) { confirmsReset = true }
+                        .accessibilityIdentifier("resetEncryptionDevice")
+                } footer: {
+                    Text("For when people can't read your messages, or you can't read theirs, since this device's key changed. Everyone then sees it as a new device, which their apps accept as they would a new phone.")
                 }
             }
 
@@ -133,6 +142,14 @@ struct DevicesList: View {
                 : "They will stop receiving your encrypted messages. Any you still use add themselves back the next time they connect.")
         }
         .errorAlert("Couldn't remove", $removalError)
+        .alert("Reset encryption for this device?", isPresented: $confirmsReset) {
+            Button("Reset", role: .destructive) {
+                Task { await model.replaceEncryptionDevice() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This device gets a new key and fingerprint, and its old one is taken off your account. Your chats stay. Messages still on their way to the old key can't be read, and anyone who verified this device will need to verify it again.")
+        }
     }
 
     private func remove(_ targets: [OMEMODevice]) {

@@ -3047,6 +3047,14 @@ public final class XMPPSession: @unchecked Sendable {
         omemo.store.forget(deviceIds: ids, of: account.description)
     }
 
+    /// Makes this install a new OMEMO device, with a new id and key, for when
+    /// contacts' apps hold on to the old key: see `OMEMOStore.replaceIdentity`.
+    /// Only for a session disconnected for good, as this one stays the old
+    /// device; a new session over the database registers the new one.
+    public func replaceEncryptionDevice() throws {
+        try omemo.replaceDevice()
+    }
+
     /// The devices `setTrust(trust, for: device)` would make undecided, so the
     /// user can be asked first.
     public func devicesDemoted(bySetting trust: OMEMODevice.Trust, for device: OMEMODevice) -> [OMEMODevice] {

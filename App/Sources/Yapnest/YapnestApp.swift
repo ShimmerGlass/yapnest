@@ -52,6 +52,7 @@ struct YapnestApp: App {
             .diagnosticsErrorAlert(delegate.diagnostics)
             .errorAlert("Couldn't open the link", Bindable(delegate.model).linkProblem)
             .errorAlert("Couldn't open your account", Bindable(delegate.model).openProblem)
+            .errorAlert("Couldn't reset encryption", Bindable(delegate.model).encryptionDeviceProblem)
             .errorAlert("Couldn't place the call", Bindable(delegate.model.calls).error)
             .fullScreenCover(isPresented: Binding(get: { delegate.model.calls.showsCallView }, set: { _ in })) {
                 if let session = delegate.model.session, let state = delegate.model.calls.screen {

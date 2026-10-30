@@ -142,6 +142,57 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         return (identity, erased)
     }
 
+    /// Makes this install a new device, with a new id and key, at the user's
+    /// request. When a device's key changes by mistake, people who aren't
+    /// subscribed to us are never told: their apps go on encrypting with
+    /// the sessions they hold for its id, which it can no longer read, and
+    /// only an id they've never seen makes them fetch our bundle again. The old
+    /// device's sessions and prekeys go with its key, and it is noted for the
+    /// session to take off the account's list once the new one is
+    /// registered. What the user decided about contacts' devices stays, and
+    /// the keychain keeps the old key aside.
+    ///
+    /// The session must be closed: it would go on as the old device.
+    func replaceIdentity(context: SignalContext) throws {
+        let identity = try database.writer.writeWithoutTransaction { db -> StoredIdentity in
+            try db.execute(sql: "PRAGMA secure_delete = ON")
+            defer { try? db.execute(sql: "PRAGMA secure_delete = OFF") }
+            var made: StoredIdentity?
+            try db.inTransaction(.immediate) {
+                made = try makeReplacement(in: db, context: context)
+                return .commit
+            }
+            guard let made else { throw OMEMOError.keyGenerationFailed }
+            return made
+        }
+        use(identity)
+    }
+
+    private func makeReplacement(in db: Database, context: SignalContext) throws -> StoredIdentity {
+        let old = try AppDatabase.setting(db, .omemoRegistrationId).flatMap { UInt32($0) }
+        // Not an id the account had: a contact still holding that device's
+        // sessions would take this one for it.
+        let replaced = try Self.replacedDeviceIds(in: db)
+        let taken = Set(try Int32.fetchAll(db, sql: "SELECT deviceId FROM omemoIdentity WHERE name = ?", arguments: [account]) + replaced)
+            .union(old.map { [Int32(bitPattern: $0)] } ?? [])
+        guard let keyPair = SignalIdentityKeyPair.generateKeyPair(context: context), let data = keyPair.keyPair,
+              let newId = (0..<8).lazy.map({ _ in context.generateRegistrationId() })
+                .first(where: { $0 != 0 && !taken.contains(Int32(bitPattern: $0)) }) else {
+            throw OMEMOError.keyGenerationFailed
+        }
+        let identity = StoredIdentity(registrationId: newId, keyPair: data)
+        try db.execute(sql: "DELETE FROM omemoSession")
+        try db.execute(sql: "DELETE FROM omemoPreKey")
+        try db.execute(sql: "DELETE FROM omemoSignedPreKey")
+        try AppDatabase.setSetting(db, .omemoRegistrationId, String(newId))
+        if let old { try Self.setReplacedDeviceIds(replaced + [Int32(bitPattern: old)], in: db) }
+        // The key last: a keychain that refuses it rolls all of this back,
+        // and the old device stays whole.
+        try identityKeys.save(identity)
+        DiagLog.notice(.omemo, "Device replaced at the user's request", .id("device", Redacted.id(String(newId))))
+        return identity
+    }
+
     /// Puts `kept` back in place of the device an older build made in the
     /// database, and notes that device for the session to take off the
     /// account's list. The sessions stay: most are the kept device's, and

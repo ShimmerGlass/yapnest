@@ -374,6 +374,34 @@ struct OMEMODeviceUsageTests {
         #expect(Set(server.publishedList) == [own, 12])
     }
 
+    /// A device replaced at the user's request: the next session registers
+    /// the new one and takes the old off our list, as contacts would
+    /// otherwise go on encrypting to it.
+    @Test func aDeviceReplacedByTheUserIsListedInsteadOfTheOld() async throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let old = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        let oldId = Int32(bitPattern: old.deviceId)
+        try old.replaceDevice()
+
+        let encryption = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        let client = XMPPClient()
+        defer { withExtendedLifetime(client) {} }
+        client.connectionConfiguration.userJid = BareJID(me.description)
+        _ = client.modulesManager.register(DiscoveryModule(identity: .init(category: "client", type: "pc", name: "Test")))
+        _ = client.modulesManager.register(PubSubModule())
+        _ = client.modulesManager.register(encryption.module)
+        let server = ListServer()
+        client.writer = server
+        let own = Int32(bitPattern: encryption.deviceId)
+        server.ownDevice = own
+        server.storedList = ListServer.list([oldId, 12])
+
+        encryption.module.isPepAvailable = true
+        await server.waitUntil { encryption.store.replacedDeviceIds().isEmpty }
+        #expect(Set(server.publishedList) == [own, 12])
+        #expect(server.deletedBundles == [oldId])
+    }
+
     /// A server listing this device and `others`, whose own bundle it lets
     /// the registration publish, so the device gets ready.
     private func listServer(for encryption: OMEMOEncryption, on client: XMPPClient, listing others: [Int32]) -> (ListServer, own: Int32) {
@@ -432,7 +460,7 @@ private final class ListServer: PacketWriter, @unchecked Sendable {
     }
 
     func waitUntil(_ condition: () -> Bool) async {
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(20)
         while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
     }
 

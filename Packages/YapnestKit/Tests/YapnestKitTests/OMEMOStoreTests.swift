@@ -266,6 +266,57 @@ struct OMEMOStoreTests {
         #expect(restored.store.isTrusted(identity: bobsDevice, publicKeyData: key(0x07)))
     }
 
+    /// A device whose key changed by mistake kept its id, and contacts who
+    /// aren't subscribed to us went on holding the old key for it. Replacing
+    /// it makes a device they've never seen, and takes the old off our list.
+    @Test func aReplacedDeviceComesBackAsANewOne() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let old = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        let bobsDevice = SignalAddress(name: bob, deviceId: 7)
+        #expect(old.store.storeSessionRecord(Data([1]), forAddress: bobsDevice))
+        #expect(old.store.storePreKey(Data([2]), withId: 1))
+        #expect(old.store.storeSignedPreKey(Data([3]), withId: 1))
+        #expect(old.store.save(identity: bobsDevice, publicKeyData: key(0x07)))
+        let oldKey = try #require(old.store.keyPair()?.publicKey), oldId = old.deviceId
+
+        try old.replaceDevice()
+
+        let new = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(new.deviceId != oldId)
+        #expect(new.store.keyPair()?.publicKey != oldKey)
+        #expect(try keys.load()?.registrationId == new.deviceId)
+        #expect(try database.setting(.omemoRegistrationId) == String(new.deviceId))
+        #expect(new.store.sessionRecord(forAddress: bobsDevice) == nil)
+        #expect(new.store.loadPreKey(withId: 1) == nil)
+        #expect(new.store.loadSignedPreKey(withId: 1) == nil)
+        #expect(new.store.isTrusted(identity: bobsDevice, publicKeyData: key(0x07)), "what the user decided about contacts stays")
+        #expect(new.store.replacedDeviceIds() == [Int32(bitPattern: oldId)])
+    }
+
+    /// A keychain that won't take the new key leaves the device as it was.
+    @Test func aReplacementTheKeychainRefusesChangesNothing() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let old = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        let bobsDevice = SignalAddress(name: bob, deviceId: 7)
+        #expect(old.store.storeSessionRecord(Data([1]), forAddress: bobsDevice))
+        let refusing = try OMEMOEncryption(database: database, account: me, identityKeys: RefusingIdentityKeys(keys))
+
+        #expect(throws: (any Error).self) { try refusing.replaceDevice() }
+
+        let again = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(again.deviceId == old.deviceId)
+        #expect(again.store.sessionRecord(forAddress: bobsDevice) == Data([1]))
+        #expect(again.store.replacedDeviceIds().isEmpty)
+    }
+
+    private struct RefusingIdentityKeys: IdentityKeyStore {
+        struct Refused: Error {}
+        let keys: MemoryIdentityKeyStore
+        init(_ keys: MemoryIdentityKeyStore) { self.keys = keys }
+        func load() throws -> StoredIdentity? { try keys.load() }
+        func save(_ identity: StoredIdentity) throws { throw Refused() }
+    }
+
     /// The app and an extension setting up a new database at the same moment,
     /// each over its own connection as in two processes, end up as one
     /// device: the key in the keychain and the id in the database match.

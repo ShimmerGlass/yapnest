@@ -83,6 +83,8 @@ final class AppModel {
     /// Set when the saved account couldn't be opened for a reason the user
     /// can act on; the window says so over the sign-in screen.
     var openProblem: String?
+    /// Set when this device couldn't be made a new encryption device.
+    var encryptionDeviceProblem: String?
     /// Counts the menu bar's Find in Chat, which the open chat answers.
     var chatSearchRequests = 0
     /// Bumped by Edit Last Message in the Mac's menu; the open chat answers it.
@@ -433,6 +435,32 @@ final class AppModel {
         } catch {
             throw XMPPSession.PasswordError.changedButNotSaved
         }
+    }
+
+    /// Makes this install a new encryption device (`XMPPSession.replaceEncryptionDevice`).
+    /// The session goes on as the old device, so it's closed first, and the
+    /// account opened again as at launch, which registers the new one. The
+    /// screens showing the old session close with it, so a failure is told
+    /// through `encryptionDeviceProblem`.
+    func replaceEncryptionDevice() async {
+        guard case .signedIn(let session) = phase else { return }
+        let saved: XMPPSession.Credentials
+        do {
+            guard let stored = try await offMain({ [credentials] in try credentials.load() }), stored.jid == session.account else {
+                encryptionDeviceProblem = String(localized: "This account isn't saved on this device, so it couldn't be opened again.")
+                return
+            }
+            saved = stored
+        } catch {
+            encryptionDeviceProblem = error.localizedDescription
+            return
+        }
+        phase = .loading
+        teardown(session)
+        // It reopens either way: a replacement that failed left the old device whole.
+        let result = await offMain { Result { try session.replaceEncryptionDevice() } }
+        await restoreSession(saved)
+        if case .failure(let error) = result { encryptionDeviceProblem = error.localizedDescription }
     }
 
     /// A session that held a candidate password has signed in, with the stored
