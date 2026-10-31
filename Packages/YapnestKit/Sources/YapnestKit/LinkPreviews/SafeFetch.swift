@@ -79,16 +79,8 @@ struct FetchTarget: Equatable {
     /// or a printer on a public-looking name, and sharing links to other
     /// ports is rare enough not to be worth the exposure.
     init(_ url: URL) throws {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              components.scheme?.lowercased() == "https" else { throw FetchError.refused("not https") }
-        guard components.percentEncodedUser == nil, components.percentEncodedPassword == nil else {
-            throw FetchError.refused("credentials in URL")
-        }
-        guard components.port == nil || components.port == 443 else { throw FetchError.refused("port") }
-        guard let raw = components.percentEncodedHost, !raw.contains("%"), let kind = HostPolicy.classify(raw) else {
-            throw FetchError.refused("host")
-        }
-        host = kind
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { throw FetchError.refused("host") }
+        host = try AddressVetting.hostKind(of: components) { $0 == nil || $0 == 443 }
         var target = components.percentEncodedPath
         if target.isEmpty { target = "/" }
         if let query = components.percentEncodedQuery { target += "?" + query }
@@ -119,6 +111,39 @@ extension AddressPolicy {
         guard !candidates.isEmpty else { throw FetchError.unreachable("no address") }
         if let blocked = candidates.first(where: { isBlocked($0, localPrefixes: prefixes) }) { return .blocked(blocked) }
         return .allowed(candidates)
+    }
+}
+
+/// The checks a URL passes before anything is requested, shared by link
+/// previews and downloads so that the two can't drift apart. The port rule is
+/// the caller's: previews allow only 443, downloads any.
+enum AddressVetting {
+    /// Only HTTPS, no credentials, a port `allowsPort` accepts, and a host
+    /// that isn't local by its name.
+    static func hostKind(of components: URLComponents, allowsPort: (Int?) -> Bool) throws -> HostPolicy.Kind {
+        guard components.scheme?.lowercased() == "https" else { throw FetchError.refused("not https") }
+        guard components.percentEncodedUser == nil, components.percentEncodedPassword == nil else {
+            throw FetchError.refused("credentials in URL")
+        }
+        guard allowsPort(components.port) else { throw FetchError.refused("port") }
+        guard let raw = components.percentEncodedHost, !raw.contains("%"), let kind = HostPolicy.classify(raw) else {
+            throw FetchError.refused("host")
+        }
+        return kind
+    }
+
+    /// Resolves the host and checks every address. The networks are read after
+    /// resolving, right before the caller connects.
+    static func addresses(for host: HostPolicy.Kind, transport: FetchTransport, timeout: TimeInterval) async throws -> [IPAddress] {
+        let candidates: [IPAddress]
+        switch host {
+        case .literal(let address): candidates = [address]
+        case .name(let name): candidates = try await transport.resolve(name, timeout: timeout)
+        }
+        switch try AddressPolicy.vet(candidates, transport: transport) {
+        case .blocked: throw FetchError.refused("address is local")
+        case .allowed(let allowed): return allowed
+        }
     }
 }
 
@@ -158,17 +183,7 @@ final class SafeFetcher: LinkFetching {
     private func fetchOnce(_ url: URL, limits: FetchLimits, timeout: TimeInterval) async throws -> FetchedResource {
         let target = try FetchTarget(url)
 
-        let candidates: [IPAddress]
-        switch target.host {
-        case .literal(let address): candidates = [address]
-        case .name(let name): candidates = try await transport.resolve(name, timeout: timeout)
-        }
-        // The networks are read after resolving, right before connecting.
-        let addresses: [IPAddress]
-        switch try AddressPolicy.vet(candidates, transport: transport) {
-        case .blocked(let blocked): throw FetchError.refused("address \(blocked.bytes) is local")
-        case .allowed(let allowed): addresses = allowed
-        }
+        let addresses = try await AddressVetting.addresses(for: target.host, transport: transport, timeout: timeout)
 
         // One timeout covers every address: a fetch that is slow everywhere
         // shouldn't take a timeout per address. Connecting to an address that

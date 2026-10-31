@@ -37,6 +37,23 @@ struct DownloadPolicyTests {
         #expect(await refused(policy, url))
     }
 
+    @Test func thePortRuleIsTheCallers() async throws {
+        let policy = policy(dns: ["up.example.com": [publicAddress]])
+        let url = URL(string: "https://up.example.com:8443/a.jpg")!
+        #expect(await !refused(policy, url.absoluteString))
+        #expect(throws: FetchError.refused("port")) { _ = try FetchTarget(url) }
+    }
+
+    @Test func sharedStepNamesTheReason() async throws {
+        let transport = FakeTransport()
+        transport.dns = ["rebind.example.com": [IPAddress(literal: "192.168.1.1")!]]
+        let components = URLComponents(string: "https://user@up.example.com/")!
+        #expect(throws: FetchError.refused("credentials in URL")) { _ = try AddressVetting.hostKind(of: components) { _ in true } }
+        await #expect(throws: FetchError.refused("address is local")) {
+            try await AddressVetting.addresses(for: .name("rebind.example.com"), transport: transport, timeout: 1)
+        }
+    }
+
     @Test func aNameThatResolvesIntoTheLanIsRefused() async {
         let policy = policy(dns: [
             "evil.example.com": [publicAddress, IPAddress(literal: "192.168.0.10")!],

@@ -27,19 +27,8 @@ struct DownloadPolicy: Sendable {
     /// Throws if `url` must not be requested.
     func check(_ url: URL) async throws {
         if allowsInsecure { return }
-        guard url.scheme?.lowercased() == "https" else { throw FetchError.refused("not https") }
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              components.percentEncodedUser == nil, components.percentEncodedPassword == nil,
-              let raw = components.percentEncodedHost, !raw.contains("%"), let kind = HostPolicy.classify(raw) else {
-            throw FetchError.refused("host")
-        }
-        let candidates: [IPAddress]
-        switch kind {
-        case .literal(let address): candidates = [address]
-        case .name(let name): candidates = try await transport.resolve(name, timeout: 15)
-        }
-        if case .blocked = try AddressPolicy.vet(candidates, transport: transport) {
-            throw FetchError.refused("address is local")
-        }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { throw FetchError.refused("host") }
+        let kind = try AddressVetting.hostKind(of: components) { _ in true }
+        _ = try await AddressVetting.addresses(for: kind, transport: transport, timeout: 15)
     }
 }
