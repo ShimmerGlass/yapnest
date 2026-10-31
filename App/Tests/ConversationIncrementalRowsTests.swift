@@ -111,6 +111,24 @@ struct ConversationIncrementalRowsTests {
         #expect(try !row(f, new.id).content.layout.joinsPrevious)
     }
 
+    @Test func aTextRenderedForAnItemThatNeverBecameARowIsDroppedWhenTheWindowChanges() async throws {
+        let f = try ConversationFixture()
+        let texts = try f.addMany(3)
+        for _ in 0..<3 {
+            let file = try f.add("", read: true)
+            try f.attach("a.png", to: file)
+        }
+        await f.start()
+        #expect(f.model.rows.count == 6)
+        let stale: Int64 = 9_999_999
+        f.model.cacheTextForTesting(id: stale)
+        #expect(f.model.textCacheIDsForTesting.contains(stale))
+
+        _ = try await f.database.writer.write { try Message.deleteOne($0, key: texts[1].id) }
+        await eventually("the deletion never showed") { f.model.rows.count == 5 }
+        #expect(f.model.textCacheIDsForTesting == Set([texts[0].id!, texts[2].id!]))
+    }
+
     @Test func pagingOlderGivesTheOldFirstRowItsNeighbour() async throws {
         let f = try ConversationFixture()
         let all = try f.addMany(700)

@@ -1391,6 +1391,13 @@ final class ConversationModel {
         return inputs.map { Self.makeContent($0, cached: textCache[$0.item.id], environment: environment).content }
     }
 
+    var textCacheIDsForTesting: Set<Int64> { Set(textCache.keys) }
+
+    /// Keeps a rendering for an id, as an emission does ahead of the item becoming a row.
+    func cacheTextForTesting(id: Int64) {
+        textCache[id] = Self.renderText(TextKey(body: "stale", kind: .normal, collapsed: true))
+    }
+
     /// Builds the rows again from nothing, offering contents that differ from
     /// what the main actor would make: ones that still fit the rows' inputs,
     /// or ones made for inputs that have since changed.
@@ -1487,8 +1494,10 @@ final class ConversationModel {
             built.append(row)
             rowsByID[id] = row
         }
-        // What an emission rendered ahead for an item that never came to be a row.
-        if textCache.count > order.count { textCache = textCache.filter { orderIndex[$0.key] != nil } }
+        // What an emission rendered ahead for an item that never came to be a row. It is not in
+        // `builtOrder`, so only this finds it when the window changes; the count alone misses it
+        // while rows without text (files, events) keep the count of rows above that of texts.
+        if builtOrder != order || textCache.count > order.count { textCache = textCache.filter { orderIndex[$0.key] != nil } }
         builtOrder = order
         self.rowsByID = rowsByID
         self.inputsByID = inputsByID
