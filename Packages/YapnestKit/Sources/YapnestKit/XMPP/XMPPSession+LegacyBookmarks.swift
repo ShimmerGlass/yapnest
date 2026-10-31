@@ -48,11 +48,6 @@ extension Bookmark {
     }
 }
 
-/// The old kind of bookmark only says whether it worked, and not why.
-enum BookmarkError: Error {
-    case legacyFailed
-}
-
 extension XMPPSession {
     /// How long a bookmark publish may go unanswered.
     static let bookmarkTimeout: TimeInterval = 10
@@ -70,17 +65,16 @@ extension XMPPSession {
 
     func publishLegacyBookmark(_ bookmark: Bookmark) async throws {
         let room = bookmark.jid
-        let published = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             updateLegacyBookmarks { storage in
                 storage.removeChildren { $0.getAttribute("jid") == room.description }
                 storage.addChild(bookmark.legacyElement)
-            } then: { continuation.resume(returning: $0) }
+            } then: { continuation.resume(with: $0) }
         }
-        guard published else { throw BookmarkError.legacyFailed }
         try? database.updateGroupChat(room) { $0.isBookmarked = true }
     }
 
-    func removeLegacyBookmark(_ room: JID, then done: @escaping @Sendable (Bool) -> Void = { _ in }) {
+    func removeLegacyBookmark(_ room: JID, then done: @escaping @Sendable (Result<Void, Error>) -> Void = { _ in }) {
         updateLegacyBookmarks({ storage in
             storage.removeChildren { $0.getAttribute("jid") == room.description }
         }, unsupportedMeansNothingToChange: true, then: done)
@@ -96,9 +90,10 @@ extension XMPPSession {
     /// Reads the list, changes it and writes it back, keeping what we don't
     /// understand (URL bookmarks, other clients' extensions) as it was. A
     /// server that keeps no such list has nothing to remove from it, which a
-    /// removal counts as done.
+    /// removal counts as done. A failure is the server's error, or a timeout.
     private func updateLegacyBookmarks(
-        _ change: @escaping @Sendable (Element) -> Void, unsupportedMeansNothingToChange: Bool = false, then done: @escaping @Sendable (Bool) -> Void,
+        _ change: @escaping @Sendable (Element) -> Void, unsupportedMeansNothingToChange: Bool = false,
+        then done: @escaping @Sendable (Result<Void, Error>) -> Void,
     ) {
         Self.legacyBookmarkQueue.async { [self] in
             let pubsub = client.module(.pubsub)
@@ -112,12 +107,19 @@ extension XMPPSession {
             case .noNode?:
                 storage = Element(name: "storage", xmlns: NS.legacyBookmarks)
             case .unsupported? where unsupportedMeansNothingToChange:
-                done(true)
+                done(.success(()))
                 return
-            default:
+            case .unsupported?:
+                done(.failure(ServerError(condition: "feature-not-implemented", type: .cancel)))
+                return
+            case .failed(let error)?:
                 // Writing back a list we couldn't read would drop the others.
                 logger.warning("Couldn't read the old bookmarks to change them")
-                done(false)
+                done(.failure(error))
+                return
+            case nil:
+                logger.warning("Couldn't read the old bookmarks to change them")
+                done(.failure(ServerError.timedOut))
                 return
             }
             change(storage)
@@ -126,11 +128,15 @@ extension XMPPSession {
                 pubsub.publishItem(at: nil, to: NS.legacyBookmarks, itemId: "current", payload: storage,
                                    publishOptions: options, errorDecoder: PubSubError.from(stanza:), completionHandler: finish)
             }
-            if case .success? = result {
-                done(true)
-            } else {
-                logger.warning("Couldn't publish the old bookmarks: \(String(describing: result), privacy: .private)")
-                done(false)
+            switch result {
+            case .success?:
+                done(.success(()))
+            case .failure(let error)?:
+                logger.warning("Couldn't publish the old bookmarks: \(error.localizedDescription, privacy: .private)")
+                done(.failure(ServerError(error)))
+            case nil:
+                logger.warning("Couldn't publish the old bookmarks: no answer")
+                done(.failure(ServerError.timedOut))
             }
         }
     }

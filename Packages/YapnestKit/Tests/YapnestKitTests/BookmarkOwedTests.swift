@@ -391,6 +391,74 @@ struct OwedBookmarkTests {
     }
 }
 
+/// A server that keeps only the old kind of bookmarks: no node yet, and a set
+/// it answers as told. Every request is answered, as the old kind waits for
+/// each on a queue the whole process shares.
+struct OwedLegacyBookmarkTests {
+    let database: AppDatabase
+    let session: XMPPSession
+    let wire = FakeWire()
+    private let sets = Locked(0)
+
+    init() throws {
+        database = try AppDatabase.inMemory()
+        session = try makeSession(me, database: database)
+        session.lock.withLock { $0.retryBackoff = 0 }
+        try database.joinGroupChat(room, nickname: "me", name: "Cake", isBookmarked: true)
+        session.reloadKnownRooms()
+    }
+
+    private func connect(refusingSetsWith refusal: @escaping @Sendable (Iq) -> Iq) async {
+        let sets = sets
+        wire.answer { iq in
+            if let bind = iq.firstChild(name: "bind"), bind.xmlns == "urn:xmpp:bind:0" || bind.xmlns == "urn:ietf:params:xml:ns:xmpp-bind" {
+                let result = Element(name: "bind", xmlns: "urn:ietf:params:xml:ns:xmpp-bind")
+                result.addChild(Element(name: "jid", cdata: "me@example.org/t"))
+                return FakeWire.result(to: iq, result)
+            }
+            if iq.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#info") != nil {
+                return FakeWire.result(to: iq, Element(name: "query", xmlns: "http://jabber.org/protocol/disco#info"))
+            }
+            guard let pubsub = iq.firstChild(name: "pubsub", xmlns: pubsubNS) else { return nil }
+            if pubsub.firstChild(name: "items")?.getAttribute("node") == NS.legacyBookmarks {
+                return FakeWire.error(to: iq, condition: "item-not-found")
+            }
+            if pubsub.firstChild(name: "publish")?.getAttribute("node") == NS.legacyBookmarks {
+                sets.value += 1
+                return refusal(iq)
+            }
+            return FakeWire.error(to: iq, condition: "service-unavailable")
+        }
+        session.connectForTesting(wire)
+        session.lock.withLock { $0.awaitsAccountDiscovery = false }
+        session.client.module(.resourceBind).bind(completionHandler: nil)
+        session.client.module(.disco).discoverAccountFeatures(completionHandler: nil)
+        _ = await eventually { session.usesLegacyBookmarks && session.isConnected }
+    }
+
+    private func group() throws -> GroupChat { try #require(try database.groupChat(room)) }
+
+    @Test func aFinalRefusalOfTheOldKindShowsAWarningAndStopsBeingOwed() async throws {
+        await connect { forbidden($0) }
+        #expect(session.usesLegacyBookmarks)
+        try session.setNotify(.never, in: room)
+
+        #expect(await eventually(timeout: 40) { session.warnings.current.contains { $0.key == "bookmark/\(room)" } })
+        #expect(try !group().bookmarkOwed)
+        #expect(session.warnings.current.first?.action == .retry)
+    }
+
+    @Test func aPassingErrorOfTheOldKindKeepsItOwedWithoutAWarning() async throws {
+        await connect { wait($0) }
+        try session.setNotify(.never, in: room)
+
+        #expect(await eventually(timeout: 40) { sets.value > 0 })
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(try group().bookmarkOwed)
+        #expect(session.warnings.current.isEmpty)
+    }
+}
+
 struct BookmarkOwedMigrationTests {
     @Test func theColumnIsAddedToADatabaseFromBefore() throws {
         let queue = try DatabaseQueue()

@@ -2069,7 +2069,7 @@ extension XMPPSession {
             )
         } catch let refusal {
             logger.warning("Couldn't bookmark \(group.jid, privacy: .private): \(refusal.localizedDescription, privacy: .private)")
-            // Its failure is the one to report: the old kind says only whether it worked.
+            // The XEP-0402 refusal is the one to report, as that is the kind the server should keep.
             do { try await publishLegacyBookmark(bookmark) } catch { throw refusal }
         }
         try? database.updateGroupChat(group.jid) { $0.isBookmarked = true }
@@ -2080,10 +2080,9 @@ extension XMPPSession {
     /// bookmark to remove counts as having removed it.
     func retractBookmark(_ room: JID) async throws {
         if usesLegacyBookmarks {
-            let removed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-                removeLegacyBookmark(room) { continuation.resume(returning: $0) }
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                removeLegacyBookmark(room) { continuation.resume(with: $0) }
             }
-            guard removed else { throw BookmarkError.legacyFailed }
             try? database.updateGroupChat(room) { $0.isBookmarked = false }
             return
         }
