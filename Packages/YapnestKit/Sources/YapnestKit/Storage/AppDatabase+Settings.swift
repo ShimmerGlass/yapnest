@@ -200,7 +200,13 @@ extension AppDatabase {
     /// Whether `member` was kept as having no OMEMO, and no longer is.
     @discardableResult
     public func forgetUnsupported(_ member: JID, device: UInt32) throws -> Bool {
-        try writer.write { db in
+        // Asked at every device list heard, for nearly all of which there is
+        // no mark: a read keeps those out of the write queue.
+        let marked = try reader.read { db in
+            try Self.keptIntroductions(db).map { $0.device == device && $0.unsupported?[member.description] != nil } ?? false
+        }
+        guard marked else { return false }
+        return try writer.write { db in
             guard var kept = try Self.keptIntroductions(db), kept.device == device, kept.unsupported?[member.description] != nil else { return false }
             kept.unsupported?[member.description] = nil
             try Self.setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
