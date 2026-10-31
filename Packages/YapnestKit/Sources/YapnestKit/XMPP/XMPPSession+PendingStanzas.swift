@@ -1,5 +1,5 @@
 import Foundation
-import Martin
+@preconcurrency import Martin
 
 typealias PendingKind = AppDatabase.PendingKind
 
@@ -74,5 +74,60 @@ extension XMPPSession {
     func giveUpPending(_ kind: PendingKind, id: String, because reason: String?) {
         lock.withLock { _ = $0.pendingStanzas.remove(id, of: kind) }
         try? database.clearPending(kind, id: id, error: reason)
+    }
+
+    /// A change of a `kind` the server hasn't acknowledged: the message it is
+    /// on, its conversation's peer, the id of its stanza, and for reactions
+    /// the message itself, as their stanza is built from it.
+    struct PendingRow {
+        var messageId: Int64
+        var peer: JID
+        var id: String
+        var message: Message?
+    }
+
+    func pendingRows(_ kind: PendingKind) -> [PendingRow]? {
+        switch kind {
+        case .reaction:
+            return (try? database.pendingReactions())?.compactMap { message, peer, id in
+                message.id.map { PendingRow(messageId: $0, peer: peer, id: id, message: message) }
+            }
+        case .action:
+            return (try? database.pendingActions())?.map { PendingRow(messageId: $0.messageId, peer: $0.peer, id: $0.id, message: nil) }
+        }
+    }
+
+    /// Sends what the server never acknowledged, which only a new session
+    /// loses: a resumed stream resends it itself, and it is already written
+    /// then.
+    func resendUnacknowledged() {
+        for kind in PendingKind.allCases {
+            for row in pendingRows(kind) ?? [] where !lock.withLock({ $0.pendingStanzas.contains(row.id, of: kind) }) {
+                switch kind {
+                case .reaction: resendReaction(row)
+                case .action: sendAction(id: row.id, of: row.messageId, to: row.peer)
+                }
+            }
+        }
+    }
+
+    /// A room that isn't ready has the reactions wait like a fresh reaction does.
+    private func resendReaction(_ row: PendingRow) {
+        guard let message = row.message else { return }
+        // A room we left never becomes ready, so it would be queued again
+        // every session for good.
+        if (try? database.groupChat(row.peer))?.hasLeft == true {
+            try? database.clearPending(.reaction, messageId: row.messageId)
+            return
+        }
+        // Rebuilt from what we hold now, which the stored id names.
+        guard !message.isRetracted, let target = reference(to: message),
+              let mine = try? database.reactions(on: message, from: account) else {
+            try? database.clearPending(.reaction, messageId: row.messageId)
+            return
+        }
+        let route = route(to: row.peer)
+        let stanza = OutboundStanza.reactions(mine, to: route, target: target, id: row.id)
+        whenReady(route) { [self] in writeReactions(stanza, id: row.id, messageId: row.messageId, peer: row.peer) }
     }
 }

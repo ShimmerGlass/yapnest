@@ -2490,7 +2490,7 @@ public final class XMPPSession: @unchecked Sendable {
             if lock.withLock({ !$0.streamErrorStrikes.isEmpty }) {
                 // A stanza the server closed the stream on goes first and alone.
                 let ids = chats.compactMap(\.0.remoteId) + rooms.compactMap(\.message.remoteId)
-                    + ((try? database.pendingReactions()) ?? []).map(\.id) + ((try? database.pendingActions()) ?? []).map(\.id)
+                    + PendingKind.allCases.flatMap { (pendingRows($0) ?? []).map(\.id) }
                 beginProbation(among: ids)
             }
             var resent = 0
@@ -2503,43 +2503,15 @@ public final class XMPPSession: @unchecked Sendable {
                 transmit(message, to: room)
             }
             DiagLog.info(.send, "Sending unclaimed pending messages", .int("count", resent))
-            resendPendingReactions()
-            resendPendingActions()
+            resendUnacknowledged()
         } catch {
             logger.error("Failed to load unsent messages: \(error)")
         }
     }
 
-    /// Sends the reactions the server never acknowledged, which only a new
-    /// session loses: a resumed stream resends them itself, and they are
-    /// already written then. A room that isn't ready has them wait like a
-    /// fresh reaction does.
-    private func resendPendingReactions() {
-        guard let pending = try? database.pendingReactions() else { return }
-        for (message, peer, id) in pending {
-            guard let messageId = message.id else { continue }
-            guard !lock.withLock({ $0.pendingStanzas.contains(id, of: .reaction) }) else { continue }
-            // A room we left never becomes ready, so it would be queued again
-            // every session for good.
-            if (try? database.groupChat(peer))?.hasLeft == true {
-                try? database.clearPending(.reaction, messageId: messageId)
-                continue
-            }
-            // Rebuilt from what we hold now, which the stored id names.
-            guard !message.isRetracted, let target = reference(to: message),
-                  let mine = try? database.reactions(on: message, from: account) else {
-                try? database.clearPending(.reaction, messageId: messageId)
-                continue
-            }
-            let route = route(to: peer)
-            let stanza = OutboundStanza.reactions(mine, to: route, target: target, id: id)
-            whenReady(route) { [self] in writeReactions(stanza, id: id, messageId: messageId, peer: peer) }
-        }
-    }
-
     /// Writes a reactions stanza once, asking for its acknowledgement, or
     /// pinging for it where the stream has no stream management.
-    private func writeReactions(_ stanza: Martin.Message, id: String, messageId: Int64, peer: JID) {
+    func writeReactions(_ stanza: Martin.Message, id: String, messageId: Int64, peer: JID) {
         guard isConnected, !isHeldByProbation(id), lock.withLock({ $0.pendingStanzas.insert(id, of: .reaction) }) else { return }
         expectBounce(
             of: id, key: .reactions(messageId), peer: peer,
@@ -2905,7 +2877,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// corrected again, or retracted, and only the latest state is sent. Where
     /// the stanza can no longer be built, or can never be sent, it stops
     /// being pending.
-    private func sendAction(id: String, of messageId: Int64, to peer: JID) {
+    func sendAction(id: String, of messageId: Int64, to peer: JID) {
         guard !isHeldByProbation(id) else { return }
         // A room we left never becomes ready, so it would wait for good.
         // Nothing is shown for it: they left, and no one there is waiting for it.
@@ -3028,16 +3000,6 @@ public final class XMPPSession: @unchecked Sendable {
             sendUnclaimedPending()
         }
         if delay <= 0 { resend() } else { DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: resend) }
-    }
-
-    /// Sends the corrections and retractions the server never acknowledged,
-    /// which only a new session loses; see `resendPendingReactions`.
-    private func resendPendingActions() {
-        guard let pending = try? database.pendingActions() else { return }
-        for (messageId, peer, id) in pending {
-            guard !lock.withLock({ $0.pendingStanzas.contains(id, of: .action) }) else { continue }
-            sendAction(id: id, of: messageId, to: peer)
-        }
     }
 
     /// Chooses the action `actionId` that the incoming `message` offered
