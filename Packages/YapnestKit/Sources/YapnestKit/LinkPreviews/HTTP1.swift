@@ -119,7 +119,7 @@ struct HTTP1ResponseParser {
 
         case .fixed(let remaining):
             guard !buffer.isEmpty else { return false }
-            let count = takeBody(remaining)
+            let count = try takeBody(remaining)
             if !isComplete { state = remaining == count ? .done : .fixed(remaining - count) }
             return true
 
@@ -127,7 +127,7 @@ struct HTTP1ResponseParser {
             guard !buffer.isEmpty else { return false }
             let taken = buffer
             buffer.removeAll()
-            append(taken[...])
+            try append(taken[...])
             return true
 
         case .chunkSize:
@@ -148,7 +148,7 @@ struct HTTP1ResponseParser {
 
         case .chunk(let remaining):
             guard !buffer.isEmpty else { return false }
-            let count = takeBody(remaining)
+            let count = try takeBody(remaining)
             if !isComplete { state = remaining == count ? .chunkEnd : .chunk(remaining - count) }
             return true
 
@@ -177,11 +177,11 @@ struct HTTP1ResponseParser {
 
     /// Moves up to `remaining` buffered bytes into the body, and returns how
     /// many.
-    private mutating func takeBody(_ remaining: Int) -> Int {
+    private mutating func takeBody(_ remaining: Int) throws -> Int {
         let count = min(remaining, buffer.count)
         let taken = buffer.prefix(count)
         buffer.removeFirst(count)
-        append(taken)
+        try append(taken)
         return count
     }
 
@@ -241,13 +241,18 @@ struct HTTP1ResponseParser {
     }
 
     /// Adds body bytes up to the limit, and ends the body at `</head>` if asked.
-    private mutating func append(_ bytes: ArraySlice<UInt8>) {
+    /// A page past its limit is cut there, as its head is what's wanted. A
+    /// file past its limit is refused, however it's framed: cut short, an
+    /// image only fails to decode, and an announced size is refused the same.
+    private mutating func append(_ bytes: ArraySlice<UInt8>) throws {
+        if !isHTML, body.count + bytes.count > bodyLimit { throw Failure.tooLarge }
         body.append(contentsOf: bytes.prefix(bodyLimit - body.count))
+        guard isHTML else { return }
         if body.count >= bodyLimit {
             state = .done
             return
         }
-        guard limits.stopAtEndOfHead, isHTML else { return }
+        guard limits.stopAtEndOfHead else { return }
         let marker = Array("</head>".utf8)
         let start = max(0, searched - marker.count + 1)
         let unsearched = [UInt8](body.suffix(from: body.startIndex + start))

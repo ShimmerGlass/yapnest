@@ -207,13 +207,12 @@ struct SafeFetcherOverSocketsTests {
         await #expect(throws: FetchError.tooLarge) { try await fetch(server, "https://site.example/") }
     }
 
-    @Test func cutsAnEndlessBodyAtTheLimitAndHangsUp() async throws {
+    @Test func refusesAnEndlessFileAtTheLimitAndHangsUp() async throws {
         let head = LocalHTTPServer.response(200, ["Content-Type": "image/png"], length: false)
         let server = try await LocalHTTPServer(replies: [.endless(head: head, piece: Data(repeating: 0x78, count: 700))])
         defer { server.stop() }
-        let result = try await fetch(server, "https://site.example/")
-        #expect(result.body.count == Self.limits.maxBytes)
-        #expect(await eventually { server.closedByClient == 1 })
+        await #expect(throws: FetchError.tooLarge) { try await fetch(server, "https://site.example/") }
+        #expect(await eventually(timeout: 20) { server.closedByClient == 1 })
     }
 
     @Test func htmlHasItsOwnLowerLimit() async throws {

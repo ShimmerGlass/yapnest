@@ -241,14 +241,31 @@ struct HTTP1ParserTests {
         #expect(String(decoding: html.body.prefix(25), as: UTF8.self) == "<html><head><title>Big</t")
     }
 
-    @Test func cutsOffAtTheLimit() throws {
-        let image = try parse(["HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n", String(repeating: "x", count: 900), String(repeating: "x", count: 900)], close: false)
+    // Cut short, an image that never announced its size only failed to decode.
+    @Test func aFileOverTheLimitIsRefusedHoweverItIsFramed() {
+        let big = String(repeating: "x", count: 900)
+        #expect(throws: HTTP1ResponseParser.Failure.tooLarge) {
+            _ = try parse(["HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n", big, big], close: false)
+        }
+        #expect(throws: HTTP1ResponseParser.Failure.tooLarge) {
+            _ = try parse(["HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nTransfer-Encoding: chunked\r\n\r\n384\r\n\(big)\r\n384\r\n\(big)\r\n0\r\n\r\n"], close: false)
+        }
+    }
+
+    @Test func aFileAtTheLimitIsReadWhole() throws {
+        let image = try parse(["HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n", String(repeating: "x", count: 600), String(repeating: "x", count: 400)])
         #expect(image.isComplete)
         #expect(image.body.count == 1000)
+    }
+
+    @Test func aPageIsCutAtItsOwnLimit() throws {
         // HTML has its own, lower limit, even when the length is announced.
         let html = try parse(["HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 900\r\n\r\n", String(repeating: "x", count: 900)], close: false)
         #expect(html.isComplete)
         #expect(html.body.count == 500)
+        let unannounced = try parse(["HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n", String(repeating: "x", count: 900)], close: false)
+        #expect(unannounced.isComplete)
+        #expect(unannounced.body.count == 500)
     }
 
     @Test func stopsAfterEndOfHead() throws {
