@@ -20,35 +20,27 @@ public struct NotificationFetcher: Sendable {
         case failed(String)
     }
 
-    public var credentials: XMPPSession.Credentials
+    var account: ExtensionAccount
     /// The account's directory in the shared container.
-    public var directory: URL
-    public var resource: String
-    public var lock: ProcessLock
-    /// Held by the app while it holds or waits for `lock`.
-    public var appLock: ProcessLock
-
-    /// This device's OMEMO identity, the app's, which the session needs to
-    /// decrypt; nil for the keychain's.
-    public var identityKeys: (any IdentityKeyStore)?
+    public var directory: URL { account.directory }
 
     public init(
         credentials: XMPPSession.Credentials, directory: URL, resource: String, lock: ProcessLock = SharedContainer.sessionLock,
         appLock: ProcessLock = SharedContainer.appLock,
         identityKeys: (any IdentityKeyStore)? = nil,
     ) {
-        self.credentials = credentials
-        self.directory = directory
-        self.resource = resource
-        self.lock = lock
-        self.appLock = appLock
-        self.identityKeys = identityKeys
+        self.init(account: ExtensionAccount(
+            credentials: credentials, directory: directory, resource: resource, lock: lock, appLock: appLock, identityKeys: identityKeys,
+        ))
+    }
+
+    init(account: ExtensionAccount) {
+        self.account = account
     }
 
     /// For the signed-in account, or nil if the app hasn't been signed in.
     public static func current() -> NotificationFetcher? {
-        guard let account = ExtensionAccount.current(role: "push") else { return nil }
-        return NotificationFetcher(credentials: account.credentials, directory: account.directory, resource: account.resource)
+        ExtensionAccount.current(role: "push").map { NotificationFetcher(account: $0) }
     }
 
     private static let logger = Logger(subsystem: "Yapnest", category: "Notifications")
@@ -118,16 +110,16 @@ public struct NotificationFetcher: Sendable {
 
     private func catchUpAndClaim(lockWait: TimeInterval, timeout: TimeInterval) async -> (Outcome, completed: Bool) {
         // The app connects and resumes in a moment, then lets go.
-        guard await lock.waitForLock(timeout: lockWait) else {
-            if appLock.appIsRunning { return (.appIsRunning, false) }
+        guard await account.lock.waitForLock(timeout: lockWait) else {
+            if account.appLock.appIsRunning { return (.appIsRunning, false) }
             return (.busy, false)
         }
-        defer { lock.unlock() }
+        defer { account.lock.unlock() }
         do {
-            let database = try account.openDatabase()
+            let database = try account.files.openDatabase()
             let session = try XMPPSession(
-                credentials: credentials, resource: resource, directory: account, database: database, mode: .notificationService,
-                identityKeys: identityKeys,
+                credentials: account.credentials, resource: account.resource, directory: account.files, database: database, mode: .notificationService,
+                identityKeys: account.identityKeys,
             )
             session.savesConfirmedPassword(to: CredentialStore())
             let caughtUp = await session.catchUpOnce(timeout: timeout)
@@ -146,7 +138,7 @@ public struct NotificationFetcher: Sendable {
 
     private func claim() -> Outcome {
         do {
-            return try claimed(from: account.openDatabase())
+            return try claimed(from: account.files.openDatabase())
         } catch {
             return .failed(error.localizedDescription)
         }
@@ -156,8 +148,6 @@ public struct NotificationFetcher: Sendable {
         let claimed = try database.claimNotificationsAndEdits()
         return .notifications(claimed.new, edited: claimed.edited, badge: try database.unreadCount())
     }
-
-    private var account: AccountDirectory { AccountDirectory(url: directory) }
 }
 
 /// Runs fetches one after another, in the order they came.

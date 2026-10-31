@@ -26,13 +26,9 @@ public struct ShareSender: Sendable {
         case failedInApp(String)
     }
 
-    public var credentials: XMPPSession.Credentials
+    var account: ExtensionAccount
     /// The account's directory in the shared container.
-    public var directory: URL
-    public var resource: String
-    public var lock: ProcessLock
-    /// Held by the app while it holds or waits for `lock`.
-    public var appLock: ProcessLock
+    public var directory: URL { account.directory }
 
     /// Files larger than this are left for the app: sending one reads it into
     /// memory, encrypted twice over, and the extension has about 120 MB.
@@ -52,27 +48,23 @@ public struct ShareSender: Sendable {
     /// can be tried without one.
     var makeSession: (@Sendable (AppDatabase) throws -> XMPPSession)?
 
-    /// This device's OMEMO identity, the app's, which the session needs to
-    /// decrypt; nil for the keychain's.
-    public var identityKeys: (any IdentityKeyStore)?
-
     public init(
         credentials: XMPPSession.Credentials, directory: URL, resource: String, lock: ProcessLock = SharedContainer.sessionLock,
         appLock: ProcessLock = SharedContainer.appLock,
         identityKeys: (any IdentityKeyStore)? = nil,
     ) {
-        self.credentials = credentials
-        self.directory = directory
-        self.resource = resource
-        self.lock = lock
-        self.appLock = appLock
-        self.identityKeys = identityKeys
+        self.init(account: ExtensionAccount(
+            credentials: credentials, directory: directory, resource: resource, lock: lock, appLock: appLock, identityKeys: identityKeys,
+        ))
+    }
+
+    init(account: ExtensionAccount) {
+        self.account = account
     }
 
     /// For the signed-in account, or nil if the app hasn't been signed in.
     public static func current() -> ShareSender? {
-        guard let account = ExtensionAccount.current(role: "share") else { return nil }
-        return ShareSender(credentials: account.credentials, directory: account.directory, resource: account.resource)
+        ExtensionAccount.current(role: "share").map { ShareSender(account: $0) }
     }
 
     private static let logger = Logger(subsystem: "Yapnest", category: "Share")
@@ -89,13 +81,12 @@ public struct ShareSender: Sendable {
 
     /// Where `item`'s avatar is, if it has one.
     public func avatarURL(for item: ChatListItem) -> URL? {
-        account.avatars.url(for: item.contact)
+        account.files.avatars.url(for: item.contact)
     }
 
-    private var account: AccountDirectory { AccountDirectory(url: directory) }
 
     private func openDatabase() throws -> AppDatabase {
-        try account.openDatabase()
+        try account.files.openDatabase()
     }
 
     // MARK: Sending
@@ -129,17 +120,17 @@ public struct ShareSender: Sendable {
             return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
         guard !staged.isEmpty else { return .failed(String(localized: "There's nothing to send.")) }
-        await ShareSuggestions.donate(to: peer, database: database, avatars: account.avatars)
+        await ShareSuggestions.donate(to: peer, database: database, avatars: account.files.avatars)
 
         if let outcome = await takeLock() { return outcome }
-        defer { lock.unlock() }
+        defer { account.lock.unlock() }
         // The wait for the lock isn't the server's time.
         deadline = max(deadline, Date().addingTimeInterval(10))
 
         let session: XMPPSession
         do {
             session = try makeSession?(database)
-                ?? XMPPSession(credentials: credentials, resource: resource, directory: account, database: database, mode: .share, identityKeys: identityKeys)
+                ?? XMPPSession(credentials: account.credentials, resource: account.resource, directory: account.files, database: database, mode: .share, identityKeys: account.identityKeys)
         } catch {
             return .queued(error.localizedDescription)
         }
@@ -170,14 +161,14 @@ public struct ShareSender: Sendable {
     /// Nil once this process holds the lock; else how the send ends without it.
     private func takeLock() async -> Outcome? {
         func acquire(_ wait: TimeInterval) async -> Bool {
-            await lock.waitForLock(timeout: wait)
+            await account.lock.waitForLock(timeout: wait)
         }
         if await acquire(lockTimeout) { return nil }
         // Only the app listens for the signal.
-        if !appLock.appIsRunning {
+        if !account.appLock.appIsRunning {
             if await acquire(extensionLockWait) { return nil }
         }
-        if appLock.appIsRunning {
+        if account.appLock.appIsRunning {
             PendingSendsSignal.post()
             return .handedToApp
         }
@@ -189,7 +180,7 @@ public struct ShareSender: Sendable {
     /// temporary copies go.
     private func stage(_ content: ShareContent, to peer: JID, in database: AppDatabase) async throws -> [Message] {
         let outgoing = OutgoingMessages(
-            database: database, attachments: account.attachments, account: credentials.jid,
+            database: database, attachments: account.files.attachments, account: account.credentials.jid,
         )
         var prepared: [OutgoingMessages.PreparedFile] = []
         var items: [OutgoingMessages.Item] = []
