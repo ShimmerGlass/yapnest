@@ -1078,26 +1078,21 @@ extension XMPPSession {
         let others = lists.filter { !Self.memberLists.contains($0) }
         if !others.isEmpty { try? await requestLists(others, of: room) }
         guard !members.isEmpty else { return false }
-        do {
-            try await requestLists(members, of: room)
-            warnings.clear(key)
-            return true
-        } catch {
+        let outcome = await warnings.attempt(
+            key, title: String(localized: "Encrypted messages may not reach all members"),
+            friendly: String(localized: "A group's members couldn't be listed, so encrypted messages may not reach all of them"),
             // A dropped connection is redone by the next session.
-            guard isConnected, lock.withLock({ $0.attempt }) == attempt else { return false }
-            let reason = ServerError.classify(error)
-            logger.warning("Couldn't list the members of \(room, privacy: .private): \(reason.condition, privacy: .private)")
-            // A room that doesn't show its list to members forbids it: that is
-            // the room's setting, and the occupants' addresses stand in.
-            guard reason.condition != "forbidden" else { return false }
-            warnings.post(
-                key, title: String(localized: "Encrypted messages may not reach all members"),
-                friendly: String(localized: "A group's members couldn't be listed, so encrypted messages may not reach all of them"), error: error,
-            ) { [weak self] in
-                try await self?.requestLists(members, of: room)
-            }
-            return false
-        }
+            stillWanted: { [weak self] in self?.attemptIsCurrent(attempt) ?? false },
+            shouldPost: { [logger] error in
+                let reason = ServerError.classify(error)
+                logger.warning("Couldn't list the members of \(room, privacy: .private): \(reason.condition, privacy: .private)")
+                // A room that doesn't show its list to members forbids it: that is
+                // the room's setting, and the occupants' addresses stand in.
+                return reason.condition != "forbidden"
+            },
+        ) { [self] in try await requestLists(members, of: room) }
+        if case .succeeded = outcome { return true }
+        return false
     }
 
     /// Asks for each list, all of them even when one fails, and throws the

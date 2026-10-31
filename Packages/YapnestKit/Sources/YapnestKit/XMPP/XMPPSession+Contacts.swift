@@ -68,17 +68,12 @@ extension XMPPSession {
     func fetchRoster(attempt: Int) {
         Task { [weak self] in
             guard let self else { return }
-            do {
-                try await requestRoster()
-                warnings.clear("roster")
-            } catch {
-                // A new connection asks again by itself.
-                guard isConnected, lock.withLock({ $0.attempt }) == attempt else { return }
-                warnings.post(
-                    "roster", title: String(localized: "Contacts not updated"),
-                    friendly: String(localized: "Your contacts couldn't be read from the server"), error: error,
-                ) { [weak self] in try await self?.requestRoster() }
-            }
+            // A new connection asks again by itself, so one that is gone says nothing.
+            await warnings.attempt(
+                "roster", title: String(localized: "Contacts not updated"),
+                friendly: String(localized: "Your contacts couldn't be read from the server"),
+                stillWanted: { [weak self] in self?.attemptIsCurrent(attempt) ?? false },
+            ) { [self] in try await requestRoster() }
         }
     }
 
@@ -133,17 +128,12 @@ extension XMPPSession {
     /// Nobody waits on it, so a failure is a warning with a Retry.
     public func befriendForNewChat(_ jid: JID) async {
         guard isConnected else { return }
-        let key = "befriend:\(jid.description)"
-        do {
-            try await befriend(jid)
-            warnings.clear(key)
-        } catch {
-            // A dropped connection leaves the chat's banner to offer it again.
-            guard isConnected else { return }
-            warnings.post(key, title: String(localized: "Contact not added"), friendly: String(localized: "\(jid.description) wasn't added to your contacts"), error: error) { [weak self] in
-                try await self?.befriend(jid)
-            }
-        }
+        // A dropped connection leaves the chat's banner to offer it again.
+        await warnings.attempt(
+            "befriend:\(jid.description)", title: String(localized: "Contact not added"),
+            friendly: String(localized: "\(jid.description) wasn't added to your contacts"),
+            stillWanted: { [weak self] in self?.isConnected ?? false },
+        ) { [self] in try await befriend(jid) }
     }
 
     private func befriend(_ jid: JID) async throws {

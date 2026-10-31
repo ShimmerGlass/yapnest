@@ -1547,16 +1547,15 @@ public final class XMPPSession: @unchecked Sendable {
     /// inline; then a second request would only repeat it.
     func enableCarbons() {
         if client.modulesManager.moduleOrNil(Sasl2Module.IDENTIFIER)?.carbonsEnabledInline == true { return }
+        let started = lock.withLock { $0.attempt }
         Task { [weak self] in
             guard let self else { return }
-            do {
-                try await retryingPassingErrors { try await requestCarbons() }
-                warnings.clear("carbons")
-            } catch {
-                warnings.post("carbons", title: String(localized: "Other devices' messages may not show"), friendly: String(localized: "The server wouldn't copy your other devices' messages here"), error: error) { [weak self] in
-                    try await self?.requestCarbons()
-                }
-            }
+            await warnings.attempt(
+                "carbons", title: String(localized: "Other devices' messages may not show"),
+                friendly: String(localized: "The server wouldn't copy your other devices' messages here"),
+                stillWanted: { [weak self] in self?.attemptIsCurrent(started) ?? false },
+                retry: { [weak self] in try await self?.requestCarbons() },
+            ) { [self] in try await retryingPassingErrors { try await requestCarbons() } }
         }
     }
 
@@ -1680,23 +1679,19 @@ public final class XMPPSession: @unchecked Sendable {
         guard let attempt else { return }
         Task { [weak self] in
             guard let self else { return }
-            var failure = error
-            if ServerError.classify(error).isPassing {
-                do {
-                    try await retryingPassingErrors { try await discoverAccountFeatures() }
-                    // The answer reaches `accountDiscovered` through its subscription.
-                    return
-                } catch {
-                    failure = error
-                }
-            }
-            guard isConnected, lock.withLock({ $0.attempt == attempt && $0.awaitsAccountDiscovery }) else { return }
             // Whatever the error: one that kept passing through every retry is
-            // still a server that never said what it supports.
-            warnings.post("discovery", title: String(localized: "Server features unknown"), friendly: String(localized: "The server didn't say what it supports"), error: failure) { [weak self] in
-                try await self?.discoverAccountFeatures()
-            }
-            startSync(archiveVersion: nil)
+            // still a server that never said what it supports. A success
+            // returns: the answer reaches `accountDiscovered` through its subscription.
+            let outcome = await warnings.attempt(
+                "discovery", title: String(localized: "Server features unknown"),
+                friendly: String(localized: "The server didn't say what it supports"),
+                stillWanted: { [weak self] in
+                    guard let self else { return false }
+                    return attemptIsCurrent(attempt) && lock.withLock { $0.awaitsAccountDiscovery }
+                },
+                retry: { [weak self] in try await self?.discoverAccountFeatures() },
+            ) { [self] in try await retryingPassingErrors(afterFailure: error) { try await discoverAccountFeatures() } }
+            if case .posted = outcome { startSync(archiveVersion: nil) }
         }
     }
 

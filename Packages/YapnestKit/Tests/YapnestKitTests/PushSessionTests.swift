@@ -319,7 +319,7 @@ struct PushSessionTests {
         connect()
         serveEnable { _, iq in FakeWire.error(to: iq, condition: "internal-server-error", type: "wait") }
         session.setPushToken(Data([0x02]), sandbox: true)
-        #expect(await eventually { pushStanzas("enable").count == ServerRetry.attempts + 1 })
+        #expect(await eventually { pushStanzas("enable").count == ServerRetry.attempts })
         #expect(await eventually { session.lock.withLock { $0.owedOnResume.contains(.push) } })
         // Shown once the tries ran out, though the error was one that passes.
         #expect(await eventually { session.warnings.current.map(\.key) == ["push"] })

@@ -79,26 +79,18 @@ extension XMPPSession {
             warnings.clear("push")
         case .failure(let error):
             lock.withLock { _ = $0.owedOnResume.insert(.push) }
-            guard ServerError.classify(error).isPassing else { return postPushWarning(error) }
+            let started = lock.withLock { $0.attempt }
             Task { [weak self] in
                 guard let self else { return }
-                let (backoff, started) = lock.withLock { ($0.retryBackoff, $0.attempt) }
-                if backoff > 0 { try? await Task.sleep(for: .seconds(backoff)) }
-                guard isConnected else { return }
-                do {
-                    try await retryingPassingErrors { try await attemptPushEnable() }
-                    pushEnableFinished(.success(()))
-                } catch {
-                    guard isConnected, lock.withLock({ $0.attempt }) == started else { return }
-                    postPushWarning(error)
-                }
+                // The failure counts as the first of the attempts, and a final one is shown at once.
+                let outcome = await warnings.attempt(
+                    "push", title: String(localized: "Notifications are off"),
+                    friendly: String(localized: "The server couldn't turn on notifications"),
+                    stillWanted: { [weak self] in self?.attemptIsCurrent(started) ?? false },
+                    retry: { [weak self] in try await self?.attemptPushEnable() },
+                ) { [self] in try await retryingPassingErrors(afterFailure: error) { try await attemptPushEnable() } }
+                if case .succeeded = outcome { lock.withLock { _ = $0.owedOnResume.remove(.push) } }
             }
-        }
-    }
-
-    private func postPushWarning(_ error: Error) {
-        warnings.post("push", title: String(localized: "Notifications are off"), friendly: String(localized: "The server couldn't turn on notifications"), error: error) { [weak self] in
-            try await self?.attemptPushEnable()
         }
     }
 

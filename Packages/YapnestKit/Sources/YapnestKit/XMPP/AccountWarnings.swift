@@ -102,6 +102,62 @@ public final class AccountWarnings: @unchecked Sendable {
         }
     }
 
+    /// What `attempt` did.
+    enum AttemptOutcome: Sendable {
+        /// The work succeeded, and the warning is cleared.
+        case succeeded
+        /// It failed when the result was no longer wanted, so nothing was said.
+        case abandoned
+        /// It failed with an error that can pass, and the caller chose to leave it.
+        case passed(Error)
+        /// It failed, and `shouldPost` declined to warn.
+        case declined(Error)
+        /// It failed, and the warning with its Retry is shown.
+        case posted(Error)
+    }
+
+    /// What `attempt` does with an error that can pass by itself.
+    enum PassingErrors: Sendable {
+        /// Warn like any other: for work that already retried it, so what is
+        /// left outlasted the attempts.
+        case post
+        /// Return it: something else (the next connect, a resumed stream)
+        /// tries again, and a warning would be about something that may be gone.
+        case leave
+    }
+
+    /// Runs `work`, the usual shape of an action that nobody waits on: a
+    /// success clears the warning at `key`, and a failure shows it with a
+    /// Retry, unless `stillWanted` says the result no longer matters (the
+    /// connection that started it is gone, and the next one redoes it). Ask
+    /// the same question the retries do, `XMPPSession.attemptIsCurrent`.
+    ///
+    /// `retry` is what the Retry runs, `work` itself when it isn't given; give
+    /// it for work that has retries of its own, which a user waiting on a
+    /// button shouldn't sit through. `shouldPost` can decline a failure that
+    /// is expected, such as a room's refusal to list its members.
+    @discardableResult
+    func attempt(
+        _ key: String, title: String, friendly: String,
+        stillWanted: @Sendable () -> Bool,
+        passingErrors: PassingErrors = .post,
+        retry: (@Sendable () async throws -> Void)? = nil,
+        shouldPost: @Sendable (Error) -> Bool = { _ in true },
+        _ work: @escaping @Sendable () async throws -> Void,
+    ) async -> AttemptOutcome {
+        do {
+            try await work()
+            clear(key)
+            return .succeeded
+        } catch {
+            guard stillWanted() else { return .abandoned }
+            if passingErrors == .leave, ServerError.classify(error).isPassing { return .passed(error) }
+            guard shouldPost(error) else { return .declined(error) }
+            post(key, title: title, friendly: friendly, error: error, retry: retry ?? work)
+            return .posted(error)
+        }
+    }
+
     /// Runs the warning's retry. A success clears it; a failure replaces its
     /// detail with the new outcome. Returns whether it's gone.
     @discardableResult

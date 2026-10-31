@@ -104,8 +104,15 @@ extension XMPPSession {
         let started = lock.withLock { $0.attempt }
         return try await ServerRetry.run(
             attempts: attempts, backoff: backoff, onlyRefusals: onlyRefusals, afterFailure: failure,
-            isStillWanted: { isConnected && lock.withLock { $0.attempt } == started },
+            isStillWanted: { attemptIsCurrent(started) },
             operation: operation,
         )
+    }
+
+    /// Whether the connection that began as `attempt` is still the one: it is
+    /// up, and no new session began and redoes its own work. What the retries
+    /// ask before each repeat, and a warning before it is shown.
+    func attemptIsCurrent(_ attempt: Int) -> Bool {
+        isConnected && lock.withLock { $0.attempt } == attempt
     }
 }

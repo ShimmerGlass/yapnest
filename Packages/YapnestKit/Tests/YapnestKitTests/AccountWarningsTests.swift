@@ -100,6 +100,75 @@ struct AccountWarningsTests {
         #expect(await warnings.retry("p") == false)
         #expect(warnings.current.count == 1)
     }
+
+    private let finalError = ServerError(condition: "forbidden", type: .cancel)
+    private let passingError = ServerError(condition: "service-unavailable", type: .wait)
+
+    @Test func anAttemptThatSucceedsClearsItsWarning() async {
+        let warnings = AccountWarnings()
+        warnings.post("k", title: "T", detail: "old")
+        let outcome = await warnings.attempt("k", title: "T", friendly: "F", stillWanted: { true }) {}
+        guard case .succeeded = outcome else { Issue.record("\(outcome)"); return }
+        #expect(warnings.current.isEmpty)
+    }
+
+    @Test func aFinalFailureIsPostedWithARetryThatClearsItOnSuccess() async {
+        let warnings = AccountWarnings()
+        let tries = Tries()
+        let finalError = finalError
+        let outcome = await warnings.attempt("k", title: "T", friendly: "F", stillWanted: { true }) {
+            if tries.next() == 1 { throw finalError }
+        }
+        guard case .posted = outcome else { Issue.record("\(outcome)"); return }
+        #expect(warnings.current.map(\.key) == ["k"])
+        #expect(warnings.current.first?.action == .retry)
+        #expect(await warnings.retry("k"))
+        #expect(warnings.current.isEmpty)
+        #expect(tries.value == 2)
+    }
+
+    @Test func aGivenRetryReplacesTheWorkForTheButton() async {
+        let warnings = AccountWarnings()
+        let retried = Tries()
+        let finalError = finalError
+        await warnings.attempt("k", title: "T", friendly: "F", stillWanted: { true }, retry: { _ = retried.next() }) { throw finalError }
+        #expect(await warnings.retry("k"))
+        #expect(retried.value == 1)
+    }
+
+    @Test func aFailureThatIsNoLongerWantedPostsNothing() async {
+        let warnings = AccountWarnings()
+        let finalError = finalError
+        let outcome = await warnings.attempt("k", title: "T", friendly: "F", stillWanted: { false }) { throw finalError }
+        guard case .abandoned = outcome else { Issue.record("\(outcome)"); return }
+        #expect(warnings.current.isEmpty)
+    }
+
+    @Test func aPassingErrorFollowsTheCallersChoice() async {
+        let warnings = AccountWarnings()
+        let passingError = passingError
+        let left = await warnings.attempt("k", title: "T", friendly: "F", stillWanted: { true }, passingErrors: .leave) { throw passingError }
+        guard case .passed = left else { Issue.record("\(left)"); return }
+        #expect(warnings.current.isEmpty)
+        let posted = await warnings.attempt("k", title: "T", friendly: "F", stillWanted: { true }, passingErrors: .post) { throw passingError }
+        guard case .posted = posted else { Issue.record("\(posted)"); return }
+        #expect(warnings.current.map(\.key) == ["k"])
+    }
+
+    @Test func aFinalErrorIsPostedEvenWhenPassingOnesAreLeft() async {
+        let warnings = AccountWarnings()
+        let finalError = finalError
+        await warnings.attempt("k", title: "T", friendly: "F", stillWanted: { true }, passingErrors: .leave) { throw finalError }
+        #expect(warnings.current.map(\.key) == ["k"])
+    }
+
+    @Test func aDeclinedFailurePostsNothing() async {
+        let warnings = AccountWarnings()
+        let finalError = finalError
+        let outcome = await warnings.attempt("k", title: "T", friendly: "F", stillWanted: { true }, shouldPost: { _ in false }) { throw finalError }
+        guard case .declined = outcome else { Issue.record("\(outcome)"); return }
+        #expect(warnings.current.isEmpty)
+    }
 }
 
 struct ServerErrorMessageTests {

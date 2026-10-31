@@ -91,18 +91,22 @@ extension XMPPSession {
         // applies a change made while it was down.
         lock.withLock { _ = $0.owedOnResume.insert(.profileAccess) }
         guard isConnected else { return }
-        do {
-            try await applyProfileAccess()
-            lock.withLock { _ = $0.owedOnResume.remove(.profileAccess) }
-            warnings.clear("profile-access")
-        } catch {
-            if passesByItself(error, "Couldn't check who reads the profile") { return }
+        let outcome = await warnings.attempt(
+            "profile-access", title: String(localized: "Name and photo visibility not updated"),
+            friendly: String(localized: "The server wouldn't change who can see your name and photo"),
+            stillWanted: { true },
+            passingErrors: .leave,
+        ) { [self] in try await applyProfileAccess() }
+        switch outcome {
+        case .passed(let error):
+            logger.info("Couldn't check who reads the profile: \(error.localizedDescription, privacy: .private)")
+        case .posted(let error):
             lock.withLock { _ = $0.owedOnResume.remove(.profileAccess) }
             logger.error("Couldn't change who reads the profile: \(error.localizedDescription, privacy: .private)")
-            warnings.post("profile-access", title: String(localized: "Name and photo visibility not updated"), friendly: String(localized: "The server wouldn't change who can see your name and photo"), error: error) { [weak self] in
-                try await self?.applyProfileAccess()
-                self?.warnings.clear("profile-access")
-            }
+        case .succeeded:
+            lock.withLock { _ = $0.owedOnResume.remove(.profileAccess) }
+        case .abandoned, .declined:
+            break
         }
     }
 

@@ -47,7 +47,7 @@ struct AccountDiscoveryFailureTests {
     @Test func aDiscoveryThatKeepsTimingOutStillLeadsToCatchUpAndIsShown() async throws {
         connect { FakeWire.error(to: $0, condition: "remote-server-timeout", type: "wait") }
         #expect(await eventually { session.state.value == .connected(isSyncing: false) })
-        #expect(discoRequests == ServerRetry.attempts + 1)
+        #expect(discoRequests == ServerRetry.attempts)
         #expect(session.warnings.current.map(\.key) == ["discovery"])
     }
 
