@@ -1351,17 +1351,13 @@ public final class XMPPSession: @unchecked Sendable {
         let reason = SendFailure.serverClosedStream
         let pendingKind = lock.withLock { $0.pendingStanzas.kind(of: id) }
         let giveUp: () -> Void
-        if pendingKind == .action {
+        if let pendingKind {
             giveUp = { [self] in
-                DiagLog.error(.send, "Correction or retraction given up", .id("stanza", blamed), .value("reason", reason))
-                lock.withLock { _ = $0.pendingStanzas.remove(id, of: .action) }
-                giveUpAction(id, because: String(localized: "The server closed the connection each time this was sent."))
-            }
-        } else if pendingKind == .reaction {
-            giveUp = { [self] in
-                DiagLog.error(.send, "Reactions given up", .id("stanza", blamed), .value("reason", reason))
-                lock.withLock { _ = $0.pendingStanzas.remove(id, of: .reaction) }
-                try? database.clearPending(.reaction, id: id, error: String(localized: "The server closed the connection each time this was sent."))
+                switch pendingKind {
+                case .reaction: DiagLog.error(.send, "Reactions given up", .id("stanza", blamed), .value("reason", reason))
+                case .action: DiagLog.error(.send, "Correction or retraction given up", .id("stanza", blamed), .value("reason", reason))
+                }
+                giveUpPending(pendingKind, id: id, because: String(localized: "The server closed the connection each time this was sent."))
             }
         } else if let message = try? database.pendingOutgoing(remoteId: id) {
             giveUp = { [self] in
@@ -2913,7 +2909,7 @@ public final class XMPPSession: @unchecked Sendable {
         guard !isHeldByProbation(id) else { return }
         // A room we left never becomes ready, so it would wait for good.
         // Nothing is shown for it: they left, and no one there is waiting for it.
-        if (try? database.groupChat(peer))?.hasLeft == true { return giveUpAction(id, because: nil) }
+        if (try? database.groupChat(peer))?.hasLeft == true { return giveUpPending(.action, id: id, because: nil) }
         whenReady(route(to: peer)) { [self] in
             // After any correction still being encrypted.
             sendQueue(for: peer).async { [self] in
@@ -2923,10 +2919,10 @@ public final class XMPPSession: @unchecked Sendable {
                 let stanza: Martin.Message
                 if message.isRetracted {
                     // Groups name messages by the room's stanza-id, 1:1 chats by the stanza's id.
-                    guard let target = route.reference(to: message) else { return giveUpAction(id, because: Self.unsendableChange) }
+                    guard let target = route.reference(to: message) else { return giveUpPending(.action, id: id, because: Self.unsendableChange) }
                     stanza = OutboundStanza.retraction(of: target, to: route, id: id)
                 } else {
-                    guard let original = message.remoteId else { return giveUpAction(id, because: Self.unsendableChange) }
+                    guard let original = message.remoteId else { return giveUpPending(.action, id: id, because: Self.unsendableChange) }
                     // Corrections name the original's stanza id, in groups too.
                     stanza = OutboundStanza.text(message.body, to: route, id: id, replyingTo: quote(of: message, in: route),
                                                  mentions: mentions(in: message.body, route: route))
@@ -2953,7 +2949,7 @@ public final class XMPPSession: @unchecked Sendable {
                     // Like a message that can't be encrypted for the chat, it
                     // won't go next session either.
                     dropped()
-                    giveUpAction(id, because: text)
+                    giveUpPending(.action, id: id, because: text)
                     DiagLog.error(.send, "Correction or retraction failed", .value("reason", reason))
                 }
             }
@@ -2961,12 +2957,6 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     private static var unsendableChange: String { String(localized: "The change couldn't be sent.") }
-
-    /// Stops sending the correction or retraction `id`. With a reason, the
-    /// message shows that it didn't reach the others, with a way to try again.
-    private func giveUpAction(_ id: String, because reason: String?) {
-        try? database.clearPending(.action, id: id, error: reason)
-    }
 
     /// Sends a correction or retraction that did not reach the others again,
     /// with what the message holds now.

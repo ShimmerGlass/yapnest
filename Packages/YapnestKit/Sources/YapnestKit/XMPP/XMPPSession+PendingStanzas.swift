@@ -68,4 +68,11 @@ extension XMPPSession {
         }
         return true
     }
+
+    /// Stops sending the pending stanza `id`. With a reason, it shows that it
+    /// didn't reach the others, with a way to try again.
+    func giveUpPending(_ kind: PendingKind, id: String, because reason: String?) {
+        lock.withLock { _ = $0.pendingStanzas.remove(id, of: kind) }
+        try? database.clearPending(kind, id: id, error: reason)
+    }
 }
