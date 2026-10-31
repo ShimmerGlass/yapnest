@@ -17,6 +17,7 @@ struct ProfileView: View {
     @State private var photo: PhotosPickerItem?
     @State private var isChangingAvatar = false
     @State private var profileError: String?
+    @State private var saves = SettingsWrites()
     @State private var name = ""
     @State private var savedName = ""
     @State private var isSavingName = false
@@ -242,29 +243,18 @@ struct ProfileView: View {
 
     // Saved here and sent in the same call, so nothing waits on the server.
     private func setAvailability(_ new: XMPPSession.Availability) {
-        Task {
-            do {
-                try await offMain { [session] in try session.setAvailability(new) }
-                availability = new
-            } catch {
-                profileError = error.localizedDescription
-            }
-        }
+        saves.run({ [session] in try session.setAvailability(new) }, onSuccess: { availability = new }, onFailure: { profileError = $0.localizedDescription })
     }
 
     private func saveStatus() {
         let message = status
-        Task {
-            do {
-                savedStatus = try await offMain { [session] in
-                    try session.setStatusMessage(message)
-                    return session.statusMessage
-                }
-                status = savedStatus
-            } catch {
-                profileError = error.localizedDescription
-            }
-        }
+        saves.run({ [session] in
+            try session.setStatusMessage(message)
+            return session.statusMessage
+        }, onSuccess: { saved in
+            savedStatus = saved
+            status = saved
+        }, onFailure: { profileError = $0.localizedDescription })
     }
 
     private func removeAvatar() {

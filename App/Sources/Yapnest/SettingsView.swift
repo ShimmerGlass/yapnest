@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var encryptsNewChats = true
     @AppStorage(AppSwitcherCoverSetting.key) private var hidesScreenInAppSwitcher = false
     @State private var privacyError: String?
+    @State private var saves = SettingsWrites()
     @State private var diagnostics = DiagnosticsExporter()
     /// The stored values are read off the main thread; until then the controls
     /// would show defaults and snap, so they stay disabled.
@@ -236,14 +237,7 @@ struct SettingsView: View {
         save({ BackupPolicy.setIncludesMessages(on) }) { includesMessagesInBackups = on }
     }
 
-    private func save(_ write: @escaping @Sendable () throws -> Void, then done: @escaping () -> Void) {
-        Task {
-            do {
-                try await offMain(write)
-                done()
-            } catch {
-                privacyError = error.localizedDescription
-            }
-        }
+    private func save(_ write: @escaping @Sendable () throws -> Void, then done: @escaping @MainActor () -> Void) {
+        saves.run(write, onSuccess: { done() }, onFailure: { privacyError = $0.localizedDescription })
     }
 }

@@ -688,12 +688,7 @@ struct ChatSettingsView: View {
     }
 
     private func setOptimistically<Value>(_ field: Binding<Value>, to value: Value, _ work: @escaping @Sendable () throws -> Void) {
-        let previous = field.wrappedValue
-        field.wrappedValue = value
-        saves.run(work, onFailure: { error in
-            field.wrappedValue = previous
-            saveError = error.localizedDescription
-        })
+        saves.setOptimistically(field, to: value, work) { saveError = $0.localizedDescription }
     }
 
     /// Changing it publishes the group's bookmark, a server action, so it
@@ -726,25 +721,6 @@ struct ChatSettingsView: View {
 
     private func setLinkPreviews(_ allowed: Bool?) {
         setOptimistically($linkPreviews, to: allowed) { [database = session.database, peer] in try database.setLinkPreviews(allowed, peer: peer) }
-    }
-}
-
-/// Writes for settings, off the main thread and in the order they were
-/// made, so toggling twice quickly ends where the user left it.
-@MainActor
-private final class SettingsWrites {
-    private var tail: Task<Void, Never>?
-
-    func run(_ work: @escaping @Sendable () throws -> Void, onFailure: @escaping @MainActor (Error) -> Void) {
-        let previous = tail
-        tail = Task {
-            await previous?.value
-            do {
-                try await offMain(work)
-            } catch {
-                onFailure(error)
-            }
-        }
     }
 }
 
