@@ -75,7 +75,7 @@ extension ConversationModel {
         preparing {
             // In order, so they are sent the way they were put there.
             for (provider, kind) in AttachmentIntake.attachments(in: providers) {
-                await self.stage(isPhoto: kind == .image) { try await Self.copyOut(provider, kind: kind) }
+                await self.stage(isPhoto: kind == .image) { try await ProviderCopy.copyOut(provider, kind: kind, under: FileManager.default.temporaryDirectory) }
             }
         }
     }
@@ -103,10 +103,6 @@ extension ConversationModel {
         guard let item = pendingAttachments.first(where: { $0.id == id }) else { return }
         pendingAttachments.removeAll { $0.id == id }
         if case .file(let file, _) = item.content { AttachmentPicker.discardCopy(file) }
-    }
-
-    private static func copyOut(_ provider: NSItemProvider, kind: AttachmentIntake.Kind) async throws -> URL {
-        try await ProviderCopy.copyOut(provider, kind: kind, under: FileManager.default.temporaryDirectory)
     }
 }
 

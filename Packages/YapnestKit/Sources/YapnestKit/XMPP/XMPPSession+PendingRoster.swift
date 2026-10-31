@@ -51,7 +51,7 @@ extension XMPPSession {
                 warnings.clear("roster/\(change.jid)")
             } catch {
                 logger.info("Couldn't send a roster change: \(error.localizedDescription, privacy: .private)")
-                let refused = error is ContactError || (ServerError.isFromServer(error) && ServerError.classify(error).isFinal)
+                let refused = error is ContactError || ServerError.isFinalRefusal(error)
                 // Whatever passes by itself stays queued for the next connect.
                 guard refused else { return }
                 do {

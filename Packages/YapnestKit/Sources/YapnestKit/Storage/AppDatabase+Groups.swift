@@ -51,6 +51,14 @@ extension AppDatabase {
         }
     }
 
+    /// Marks the bookmarks of `jids` as owed to the server, in one write.
+    func markBookmarksOwed(_ jids: [JID]) throws {
+        guard !jids.isEmpty else { return }
+        try writer.write { db in
+            try GroupChat.filter(jids.contains(Column("jid"))).updateAll(db, Column("bookmarkOwed").set(to: true))
+        }
+    }
+
     /// Applies `change` to the stored group; does nothing if there is none.
     public func updateGroupChat(_ jid: JID, _ change: (inout GroupChat) -> Void) throws {
         try writer.write { db in

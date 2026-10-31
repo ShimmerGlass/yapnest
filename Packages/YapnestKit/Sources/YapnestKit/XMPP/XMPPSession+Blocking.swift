@@ -116,7 +116,7 @@ extension XMPPSession {
                 warnings.clear("blocking/\(change.jid)")
             } catch {
                 logger.info("Couldn't \(change.blocked ? "block" : "unblock", privacy: .public): \(error.localizedDescription, privacy: .private)")
-                let refused = error is BlockingError || (ServerError.isFromServer(error) && ServerError.classify(error).isFinal)
+                let refused = error is BlockingError || ServerError.isFinalRefusal(error)
                 // Whatever passes by itself stays queued for the next connect.
                 guard refused else { return }
                 do {

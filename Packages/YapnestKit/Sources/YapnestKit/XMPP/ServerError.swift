@@ -128,6 +128,12 @@ public struct ServerError: Error, Equatable, Sendable {
         return (error as? URLError).map { classify($0).isPassing } ?? false
     }
 
+    /// Whether `error` is a server's refusal for good, which is shown rather
+    /// than retried.
+    public static func isFinalRefusal(_ error: Error) -> Bool {
+        isFromServer(error) && classify(error).isFinal
+    }
+
     /// What to tell the user about a failed request: the server's reason
     /// after a lead that says whether it will pass, or `localizedDescription`
     /// for an error that isn't the server's. `friendly` replaces the lead.

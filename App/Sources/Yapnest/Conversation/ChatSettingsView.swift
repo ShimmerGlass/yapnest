@@ -174,16 +174,14 @@ struct ChatSettingsView: View {
                 if group == nil, peer != session.account, contact?.isInRoster == true {
                     Section {
                         Button {
-                            nicknameDraft = (contact?.pendingRename == true ? contact?.pendingName : contact?.name) ?? ""
+                            nicknameDraft = contact?.chosenName ?? ""
                             asksNickname = true
                         } label: {
                             LabeledContent {
                                 VStack(alignment: .trailing) {
-                                    Text((contact?.pendingRename == true ? contact?.pendingName : contact?.name) ?? "None")
+                                    Text(contact?.chosenName ?? "None")
                                     if contact?.pendingRename == true {
-                                        Text("Waiting to send")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                        WaitingToSendLabel()
                                     }
                                 }
                             } label: {

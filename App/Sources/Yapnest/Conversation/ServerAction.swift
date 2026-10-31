@@ -79,3 +79,25 @@ struct BusyLabel: View {
         }
     }
 }
+
+/// Says a change is queued and not yet sent.
+struct WaitingToSendLabel: View {
+    var body: some View {
+        Text("Waiting to send")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+}
+
+extension View {
+    /// Hides the view under a spinner while `isBusy`, but keeps its place, so
+    /// the control doesn't change size.
+    func busyOverlay(_ isBusy: Bool) -> some View {
+        busyOverlay(isBusy) { ProgressView() }
+    }
+
+    func busyOverlay(_ isBusy: Bool, @ViewBuilder spinner: () -> some View) -> some View {
+        opacity(isBusy ? 0 : 1)
+            .overlay { if isBusy { spinner() } }
+    }
+}

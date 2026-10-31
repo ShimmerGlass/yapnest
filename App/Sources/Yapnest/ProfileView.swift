@@ -47,9 +47,7 @@ struct ProfileView: View {
                             if profileAction.isBusy(Control.avatar) {
                                 ProgressView()
                             } else if pending.avatar {
-                                Text("Waiting to send")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                WaitingToSendLabel()
                             }
                         }
                     }
@@ -63,9 +61,7 @@ struct ProfileView: View {
                         if profileAction.isBusy(Control.name) {
                             ProgressView()
                         } else if pending.nickname {
-                            Text("Waiting to send")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            WaitingToSendLabel()
                         } else if XMPPSession.normalizedNickname(name) ?? "" != savedName {
                             Button("Save", action: saveName)
                         }

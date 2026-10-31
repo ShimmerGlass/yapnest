@@ -84,7 +84,6 @@ public struct ShareSender: Sendable {
         account.files.avatars.url(for: item.contact)
     }
 
-
     private func openDatabase() throws -> AppDatabase {
         try account.files.openDatabase()
     }
@@ -160,15 +159,16 @@ public struct ShareSender: Sendable {
 
     /// Nil once this process holds the lock; else how the send ends without it.
     private func takeLock() async -> Outcome? {
-        func acquire(_ wait: TimeInterval) async -> Bool {
-            await account.lock.waitForLock(timeout: wait)
+        if await account.lock.waitForLock(timeout: lockTimeout) { return nil }
+        // Only the app listens for the signal. Without it the holder is
+        // another extension, which finishes soon, so wait for it; the app
+        // may have started meanwhile.
+        var appIsRunning = account.appLock.appIsRunning
+        if !appIsRunning {
+            if await account.lock.waitForLock(timeout: extensionLockWait) { return nil }
+            appIsRunning = account.appLock.appIsRunning
         }
-        if await acquire(lockTimeout) { return nil }
-        // Only the app listens for the signal.
-        if !account.appLock.appIsRunning {
-            if await acquire(extensionLockWait) { return nil }
-        }
-        if account.appLock.appIsRunning {
+        if appIsRunning {
             PendingSendsSignal.post()
             return .handedToApp
         }

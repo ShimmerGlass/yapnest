@@ -135,8 +135,7 @@ struct ConversationView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { model.calls.startCall(to: peer) } label: {
                             Label("Call", systemImage: "phone")
-                                .opacity(isStartingCall ? 0 : 1)
-                                .overlay { if isStartingCall { ProgressView() } }
+                                .busyOverlay(isStartingCall)
                         }
                         .disabled(model.calls.isInCall || isStartingCall)
                     }
@@ -381,8 +380,7 @@ struct ConversationView: View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .labelStyle(.iconOnly)
-                .opacity(isBusy ? 0 : 1)
-                .overlay { if isBusy { ProgressView().controlSize(.small) } }
+                .busyOverlay(isBusy) { ProgressView().controlSize(.small) }
         }
         .disabled(isBusy)
             .buttonStyle(.plain)

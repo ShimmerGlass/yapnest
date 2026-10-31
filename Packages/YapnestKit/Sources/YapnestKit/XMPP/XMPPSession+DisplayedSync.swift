@@ -73,7 +73,7 @@ extension XMPPSession {
     /// another device's read point back.
     private func publishOwedRound() async {
         let settled = lock.withLock { !$0.isSyncing && $0.displayedFetches == 0 }
-        guard policy.resendsPending, isConnected, settled else { return }
+        guard isConnected, settled else { return }
         let owed: [Conversation]
         do {
             owed = try database.conversationsOwingReadState()
@@ -126,7 +126,7 @@ extension XMPPSession {
         } catch {
             logger.info("Couldn't publish read state for \(peer, privacy: .private): \(error.localizedDescription, privacy: .private)")
             // The chat stays owed, so the next connect tries again; only a refusal for good is shown.
-            if ServerError.isFromServer(error), ServerError.classify(error).isFinal {
+            if ServerError.isFinalRefusal(error) {
                 try? database.clearReadStateOwed(conversationId: conversationId, ifNewest: nil)
                 warnings.post("readState", title: String(localized: "Read state not synced"), friendly: String(localized: "The server wouldn't take the read state"), error: error)
             }

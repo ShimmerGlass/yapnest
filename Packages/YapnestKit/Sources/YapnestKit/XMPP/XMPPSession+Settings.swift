@@ -535,7 +535,7 @@ extension XMPPSession {
                 logger.info("Couldn't publish \(item.id, privacy: .private): \(error.localizedDescription, privacy: .private)")
                 // One that is refused for good would otherwise be tried at every
                 // connect and never shown. It waits until it changes.
-                if ServerError.isFromServer(error), ServerError.classify(error).isFinal {
+                if ServerError.isFinalRefusal(error) {
                     lock.withLock { $0.settingsSync.refusedItems[item.id] = item.content }
                     warnSettingsRefused(error)
                 }

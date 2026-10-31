@@ -89,7 +89,7 @@ public final class ProcessLock: @unchecked Sendable {
         }
     }
 
-    /// `lock(timeout:as:)` for async code: it polls on a queue of its own and
+    /// `lock(timeout:)` for async code: it polls on a queue of its own and
     /// resumes when it has the lock or the time is up.
     public func waitForLock(timeout: TimeInterval) async -> Bool {
         await withCheckedContinuation { continuation in

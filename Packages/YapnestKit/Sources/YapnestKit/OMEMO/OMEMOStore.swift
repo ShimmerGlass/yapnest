@@ -397,7 +397,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     func currentPreKeyId() -> UInt32 {
         (read { db in
             let left = try UInt32.fetchOne(db, sql: "SELECT MAX(id) FROM omemoPreKey") ?? 0
-            let made = try AppDatabase.setting(db, .omemoLastPreKeyId).flatMap { UInt32($0) } ?? 0
+            let made = try Self.lastPreKeyId(db)
             return max(left, made)
         }) ?? 0
     }
@@ -416,10 +416,16 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         read { db in try Bool.fetchOne(db, sql: "SELECT isDeleted FROM omemoPreKey WHERE id = ?", arguments: [id]) } == true
     }
 
+    /// The highest one-time prekey id ever made, kept apart from the table
+    /// that a flush empties.
+    private static func lastPreKeyId(_ db: Database) throws -> UInt32 {
+        try AppDatabase.setting(db, .omemoLastPreKeyId).flatMap { UInt32($0) } ?? 0
+    }
+
     func storePreKey(_ data: Data, withId id: UInt32) -> Bool {
         write { db in
             try db.execute(sql: "INSERT OR REPLACE INTO omemoPreKey (id, data, isDeleted) VALUES (?, ?, 0)", arguments: [id, data])
-            let made = try AppDatabase.setting(db, .omemoLastPreKeyId).flatMap { UInt32($0) } ?? 0
+            let made = try Self.lastPreKeyId(db)
             if id > made { try AppDatabase.setSetting(db, .omemoLastPreKeyId, String(id)) }
         }
     }

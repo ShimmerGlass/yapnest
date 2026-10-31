@@ -153,13 +153,14 @@ struct DevicesList: View {
 
     private func remove(_ targets: [OMEMODevice]) {
         removal.run { [session] in
+            var failure: Error?
             do {
                 try await session.removeOwnDevices(targets)
             } catch {
-                await reload()
-                throw error
+                failure = error
             }
             await reload()
+            if let failure { throw failure }
         }
     }
 

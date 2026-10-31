@@ -30,9 +30,7 @@ struct ContactRequestRow: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         if isWaiting {
-                            Text("Waiting to send")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            WaitingToSendLabel()
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

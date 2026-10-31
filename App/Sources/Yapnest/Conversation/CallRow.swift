@@ -54,8 +54,7 @@ struct CallRowView: View {
             HStack(spacing: 6) {
                 // The symbol stays under the spinner so the row keeps its size.
                 Image(systemName: call.symbol)
-                    .opacity(isStarting ? 0 : 1)
-                    .overlay { if isStarting { ProgressView().controlSize(.mini) } }
+                    .busyOverlay(isStarting) { ProgressView().controlSize(.mini) }
                 Text(call.title)
                 Text(row.content.time).foregroundStyle(.tertiary)
             }

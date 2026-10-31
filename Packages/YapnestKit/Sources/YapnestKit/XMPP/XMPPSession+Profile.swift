@@ -190,12 +190,12 @@ extension XMPPSession {
     }
 
     /// Whether a failed send is one for good, rather than one that can pass.
-    private func isRefusal(_ error: Error) -> Bool {
+    private func isFinalProfileRefusal(_ error: Error) -> Bool {
         if let error = error as? ProfileError {
             if case .offline = error { return false }
             return true
         }
-        return ServerError.isFromServer(error) && ServerError.classify(error).isFinal
+        return ServerError.isFinalRefusal(error)
     }
 
     private func sendOwed(_ owed: OwedAvatarChange) async {
@@ -211,7 +211,7 @@ extension XMPPSession {
             warnings.clear(Self.avatarWarning)
         } catch {
             logger.info("Couldn't send the avatar: \(error.localizedDescription, privacy: .private)")
-            guard isRefusal(error) else { return }
+            guard isFinalProfileRefusal(error) else { return }
             // Showing the avatar the server has again needs its file; without
             // it none shows until the server's is fetched.
             let shown = owed.base.flatMap { avatars.contains($0) ? $0 : nil }
@@ -256,7 +256,7 @@ extension XMPPSession {
             warnings.clear(Self.nicknameWarning)
         } catch {
             logger.info("Couldn't send the nickname: \(error.localizedDescription, privacy: .private)")
-            guard isRefusal(error) else { return }
+            guard isFinalProfileRefusal(error) else { return }
             do {
                 guard try database.revertNicknameChange(owed, shows: owed.base) else { return }
             } catch {
@@ -300,8 +300,8 @@ extension XMPPSession {
         switch try await readOwnNode(NS.avatarMetadata, "Avatar", limit: .lastItems(1)) {
         case .items(let page): ProfileStanza.avatarId(in: page.items.first?.payload)
         // A server that can't hold the node has none; publishing says why.
-        case .noNode, .unsupported: nil
-        case .failed(let error): throw error
+        // `readOwnNode` has already thrown a failure.
+        case .noNode, .unsupported, .failed: nil
         }
     }
 
@@ -317,8 +317,7 @@ extension XMPPSession {
     private func serverNickname() async throws -> String? {
         switch try await readOwnNode(NS.nick, "Nickname") {
         case .items(let page): page.items.lazy.compactMap { Self.normalizedNickname(ProfileStanza.nick(from: $0.payload)) }.first
-        case .noNode, .unsupported: nil
-        case .failed(let error): throw error
+        case .noNode, .unsupported, .failed: nil
         }
     }
 

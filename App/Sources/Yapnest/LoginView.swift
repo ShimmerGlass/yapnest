@@ -168,8 +168,7 @@ struct ProminentBusyButton: View {
         Button(action: action) {
             // The text stays in place, hidden, so the button keeps its size.
             Text(title)
-                .opacity(isBusy ? 0 : 1)
-                .overlay { if isBusy { ProgressView().tint(.white) } }
+                .busyOverlay(isBusy) { ProgressView().tint(.white) }
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)

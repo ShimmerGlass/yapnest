@@ -793,12 +793,8 @@ extension XMPPSession {
     func markLeft(_ room: JID, owingBookmark: Bool = false) {
         try? database.updateGroupChat(room) {
             $0.hasLeft = true
-            if owingBookmark {
-                $0.bookmarkOwed = true
-                $0.isBookmarked = false
-            } else {
-                $0.bookmarkOwed = false
-            }
+            $0.bookmarkOwed = owingBookmark
+            if owingBookmark { $0.isBookmarked = false }
         }
         rosterForget(room)
     }
@@ -1941,6 +1937,7 @@ extension XMPPSession {
             }
             applyBookmarkFields(bookmark)
         }
+        var owed: [JID] = []
         for group in groups.values where !group.hasLeft {
             let bookmark = byJID[group.jid]
             if bookmark?.autojoin == true { continue }
@@ -1948,9 +1945,10 @@ extension XMPPSession {
                 // Left on another device, which wins over what we owe.
                 markLeft(group.jid)
             } else if !group.bookmarkOwed {
-                try? database.updateGroupChat(group.jid) { $0.bookmarkOwed = true }
+                owed.append(group.jid)
             }
         }
+        try? database.markBookmarksOwed(owed)
         sendOwedBookmarks()
         joinRooms()
     }
@@ -1968,16 +1966,12 @@ extension XMPPSession {
     }
 
     func bookmarkChanged(_ change: BookmarksModule.Change) {
-        let jid: JID = switch change {
-        case .published(let bookmark): bookmark.jid
-        case .retracted(let jid): jid
+        let (jid, leftElsewhere): (JID, Bool) = switch change {
+        case .published(let bookmark): (bookmark.jid, !bookmark.autojoin)
+        case .retracted(let jid): (jid, true)
         }
         if let group = try? database.groupChat(jid), group.bookmarkOwed {
             // Another device leaving a group we had bookmarked wins over what we owe.
-            let leftElsewhere = switch change {
-            case .published(let bookmark): !bookmark.autojoin
-            case .retracted: true
-            }
             guard leftElsewhere, !group.hasLeft, group.isBookmarked else { return }
         }
         switch change {
@@ -2036,7 +2030,7 @@ extension XMPPSession {
             } catch {
                 logger.info("Couldn't send the bookmark for \(group.jid, privacy: .private): \(error.localizedDescription, privacy: .private)")
                 // Whatever passes by itself stays owed for the next connect.
-                guard ServerError.isFromServer(error), ServerError.classify(error).isFinal else { continue }
+                guard ServerError.isFinalRefusal(error) else { continue }
                 try? database.updateGroupChat(group.jid) { $0.bookmarkOwed = false }
                 lock.withLock { $0.bookmarkRefusals[group.jid] = error }
                 postBookmarkWarning(group, error: error)

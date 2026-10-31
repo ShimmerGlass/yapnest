@@ -109,12 +109,14 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
     /// ringing phone, a download or a conversation.
     public var mayReceive: Bool { hasConsent && !isBlocked }
 
+    /// The name the user gave them: the one waiting to be sent, else the roster's.
+    public var chosenName: String? { pendingRename ? pendingName : name }
+
     /// The roster name, else the name they publish if the user added them,
     /// else the bare address.
     public var displayName: String {
         // The name the user gave them always wins over the one they chose.
-        let chosen = pendingRename ? pendingName : name
-        if let chosen, !chosen.isEmpty { return chosen }
+        if let chosen = chosenName, !chosen.isEmpty { return chosen }
         if isKnown, let nickname, !nickname.isEmpty { return nickname }
         return jid.shortName
     }
