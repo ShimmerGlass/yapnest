@@ -70,7 +70,11 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     }
     private lazy var sendButton = makeSendButton()
     private lazy var micButton = makeMicButton()
-    private let recordingRow = VoiceRecordingRow()
+    /// Built when the first recording starts: most chats never record, and
+    /// opening one is when its cost is felt.
+    private var recordingRow: VoiceRecordingRow?
+    /// The view the recording row is added to, over the field.
+    private var fieldContent: UIView?
     /// The column of the field that holds the text, hidden while recording.
     private var fieldColumn: UIView?
     private var recordingClock: Timer?
@@ -255,12 +259,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         contentView.addSubview(column)
         fieldColumn = column
 
-        recordingRow.translatesAutoresizingMaskIntoConstraints = false
-        recordingRow.alpha = 0
-        recordingRow.isHidden = true
-        recordingRow.isUserInteractionEnabled = false
-        recordingRow.onCancel = { [weak self] in self?.voice?.cancel() }
-        contentView.addSubview(recordingRow)
+        fieldContent = contentView
 
         textHeight = textView.heightAnchor.constraint(equalToConstant: Metrics.controlSize)
         NSLayoutConstraint.activate([
@@ -269,10 +268,6 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
             column.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -2),
             column.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             textHeight,
-            recordingRow.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            recordingRow.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            recordingRow.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            recordingRow.heightAnchor.constraint(equalToConstant: Metrics.controlSize),
             placeholder.topAnchor.constraint(equalTo: textView.topAnchor, constant: 10),
         ])
         applyTextInsets()
@@ -737,18 +732,24 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     func voiceChanged() {
         guard let voice else { return }
         let recording = voice.isRecording
-        recordingRow.show(phase: voice.phase, willCancel: voice.willCancel)
-        recordingRow.isUserInteractionEnabled = voice.phase == .locked
+        // A row that was never built has nothing to reset or hide.
+        guard let row = recording ? makeRecordingRow() : recordingRow else {
+            textView.isUserInteractionEnabled = true
+            updateControls(animated: true)
+            return
+        }
+        row.show(phase: voice.phase, willCancel: voice.willCancel)
+        row.isUserInteractionEnabled = voice.phase == .locked
         textView.isUserInteractionEnabled = !recording
         // Hidden when idle, so its Cancel isn't among the buttons VoiceOver finds.
-        if recording { recordingRow.isHidden = false }
+        if recording { row.isHidden = false }
         UIView.animate(withDuration: 0.2, animations: {
-            self.recordingRow.alpha = recording ? 1 : 0
+            row.alpha = recording ? 1 : 0
             self.fieldColumn?.alpha = recording ? 0 : 1
             // Held, the button swells under the finger.
             self.micButton.transform = voice.phase == .holding ? CGAffineTransform(scaleX: 1.4, y: 1.4) : .identity
         }, completion: { _ in
-            if self.voice?.isRecording != true { self.recordingRow.isHidden = true }
+            if self.voice?.isRecording != true { row.isHidden = true }
         })
         updateControls(animated: true)
         if recording, recordingClock == nil {
@@ -764,9 +765,37 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         }
     }
 
+    /// The row, built on first use. Hidden and transparent, as it was when
+    /// built with the field, so the fade-in starts from the same state.
+    private func makeRecordingRow() -> VoiceRecordingRow? {
+        if let recordingRow { return recordingRow }
+        guard let fieldContent else { return nil }
+        let row = VoiceRecordingRow()
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.alpha = 0
+        row.isHidden = true
+        row.isUserInteractionEnabled = false
+        row.onCancel = { [weak self] in self?.voice?.cancel() }
+        fieldContent.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: fieldContent.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: fieldContent.trailingAnchor),
+            row.bottomAnchor.constraint(equalTo: fieldContent.bottomAnchor),
+            row.heightAnchor.constraint(equalToConstant: Metrics.controlSize),
+        ])
+        // Laid out now, outside the fade's animation, which would otherwise
+        // grow it from the corner the first time.
+        fieldContent.layoutIfNeeded()
+        recordingRow = row
+        return row
+    }
+
+    /// Whether a recording has built its row yet.
+    var hasRecordingRow: Bool { recordingRow != nil }
+
     private func tickRecording() {
         guard let voice else { return }
-        recordingRow.update(elapsed: voice.elapsed, level: voice.level)
+        recordingRow?.update(elapsed: voice.elapsed, level: voice.level)
         voice.tick()
     }
 
@@ -818,11 +847,15 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
             self.micButton.alpha = showSend ? 0 : 1
             self.cameraButton.isHidden = showSend
             self.cameraButton.alpha = showSend ? 0 : 1
-            self.layoutIfNeeded()
         }
         if animated {
-            UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, animations: apply)
+            UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0) {
+                apply()
+                self.layoutIfNeeded()
+            }
         } else {
+            // Built but not yet in a window: the first layout comes with it,
+            // so forcing one here only solved the constraints twice.
             apply()
         }
     }
