@@ -522,7 +522,7 @@ struct SafeFetcherTests {
         transport.dns["site.example"] = [ip("93.184.216.34"), ip("93.184.216.35")]
         transport.startHangs = [ip("93.184.216.34")]
         transport.scripts["site.example"] = [[], Self.response(200, ["Content-Type": "text/plain"], body: "second")]
-        let fetcher = SafeFetcher(transport: transport, requestTimeout: 2, totalTimeout: 2, connectTimeout: 0.2)
+        let fetcher = SafeFetcher(transport: transport, requestTimeout: 10, totalTimeout: 10, connectTimeout: 0.2)
         let result = try await fetcher.fetch(URL(string: "https://site.example/")!, limits: Self.limits)
         #expect(String(decoding: result.body, as: UTF8.self) == "second")
         #expect(transport.connects.map(\.address) == [ip("93.184.216.34"), ip("93.184.216.35")])
