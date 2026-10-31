@@ -109,6 +109,8 @@ extension XMPPSession {
     public enum ProfileError: Error, LocalizedError {
         case offline
         case imageTooLarge
+        /// The picture queued for sending is gone from the avatar store.
+        case imageMissing
         /// The server said no; `reason` is its own condition and text.
         case refused(reason: String)
 
@@ -117,33 +119,237 @@ extension XMPPSession {
             case .refused(let reason): String(localized: "The server refused it: \(reason)")
             case .offline: String(localized: "You're offline.")
             case .imageTooLarge: String(localized: "That picture is too large.")
+            case .imageMissing: String(localized: "The picture is no longer on this device.")
             }
         }
     }
 
-    /// Publishes `data` as our avatar and shows it right away, without
-    /// waiting for the server to notify us of our own change.
+    /// Makes `data` our avatar. It shows at once and is kept until the server
+    /// has it, so it can be set offline; see `sendOwedProfile`.
     public func publishAvatar(_ data: Data, mimeType: String, width: Int? = nil, height: Int? = nil) async throws {
-        guard await waitForConnection() else { throw ProfileError.offline }
         guard data.count <= AvatarStore.maxSize else { throw ProfileError.imageTooLarge }
         let hash = AvatarStore.hash(of: data)
+        // The file is what gets sent later, so it has to be there first. They
+        // are named by their hash, so only a failed write keeps the picture
+        // from showing.
+        guard avatars.save(data, hash: hash) else { throw ProfileError.imageTooLarge }
+        try queueAvatar(OwedAvatarChange.Image(hash: hash, mimeType: mimeType, size: data.count, width: width, height: height))
+    }
+
+    /// Removes our avatar, by publishing empty metadata (XEP-0084 §4.2), once
+    /// connected.
+    public func removeAvatar() async throws {
+        try queueAvatar(nil)
+    }
+
+    private func queueAvatar(_ image: OwedAvatarChange.Image?) throws {
+        try database.queueAvatarChange(image, for: account)
+        warnings.clear(Self.avatarWarning)
+        sendOwedProfile()
+    }
+
+    /// Whether our avatar or name is waiting to be sent.
+    public var avatarPending: Bool { (try? database.owedAvatarChange()) != nil }
+    public var nicknamePending: Bool { (try? database.owedNicknameChange()) != nil }
+
+    private static let avatarWarning = "profile/avatar"
+    private static let nicknameWarning = "profile/nickname"
+
+    /// Sends our avatar and name changes that the server doesn't have yet,
+    /// once connected, after checking that it still has what it had when
+    /// each was made: if another device changed it meanwhile, that wins and
+    /// ours is dropped with a notice. A passing error leaves the change owed
+    /// for the next connect, and a refusal for good puts the old value back
+    /// and shows a warning with a Retry. Only the app sends. The task is
+    /// returned for a caller that needs to wait for the round.
+    @discardableResult
+    func sendOwedProfile() -> Task<Void, Never>? {
+        guard policy.syncsAccountState else { return nil }
+        return lock.withLock { state in
+            // Asked again while a round goes: it reads what is owed once more.
+            if let task = state.profileTask {
+                state.profileRun = .runAgain
+                return task
+            }
+            state.profileRun = .running
+            let task = Task { [weak self] in
+                while let self {
+                    // Asked again before this round read what is owed: it covers that.
+                    lock.withLock { $0.profileRun = .running }
+                    await sendOwedProfileRound()
+                    let again = lock.withLock { state in
+                        if state.profileRun == .runAgain {
+                            state.profileRun = .running
+                            return true
+                        }
+                        state.profileRun = .idle
+                        state.profileTask = nil
+                        return false
+                    }
+                    guard again else { return }
+                }
+            }
+            state.profileTask = task
+            return task
+        }
+    }
+
+    private func sendOwedProfileRound() async {
+        guard isConnected else { return }
+        do {
+            if let owed = try database.owedAvatarChange() { await sendOwed(owed) }
+            guard isConnected else { return }
+            if let owed = try database.owedNicknameChange() { await sendOwed(owed) }
+        } catch {
+            logger.error("Failed to read the profile changes owed: \(error)")
+        }
+    }
+
+    /// Whether a failed send is one for good, rather than one that can pass.
+    private func isRefusal(_ error: Error) -> Bool {
+        if let error = error as? ProfileError {
+            if case .offline = error { return false }
+            return true
+        }
+        return ServerError.isFromServer(error) && ServerError.classify(error).isFinal
+    }
+
+    private func sendOwed(_ owed: OwedAvatarChange) async {
+        do {
+            let server = try await serverAvatarId()
+            guard server == owed.base?.lowercased() else {
+                avatarChangedElsewhere(owed, server: server)
+                return
+            }
+            try await publish(owed)
+            try database.settleAvatarChange(owed, serverNow: owed.image?.hash)
+            lock.withLock { _ = $0.profileRefusals.removeValue(forKey: Self.avatarWarning) }
+            warnings.clear(Self.avatarWarning)
+        } catch {
+            logger.info("Couldn't send the avatar: \(error.localizedDescription, privacy: .private)")
+            guard isRefusal(error) else { return }
+            // Showing the avatar the server has again needs its file; without
+            // it none shows until the server's is fetched.
+            let shown = owed.base.flatMap { avatars.contains($0) ? $0 : nil }
+            do {
+                guard try database.revertAvatarChange(owed, shows: shown, for: account) else { return }
+            } catch {
+                logger.error("Failed to put back the avatar the server refused: \(error)")
+            }
+            if owed.base != nil, shown == nil { fetchAvatar(of: account) }
+            let image = owed.image
+            var retry: (@Sendable () async throws -> Void)?
+            if !(error is ProfileError) {
+                retry = { [weak self] in
+                    guard let self else { return }
+                    try database.queueAvatarChange(image, for: account)
+                    await sendOwedProfile()?.value
+                    if let refusal = lock.withLock({ $0.profileRefusals.removeValue(forKey: Self.avatarWarning) }) { throw refusal }
+                }
+            }
+            lock.withLock { $0.profileRefusals[Self.avatarWarning] = error }
+            warnings.post(
+                Self.avatarWarning, title: String(localized: "Photo not updated"),
+                friendly: String(localized: "The server wouldn't change your photo"), error: error, retry: retry,
+            )
+        }
+    }
+
+    private func sendOwed(_ owed: OwedNicknameChange) async {
+        do {
+            let server = try await serverNickname()
+            guard server == owed.base else {
+                nicknameChangedElsewhere(owed, server: server)
+                return
+            }
+            if let value = owed.value {
+                try await publishProfilePEP(node: NS.nick, itemId: Self.nicknameItemId, payload: ProfileStanza.nick(value), accessModel: profileAccessModel)
+            } else {
+                try await retractNicknames()
+            }
+            try database.settleNicknameChange(owed, serverNow: owed.value)
+            lock.withLock { _ = $0.profileRefusals.removeValue(forKey: Self.nicknameWarning) }
+            warnings.clear(Self.nicknameWarning)
+        } catch {
+            logger.info("Couldn't send the nickname: \(error.localizedDescription, privacy: .private)")
+            guard isRefusal(error) else { return }
+            do {
+                guard try database.revertNicknameChange(owed, shows: owed.base) else { return }
+            } catch {
+                logger.error("Failed to put back the nickname the server refused: \(error)")
+            }
+            let value = owed.value
+            lock.withLock { $0.profileRefusals[Self.nicknameWarning] = error }
+            warnings.post(
+                Self.nicknameWarning, title: String(localized: "Name not updated"),
+                friendly: String(localized: "The server wouldn't change your name"), error: error,
+            ) { [weak self] in
+                guard let self else { return }
+                try database.queueNicknameChange(value)
+                await sendOwedProfile()?.value
+                if let refusal = lock.withLock({ $0.profileRefusals.removeValue(forKey: Self.nicknameWarning) }) { throw refusal }
+            }
+        }
+    }
+
+    /// Another device changed it first: that is the one kept.
+    private func avatarChangedElsewhere(_ owed: OwedAvatarChange, server: String?) {
+        let shown = server.flatMap { avatars.contains($0) ? $0 : nil }
+        guard (try? database.revertAvatarChange(owed, shows: shown, for: account)) == true else { return }
+        if server != nil, shown == nil { fetchAvatar(of: account) }
+        warnings.post(
+            Self.avatarWarning, title: String(localized: "Photo not changed"),
+            detail: String(localized: "Your photo was changed on another device, so the one you chose here wasn't used."),
+        )
+    }
+
+    private func nicknameChangedElsewhere(_ owed: OwedNicknameChange, server: String?) {
+        guard (try? database.revertNicknameChange(owed, shows: server)) == true else { return }
+        warnings.post(
+            Self.nicknameWarning, title: String(localized: "Name not changed"),
+            detail: String(localized: "Your name was changed on another device, so the one you chose here wasn't used."),
+        )
+    }
+
+    /// The id of the avatar the server has for us, lowercased; nil for none.
+    private func serverAvatarId() async throws -> String? {
+        switch try await readOwnNode(NS.avatarMetadata, "Avatar", limit: .lastItems(1)) {
+        case .items(let page): ProfileStanza.avatarId(in: page.items.first?.payload)
+        // A server that can't hold the node has none; publishing says why.
+        case .noNode, .unsupported: nil
+        case .failed(let error): throw error
+        }
+    }
+
+    /// `readNode`, with what passes retried and a failure thrown.
+    private func readOwnNode(_ node: String, _ what: StaticString, limit: PubSubModule.QueryLimit = .none) async throws -> NodeRead {
+        try await retryingPassingErrors {
+            let read = await readNode(node, as: what, limit: limit)
+            if case .failed(let error) = read { throw error }
+            return read
+        }
+    }
+
+    private func serverNickname() async throws -> String? {
+        switch try await readOwnNode(NS.nick, "Nickname") {
+        case .items(let page): page.items.lazy.compactMap { Self.normalizedNickname(ProfileStanza.nick(from: $0.payload)) }.first
+        case .noNode, .unsupported: nil
+        case .failed(let error): throw error
+        }
+    }
+
+    private func publish(_ owed: OwedAvatarChange) async throws {
+        guard let image = owed.image else {
+            try await publishProfilePEP(node: NS.avatarMetadata, itemId: nil, payload: ProfileStanza.avatarMetadata(nil), accessModel: profileAccessModel)
+            return
+        }
+        guard let data = try? Data(contentsOf: avatars.url(for: image.hash)) else { throw ProfileError.imageMissing }
         // Martin's own publishAvatar sends no publish-options, leaving the
         // node at the server's default, which is readable only by contacts
         // we've approved, and it refuses anything that isn't PNG.
-        try await publishProfilePEP(node: NS.avatarData, itemId: hash, payload: ProfileStanza.avatarData(data), accessModel: profileAccessModel)
-        let info = PEPUserAvatarModule.Info(id: hash, size: data.count, mimeType: mimeType, height: height, width: width)
-        try await publishProfilePEP(node: NS.avatarMetadata, itemId: hash, payload: ProfileStanza.avatarMetadata(info), accessModel: profileAccessModel)
-        // The files are named by their hash, so only a failed write keeps
-        // the picture from showing.
-        guard avatars.save(data, hash: hash) else { throw ProfileError.imageTooLarge }
-        try database.setAvatarHash(hash, for: account)
-    }
-
-    /// Removes our avatar, by publishing empty metadata (XEP-0084 §4.2).
-    public func removeAvatar() async throws {
-        guard await waitForConnection() else { throw ProfileError.offline }
-        try await publishProfilePEP(node: NS.avatarMetadata, itemId: nil, payload: ProfileStanza.avatarMetadata(nil), accessModel: profileAccessModel)
-        try database.setAvatarHash(nil, for: account)
+        try await publishProfilePEP(node: NS.avatarData, itemId: image.hash, payload: ProfileStanza.avatarData(data), accessModel: profileAccessModel)
+        let info = PEPUserAvatarModule.Info(id: image.hash, size: image.size, mimeType: image.mimeType, height: image.height, width: image.width)
+        try await publishProfilePEP(node: NS.avatarMetadata, itemId: image.hash, payload: ProfileStanza.avatarMetadata(info), accessModel: profileAccessModel)
     }
 
     /// `publishPEP` for the profile, which a screen waits on: what passes is
@@ -259,6 +465,12 @@ enum ProfileStanza {
         Element(name: "data", cdata: data.base64EncodedString(), xmlns: NS.avatarData)
     }
 
+    /// The id of the first picture a metadata item lists, lowercased; nil for
+    /// the empty metadata that says there is none.
+    static func avatarId(in payload: Element?) -> String? {
+        payload?.firstChild(name: "info")?.attribute("id")?.lowercased()
+    }
+
     /// Metadata with no `info` says we have no avatar.
     static func avatarMetadata(_ info: PEPUserAvatarModule.Info?) -> Element {
         let metadata = Element(name: "metadata", xmlns: NS.avatarMetadata)
@@ -291,17 +503,13 @@ extension XMPPSession {
         Self.normalizedNickname(try? database.setting(.nickname))
     }
 
-    /// Publishes `name` as ours, or takes it back when
-    /// it's blank. Our copy is kept once the server has it.
+    /// Makes `name` ours, or takes it back when it's blank. It shows at once
+    /// and is kept until the server has it, so it can be set offline; see
+    /// `sendOwedProfile`.
     public func setNickname(_ name: String?) async throws {
-        guard await waitForConnection() else { throw ProfileError.offline }
-        let name = Self.normalizedNickname(name)
-        if let name {
-            try await publishProfilePEP(node: NS.nick, itemId: Self.nicknameItemId, payload: ProfileStanza.nick(name), accessModel: profileAccessModel)
-        } else {
-            try await retractNicknames()
-        }
-        try database.setSetting(.nickname, name)
+        try database.queueNicknameChange(Self.normalizedNickname(name))
+        warnings.clear(Self.nicknameWarning)
+        sendOwedProfile()
     }
 
     /// XEP-0172 fixes no item id, so whatever the node holds is taken back,
@@ -357,6 +565,9 @@ extension XMPPSession {
         let nickname = Self.normalizedNickname(nickname)
         // A stranger's event would add a contact row for them.
         guard jid == account || (try? database.isKnownPeer(jid)) == true else { return }
+        // Our own change not yet sent is what shows; once it's sent or the
+        // server's wins, the sender sets the name.
+        if jid == account, (try? database.owedNicknameChange()) != nil { return }
         do {
             if jid == account {
                 try database.setSetting(.nickname, nickname)

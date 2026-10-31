@@ -39,18 +39,22 @@ extension LiveServer {
             await deleteNode(session)
 
             try await session.setNickname("Carol")
+            await session.sendOwedProfile()?.value
             #expect(try await publishedNames(session) == ["Carol"])
             #expect(session.nickname == "Carol")
 
             try await session.setNickname("Caroline")
+            await session.sendOwedProfile()?.value
             #expect(try await publishedNames(session) == ["Caroline"])
 
             try await session.setNickname(nil)
+            await session.sendOwedProfile()?.value
             #expect(try await publishedNames(session) == [])
             #expect(session.nickname == nil)
 
             // Taking back a name that isn't there is not an error.
             try await session.setNickname("  ")
+            await session.sendOwedProfile()?.value
         }
 
         /// The node as it stands before the setting matches, such as one an
@@ -64,8 +68,10 @@ extension LiveServer {
                 try session.database.setFlag(.sharesProfilePublicly, sharesPublicly)
 
                 try await session.publishPEP(node: NS.nick, itemId: "current", payload: ProfileStanza.nick("Old"), accessModel: left)
+                try session.database.setSetting(.nickname, "Old")
 
                 try await session.setNickname("Carol")
+                await session.sendOwedProfile()?.value
                 #expect(try await publishedNames(session) == ["Carol"])
                 let accessModel: String? = try await withCheckedThrowingContinuation { continuation in
                     session.client.module(.pubsub).retrieveNodeConfiguration(from: nil, node: NS.nick) { result in

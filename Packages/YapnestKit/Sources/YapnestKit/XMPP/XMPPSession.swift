@@ -358,6 +358,12 @@ public final class XMPPSession: @unchecked Sendable {
         /// Groups whose bookmark the server refused for good, until the
         /// user's Retry asks about them.
         var bookmarkRefusals: [JID: Error] = [:]
+        /// The run sending our avatar and name changes, and the task doing it.
+        var profileRun = HeldRun.idle
+        var profileTask: Task<Void, Never>?
+        /// The profile warning keys whose change the server refused for good,
+        /// until the user's Retry asks about it.
+        var profileRefusals: [String: Error] = [:]
         /// The last read message we know our devices agree on, by chat (XEP-0490).
         var publishedDisplayed: [JID: String] = [:]
         /// Where our settings node stands this session: see `SettingsSyncState`.
@@ -1558,6 +1564,7 @@ public final class XMPPSession: @unchecked Sendable {
             sendPendingBlocks()
             sendPendingRosterChanges()
             sendOwedBookmarks()
+            sendOwedProfile()
         }
         resumeInterruptedCatchUps()
         // Chats read while the stream was down owe their state; another device
@@ -2125,6 +2132,9 @@ public final class XMPPSession: @unchecked Sendable {
         // Any server can push these at us, and each would add a contact row
         // and a file nothing ever removes.
         guard jid == account || (try? database.isKnownPeer(jid)) == true else { return }
+        // Our own change not yet sent is what shows; once it's sent or the
+        // server's wins, the sender sets the avatar.
+        if jid == account, (try? database.owedAvatarChange()) != nil { return }
         // An empty metadata item means they removed their avatar.
         guard !info.isEmpty else {
             try? database.setAvatarHash(nil, for: jid)
@@ -2412,6 +2422,7 @@ public final class XMPPSession: @unchecked Sendable {
         sendUnclaimedPending()
         sendPendingBlocks()
         sendPendingRosterChanges()
+        sendOwedProfile()
         restoreChatsIfPending()
     }
 

@@ -64,15 +64,6 @@ struct ProfileTests {
         #expect(metadata.children.isEmpty)
     }
 
-    @Test func offlineSessionRefusesToPublish() async {
-        await #expect(throws: XMPPSession.ProfileError.self) {
-            try await session.publishAvatar(Data([1]), mimeType: "image/png")
-        }
-        await #expect(throws: XMPPSession.ProfileError.self) {
-            try await session.removeAvatar()
-        }
-    }
-
     // MARK: Nicknames
 
     private let alice = YapnestKit.JID("alice@example.org")!

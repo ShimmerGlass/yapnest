@@ -66,6 +66,11 @@ extension AppDatabase {
         case gifFavorites
         /// The name we publish for ourselves (XEP-0172).
         case nickname
+        /// Our avatar or name changed while the server couldn't be reached,
+        /// as JSON: see `OwedAvatarChange` and `OwedNicknameChange`. Kept
+        /// until the server has answered.
+        case owedAvatarChange
+        case owedNicknameChange
         /// What we tell contacts we're doing (RFC 6121): `away` or `dnd`,
         /// unset when available, and free text.
         case availability

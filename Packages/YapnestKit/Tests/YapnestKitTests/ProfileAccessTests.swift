@@ -13,6 +13,7 @@ private final class ProfileServer: @unchecked Sendable {
     private var failure: (condition: String, type: String)?
     private var failingNodes: [String: (condition: String, type: String)] = [:]
     private var publishOptions: [String: [String]] = [:]
+    private var nick: String?
 
     init(_ models: [String: String]) { self.models = models }
 
@@ -28,7 +29,7 @@ private final class ProfileServer: @unchecked Sendable {
 
     func attach(to wire: FakeWire) {
         wire.answer { [self] iq in
-            lock.withLock {
+            lock.withLock { () -> Iq? in
                 guard let pubsub = iq.firstChild(name: "pubsub") else { return nil }
                 if let publish = pubsub.firstChild(name: "publish") {
                     let node = publish.attribute("node") ?? ""
@@ -36,7 +37,18 @@ private final class ProfileServer: @unchecked Sendable {
                     let fields = formFields(of: form)
                     publishOptions = fields
                     if let model = fields["pubsub#access_model"]?.first { models[node] = models[node] ?? model }
+                    if node == NS.nick { nick = publish.firstChild(name: "item")?.firstChild(name: "nick")?.value }
                     return FakeWire.result(to: iq)
+                }
+                if let items = pubsub.firstChild(name: "items") {
+                    guard items.attribute("node") == NS.nick, let nick else { return FakeWire.error(to: iq) }
+                    let item = Element(name: "item", attributes: ["id": "current"])
+                    item.addChild(ProfileStanza.nick(nick))
+                    let list = Element(name: "items", attributes: ["node": NS.nick])
+                    list.addChild(item)
+                    let result = Element(name: "pubsub", xmlns: "http://jabber.org/protocol/pubsub")
+                    result.addChild(list)
+                    return FakeWire.result(to: iq, result)
                 }
                 guard pubsub.xmlns == "http://jabber.org/protocol/pubsub#owner", let configure = pubsub.firstChild(name: "configure") else { return nil }
                 let node = configure.attribute("node") ?? ""
@@ -215,9 +227,11 @@ struct ProfileAccessTests {
         let server = Self.open()
         let session = try connect(server)
         try await session.setNickname("Carol")
+        await session.sendOwedProfile()?.value
         #expect(server.lastPublishOptions["pubsub#access_model"] == ["presence"])
         try db.setFlag(.sharesProfilePublicly, true)
         try await session.setNickname("Caroline")
+        await session.sendOwedProfile()?.value
         #expect(server.lastPublishOptions["pubsub#access_model"] == ["open"])
     }
 }

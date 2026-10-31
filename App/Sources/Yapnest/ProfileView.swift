@@ -10,6 +10,7 @@ struct ProfileView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var me: Contact?
+    @State private var pending = AppDatabase.ProfilePending(avatar: false, nickname: false)
     @State private var sharesProfilePublicly = false
     @State private var isChangingProfileAccess = false
     @State private var confirmsSignOut = false
@@ -43,7 +44,13 @@ struct ProfileView: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            if isChangingAvatar { ProgressView() }
+                            if isChangingAvatar {
+                                ProgressView()
+                            } else if pending.avatar {
+                                Text("Waiting to send")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                     .avatarHeaderRow()
@@ -55,6 +62,10 @@ struct ProfileView: View {
                             .disabled(profileAction.isBusy || !isLoaded)
                         if isSavingName {
                             ProgressView()
+                        } else if pending.nickname {
+                            Text("Waiting to send")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         } else if XMPPSession.normalizedNickname(name) ?? "" != savedName {
                             Button("Save", action: saveName)
                         }
@@ -165,6 +176,18 @@ struct ProfileView: View {
                 status = saved.status
                 sharesProfilePublicly = saved.sharesProfilePublicly
                 isLoaded = true
+            }
+            .task(id: session.account) {
+                await session.database.forEachValue(of: session.database.observeProfilePending(), "Profile pending") { pending = $0 }
+            }
+            // Another device's name may have been kept instead of the one typed here.
+            .onChange(of: pending.nickname) { _, owed in
+                guard !owed else { return }
+                Task {
+                    let current = await offMain { [session] in session.nickname ?? "" }
+                    if name == savedName { name = current }
+                    savedName = current
+                }
             }
             .task(id: session.account) {
                 await session.database.forEachValue(of: session.database.observeContact(session.account), "Own contact") { contact in
