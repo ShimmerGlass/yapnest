@@ -246,20 +246,4 @@ struct NotificationTests {
         #expect(extensionLock.tryLock())
         #expect(!app.tryLock())
     }
-
-    @Test func lockRecordsItsHolderOnlyWhileHeld() throws {
-        let url = FileManager.default.temporaryDirectory.appending(path: "lock-\(UUID().uuidString)")
-        let holder = ProcessLock(url: url), observer = ProcessLock(url: url)
-        #expect(observer.holder == nil)
-        #expect(holder.tryLock(as: .share))
-        #expect(observer.holder == .share)
-        holder.unlock()
-        // The role is left in the file, but nobody holds the lock.
-        #expect(observer.holder == nil)
-        #expect(holder.tryLock())
-        #expect(observer.holder == nil)
-        holder.unlock()
-        #expect(holder.tryLock(as: .app))
-        #expect(observer.holder == .app)
-    }
 }

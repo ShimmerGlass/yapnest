@@ -68,109 +68,66 @@ struct ProcessLockTests {
         return directory.appending(path: "session.lock")
     }
 
-    @Test func holderIsTheRoleOfWhoeverHoldsTheLock() throws {
+    @Test func theAppIsNotRunningWhenNobodyHoldsItsLock() throws {
+        let url = try lockURL()
+        #expect(!ProcessLock(url: url).appIsRunning)
+        let app = ProcessLock(url: url)
+        #expect(app.tryLock())
+        app.unlock()
+        #expect(!ProcessLock(url: url).appIsRunning)
+    }
+
+    @Test func theAppIsRunningWhileItHoldsItsLockFromAnotherOpenOfTheFile() throws {
         let url = try lockURL()
         let app = ProcessLock(url: url)
-        #expect(app.tryLock(as: .app))
-        #expect(ProcessLock(url: url).holder == .app)
+        #expect(app.tryLock())
+        #expect(ProcessLock(url: url).appIsRunning)
+        #expect(ProcessLock(url: url).appIsRunning)
         app.unlock()
-        #expect(ProcessLock(url: url).holder == nil)
+        #expect(!ProcessLock(url: url).appIsRunning)
     }
 
-    @Test func holderIsNilWithoutAFile() throws {
-        #expect(ProcessLock(url: try lockURL()).holder == nil)
-    }
-
-    @Test func staleRoleLeftByAHolderThatIsGoneIsNotBelieved() throws {
+    @Test func askingWhetherTheAppIsRunningLeavesTheLockFree() throws {
         let url = try lockURL()
-        // What a crashed process leaves: its role in the file, and no lock.
-        try Data("share".utf8).write(to: url)
-        #expect(ProcessLock(url: url).holder == nil)
+        #expect(!ProcessLock(url: url).appIsRunning)
+        #expect(ProcessLock(url: url).tryLock())
     }
 
-    @Test func holderWithoutARoleIsUnknown() throws {
-        let url = try lockURL()
-        let lock = ProcessLock(url: url)
-        #expect(lock.tryLock())
-        #expect(ProcessLock(url: url).holder == nil)
-    }
+    @Test func theAppIsRunningFromTheFirstMomentItHoldsTheSessionLock() throws {
+        // The app takes its own lock before it waits for the session lock, and
+        // never holds the session lock without it.
+        let directory = try lockURL().deletingLastPathComponent()
+        let session = ProcessLock(url: directory.appending(path: "session.lock"))
+        let appURL = directory.appending(path: "app.lock")
+        let app = ProcessLock(url: appURL)
+        let extensionSession = ProcessLock(url: directory.appending(path: "session.lock"))
+        #expect(extensionSession.tryLock())
 
-    @Test func newHolderReplacesTheLastOnesRole() throws {
-        let url = try lockURL()
-        let first = ProcessLock(url: url)
-        #expect(first.tryLock(as: .notification))
-        first.unlock()
-        let second = ProcessLock(url: url)
-        #expect(second.tryLock())
-        #expect(ProcessLock(url: url).holder == nil)
-    }
-
-    @Test func aShorterRoleLeavesNothingOfALongerOne() throws {
-        let url = try lockURL()
-        let first = ProcessLock(url: url)
-        #expect(first.tryLock(as: .notification))
-        first.unlock()
-        let second = ProcessLock(url: url)
-        #expect(second.tryLock(as: .app))
-        #expect(ProcessLock(url: url).holder == .app)
-        #expect(try Data(contentsOf: url) == Data("app".utf8))
-    }
-
-    @Test func aHolderWhoHasNotWrittenItsRoleYetIsAskedAgain() async throws {
-        let url = try lockURL()
-        let lock = ProcessLock(url: url)
-        #expect(lock.tryLock())
-        let reader = ProcessLock(url: url)
-        #expect(reader.holder(attempts: 1) == nil)
-
-        let writer = Task.detached {
-            try? await Task.sleep(for: .milliseconds(30))
-            let handle = try FileHandle(forWritingTo: url)
-            try handle.write(contentsOf: Data("app".utf8))
-            try handle.close()
-        }
-        let found = await Task.detached { reader.holder(attempts: 500, pause: 0.002) }.value
-        try await writer.value
-        #expect(found == .app)
-    }
-
-    @Test func aHolderWhoseRoleIsStillBeingWrittenIsAskedAgain() async throws {
-        let url = try lockURL()
-        let lock = ProcessLock(url: url)
-        #expect(lock.tryLock())
-        // A half-written role parses as nothing, and is not the holder's last word.
-        try Data("ap".utf8).write(to: url)
-        let reader = ProcessLock(url: url)
-        #expect(reader.holder(attempts: 1) == nil)
-
-        let writer = Task.detached {
-            try? await Task.sleep(for: .milliseconds(30))
-            let handle = try FileHandle(forWritingTo: url)
-            try handle.write(contentsOf: Data("app".utf8))
-            try handle.close()
-        }
-        let found = await Task.detached { reader.holder(attempts: 500, pause: 0.002) }.value
-        try await writer.value
-        #expect(found == .app)
+        #expect(app.tryLock())
+        #expect(!session.tryLock())
+        #expect(ProcessLock(url: appURL).appIsRunning)
+        extensionSession.unlock()
+        #expect(session.tryLock())
+        #expect(ProcessLock(url: appURL).appIsRunning)
+        session.unlock()
+        app.unlock()
+        #expect(!ProcessLock(url: appURL).appIsRunning)
     }
 
     @Test func secondHolderCannotTakeALockInUse() throws {
         let url = try lockURL()
         let first = ProcessLock(url: url), second = ProcessLock(url: url)
-        #expect(first.tryLock(as: .app))
-        #expect(!second.tryLock(as: .share))
+        #expect(first.tryLock())
+        #expect(!second.tryLock())
         #expect(!second.isLocked)
-        // The record is still the holder's.
-        #expect(ProcessLock(url: url).holder == .app)
     }
 
-    @Test func tryLockWhileAlreadyHeldSucceedsWithoutChangingTheRole() throws {
+    @Test func tryLockWhileAlreadyHeldSucceeds() throws {
         let url = try lockURL()
         let lock = ProcessLock(url: url)
-        #expect(lock.tryLock(as: .app))
-        #expect(lock.tryLock(as: .share))
+        #expect(lock.tryLock())
+        #expect(lock.tryLock())
         #expect(lock.isLocked)
-        #expect(ProcessLock(url: url).holder == .app)
     }
 
     @Test func unlockIsIdempotent() throws {
@@ -187,28 +144,27 @@ struct ProcessLockTests {
     @Test func lockWaitsForTheHolderToLetGo() async throws {
         let url = try lockURL()
         let first = ProcessLock(url: url)
-        #expect(first.tryLock(as: .share))
+        #expect(first.tryLock())
         Task.detached {
             try? await Task.sleep(for: .milliseconds(150))
             first.unlock()
         }
         let second = ProcessLock(url: url)
-        let got = await Task.detached { second.lock(timeout: 5, as: .app) }.value
+        let got = await Task.detached { second.lock(timeout: 5) }.value
         #expect(got)
-        #expect(ProcessLock(url: url).holder == .app)
     }
 
     @Test func manyWaitsForTheLockDoNotTakeTheConcurrencyPool() async throws {
         let url = try lockURL()
         let holder = ProcessLock(url: url)
-        #expect(holder.tryLock(as: .app))
+        #expect(holder.tryLock())
         // More waiters than the pool has threads.
         let waiters = ProcessInfo.processInfo.activeProcessorCount * 4
         let waiting = Task {
             await withTaskGroup(of: Bool.self) { group in
                 for _ in 0..<waiters {
                     let lock = ProcessLock(url: url)
-                    group.addTask { await lock.waitForLock(timeout: 1.5, as: .share) }
+                    group.addTask { await lock.waitForLock(timeout: 1.5) }
                 }
                 return await group.reduce(into: [Bool]()) { $0.append($1) }
             }
@@ -224,17 +180,17 @@ struct ProcessLockTests {
     @Test func lockGivesUpAfterTheTimeout() throws {
         let url = try lockURL()
         let first = ProcessLock(url: url)
-        #expect(first.tryLock(as: .app))
+        #expect(first.tryLock())
         let second = ProcessLock(url: url)
         let started = Date()
-        #expect(!second.lock(timeout: 0.25, as: .share))
+        #expect(!second.lock(timeout: 0.25))
         #expect(Date().timeIntervalSince(started) >= 0.25)
     }
 
     @Test func lockDroppedWithoutUnlockIsReleased() throws {
         let url = try lockURL()
         var first: ProcessLock? = ProcessLock(url: url)
-        #expect(first?.tryLock(as: .app) == true)
+        #expect(first?.tryLock() == true)
         first = nil
         #expect(ProcessLock(url: url).tryLock())
     }

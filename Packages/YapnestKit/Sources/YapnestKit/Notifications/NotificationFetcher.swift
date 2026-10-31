@@ -25,6 +25,8 @@ public struct NotificationFetcher: Sendable {
     public var directory: URL
     public var resource: String
     public var lock: ProcessLock
+    /// Held by the app while it holds or waits for `lock`.
+    public var appLock: ProcessLock
 
     /// This device's OMEMO identity, the app's, which the session needs to
     /// decrypt; nil for the keychain's.
@@ -32,12 +34,14 @@ public struct NotificationFetcher: Sendable {
 
     public init(
         credentials: XMPPSession.Credentials, directory: URL, resource: String, lock: ProcessLock = SharedContainer.sessionLock,
+        appLock: ProcessLock = SharedContainer.appLock,
         identityKeys: (any IdentityKeyStore)? = nil,
     ) {
         self.credentials = credentials
         self.directory = directory
         self.resource = resource
         self.lock = lock
+        self.appLock = appLock
         self.identityKeys = identityKeys
     }
 
@@ -114,8 +118,8 @@ public struct NotificationFetcher: Sendable {
 
     private func catchUpAndClaim(lockWait: TimeInterval, timeout: TimeInterval) async -> (Outcome, completed: Bool) {
         // The app connects and resumes in a moment, then lets go.
-        guard await lock.waitForLock(timeout: lockWait, as: .notification) else {
-            if lock.holder == .app { return (.appIsRunning, false) }
+        guard await lock.waitForLock(timeout: lockWait) else {
+            if appLock.appIsRunning { return (.appIsRunning, false) }
             return (.busy, false)
         }
         defer { lock.unlock() }

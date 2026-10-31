@@ -10,6 +10,7 @@ private let me = JID("me@example.org")!
 @Suite(.serialized) struct NotificationFetcherLockTests {
     let root = FileManager.default.temporaryDirectory.appending(path: "fetcher-\(UUID().uuidString)")
     var lockURL: URL { root.appending(path: "session.lock") }
+    var appLockURL: URL { root.appending(path: "app.lock") }
 
     init() throws {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -18,29 +19,30 @@ private let me = JID("me@example.org")!
     private func fetcher() -> NotificationFetcher {
         NotificationFetcher(
             credentials: .init(jid: me, password: "x"), directory: root.appending(path: "account"), resource: "push",
-            lock: ProcessLock(url: lockURL),
+            lock: ProcessLock(url: lockURL), appLock: ProcessLock(url: appLockURL),
         )
     }
 
     @Test func aPushWhileTheShareExtensionHoldsTheSessionIsBusy() async {
         let share = ProcessLock(url: lockURL)
-        #expect(share.tryLock(as: .share))
+        #expect(share.tryLock())
         defer { share.unlock() }
 
         #expect(await fetcher().fetch() == .busy)
     }
 
     @Test func aPushWhileTheAppHoldsTheSessionLeavesTheNotificationToTheApp() async {
-        let app = ProcessLock(url: lockURL)
-        #expect(app.tryLock(as: .app))
-        defer { app.unlock() }
+        let app = ProcessLock(url: lockURL), appLock = ProcessLock(url: appLockURL)
+        #expect(appLock.tryLock())
+        #expect(app.tryLock())
+        defer { app.unlock(); appLock.unlock() }
 
         #expect(await fetcher().fetch() == .appIsRunning)
     }
 
     @Test func aPushQueuedBehindASlowOneKeepsItsOwnDeadline() async {
         let share = ProcessLock(url: lockURL)
-        #expect(share.tryLock(as: .share))
+        #expect(share.tryLock())
         defer { share.unlock() }
         let fetcher = fetcher()
 
@@ -67,7 +69,7 @@ private let me = JID("me@example.org")!
 
     @Test func aPushBehindACatchUpThatFoundTheSessionBusyTriesForItself() async {
         let share = ProcessLock(url: lockURL)
-        #expect(share.tryLock(as: .share))
+        #expect(share.tryLock())
         defer { share.unlock() }
         let fetcher = fetcher()
 
@@ -83,9 +85,10 @@ private let me = JID("me@example.org")!
     }
 
     @Test func pushesQueuedWhileTheAppHoldsTheSessionDontEachWaitForIt() async {
-        let app = ProcessLock(url: lockURL)
-        #expect(app.tryLock(as: .app))
-        defer { app.unlock() }
+        let app = ProcessLock(url: lockURL), appLock = ProcessLock(url: appLockURL)
+        #expect(appLock.tryLock())
+        #expect(app.tryLock())
+        defer { app.unlock(); appLock.unlock() }
         let fetcher = fetcher()
 
         let first = Task { (await fetcher.fetch(), Date()) }

@@ -56,16 +56,16 @@ public enum SharedContainer {
 
     /// Held by whichever process has a session open.
     public static var sessionLock: ProcessLock { ProcessLock(url: url.appending(path: "session.lock")) }
+
+    /// Held by the app for as long as it holds or waits for the session lock,
+    /// so the extensions can tell the app is running without reading anything
+    /// the holder of the session lock writes after taking it.
+    public static var appLock: ProcessLock { ProcessLock(url: url.appending(path: "app.lock")) }
 }
 
 /// An exclusive lock between processes (flock), released when the holder
 /// exits, even by crashing.
 public final class ProcessLock: @unchecked Sendable {
-    /// Who holds the lock, for the others to tell whether waiting is worth it.
-    public enum Role: String, Sendable {
-        case app, share, notification
-    }
-
     private let url: URL
     private let fd = OSAllocatedUnfairLock<Int32>(initialState: -1)
     /// Where `waitForLock` blocks. A wait can last 30 seconds, and the
@@ -80,10 +80,10 @@ public final class ProcessLock: @unchecked Sendable {
     deinit { unlock() }
 
     /// Waits up to `timeout` for the lock. Blocks: call it off the main thread.
-    public func lock(timeout: TimeInterval, as role: Role? = nil) -> Bool {
+    public func lock(timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while true {
-            if tryLock(as: role) { return true }
+            if tryLock() { return true }
             if Date() >= deadline { return false }
             Thread.sleep(forTimeInterval: 0.1)
         }
@@ -91,13 +91,13 @@ public final class ProcessLock: @unchecked Sendable {
 
     /// `lock(timeout:as:)` for async code: it polls on a queue of its own and
     /// resumes when it has the lock or the time is up.
-    public func waitForLock(timeout: TimeInterval, as role: Role? = nil) async -> Bool {
+    public func waitForLock(timeout: TimeInterval) async -> Bool {
         await withCheckedContinuation { continuation in
-            waitQueue.async { continuation.resume(returning: self.lock(timeout: timeout, as: role)) }
+            waitQueue.async { continuation.resume(returning: self.lock(timeout: timeout)) }
         }
     }
 
-    public func tryLock(as role: Role? = nil) -> Bool {
+    public func tryLock() -> Bool {
         fd.withLock { fd in
             if fd >= 0 { return true }
             let opened = open(url.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
@@ -107,43 +107,23 @@ public final class ProcessLock: @unchecked Sendable {
                 return false
             }
             fd = opened
-            // The file's contents are the holder's role. Emptied first and then
-            // written, so a reader finds it empty or whole, never the last
-            // holder's role or a mix of the two; `holder` waits out the
-            // empty moment.
-            _ = ftruncate(opened, 0)
-            let bytes = role?.rawValue.data(using: .utf8) ?? Data()
-            if !bytes.isEmpty {
-                _ = bytes.withUnsafeBytes { pwrite(opened, $0.baseAddress, bytes.count, 0) }
-            }
             return true
         }
     }
 
-    /// The role the current holder took the lock as, or nil if nobody holds
-    /// it or it didn't say. The record is only believed while the lock is
-    /// held: a holder that crashed leaves its role behind, but the system
-    /// released its lock, so we can take it ourselves and know it's stale.
-    public var holder: Role? { holder(attempts: 5) }
-
-    /// Reading the file again a few times when the lock is held but it says
-    /// nothing, or something that isn't a role, as the holder may be between
-    /// taking the lock and writing its role.
-    func holder(attempts: Int, pause: TimeInterval = 0.002) -> Role? {
+    /// Whether another open of this file holds the lock. Meant for the app's
+    /// lock, which the app takes before it waits for the session lock and
+    /// lets go of with it, so a failure here means the app is running. The
+    /// lock is only tried, and let go of at once.
+    public var appIsRunning: Bool {
         let reader = open(url.path, O_RDONLY | O_CLOEXEC)
-        guard reader >= 0 else { return nil }
+        guard reader >= 0 else { return false }
         defer { close(reader) }
-        for attempt in 0..<max(attempts, 1) {
-            if attempt > 0 { Thread.sleep(forTimeInterval: pause) }
-            if flock(reader, LOCK_SH | LOCK_NB) == 0 {
-                flock(reader, LOCK_UN)
-                return nil
-            }
-            var buffer = [UInt8](repeating: 0, count: 16)
-            let count = pread(reader, &buffer, buffer.count, 0)
-            if count > 0, let role = Role(rawValue: String(decoding: buffer[..<count], as: UTF8.self)) { return role }
+        if flock(reader, LOCK_SH | LOCK_NB) == 0 {
+            flock(reader, LOCK_UN)
+            return false
         }
-        return nil
+        return true
     }
 
     public var isLocked: Bool { fd.withLock { $0 >= 0 } }

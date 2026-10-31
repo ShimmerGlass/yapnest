@@ -84,12 +84,14 @@ struct AppModelSessionTests {
         // The lock is held for several waits' worth of time, and the account
         // isn't signed in yet: the waiter must not give up on it.
         let fixture = AppModelFixture(lockTimeout: 0.1)
-        #expect(fixture.otherProcess.tryLock(as: .share))
+        #expect(fixture.otherProcess.tryLock())
         let model = fixture.model!
         let signIn = Task { try await model.signIn(fixture.credentialsToSignIn) }
         defer { signIn.cancel() }
 
         #expect(await stays(for: .milliseconds(600)) { fixture.connects.isEmpty })
+        // Waiting counts as running, so an extension doesn't wait for the app.
+        #expect(fixture.appIsRunning())
         fixture.otherProcess.unlock()
 
         await eventually("the sign-in goes through") { model.session != nil }
@@ -103,7 +105,9 @@ struct AppModelSessionTests {
         try await model.signIn(fixture.credentialsToSignIn)
         model.scenePhaseChanged(active: false, background: true)
         await eventually("the session lets go of the lock") { !fixture.lock.isLocked }
-        #expect(fixture.otherProcess.tryLock(as: .notification))
+        // A suspended app must not keep extensions from deciding for themselves.
+        #expect(!fixture.appIsRunning())
+        #expect(fixture.otherProcess.tryLock())
 
         model.scenePhaseChanged(active: true, background: false)
         #expect(await stays(for: .milliseconds(500)) { fixture.connects.count == 1 })
@@ -111,6 +115,7 @@ struct AppModelSessionTests {
 
         await eventually("it connects again") { fixture.connects.count == 2 }
         #expect(fixture.lock.isLocked)
+        #expect(fixture.appIsRunning())
     }
 
     // MARK: Leaving the app

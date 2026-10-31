@@ -86,14 +86,16 @@ struct ShareTests {
     @Test func whenTheAppHoldsTheSessionTheMessagesWaitAndTheAppIsTold() async throws {
         let account = directory.appending(path: "account")
         let lockURL = directory.appending(path: "session.lock")
+        let appLockURL = directory.appending(path: "app.lock")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let app = ProcessLock(url: lockURL)
-        #expect(app.tryLock(as: .app))
+        let app = ProcessLock(url: lockURL), appLock = ProcessLock(url: appLockURL)
+        #expect(appLock.tryLock())
+        #expect(app.tryLock())
 
         let told = Told()
         let signal = PendingSendsSignal { told.set() }
         var sender = ShareSender(
-            credentials: .init(jid: me, password: "x"), directory: account, resource: "share", lock: ProcessLock(url: lockURL),
+            credentials: .init(jid: me, password: "x"), directory: account, resource: "share", lock: ProcessLock(url: lockURL), appLock: ProcessLock(url: appLockURL),
         )
         sender.lockTimeout = 0.2
         let outcome = await sender.send(ShareContent(files: [.init(url: try file("a.txt"))], comment: "hi"), to: alice)
@@ -108,14 +110,16 @@ struct ShareTests {
         #expect(told.value)
         withExtendedLifetime(signal) {}
         app.unlock()
+        appLock.unlock()
     }
 
     @Test func whenTheNotificationExtensionHoldsTheSessionItWaitsAndSendsItself() async throws {
         let account = directory.appending(path: "account")
         let lockURL = directory.appending(path: "session.lock")
+        let appLockURL = directory.appending(path: "app.lock")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let extensionLock = ProcessLock(url: lockURL)
-        #expect(extensionLock.tryLock(as: .notification))
+        #expect(extensionLock.tryLock())
         Task.detached {
             try await Task.sleep(for: .milliseconds(600))
             extensionLock.unlock()
@@ -124,7 +128,7 @@ struct ShareTests {
         let told = Told()
         let signal = PendingSendsSignal { told.set() }
         var sender = ShareSender(
-            credentials: .init(jid: me, password: "x"), directory: account, resource: "share", lock: ProcessLock(url: lockURL),
+            credentials: .init(jid: me, password: "x"), directory: account, resource: "share", lock: ProcessLock(url: lockURL), appLock: ProcessLock(url: appLockURL),
         )
         sender.lockTimeout = 0.2
         sender.makeSession = { _ in throw TestFailure() }
@@ -138,11 +142,12 @@ struct ShareTests {
     @Test func anExtensionThatNeverLetsGoIsNotReportedAsTheApp() async throws {
         let account = directory.appending(path: "account")
         let lockURL = directory.appending(path: "session.lock")
+        let appLockURL = directory.appending(path: "app.lock")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let extensionLock = ProcessLock(url: lockURL)
-        #expect(extensionLock.tryLock(as: .notification))
+        #expect(extensionLock.tryLock())
         var sender = ShareSender(
-            credentials: .init(jid: me, password: "x"), directory: account, resource: "share", lock: ProcessLock(url: lockURL),
+            credentials: .init(jid: me, password: "x"), directory: account, resource: "share", lock: ProcessLock(url: lockURL), appLock: ProcessLock(url: appLockURL),
         )
         sender.lockTimeout = 0.2
         sender.extensionLockWait = 0.3

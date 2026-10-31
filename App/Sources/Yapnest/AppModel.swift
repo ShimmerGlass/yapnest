@@ -108,6 +108,8 @@ final class AppModel {
     struct Environment {
         var credentials: any CredentialStoring = CredentialStore()
         var sessionLock: ProcessLock = SharedContainer.sessionLock
+        /// Held from before the app waits for the session lock until it lets go of it.
+        var appLock: ProcessLock = SharedContainer.appLock
         /// How long one wait for the process lock lasts before it checks the session is still wanted.
         var lockTimeout: TimeInterval = 30
         var accountDirectory: @Sendable (JID) -> AccountDirectory = { AccountDirectory(account: $0) }
@@ -162,6 +164,20 @@ final class AppModel {
     /// Shared with the notification and share extensions: whoever holds it runs
     /// the account's session.
     @ObservationIgnored private var sessionLock: ProcessLock { environment.sessionLock }
+    @ObservationIgnored private var appLock: ProcessLock { environment.appLock }
+
+    /// Announces the app to the extensions before it waits for the session
+    /// lock. Taken first, so there is no moment when the session lock is
+    /// ours and the app lock isn't. Another process can hold it for an
+    /// instant, only while asking whether the app is running.
+    private func announceApp() { _ = appLock.lock(timeout: 1) }
+
+    /// Lets go of the session lock, then the app lock, so an extension that
+    /// finds the session free never sees the app as running without it.
+    private func releaseProcessLocks() {
+        sessionLock.unlock()
+        appLock.unlock()
+    }
     @ObservationIgnored private(set) var isActive = true
     /// Kept for a session that appears while the app is already away.
     @ObservationIgnored private var isBackground = false
@@ -634,7 +650,8 @@ final class AppModel {
         // The extension may have stored messages this process hasn't seen.
         let (database, badgeSync) = (session.database, badgeSync)
         Task { await offMain { badgeSync.externalChangesMayHaveArrived(in: database) } }
-        if sessionLock.tryLock(as: .app) {
+        announceApp()
+        if sessionLock.tryLock() {
             environment.connect(session)
             return
         }
@@ -649,10 +666,10 @@ final class AppModel {
             defer { if lockWaiter === session { lockWaiter = nil } }
             while true {
                 let (sessionLock, timeout) = (sessionLock, environment.lockTimeout)
-                let locked = await sessionLock.waitForLock(timeout: timeout, as: .app)
+                let locked = await sessionLock.waitForLock(timeout: timeout)
                 guard isActive, SessionScope.isWanted(session, signedIn: self.session, pendingSignIn: pendingSignIn) else {
                     // Not if a newer session waits on the same lock: it would take it from there.
-                    if locked, lockWaiter === session { sessionLock.unlock() }
+                    if lockWaiter === session { releaseProcessLocks() }
                     return
                 }
                 if locked {
@@ -701,7 +718,7 @@ final class AppModel {
         session.suspend()
         DiagLog.info(.app, "Session suspended")
         DiagLog.flush()
-        sessionLock.unlock()
+        releaseProcessLocks()
         AppDatabase.suspend()
         endBackgroundTask()
     }
@@ -998,7 +1015,7 @@ final class AppModel {
     private func teardown(_ session: XMPPSession) {
         calls.detach()
         session.disconnect()
-        sessionLock.unlock()
+        releaseProcessLocks()
         unreadObservation?.cancel()
         pendingSends = nil
         #if targetEnvironment(macCatalyst)

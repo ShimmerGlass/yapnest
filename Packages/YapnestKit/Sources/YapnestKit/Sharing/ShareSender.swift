@@ -31,6 +31,8 @@ public struct ShareSender: Sendable {
     public var directory: URL
     public var resource: String
     public var lock: ProcessLock
+    /// Held by the app while it holds or waits for `lock`.
+    public var appLock: ProcessLock
 
     /// Files larger than this are left for the app: sending one reads it into
     /// memory, encrypted twice over, and the extension has about 120 MB.
@@ -56,12 +58,14 @@ public struct ShareSender: Sendable {
 
     public init(
         credentials: XMPPSession.Credentials, directory: URL, resource: String, lock: ProcessLock = SharedContainer.sessionLock,
+        appLock: ProcessLock = SharedContainer.appLock,
         identityKeys: (any IdentityKeyStore)? = nil,
     ) {
         self.credentials = credentials
         self.directory = directory
         self.resource = resource
         self.lock = lock
+        self.appLock = appLock
         self.identityKeys = identityKeys
     }
 
@@ -166,14 +170,14 @@ public struct ShareSender: Sendable {
     /// Nil once this process holds the lock; else how the send ends without it.
     private func takeLock() async -> Outcome? {
         func acquire(_ wait: TimeInterval) async -> Bool {
-            await lock.waitForLock(timeout: wait, as: .share)
+            await lock.waitForLock(timeout: wait)
         }
         if await acquire(lockTimeout) { return nil }
         // Only the app listens for the signal.
-        if lock.holder != .app {
+        if !appLock.appIsRunning {
             if await acquire(extensionLockWait) { return nil }
         }
-        if lock.holder == .app {
+        if appLock.appIsRunning {
             PendingSendsSignal.post()
             return .handedToApp
         }

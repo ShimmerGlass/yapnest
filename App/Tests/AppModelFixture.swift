@@ -37,6 +37,9 @@ final class FakeCredentials: CredentialStoring, @unchecked Sendable {
 final class AppModelFixture {
     let root = FileManager.default.temporaryDirectory.appending(path: "appmodel-\(UUID().uuidString)")
     let lock: ProcessLock
+    let appLock: ProcessLock
+    /// What an extension asks, from its own open of the app's lock.
+    let appIsRunning: @Sendable () -> Bool
     /// Another process's handle on the same lock.
     let otherProcess: ProcessLock
     let credentials = FakeCredentials()
@@ -75,9 +78,13 @@ final class AppModelFixture {
     ) {
         lock = ProcessLock(url: root.appending(path: "session.lock"))
         otherProcess = ProcessLock(url: root.appending(path: "session.lock"))
+        appLock = ProcessLock(url: root.appending(path: "app.lock"))
+        let appLockURL = root.appending(path: "app.lock")
+        appIsRunning = { ProcessLock(url: appLockURL).appIsRunning }
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         environment.credentials = credentials
         environment.sessionLock = lock
+        environment.appLock = appLock
         environment.lockTimeout = lockTimeout
         let opening = opening
         environment.accountDirectory = { [root] in
