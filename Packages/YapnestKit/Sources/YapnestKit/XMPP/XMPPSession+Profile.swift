@@ -21,11 +21,17 @@ extension XMPPSession {
     public func setSharesProfilePublicly(_ on: Bool) async throws {
         let before = sharesProfilePublicly
         try database.setFlag(.sharesProfilePublicly, on)
+        // Owed until applied or refused, as for `reconcileProfileAccess`: a
+        // stream that resumes runs no catch-up, and would otherwise leave it
+        // for the next new session.
+        lock.withLock { _ = $0.owedOnResume.insert(.profileAccess) }
         guard isConnected else { return }
         do {
             try await applyProfileAccess()
+            lock.withLock { _ = $0.owedOnResume.remove(.profileAccess) }
         } catch {
             if passesByItself(error, "Couldn't change who reads the profile now") { return }
+            lock.withLock { _ = $0.owedOnResume.remove(.profileAccess) }
             try? database.setFlag(.sharesProfilePublicly, before)
             // The nodes that did change would otherwise stay as the refused
             // setting left them. This can fail as well, and the user is told

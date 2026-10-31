@@ -140,9 +140,10 @@ struct ProfileAccessTests {
         server.fail("forbidden", type: "auth")
         let session = try connect(server)
         await session.reconcileProfileAccess()
-        let warning = try #require(session.warnings.current.first { $0.key == "profile-access" })
+        #expect(session.warnings.current.contains { $0.key == "profile-access" })
         server.recover()
-        try await warning.retry?()
+        // The banner's Retry, which clears the warning when it succeeds.
+        #expect(await session.warnings.retry("profile-access"))
         #expect(server.access.values.allSatisfy { $0 == "presence" })
         #expect(session.warnings.current.isEmpty)
     }
@@ -221,6 +222,27 @@ struct ProfileAccessTests {
         let session = try connect(server)
         try await session.setSharesProfilePublicly(true)
         #expect(session.sharesProfilePublicly)
+    }
+
+    // The setter returned offline without owing the change, so only a new
+    // session applied it, which a resumed stream can put off for days.
+    @Test func aToggleMadeWhileTheStreamIsDownIsAppliedWhenItResumes() async throws {
+        let server = ProfileServer([NS.avatarData: "presence", NS.avatarMetadata: "presence", NS.nick: "presence"])
+        let session = try connect(server)
+        session.client.update(state: .disconnected())
+        try await session.setSharesProfilePublicly(true)
+        session.client.update(state: .connected(resumed: true))
+        await eventually("the nodes open") { server.access.values.allSatisfy { $0 == "open" } }
+    }
+
+    @Test func aToggleThatHitAPassingErrorIsTriedAgainWhenTheStreamResumes() async throws {
+        let server = ProfileServer([NS.avatarData: "presence", NS.avatarMetadata: "presence", NS.nick: "presence"])
+        server.fail("remote-server-timeout", type: "wait")
+        let session = try connect(server)
+        try await session.setSharesProfilePublicly(true)
+        server.recover()
+        session.resumeWork()
+        await eventually("the nodes open") { server.access.values.allSatisfy { $0 == "open" } }
     }
 
     @Test func publishingAsksForTheCurrentModel() async throws {
