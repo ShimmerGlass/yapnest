@@ -77,18 +77,26 @@ extension AppDatabase {
     /// `query`, newest first, kept up to date as messages arrive, are edited,
     /// retracted or deleted. Empty when the query has no words.
     public func observeSearchMatches(_ query: String, in conversationId: Int64, limit: Int) -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<[Int64]>>> {
-        let pattern = Self.searchPattern(for: query)
-        return ValueObservation.tracking(regions: [Table("messageSearch"), Table(Message.databaseTableName)]) { db in
-            guard let pattern, limit > 0 else { return [] }
-            return try Int64.fetchAll(db, sql: """
-                SELECT message.id
-                FROM messageSearch
-                JOIN message ON message.id = messageSearch.rowid
-                WHERE messageSearch MATCH ? AND message.conversationId = ?
-                ORDER BY message.timestamp DESC, message.id DESC
-                LIMIT ?
-                """, arguments: [pattern.rawPattern, conversationId, limit])
+        // Without anything to look for the result stays empty, so no write needs a fetch.
+        guard let pattern = Self.searchPattern(for: query), limit > 0 else {
+            return ValueObservation.tracking(regions: []) { _ -> [Int64] in [] }.removeDuplicates()
+        }
+        return ValueObservation.tracking(regions: Self.searchTables) { db in
+            try Self.searchMatches(db, pattern: pattern, in: conversationId, limit: limit)
         }
         .removeDuplicates()
+    }
+
+    static let searchTables: [any DatabaseRegionConvertible] = [Table("messageSearch"), Table(Message.databaseTableName)]
+
+    static func searchMatches(_ db: Database, pattern: FTS5Pattern, in conversationId: Int64, limit: Int) throws -> [Int64] {
+        try Int64.fetchAll(db, sql: """
+            SELECT message.id
+            FROM messageSearch
+            JOIN message ON message.id = messageSearch.rowid
+            WHERE messageSearch MATCH ? AND message.conversationId = ?
+            ORDER BY message.timestamp DESC, message.id DESC
+            LIMIT ?
+            """, arguments: [pattern.rawPattern, conversationId, limit])
     }
 }

@@ -57,9 +57,11 @@ extension AppDatabase {
         Message.eventLine(conversationId: conversationId, sender: peer, event: .newDevice(deviceId: deviceId, fingerprint: fingerprint), at: date)
     }
 
+    static let deviceNoticeTables: [any DatabaseRegionConvertible] = [Table("deviceNotice")]
+
     /// Our devices announced since their list was first seen, not yet dismissed, oldest first.
     func observeDeviceNotices() -> ValueObservation<ValueReducers.Fetch<[DeviceNotice]>> {
-        ValueObservation.tracking(regions: [Table("deviceNotice")]) { db in try Self.deviceNotices(db) }
+        ValueObservation.tracking(regions: Self.deviceNoticeTables) { db in try Self.deviceNotices(db) }
     }
 
     func deviceNotices() throws -> [DeviceNotice] {

@@ -10,25 +10,27 @@ typealias PendingKind = AppDatabase.PendingKind
 /// Each kind differs in how its stanza is built and written, which stays with
 /// `writeReactions` and `sendAction`.
 struct PendingLedger {
-    private var written: [PendingKind: Set<String>] = [:]
+    private var written: [String: PendingKind] = [:]
 
     func contains(_ id: String, of kind: PendingKind) -> Bool {
-        written[kind]?.contains(id) ?? false
+        written[id] == kind
     }
 
     /// The kind of stanza written this session under `id`.
     func kind(of id: String) -> PendingKind? {
-        PendingKind.allCases.first { contains(id, of: $0) }
+        written[id]
     }
 
-    /// False if `id` was written already, so none is written twice.
+    /// False if `id` was written already, so none is written twice. Ids are
+    /// UUIDs, so they are unique across kinds too.
     mutating func insert(_ id: String, of kind: PendingKind) -> Bool {
-        written[kind, default: []].insert(id).inserted
+        guard written[id] == nil else { return false }
+        written[id] = kind
+        return true
     }
 
-    @discardableResult
-    mutating func remove(_ id: String, of kind: PendingKind) -> Bool {
-        written[kind]?.remove(id) != nil
+    mutating func remove(_ id: String) {
+        written[id] = nil
     }
 
     /// A new session forgets what it wrote, as the server never got what it
@@ -57,7 +59,7 @@ extension XMPPSession {
     /// False if it is no such stanza.
     func acknowledgePending(_ stanza: Stanza, id: String) -> Bool {
         guard let kind = pendingKind(of: stanza, id: id) else { return false }
-        lock.withLock { _ = $0.pendingStanzas.remove(id, of: kind) }
+        endWrite(kind, id: id)
         do {
             try database.clearPending(kind, id: id)
         } catch {
@@ -72,7 +74,7 @@ extension XMPPSession {
     /// Stops sending the pending stanza `id`. With a reason, it shows that it
     /// didn't reach the others, with a way to try again.
     func giveUpPending(_ kind: PendingKind, id: String, because reason: String?) {
-        lock.withLock { _ = $0.pendingStanzas.remove(id, of: kind) }
+        endWrite(kind, id: id)
         try? database.clearPending(kind, id: id, error: reason)
     }
 
@@ -86,23 +88,23 @@ extension XMPPSession {
         var message: Message?
     }
 
-    func pendingRows(_ kind: PendingKind) -> [PendingRow]? {
+    func pendingRows(_ kind: PendingKind) -> [PendingRow] {
         switch kind {
         case .reaction:
-            return (try? database.pendingReactions())?.compactMap { message, peer, id in
+            return ((try? database.pendingReactions()) ?? []).compactMap { message, peer, id in
                 message.id.map { PendingRow(messageId: $0, peer: peer, id: id, message: message) }
             }
         case .action:
-            return (try? database.pendingActions())?.map { PendingRow(messageId: $0.messageId, peer: $0.peer, id: $0.id, message: nil) }
+            return ((try? database.pendingActions()) ?? []).map { PendingRow(messageId: $0.messageId, peer: $0.peer, id: $0.id, message: nil) }
         }
     }
 
     /// Sends what the server never acknowledged, which only a new session
     /// loses: a resumed stream resends it itself, and it is already written
     /// then.
-    func resendUnacknowledged() {
-        for kind in PendingKind.allCases {
-            for row in pendingRows(kind) ?? [] where !lock.withLock({ $0.pendingStanzas.contains(row.id, of: kind) }) {
+    func resendUnacknowledged(_ pending: [(kind: PendingKind, rows: [PendingRow])]) {
+        for (kind, rows) in pending {
+            for row in rows where !lock.withLock({ $0.pendingStanzas.contains(row.id, of: kind) }) {
                 switch kind {
                 case .reaction: resendReaction(row)
                 case .action: sendAction(id: row.id, of: row.messageId, to: row.peer)
@@ -155,7 +157,7 @@ extension XMPPSession {
             repend: { [weak self] in try? self?.database.repend(resend, id: id, ifNotSupersededBy: id) },
             fail: { [weak self] error in
                 try? self?.database.clearPending(
-                    kind, messageId: messageId, from: kind == .reaction ? account : nil, error: error.describe(failure), unlessSupersededBy: id,
+                    kind, messageId: messageId, from: account, error: error.describe(failure), unlessSupersededBy: id,
                 )
             },
         )
@@ -164,6 +166,6 @@ extension XMPPSession {
 
     /// The stanza `id` wasn't written after all, or its error came: it may be written again.
     func endWrite(_ kind: PendingKind, id: String) {
-        lock.withLock { _ = $0.pendingStanzas.remove(id, of: kind) }
+        lock.withLock { $0.pendingStanzas.remove(id) }
     }
 }

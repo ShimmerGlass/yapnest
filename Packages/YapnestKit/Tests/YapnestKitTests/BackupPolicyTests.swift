@@ -16,9 +16,7 @@ struct BackupPolicyTests {
     /// The flag is an extended attribute, which a file system under heavy load
     /// has been seen to show late (a full run of the suite).
     private func isExcluded(_ url: URL, eventually expected: Bool) async throws -> Bool {
-        let deadline = Date().addingTimeInterval(20)
-        while try isExcluded(url) != expected, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
-        return try isExcluded(url) == expected
+        try await eventually { try isExcluded(url) == expected }
     }
 
     private func defaults() -> UserDefaults {

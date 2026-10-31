@@ -445,12 +445,7 @@ extension XMPPSession {
             state.settingsSync.observer = Task.detached(priority: .utility) { [weak self, database] in
                 // With the newest version of each, so that an item changed again while
                 // it is still marked (one the server refused) is published again.
-                let observation = ValueObservation.tracking(regions: AppDatabase.dirtySettingsTables) { db in
-                    try Row.fetchAll(db, sql: """
-                        SELECT d.item AS item, COALESCE((SELECT MAX(e.version) FROM syncedEntry e WHERE e.item = d.item), '') AS version
-                        FROM syncedItemDirty d
-                        """).map { $0["item"] as String }
-                }
+                let observation = ValueObservation.tracking(regions: AppDatabase.dirtySettingsTables, fetch: AppDatabase.dirtySettings)
                 do {
                     for try await dirty in observation.values(in: database.reader, bufferingPolicy: .bufferingNewest(1)) {
                         guard let self else { return }

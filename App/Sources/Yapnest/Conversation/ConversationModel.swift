@@ -289,8 +289,6 @@ final class ConversationModel {
 
     @ObservationIgnored private var items: [Int64: ConversationItem] = [:]
     @ObservationIgnored private var order: [Int64] = []
-    /// The stamp of each item in `items`, to see which ones an emission changed without reading them.
-    @ObservationIgnored private var stamps: [Int64: Int64] = [:]
     /// The items in `order`.
     @ObservationIgnored private var orderedItems: [ConversationItem] = []
     /// The order the rows were last built for.
@@ -803,7 +801,7 @@ final class ConversationModel {
         // An item with the stamp it had is the one already held, so only the
         // others are looked at: the rest of the dictionary stays as it is.
         var changedItems: [(before: ConversationItem?, after: ConversationItem)] = []
-        for item in newItems where stamps[item.id] != item.stamp {
+        for item in newItems where items[item.id]?.stamp != item.stamp {
             changedItems.append((items[item.id], item))
         }
         orderedItems = newItems
@@ -813,12 +811,10 @@ final class ConversationModel {
         if order.count >= previousOrder.count, order.starts(with: previousOrder) {
             for (_, item) in changedItems {
                 items[item.id] = item
-                stamps[item.id] = item.stamp
             }
             for index in previousOrder.count..<order.count { orderIndex[order[index]] = index }
         } else {
             items = Dictionary(uniqueKeysWithValues: newItems.map { ($0.id, $0) })
-            stamps = items.mapValues(\.stamp)
             orderIndex = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
         }
         // A removed row never reports again.
@@ -1242,35 +1238,16 @@ final class ConversationModel {
         }
     }
 
-    /// What a row's `RowInputs` come to for comparing. The row's item is the
-    /// same one if it has the stamp it had, which is all that is looked at
-    /// for the rows an emission didn't touch. A different stamp doesn't mean
-    /// a different item (a window opened again builds them all anew), so
-    /// then the items are compared. A neighbour is compared by what a row
-    /// reads of it: its body changing leaves the row beside it as it was.
-    private struct RowKey: Equatable, Sendable {
-        var item: ConversationItem
-        var previous: Neighbour?
-        var next: Neighbour?
-        var hasUnreadDivider: Bool
-        var showsWholeBody: Bool
-        var isNewest: Bool
-        var epoch: Int
-
-        static func == (a: Self, b: Self) -> Bool {
-            a.previous == b.previous && a.next == b.next && a.hasUnreadDivider == b.hasUnreadDivider
-                && a.showsWholeBody == b.showsWholeBody && a.isNewest == b.isNewest && a.epoch == b.epoch
-                && a.item.id == b.item.id && (a.item.stamp == b.item.stamp || a.item == b.item)
-        }
-    }
-
     /// Everything `makeContent` reads for one row, apart from what is fixed
     /// for the screen's life (the account, whether it's a group, the link
     /// preview service) and the time zone and locale, which `buildRows`
-    /// checks once for all rows. A row whose inputs have the key of those it
-    /// was last built from has the same content, so it isn't built again.
-    /// Anything new that `makeContent` reads belongs here.
-    private struct RowInputs: Sendable {
+    /// checks once for all rows. A row whose inputs equal those it was last
+    /// built from has the same content, so it isn't built again; an item that
+    /// has the stamp it had compares equal without being read, and a
+    /// neighbour is compared by what a row reads of it, so its body changing
+    /// leaves the row beside it as it was. Anything new that `makeContent`
+    /// reads belongs here.
+    private struct RowInputs: Equatable, Sendable {
         var item: ConversationItem
         var previous: Neighbour?
         var next: Neighbour?
@@ -1280,20 +1257,13 @@ final class ConversationModel {
         var isNewest: Bool
         /// Names, link preview choices and the day: see `inputsEpoch`.
         var epoch: Int
-
-        var key: RowKey {
-            RowKey(
-                item: item, previous: previous, next: next,
-                hasUnreadDivider: hasUnreadDivider, showsWholeBody: showsWholeBody, isNewest: isNewest, epoch: epoch,
-            )
-        }
     }
 
     /// Bumped when something row-wide that isn't in a row's item changes: the
     /// contacts' names, the link preview choices, or the day, time or locale
     /// (which the day headers read).
     @ObservationIgnored private var inputsEpoch = 0
-    @ObservationIgnored private var inputsByID: [Int64: RowKey] = [:]
+    @ObservationIgnored private var inputsByID: [Int64: RowInputs] = [:]
     /// The time zone and locale the rows were last built in.
     @ObservationIgnored private var builtIn: (calendar: Calendar, locale: Locale)?
 
@@ -1348,7 +1318,7 @@ final class ConversationModel {
         var newestIsOffered: Bool
         var epoch: Int
         /// What the rows on screen were built from; those aren't built again.
-        var built: [Int64: RowKey]
+        var built: [Int64: RowInputs]
         var texts: [Int64: CachedText]
         var environment: RowEnvironment
     }
@@ -1376,23 +1346,23 @@ final class ConversationModel {
         var rows: [Int64: Prebuilt.Row] = [:]
         let neighbours = snapshot.items.map(Neighbour.init)
         for index in snapshot.items.indices {
-            let key = rowKey(
+            let input = rowInputs(
                 at: index, in: snapshot.items, neighbours: neighbours, dividerId: snapshot.dividerId, showingWhole: snapshot.showingWhole,
                 newestIsOffered: snapshot.newestIsOffered, epoch: snapshot.epoch,
             )
-            guard snapshot.built[key.item.id] != key else { continue }
-            let input = rowInputs(at: index, in: snapshot.items, key: key)
-            let (content, text) = makeContent(input, cached: snapshot.texts[key.item.id], environment: snapshot.environment)
-            rows[key.item.id] = Prebuilt.Row(inputs: input, content: content, text: text)
+            let id = input.item.id
+            guard snapshot.built[id] != input else { continue }
+            let (content, text) = makeContent(input, cached: snapshot.texts[id], environment: snapshot.environment)
+            rows[id] = Prebuilt.Row(inputs: input, content: content, text: text)
         }
         return Prebuilt(rows: rows, calendar: snapshot.environment.calendar, locale: snapshot.environment.locale)
     }
 
-    private nonisolated static func rowKey(
+    private nonisolated static func rowInputs(
         at index: Int, in items: [ConversationItem], neighbours: [Neighbour], dividerId: Int64?, showingWhole: Set<Int64>, newestIsOffered: Bool, epoch: Int,
-    ) -> RowKey {
+    ) -> RowInputs {
         let item = items[index]
-        return RowKey(
+        return RowInputs(
             item: item,
             previous: index > 0 ? neighbours[index - 1] : nil,
             next: index + 1 < items.count ? neighbours[index + 1] : nil,
@@ -1405,38 +1375,19 @@ final class ConversationModel {
         )
     }
 
-    private nonisolated static func rowInputs(at index: Int, in items: [ConversationItem], key: RowKey) -> RowInputs {
-        RowInputs(
-            item: items[index],
-            previous: key.previous,
-            next: key.next,
-            hasUnreadDivider: key.hasUnreadDivider,
-            showsWholeBody: key.showsWholeBody,
-            isNewest: key.isNewest,
-            epoch: key.epoch,
-        )
-    }
-
-    private nonisolated static func rowInputs(
-        for items: [ConversationItem], dividerId: Int64?, showingWhole: Set<Int64>, newestIsOffered: Bool, epoch: Int,
-    ) -> [RowInputs] {
-        let neighbours = items.map(Neighbour.init)
-        return items.indices.map { index in
-            rowInputs(at: index, in: items, key: rowKey(
-                at: index, in: items, neighbours: neighbours, dividerId: dividerId, showingWhole: showingWhole, newestIsOffered: newestIsOffered, epoch: epoch,
-            ))
-        }
-    }
-
     #if DEBUG
     /// What the main actor's path makes of the rows now, for a test to compare
     /// with what was built off it.
     func contentsBuiltOnMainForTesting() -> [MessageRow.Content] {
         let environment = rowEnvironment()
-        let inputs = Self.rowInputs(
-            for: order.map { items[$0]! }, dividerId: unreadDividerId, showingWhole: showingWhole,
-            newestIsOffered: !isBounded || holdsNewest, epoch: inputsEpoch,
-        )
+        let ordered = orderedItems
+        let neighbours = ordered.map(Neighbour.init)
+        let inputs = ordered.indices.map { index in
+            Self.rowInputs(
+                at: index, in: ordered, neighbours: neighbours, dividerId: unreadDividerId, showingWhole: showingWhole,
+                newestIsOffered: !isBounded || holdsNewest, epoch: inputsEpoch,
+            )
+        }
         return inputs.map { Self.makeContent($0, cached: textCache[$0.item.id], environment: environment).content }
     }
 
@@ -1445,7 +1396,7 @@ final class ConversationModel {
     /// or ones made for inputs that have since changed.
     func rowsBuiltWithMarkedPrebuiltForTesting(stillCurrent: Bool) async -> [MessageRow] {
         inputsByID = [:]
-        let snapshot = prebuildSnapshot(for: order.map { items[$0]! })
+        let snapshot = prebuildSnapshot(for: orderedItems)
         var prebuilt = await Task.detached { Self.prebuild(snapshot) }.value
         for id in prebuilt.rows.keys {
             prebuilt.rows[id]?.content.accessibilityLabel = "prebuilt"
@@ -1496,15 +1447,15 @@ final class ConversationModel {
         let dividerId = unreadDividerId, newestIsOffered = !isBounded || holdsNewest
         for index in order.indices {
             let id = order[index]
-            let key = Self.rowKey(
+            let inputs = Self.rowInputs(
                 at: index, in: ordered, neighbours: neighbours, dividerId: dividerId, showingWhole: showingWhole,
                 newestIsOffered: newestIsOffered, epoch: inputsEpoch,
             )
-            if sameEnvironment, inputsByID[id] == key, let existing = rowsByID[id] {
+            if sameEnvironment, inputsByID[id] == inputs, let existing = rowsByID[id] {
                 built.append(existing)
                 continue
             }
-            inputsByID[id] = key
+            inputsByID[id] = inputs
             // Held too once it's scrolled into view, where growing would
             // move the rows above it.
             if holds, (boundary.map { index > $0 } ?? false) || heldIDs.contains(id), let existing = rowsByID[id] {
@@ -1514,9 +1465,8 @@ final class ConversationModel {
                 built.append(existing)
                 continue
             }
-            let inputs = Self.rowInputs(at: index, in: ordered, key: key)
             let content: MessageRow.Content
-            if let ready = prebuilt?.rows[id], ready.inputs.key == key {
+            if let ready = prebuilt?.rows[id], ready.inputs == inputs {
                 content = ready.content
                 textCache[id] = ready.text
             } else {

@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import os
 
 /// A message ready for display: reactions grouped by emoji and the
 /// replied-to message resolved.
@@ -45,21 +46,20 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
         didSet { stamp = Self.nextStamp() }
     }
 
-    /// Names this content: two items of one message with the same stamp are
-    /// the same, which saves comparing them field by field. Every build and
-    /// every change gets one no other content in the process has had, and the
-    /// cache keeps an item's stamp for as long as the item is the same.
-    /// Equality ignores it, so equal items built apart are still equal.
+    /// Names this content: every build and every change gets a stamp no other
+    /// content in the process has had, so items with equal stamps are equal
+    /// without comparing them field by field. Items built apart have different
+    /// stamps and still compare equal by their fields. Hashing ignores it.
     public private(set) var stamp: Int64 = ConversationItem.nextStamp()
 
     public var id: Int64 { message.id! }
 
-    private static let stamps = ManagedAtomicCounter()
+    private static let stamps = OSAllocatedUnfairLock(initialState: Int64(0))
 
-    private static func nextStamp() -> Int64 { stamps.next() }
+    private static func nextStamp() -> Int64 { stamps.withLock { $0 += 1; return $0 } }
 
     public static func == (a: Self, b: Self) -> Bool {
-        a.message == b.message && a.reactions == b.reactions && a.quote == b.quote
+        a.stamp == b.stamp || a.message == b.message && a.reactions == b.reactions && a.quote == b.quote
             && a.preview == b.preview && a.attachment == b.attachment
     }
 
@@ -69,18 +69,6 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
         hasher.combine(quote)
         hasher.combine(preview)
         hasher.combine(attachment)
-    }
-}
-
-private final class ManagedAtomicCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Int64 = 0
-
-    func next() -> Int64 {
-        lock.lock()
-        defer { lock.unlock() }
-        value += 1
-        return value
     }
 }
 
@@ -327,7 +315,7 @@ extension AppDatabase {
 
     /// The same count, kept up to date as messages arrive and are read.
     public func observeUnreadMessageCount(peer: JID) -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<Int>>> {
-        ValueObservation.tracking(regions: [Table(Conversation.databaseTableName), Table(Message.databaseTableName)]) { try Self.unreadCount($0, peer: peer) }.removeDuplicates()
+        ValueObservation.tracking(regions: Self.unreadCountTables) { try Self.unreadCount($0, peer: peer) }.removeDuplicates()
     }
 
     static func unreadCount(_ db: Database, peer: JID) throws -> Int {
@@ -468,8 +456,12 @@ extension AppDatabase {
         }
     }
 
+    static let unreadCountTables: [any DatabaseRegionConvertible] = [Table(Conversation.databaseTableName), Table(Message.databaseTableName)]
+
+    static let contactTables: [any DatabaseRegionConvertible] = [Table(Contact.databaseTableName)]
+
     public func observeContactNames() -> ValueObservation<ValueReducers.Fetch<[JID: String]>> {
-        ValueObservation.tracking(regions: [Table(Contact.databaseTableName)]) { db in try Self.contactNames(db) }
+        ValueObservation.tracking(regions: Self.contactTables) { db in try Self.contactNames(db) }
     }
 
     static func contactNames(_ db: Database) throws -> [JID: String] {

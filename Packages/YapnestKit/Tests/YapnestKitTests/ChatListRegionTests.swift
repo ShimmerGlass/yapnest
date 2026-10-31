@@ -82,16 +82,15 @@ struct ChatListRegionTests {
 
     @Test func theUnreadCountWatchesEveryTableItReads() async throws {
         let alice = alice
-        let watched: [any DatabaseRegionConvertible] = [Table(Conversation.databaseTableName), Table(Message.databaseTableName)]
-        #expect(try await missing(from: watched) { _ = try AppDatabase.unreadCount($0, peer: alice) } == [])
+        #expect(try await missing(from: AppDatabase.unreadCountTables) { _ = try AppDatabase.unreadCount($0, peer: alice) } == [])
     }
 
     @Test func theContactNamesWatchEveryTableTheyRead() async throws {
-        #expect(try await missing(from: [Table(Contact.databaseTableName)]) { _ = try AppDatabase.contactNames($0) } == [])
+        #expect(try await missing(from: AppDatabase.contactTables) { _ = try AppDatabase.contactNames($0) } == [])
     }
 
     @Test func theContactRequestsWatchEveryTableTheyRead() async throws {
-        #expect(try await missing(from: [Table(Contact.databaseTableName)]) { _ = try AppDatabase.contactRequests($0) } == [])
+        #expect(try await missing(from: AppDatabase.contactTables) { _ = try AppDatabase.contactRequests($0) } == [])
     }
 
     @Test func aContactIsWatchedByItsRow() async throws {
@@ -110,15 +109,15 @@ struct ChatListRegionTests {
     }
 
     @Test func theArchivedCountWatchesEveryTableItReads() async throws {
-        #expect(try await missing(from: [Table(Conversation.databaseTableName)]) { _ = try Conversation.filter(Column("isArchived") == true).fetchCount($0) } == [])
+        #expect(try await missing(from: AppDatabase.archivedCountTables) { _ = try AppDatabase.archivedCount($0) } == [])
     }
 
     @Test func theGroupInvitationsWatchEveryTableTheyRead() async throws {
-        #expect(try await missing(from: [Table(GroupInvitation.databaseTableName)]) { _ = try AppDatabase.groupInvitations($0) } == [])
+        #expect(try await missing(from: AppDatabase.groupInvitationTables) { _ = try AppDatabase.groupInvitations($0) } == [])
     }
 
     @Test func theDeviceNoticesWatchEveryTableTheyRead() async throws {
-        #expect(try await missing(from: [Table("deviceNotice")]) { _ = try AppDatabase.deviceNotices($0) } == [])
+        #expect(try await missing(from: AppDatabase.deviceNoticeTables) { _ = try AppDatabase.deviceNotices($0) } == [])
     }
 
     @Test func aDeliveryStateIsWatchedByItsRow() async throws {
@@ -127,7 +126,7 @@ struct ChatListRegionTests {
     }
 
     private func settingsMissing(_ fetch: @escaping @Sendable (Database) throws -> Void) async throws -> [String] {
-        try await missing(from: [Table("setting")], reading: fetch)
+        try await missing(from: AppDatabase.settingTables, reading: fetch)
     }
 
     @Test func theLinkPreviewSettingWatchesEveryTableItReads() async throws {
@@ -157,26 +156,12 @@ struct ChatListRegionTests {
     }
 
     @Test func thePublisherWatchesEveryTableItReads() async throws {
-        #expect(try await missing(from: AppDatabase.dirtySettingsTables) { db in
-            _ = try Row.fetchAll(db, sql: """
-                SELECT d.item AS item, COALESCE((SELECT MAX(e.version) FROM syncedEntry e WHERE e.item = d.item), '') AS version
-                FROM syncedItemDirty d
-                """)
-        } == [])
+        #expect(try await missing(from: AppDatabase.dirtySettingsTables) { _ = try AppDatabase.dirtySettings($0) } == [])
     }
 
     @Test func theSearchWatchesEveryTableItReads() async throws {
         let pattern = try #require(AppDatabase.searchPattern(for: "hi"))
         let conversationId = try await db.writer.read { try Conversation.fetchOne($0)!.id! }
-        #expect(try await missing(from: [Table("messageSearch"), Table(Message.databaseTableName)]) { db in
-            _ = try Int64.fetchAll(db, sql: """
-                SELECT message.id
-                FROM messageSearch
-                JOIN message ON message.id = messageSearch.rowid
-                WHERE messageSearch MATCH ? AND message.conversationId = ?
-                ORDER BY message.timestamp DESC, message.id DESC
-                LIMIT ?
-                """, arguments: [pattern.rawPattern, conversationId, 10])
-        } == [])
+        #expect(try await missing(from: AppDatabase.searchTables) { _ = try AppDatabase.searchMatches($0, pattern: pattern, in: conversationId, limit: 10) } == [])
     }
 }

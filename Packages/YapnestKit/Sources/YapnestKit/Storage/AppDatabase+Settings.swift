@@ -129,6 +129,9 @@ extension AppDatabase {
         }
     }
 
+    /// What the observations of one or more settings watch.
+    static let settingTables: [any DatabaseRegionConvertible] = [Table("setting")]
+
     /// For use inside a transaction or an observation.
     public static func setting(_ db: Database, _ key: SettingKey) throws -> String? {
         try String.fetchOne(db, sql: "SELECT value FROM setting WHERE key = ?", arguments: [key.rawValue])

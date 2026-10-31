@@ -212,6 +212,14 @@ extension AppDatabase {
     /// Listed rather than worked out by GRDB, which would fetch on the writer after each commit.
     static let dirtySettingsTables: [any DatabaseRegionConvertible] = [Table("syncedItemDirty"), Table("syncedEntry")]
 
+    /// The items marked for publishing.
+    static func dirtySettings(_ db: Database) throws -> [String] {
+        try Row.fetchAll(db, sql: """
+            SELECT d.item AS item, COALESCE((SELECT MAX(e.version) FROM syncedEntry e WHERE e.item = d.item), '') AS version
+            FROM syncedItemDirty d
+            """).map { $0["item"] as String }
+    }
+
     static func markDirty(_ db: Database, _ item: String) throws {
         try db.execute(sql: "INSERT OR IGNORE INTO syncedItemDirty (item) VALUES (?)", arguments: [item])
     }

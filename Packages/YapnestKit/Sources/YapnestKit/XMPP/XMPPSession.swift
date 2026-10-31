@@ -2487,10 +2487,11 @@ public final class XMPPSession: @unchecked Sendable {
                 guard let group = try database.groupChat(room) else { continue }
                 rooms += try database.pendingOutgoing(conversationId: group.conversationId).filter { !isClaimed($0) }.map { ($0, room) }
             }
+            let pending = PendingKind.allCases.map { (kind: $0, rows: pendingRows($0)) }
             if lock.withLock({ !$0.streamErrorStrikes.isEmpty }) {
                 // A stanza the server closed the stream on goes first and alone.
                 let ids = chats.compactMap(\.0.remoteId) + rooms.compactMap(\.message.remoteId)
-                    + PendingKind.allCases.flatMap { (pendingRows($0) ?? []).map(\.id) }
+                    + pending.flatMap { $0.rows.map(\.id) }
                 beginProbation(among: ids)
             }
             var resent = 0
@@ -2503,7 +2504,7 @@ public final class XMPPSession: @unchecked Sendable {
                 transmit(message, to: room)
             }
             DiagLog.info(.send, "Sending unclaimed pending messages", .int("count", resent))
-            resendUnacknowledged()
+            resendUnacknowledged(pending)
         } catch {
             logger.error("Failed to load unsent messages: \(error)")
         }
