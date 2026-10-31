@@ -198,6 +198,14 @@ extension AppDatabase {
         public static func == (a: Self, b: Self) -> Bool { a.version == b.version }
     }
 
+    /// Every table `ConversationItemCache.fetch` reads. Listed rather than
+    /// worked out by GRDB, which would fetch on the writer after each commit
+    /// and hold every write up while a chat is open (see `observeChatList`).
+    static let conversationTables: [any DatabaseRegionConvertible] = [
+        Table(Conversation.databaseTableName), Table(Message.databaseTableName), Table(Reaction.databaseTableName),
+        Table(Attachment.databaseTableName), Table(LinkPreview.databaseTableName),
+    ]
+
     /// GRDB can't tell which conversation a write touched, so every message
     /// stored re-reads this one. A cache keeps what was built for each message
     /// and rebuilds only those whose rows changed, so a receipt or a read
@@ -205,7 +213,7 @@ extension AppDatabase {
     public func observeConversation(peer: JID, me: JID, since: MessageCursor? = nil, until: MessageCursor? = nil) -> ValueObservation<ValueReducers.Map<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<ConversationSnapshot>>, [ConversationItem]>> {
         let cache = ConversationItemCache(me: me)
         return ValueObservation
-            .tracking { db in try cache.fetch(db, peer: peer, since: since, until: until) }
+            .tracking(regions: Self.conversationTables) { db in try cache.fetch(db, peer: peer, since: since, until: until) }
             .removeDuplicates()
             .map(\.items)
     }
@@ -273,10 +281,10 @@ extension AppDatabase {
 
     /// The same count, kept up to date as messages arrive and are read.
     public func observeUnreadMessageCount(peer: JID) -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<Int>>> {
-        ValueObservation.tracking { try Self.unreadCount($0, peer: peer) }.removeDuplicates()
+        ValueObservation.tracking(regions: [Table(Conversation.databaseTableName), Table(Message.databaseTableName)]) { try Self.unreadCount($0, peer: peer) }.removeDuplicates()
     }
 
-    private static func unreadCount(_ db: Database, peer: JID) throws -> Int {
+    static func unreadCount(_ db: Database, peer: JID) throws -> Int {
         guard let conversationId = try Self.conversationId(db, peer: peer) else { return 0 }
         return try Message.all()
             .inConversation(conversationId)
@@ -352,12 +360,12 @@ extension AppDatabase {
     }
 
     public func observeContact(_ jid: JID) -> ValueObservation<ValueReducers.Fetch<Contact?>> {
-        ValueObservation.tracking { db in try Contact.fetchOne(db, key: jid) }
+        ValueObservation.tracking(regions: [Contact.filter(key: jid)]) { db in try Contact.fetchOne(db, key: jid) }
     }
 
     /// The conversation's link preview choice; nil until the user decides.
     public func observeLinkPreviews(peer: JID) -> ValueObservation<ValueReducers.Fetch<Bool?>> {
-        ValueObservation.tracking { db in
+        ValueObservation.tracking(regions: [Conversation.filter(Column("peer") == peer)]) { db in
             try Self.existingConversation(db, peer: peer)?.linkPreviews
         }
     }
@@ -415,10 +423,10 @@ extension AppDatabase {
     }
 
     public func observeContactNames() -> ValueObservation<ValueReducers.Fetch<[JID: String]>> {
-        ValueObservation.tracking { db in try Self.contactNames(db) }
+        ValueObservation.tracking(regions: [Table(Contact.databaseTableName)]) { db in try Self.contactNames(db) }
     }
 
-    private static func contactNames(_ db: Database) throws -> [JID: String] {
+    static func contactNames(_ db: Database) throws -> [JID: String] {
         Dictionary(try Contact.fetchAll(db).map { ($0.jid, $0.displayName) }, uniquingKeysWith: { first, _ in first })
     }
 }

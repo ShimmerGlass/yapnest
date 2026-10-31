@@ -208,6 +208,10 @@ extension AppDatabase {
         try markDirty(db, item)
     }
 
+    /// Every table the publisher's query for the items to publish reads.
+    /// Listed rather than worked out by GRDB, which would fetch on the writer after each commit.
+    static let dirtySettingsTables: [any DatabaseRegionConvertible] = [Table("syncedItemDirty"), Table("syncedEntry")]
+
     static func markDirty(_ db: Database, _ item: String) throws {
         try db.execute(sql: "INSERT OR IGNORE INTO syncedItemDirty (item) VALUES (?)", arguments: [item])
     }

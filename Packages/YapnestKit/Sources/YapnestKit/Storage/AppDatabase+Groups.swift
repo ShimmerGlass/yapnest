@@ -15,7 +15,7 @@ extension AppDatabase {
     }
 
     public func observeGroupChat(_ jid: JID) -> ValueObservation<ValueReducers.Fetch<GroupChat?>> {
-        ValueObservation.tracking { db in try GroupChat.filter(Column("jid") == jid).fetchOne(db) }
+        ValueObservation.tracking(regions: [GroupChat.filter(Column("jid") == jid)]) { db in try GroupChat.filter(Column("jid") == jid).fetchOne(db) }
     }
 
     /// Records that we're in the room at `jid`, creating its conversation if

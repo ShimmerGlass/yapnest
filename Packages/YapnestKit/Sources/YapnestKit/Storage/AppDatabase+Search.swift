@@ -78,7 +78,7 @@ extension AppDatabase {
     /// retracted or deleted. Empty when the query has no words.
     public func observeSearchMatches(_ query: String, in conversationId: Int64, limit: Int) -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<[Int64]>>> {
         let pattern = Self.searchPattern(for: query)
-        return ValueObservation.tracking { db in
+        return ValueObservation.tracking(regions: [Table("messageSearch"), Table(Message.databaseTableName)]) { db in
             guard let pattern, limit > 0 else { return [] }
             return try Int64.fetchAll(db, sql: """
                 SELECT message.id

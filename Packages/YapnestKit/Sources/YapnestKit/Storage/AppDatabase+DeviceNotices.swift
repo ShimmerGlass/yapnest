@@ -59,14 +59,14 @@ extension AppDatabase {
 
     /// Our devices announced since their list was first seen, not yet dismissed, oldest first.
     func observeDeviceNotices() -> ValueObservation<ValueReducers.Fetch<[DeviceNotice]>> {
-        ValueObservation.tracking { db in try Self.deviceNotices(db) }
+        ValueObservation.tracking(regions: [Table("deviceNotice")]) { db in try Self.deviceNotices(db) }
     }
 
     func deviceNotices() throws -> [DeviceNotice] {
         try reader.read { try Self.deviceNotices($0) }
     }
 
-    private static func deviceNotices(_ db: Database) throws -> [DeviceNotice] {
+    static func deviceNotices(_ db: Database) throws -> [DeviceNotice] {
         try Row.fetchAll(db, sql: "SELECT deviceId, fingerprint, firstSeen FROM deviceNotice WHERE NOT isDismissed ORDER BY firstSeen, deviceId")
             .map { DeviceNotice(deviceId: $0["deviceId"], fingerprint: $0["fingerprint"], firstSeen: $0["firstSeen"]) }
     }

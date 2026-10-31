@@ -39,11 +39,14 @@ extension AppDatabase {
     }
 
     public func observeGifFavorites() -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<[Gif]>>> {
-        ValueObservation.tracking { db in try Self.gifFavorites(db) }
+        ValueObservation.tracking(regions: Self.gifFavoritesTables) { db in try Self.gifFavorites(db) }
             .removeDuplicates()
     }
 
-    private static func gifFavorites(_ db: Database) throws -> [Gif] {
+    /// Every table `gifFavorites` reads: the legacy list is a setting, the stars are synced entries.
+    static let gifFavoritesTables: [any DatabaseRegionConvertible] = [Table("setting"), Table("syncedEntry")]
+
+    static func gifFavorites(_ db: Database) throws -> [Gif] {
         // Until the first write takes them in, the stars from before sync.
         if let legacy = try setting(db, .gifFavorites) { return decodeLegacyGifFavorites(legacy) }
         return try starredGifs(db).prefix(gifFavoritesCapacity).map(\.gif)

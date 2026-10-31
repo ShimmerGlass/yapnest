@@ -194,7 +194,7 @@ extension AppDatabase {
     }
 
     public func observeProfilePending() -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<ProfilePending>>> {
-        ValueObservation.tracking { db in
+        ValueObservation.tracking(regions: [Table("setting")]) { db in
             ProfilePending(
                 avatar: try Self.setting(db, .owedAvatarChange) != nil,
                 nickname: try Self.setting(db, .owedNicknameChange) != nil,

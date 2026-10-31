@@ -3,9 +3,10 @@ import GRDB
 import Testing
 @testable import YapnestKit
 
-/// The chat list and the badge are watched by the tables they read, which
-/// are listed by hand. A table left out would leave them stale after a
-/// change there, so these compare the lists with what the fetches read.
+/// The chat list, the badge and the other observations are watched by the
+/// tables they read, which are listed by hand. A table left out would leave
+/// them stale after a change there, so these compare the lists with what the
+/// fetches read. The database holds something for each branch of a fetch.
 struct ChatListRegionTests {
     let db: AppDatabase
     let alice = JID("alice@example.org")!
@@ -18,6 +19,19 @@ struct ChatListRegionTests {
         try db.writer.write { db in
             try Attachment(messageId: message.id!, url: "https://example.org/a.png", name: "a.png", mimeType: "image/png", state: .pendingUpload).insert(db)
         }
+        // A reply with a link, a reaction and a preview, so the conversation's quote, reaction and preview reads run.
+        var reply = Message(conversationId: id, direction: .incoming, sender: alice, body: "re https://example.org/x", timestamp: Date(timeIntervalSince1970: 2), remoteId: "m2", replyToId: "m1")
+        reply.link = "https://example.org/x"
+        let stored = try db.insert(reply)
+        try db.writer.write { db in
+            try Reaction(messageId: message.id!, sender: alice, emoji: "x").insert(db)
+            try LinkPreview(url: "https://example.org/x", kind: .page, title: "t", fetchedAt: Date(timeIntervalSince1970: 3)).insert(db)
+            try Contact(jid: alice, subscriptionRequestedAt: Date(timeIntervalSince1970: 4)).insert(db)
+            _ = stored
+        }
+        try db.addDeviceNoticeForFixture(id: 7, keyByte: 1)
+        try db.recordGroupInvitation(room: JID("room@example.org")!, inviter: alice, reason: nil)
+        try db.setSetting(.availability, "away")
     }
 
     /// The region GRDB itself works out from what `fetch` reads.
@@ -58,5 +72,111 @@ struct ChatListRegionTests {
 
     @Test func theBadgeWatchesEveryTableItReads() async throws {
         #expect(try await missing(from: AppDatabase.unreadBadgeTables) { _ = try AppDatabase.unreadCounts($0, archived: false) } == [])
+    }
+
+    @Test func theConversationWatchesEveryTableItReads() async throws {
+        let cache = ConversationItemCache(me: JID("me@example.org")!)
+        let alice = alice
+        #expect(try await missing(from: AppDatabase.conversationTables) { _ = try cache.fetch($0, peer: alice, since: nil) } == [])
+    }
+
+    @Test func theUnreadCountWatchesEveryTableItReads() async throws {
+        let alice = alice
+        let watched: [any DatabaseRegionConvertible] = [Table(Conversation.databaseTableName), Table(Message.databaseTableName)]
+        #expect(try await missing(from: watched) { _ = try AppDatabase.unreadCount($0, peer: alice) } == [])
+    }
+
+    @Test func theContactNamesWatchEveryTableTheyRead() async throws {
+        #expect(try await missing(from: [Table(Contact.databaseTableName)]) { _ = try AppDatabase.contactNames($0) } == [])
+    }
+
+    @Test func theContactRequestsWatchEveryTableTheyRead() async throws {
+        #expect(try await missing(from: [Table(Contact.databaseTableName)]) { _ = try AppDatabase.contactRequests($0) } == [])
+    }
+
+    @Test func aContactIsWatchedByItsRow() async throws {
+        let alice = alice
+        #expect(try await missing(from: [Contact.filter(key: alice)]) { _ = try Contact.fetchOne($0, key: alice) } == [])
+    }
+
+    @Test func aGroupIsWatchedByItsRow() async throws {
+        let room = JID("room@example.org")!
+        #expect(try await missing(from: [GroupChat.filter(Column("jid") == room)]) { _ = try GroupChat.filter(Column("jid") == room).fetchOne($0) } == [])
+    }
+
+    @Test func aChatsLinkPreviewChoiceIsWatchedByItsConversation() async throws {
+        let alice = alice
+        #expect(try await missing(from: [Conversation.filter(Column("peer") == alice)]) { _ = try AppDatabase.existingConversation($0, peer: alice)?.linkPreviews } == [])
+    }
+
+    @Test func theArchivedCountWatchesEveryTableItReads() async throws {
+        #expect(try await missing(from: [Table(Conversation.databaseTableName)]) { _ = try Conversation.filter(Column("isArchived") == true).fetchCount($0) } == [])
+    }
+
+    @Test func theGroupInvitationsWatchEveryTableTheyRead() async throws {
+        #expect(try await missing(from: [Table(GroupInvitation.databaseTableName)]) { _ = try AppDatabase.groupInvitations($0) } == [])
+    }
+
+    @Test func theDeviceNoticesWatchEveryTableTheyRead() async throws {
+        #expect(try await missing(from: [Table("deviceNotice")]) { _ = try AppDatabase.deviceNotices($0) } == [])
+    }
+
+    @Test func aDeliveryStateIsWatchedByItsRow() async throws {
+        let id = try await db.writer.read { try Message.fetchOne($0)!.id! }
+        #expect(try await missing(from: [Message.filter(key: id)]) { _ = try Message.fetchOne($0, key: id) } == [])
+    }
+
+    private func settingsMissing(_ fetch: @escaping @Sendable (Database) throws -> Void) async throws -> [String] {
+        try await missing(from: [Table("setting")], reading: fetch)
+    }
+
+    @Test func theLinkPreviewSettingWatchesEveryTableItReads() async throws {
+        #expect(try await settingsMissing { _ = try AppDatabase.setting($0, .linkPreviews) } == [])
+    }
+
+    @Test func theProfilePendingWatchesEveryTableItReads() async throws {
+        #expect(try await settingsMissing { db in
+            _ = try AppDatabase.setting(db, .owedAvatarChange)
+            _ = try AppDatabase.setting(db, .owedNicknameChange)
+        } == [])
+    }
+
+    @Test func theOwnStatusWatchesEveryTableItReads() async throws {
+        #expect(try await settingsMissing { db in
+            _ = try AppDatabase.setting(db, .availability)
+            _ = try AppDatabase.setting(db, .statusMessage)
+        } == [])
+    }
+
+    @Test func theGifSettingWatchesEveryTableItReads() async throws {
+        #expect(try await settingsMissing { _ = try AppDatabase.flag($0, .gifs, default: true) } == [])
+    }
+
+    @Test func theGifFavoritesWatchEveryTableTheyRead() async throws {
+        #expect(try await missing(from: AppDatabase.gifFavoritesTables) { _ = try AppDatabase.gifFavorites($0) } == [])
+    }
+
+    @Test func thePublisherWatchesEveryTableItReads() async throws {
+        #expect(try await missing(from: AppDatabase.dirtySettingsTables) { db in
+            _ = try Row.fetchAll(db, sql: """
+                SELECT d.item AS item, COALESCE((SELECT MAX(e.version) FROM syncedEntry e WHERE e.item = d.item), '') AS version
+                FROM syncedItemDirty d
+                """)
+        } == [])
+    }
+
+    @Test func theSearchWatchesEveryTableItReads() async throws {
+        let pattern = try #require(AppDatabase.searchPattern(for: "hi"))
+        let conversationId = try await db.writer.read { try Conversation.fetchOne($0)!.id! }
+        #expect(try await missing(from: [Table("messageSearch"), Table(Message.databaseTableName)]) { db in
+            _ = try Int64.fetchAll(db, sql: """
+                SELECT message.id
+                FROM messageSearch
+                JOIN message ON message.id = messageSearch.rowid
+                WHERE messageSearch MATCH ? AND message.conversationId = ?
+                ORDER BY message.timestamp DESC, message.id DESC
+                LIMIT ?
+                """, arguments: [pattern.rawPattern, conversationId, 10])
+        } == [])
     }
 }

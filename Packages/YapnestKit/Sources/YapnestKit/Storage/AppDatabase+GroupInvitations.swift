@@ -22,7 +22,7 @@ extension AppDatabase {
 
     /// Invitations waiting for an answer, newest first.
     public func observeGroupInvitations() -> ValueObservation<ValueReducers.Fetch<[GroupInvitation]>> {
-        ValueObservation.tracking(Self.groupInvitations)
+        ValueObservation.tracking(regions: [Table(GroupInvitation.databaseTableName)], fetch: Self.groupInvitations)
     }
 
     static func groupInvitations(_ db: Database) throws -> [GroupInvitation] {

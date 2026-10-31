@@ -98,6 +98,6 @@ extension AppDatabase {
     }
 
     public func observeArchivedCount() -> ValueObservation<ValueReducers.Fetch<Int>> {
-        ValueObservation.tracking { db in try Conversation.filter(Column("isArchived") == true).fetchCount(db) }
+        ValueObservation.tracking(regions: [Table(Conversation.databaseTableName)]) { db in try Conversation.filter(Column("isArchived") == true).fetchCount(db) }
     }
 }
