@@ -135,6 +135,38 @@ struct ProfileAccessTests {
         #expect(session.warnings.current.isEmpty)
     }
 
+    // A resumed stream runs no catch-up, so a change it missed waited for the next new session.
+    @Test func aChangeMadeOfflineIsAppliedWhenTheStreamResumes() async throws {
+        let server = Self.open()
+        let session = try connect(server)
+        session.client.update(state: .disconnected())
+        await session.reconcileProfileAccess()
+        #expect(server.configReads == 0)
+        // Resuming runs `resumeWork` itself, once Martin holds the state.
+        session.client.update(state: .connected(resumed: true))
+        await eventually("the nodes close") { server.access.values.allSatisfy { $0 == "presence" } }
+    }
+
+    @Test func aFailureThatCanPassIsTriedAgainWhenTheStreamResumes() async throws {
+        let server = Self.open()
+        server.fail("remote-server-timeout", type: "wait")
+        let session = try connect(server)
+        await session.reconcileProfileAccess()
+        server.recover()
+        session.resumeWork()
+        await eventually("the nodes close") { server.access.values.allSatisfy { $0 == "presence" } }
+    }
+
+    @Test func aResumedStreamOwesNothingOnceApplied() async throws {
+        let server = Self.open()
+        let session = try connect(server)
+        await session.reconcileProfileAccess()
+        let reads = server.configReads
+        session.resumeWork()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(server.configReads == reads)
+    }
+
     @Test func aRemoteFlipReconfiguresTheNodes() async throws {
         let server = ProfileServer([NS.avatarData: "presence", NS.avatarMetadata: "presence", NS.nick: "presence"])
         let session = try connect(server)

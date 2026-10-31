@@ -82,16 +82,22 @@ extension XMPPSession {
     }
 
     /// Runs `applyProfileAccess` on connecting and when another device changes
-    /// the setting. A failure that can pass is left for the next connect; a
+    /// the setting. A failure that can pass is left for the next connect, or the stream resuming; a
     /// final one is shown, with a Retry, as the user would otherwise believe
     /// their name and photo are as private as they chose.
     func reconcileProfileAccess() async {
-        guard policy.syncsAccountState, isConnected else { return }
+        guard policy.syncsAccountState else { return }
+        // Owed until it's applied or refused, so a stream that resumes
+        // applies a change made while it was down.
+        lock.withLock { _ = $0.owedOnResume.insert(.profileAccess) }
+        guard isConnected else { return }
         do {
             try await applyProfileAccess()
+            lock.withLock { _ = $0.owedOnResume.remove(.profileAccess) }
             warnings.clear("profile-access")
         } catch {
             if passesByItself(error, "Couldn't check who reads the profile") { return }
+            lock.withLock { _ = $0.owedOnResume.remove(.profileAccess) }
             logger.error("Couldn't change who reads the profile: \(error.localizedDescription, privacy: .private)")
             warnings.post("profile-access", title: String(localized: "Name and photo visibility not updated"), friendly: String(localized: "The server wouldn't change who can see your name and photo"), error: error) { [weak self] in
                 try await self?.applyProfileAccess()
@@ -507,7 +513,7 @@ extension XMPPSession {
         guard policy.announcesPresence else { return }
         let connected = isConnected
         let away = lock.withLock {
-            $0.presenceUnsent = !connected
+            if connected { $0.owedOnResume.remove(.presence) } else { $0.owedOnResume.insert(.presence) }
             return $0.isAway
         }
         let show = Self.show(for: availability, away: away && sharesLastSeen)

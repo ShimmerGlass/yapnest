@@ -75,10 +75,10 @@ extension XMPPSession {
     private func pushEnableFinished(_ result: Result<Void, Error>) {
         switch result {
         case .success:
-            lock.withLock { $0.pushEnableFailed = false }
+            lock.withLock { _ = $0.owedOnResume.remove(.push) }
             warnings.clear("push")
         case .failure(let error):
-            lock.withLock { $0.pushEnableFailed = true }
+            lock.withLock { _ = $0.owedOnResume.insert(.push) }
             guard ServerError.classify(error).isPassing else { return postPushWarning(error) }
             Task { [weak self] in
                 guard let self else { return }
@@ -124,7 +124,7 @@ extension XMPPSession {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             requestPushEnable(token: token, environment: environment) { continuation.resume(with: $0) }
         }
-        lock.withLock { $0.pushEnableFailed = false }
+        lock.withLock { _ = $0.owedOnResume.remove(.push) }
     }
 
     private func enablePush(relay: JID, node: String, done: @escaping @Sendable (Result<Void, Error>) -> Void) {

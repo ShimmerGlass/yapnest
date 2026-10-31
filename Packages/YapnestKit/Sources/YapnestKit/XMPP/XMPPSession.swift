@@ -332,8 +332,9 @@ public final class XMPPSession: @unchecked Sendable {
         var mucService: String?
         /// A new session waits for account discovery before catching up.
         var awaitsAccountDiscovery = false
-        /// The last push enable failed, so a resumed stream tries it again.
-        var pushEnableFailed = false
+        /// What a resumed stream does again, as nothing else would before the
+        /// next new session; a new session does all of it itself.
+        var owedOnResume: OwedOnResume = []
         /// The archive version our server speaks, from account discovery.
         var archiveVersion: MessageArchiveManagementModule.Version?
         /// The run sending queued blocks and unblocks.
@@ -370,9 +371,6 @@ public final class XMPPSession: @unchecked Sendable {
         /// The seconds since the user last touched the machine, where the app
         /// can tell, in place of `idleSince`.
         var idleSource: (@Sendable () -> TimeInterval)?
-        /// Whether our presence changed while disconnected. Martin sends it on
-        /// a new session, but a resumed one keeps what the server last had.
-        var presenceUnsent = false
         /// When contacts' last seen was last asked for.
         var lastSeenSchedule = LastSeenSchedule()
         /// The liveness check in flight, so one runs at a time.
@@ -1434,7 +1432,7 @@ public final class XMPPSession: @unchecked Sendable {
                 confirmPassword()
                 lock.withLock {
                     $0.isSyncing = true
-                    $0.presenceUnsent = false
+                    $0.owedOnResume = []
                     $0.catchUpInterrupted = false
                     $0.interruptedRooms = []
                     // What was unacknowledged is sent again, and claims anew.
@@ -1445,7 +1443,6 @@ public final class XMPPSession: @unchecked Sendable {
                     $0.uploadService = nil
                     $0.mucService = nil
                     $0.publishedDisplayed = [:]
-                    $0.pushEnableFailed = false
                     $0.settingsSync.startSession()
                     $0.repeatedContactRequests = []
                     $0.prunesContactRequests = policy.prunesContactRequests
@@ -1531,7 +1528,8 @@ public final class XMPPSession: @unchecked Sendable {
     /// and catch-up would do for it.
     func resumeWork() {
         reportClientState()
-        if lock.withLock({ $0.presenceUnsent }) { sendPresence() }
+        let owed = lock.withLock { $0.owedOnResume }
+        if owed.contains(.presence) { sendPresence() }
         // Rooms we were in may have dropped us while we were away.
         selfPingRooms()
         // Rooms whose join was cut off wait for answers that won't come.
@@ -1552,7 +1550,10 @@ public final class XMPPSession: @unchecked Sendable {
         // Chats read while the stream was down owe their state; another device
         // may have read further meanwhile, so the states are read first.
         if policy.resendsPending, (try? database.owesReadStates()) == true { fetchDisplayed() }
-        if lock.withLock({ $0.pushEnableFailed }) { enablePush() }
+        if owed.contains(.push) { enablePush() }
+        if owed.contains(.profileAccess) {
+            Task.detached(priority: .utility) { [weak self] in await self?.reconcileProfileAccess() }
+        }
         // A settings sync the drop cut off never reconciled or started
         // watching for changes; one that finished only has changes to send.
         if lock.withLock({ $0.settingsSync.syncStarted && !$0.settingsSync.syncCompleted }) {
@@ -3250,4 +3251,18 @@ public struct PeerUpdate: Sendable {
         self.presence = presence
         self.status = status
     }
+}
+
+/// Work a new session does as part of connecting, which a resumed stream
+/// has to be told it still owes.
+struct OwedOnResume: OptionSet, Sendable {
+    let rawValue: Int
+    /// Our presence changed while disconnected. Martin sends it on a new
+    /// session, but a resumed one keeps what the server last had.
+    static let presence = OwedOnResume(rawValue: 1 << 0)
+    /// The last push enable failed.
+    static let push = OwedOnResume(rawValue: 1 << 1)
+    /// Who may read our profile was changed, or failed to change, while
+    /// it couldn't be applied.
+    static let profileAccess = OwedOnResume(rawValue: 1 << 2)
 }

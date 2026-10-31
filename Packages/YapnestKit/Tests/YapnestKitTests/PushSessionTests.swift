@@ -298,7 +298,7 @@ struct PushSessionTests {
         session.client.update(state: .disconnected())
         #expect(await session.warnings.retry("push") == false)
         #expect(session.warnings.current.map(\.key) == ["push"])
-        #expect(session.lock.withLock { $0.pushEnableFailed })
+        #expect(session.lock.withLock { $0.owedOnResume.contains(.push) })
     }
 
     @Test func aRetryOfTheWarningWithNoTokenIsNotASuccess() async throws {
@@ -311,7 +311,7 @@ struct PushSessionTests {
         try database.setSetting(.pushToken, nil)
         #expect(await session.warnings.retry("push") == false)
         #expect(session.warnings.current.map(\.key) == ["push"])
-        #expect(session.lock.withLock { $0.pushEnableFailed })
+        #expect(session.lock.withLock { $0.owedOnResume.contains(.push) })
     }
 
     @Test func aResumedStreamTriesAgainAnEnableThatKeptFailing() async throws {
@@ -320,7 +320,7 @@ struct PushSessionTests {
         serveEnable { _, iq in FakeWire.error(to: iq, condition: "internal-server-error", type: "wait") }
         session.setPushToken(Data([0x02]), sandbox: true)
         #expect(await eventually { pushStanzas("enable").count == ServerRetry.attempts + 1 })
-        #expect(await eventually { session.lock.withLock { $0.pushEnableFailed } })
+        #expect(await eventually { session.lock.withLock { $0.owedOnResume.contains(.push) } })
         // Shown once the tries ran out, though the error was one that passes.
         #expect(await eventually { session.warnings.current.map(\.key) == ["push"] })
 
