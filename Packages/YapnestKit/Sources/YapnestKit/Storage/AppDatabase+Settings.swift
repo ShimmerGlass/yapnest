@@ -73,6 +73,11 @@ extension AppDatabase {
         /// until the server has answered.
         case owedAvatarChange
         case owedNicknameChange
+        /// Set once this install has our own avatar, or name, as the server
+        /// holds it, including none. Without it a missing value doesn't mean
+        /// the server has none, so a change isn't checked against it.
+        case ownAvatarRead
+        case ownNicknameRead
         /// What we tell contacts we're doing (RFC 6121): `away` or `dnd`,
         /// unset when available, and free text.
         case availability

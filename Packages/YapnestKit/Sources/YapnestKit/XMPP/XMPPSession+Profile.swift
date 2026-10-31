@@ -201,11 +201,15 @@ extension XMPPSession {
     private func sendOwed(_ owed: OwedAvatarChange) async {
         do {
             let server = try await serverAvatarId()
-            guard server == owed.base?.lowercased() else {
-                avatarChangedElsewhere(owed, server: server)
-                return
+            // An answer that was lost after the server took the change leaves
+            // it owed with the server already holding ours.
+            if server != owed.image?.hash.lowercased() {
+                guard !owed.baseKnown || server == owed.base?.lowercased() else {
+                    avatarChangedElsewhere(owed, server: server)
+                    return
+                }
+                try await publish(owed)
             }
-            try await publish(owed)
             try database.settleAvatarChange(owed, serverNow: owed.image?.hash)
             lock.withLock { _ = $0.profileRefusals.removeValue(forKey: Self.avatarWarning) }
             warnings.clear(Self.avatarWarning)
@@ -222,11 +226,12 @@ extension XMPPSession {
             }
             if owed.base != nil, shown == nil { fetchAvatar(of: account) }
             let image = owed.image
+            let base = AppDatabase.OwedBase(value: owed.base, known: owed.baseKnown)
             var retry: (@Sendable () async throws -> Void)?
             if !(error is ProfileError) {
                 retry = { [weak self] in
                     guard let self else { return }
-                    try database.queueAvatarChange(image, for: account)
+                    try database.queueAvatarChange(image, for: account, base: base)
                     await sendOwedProfile()?.value
                     if let refusal = lock.withLock({ $0.profileRefusals.removeValue(forKey: Self.avatarWarning) }) { throw refusal }
                 }
@@ -242,14 +247,16 @@ extension XMPPSession {
     private func sendOwed(_ owed: OwedNicknameChange) async {
         do {
             let server = try await serverNickname()
-            guard server == owed.base else {
-                nicknameChangedElsewhere(owed, server: server)
-                return
-            }
-            if let value = owed.value {
-                try await publishProfilePEP(node: NS.nick, itemId: Self.nicknameItemId, payload: ProfileStanza.nick(value), accessModel: profileAccessModel)
-            } else {
-                try await retractNicknames()
+            if server != Self.normalizedNickname(owed.value) {
+                guard !owed.baseKnown || server == owed.base else {
+                    nicknameChangedElsewhere(owed, server: server)
+                    return
+                }
+                if let value = owed.value {
+                    try await publishProfilePEP(node: NS.nick, itemId: Self.nicknameItemId, payload: ProfileStanza.nick(value), accessModel: profileAccessModel)
+                } else {
+                    try await retractNicknames()
+                }
             }
             try database.settleNicknameChange(owed, serverNow: owed.value)
             lock.withLock { _ = $0.profileRefusals.removeValue(forKey: Self.nicknameWarning) }
@@ -263,13 +270,14 @@ extension XMPPSession {
                 logger.error("Failed to put back the nickname the server refused: \(error)")
             }
             let value = owed.value
+            let base = AppDatabase.OwedBase(value: owed.base, known: owed.baseKnown)
             lock.withLock { $0.profileRefusals[Self.nicknameWarning] = error }
             warnings.post(
                 Self.nicknameWarning, title: String(localized: "Name not updated"),
                 friendly: String(localized: "The server wouldn't change your name"), error: error,
             ) { [weak self] in
                 guard let self else { return }
-                try database.queueNicknameChange(value)
+                try database.queueNicknameChange(value, base: base)
                 await sendOwedProfile()?.value
                 if let refusal = lock.withLock({ $0.profileRefusals.removeValue(forKey: Self.nicknameWarning) }) { throw refusal }
             }
@@ -315,8 +323,10 @@ extension XMPPSession {
     }
 
     private func serverNickname() async throws -> String? {
-        switch try await readOwnNode(NS.nick, "Nickname") {
-        case .items(let page): page.items.lazy.compactMap { Self.normalizedNickname(ProfileStanza.nick(from: $0.payload)) }.first
+        // The newest item, as `fetchNickname` reads it, so the base and this
+        // are the same item however many others clients have left.
+        switch try await readOwnNode(NS.nick, "Nickname", limit: .lastItems(1)) {
+        case .items(let page): Self.normalizedNickname(page.items.first.flatMap { ProfileStanza.nick(from: $0.payload) })
         case .noNode, .unsupported, .failed: nil
         }
     }
@@ -554,6 +564,7 @@ extension XMPPSession {
         do {
             if jid == account {
                 try database.setSetting(.nickname, nickname)
+                try database.markOwnNicknameRead()
             } else {
                 try database.setNickname(nickname, for: jid)
             }

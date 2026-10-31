@@ -2196,9 +2196,12 @@ public final class XMPPSession: @unchecked Sendable {
         // Our own change not yet sent is what shows; once it's sent or the
         // server's wins, the sender sets the avatar.
         if jid == account, (try? database.owedAvatarChange()) != nil { return }
+        func store(_ hash: String?) {
+            if (try? database.setAvatarHash(hash, for: jid)) != nil, jid == account { try? database.markOwnAvatarRead() }
+        }
         // An empty metadata item means they removed their avatar.
         guard !info.isEmpty else {
-            try? database.setAvatarHash(nil, for: jid)
+            store(nil)
             return
         }
         // We only fetch avatars published inline in PEP, not by URL.
@@ -2207,12 +2210,12 @@ public final class XMPPSession: @unchecked Sendable {
         // It names a file: only a SHA-1, as XEP-0084 has it.
         guard AvatarStore.isValidHash(hash) else { return }
         if avatars.contains(hash) {
-            try? database.setAvatarHash(hash, for: jid)
+            store(hash)
             return
         }
         client.module(.pepUserAvatar).retrieveAvatar(from: jid.martin, itemId: image.id) { [weak self] result in
             guard let self, case .success((_, let data)) = result, self.avatars.save(data, hash: hash) else { return }
-            try? self.database.setAvatarHash(hash, for: jid)
+            store(hash)
         }
     }
 

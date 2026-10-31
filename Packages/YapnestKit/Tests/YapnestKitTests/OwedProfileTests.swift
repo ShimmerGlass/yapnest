@@ -59,7 +59,9 @@ private final class ProfilePEPServer: @unchecked Sendable {
                 item.addChild(metadata)
                 list.addChild(item)
             case NS.nick:
-                for (id, name) in names.sorted(by: { $0.key < $1.key }) {
+                let all = names.sorted(by: { $0.key < $1.key })
+                let wanted = items.attribute("max_items").flatMap(Int.init).map { all.suffix($0) } ?? all[...]
+                for (id, name) in wanted {
                     let item = Element(name: "item", attributes: ["id": id])
                     item.addChild(ProfileStanza.nick(name))
                     list.addChild(item)
@@ -398,6 +400,135 @@ struct OwedProfileTests {
         await send()
         session.nicknameChanged(me, to: "Theirs")
         #expect(session.nickname == "Theirs")
+    }
+
+    // MARK: Lost answers, unknown bases and retries
+
+    @Test func anAvatarTheServerAlreadyHasFromALostAnswerIsSettledNotRevertedAsAConflict() async throws {
+        try db.setAvatarHash(Self.base, for: me)
+        try await session.publishAvatar(small, mimeType: "image/png", width: 8, height: 8)
+        let hash = AvatarStore.hash(of: small)
+        server.avatar = hash
+
+        connect()
+        await send()
+
+        #expect(server.publishes.isEmpty)
+        #expect(!session.avatarPending)
+        #expect(avatarHash == hash)
+        #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func aNicknameTheServerAlreadyHasFromALostAnswerIsSettledNotRevertedAsAConflict() async throws {
+        try db.setSetting(.nickname, "Old")
+        try await session.setNickname("Ada")
+        server.nicks = ["current": "Ada"]
+
+        connect()
+        await send()
+
+        #expect(server.publishes.isEmpty)
+        #expect(!session.nicknamePending)
+        #expect(session.nickname == "Ada")
+        #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func anAvatarChangedBeforeOursWasEverReadIsSentRatherThanTakenForAConflict() async throws {
+        _ = try serverHolds(large)
+        try db.setAvatarHash(nil, for: me)
+        try await session.publishAvatar(small, mimeType: "image/png", width: 8, height: 8)
+        #expect(try db.owedAvatarChange()?.baseKnown == false)
+
+        connect()
+        await send()
+
+        #expect(server.avatar == AvatarStore.hash(of: small))
+        #expect(!session.avatarPending)
+        #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func aNicknameChangedBeforeOursWasEverReadIsSentRatherThanTakenForAConflict() async throws {
+        server.nicks = ["current": "Old"]
+        try await session.setNickname("Ada")
+        #expect(try db.owedNicknameChange()?.baseKnown == false)
+
+        connect()
+        await send()
+
+        #expect(server.nicks == ["current": "Ada"])
+        #expect(!session.nicknamePending)
+        #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func noAvatarKnownToBeNoneIsStillCheckedAgainstTheServer() async throws {
+        try db.markOwnAvatarRead()
+        try db.markOwnNicknameRead()
+        try await session.publishAvatar(small, mimeType: "image/png", width: 8, height: 8)
+        try await session.setNickname("Ada")
+        #expect(try db.owedAvatarChange()?.baseKnown == true)
+        #expect(try db.owedNicknameChange()?.baseKnown == true)
+        server.avatar = AvatarStore.hash(of: large)
+        server.nicks = ["current": "Grace"]
+
+        connect()
+        await send()
+
+        #expect(server.publishes.isEmpty)
+        #expect(warning("profile/avatar") != nil)
+        #expect(warning("profile/nickname") != nil)
+    }
+
+    @Test func aChangeStoredBeforeBasesCouldBeUnknownIsStillKnown() throws {
+        let avatar = try JSONDecoder().decode(OwedAvatarChange.self, from: Data(#"{"base":"abc"}"#.utf8))
+        #expect(avatar == OwedAvatarChange(image: nil, base: "abc"))
+        let nickname = try JSONDecoder().decode(OwedNicknameChange.self, from: Data(#"{"value":"A"}"#.utf8))
+        #expect(nickname == OwedNicknameChange(value: "A", base: nil))
+        #expect(avatar.baseKnown && nickname.baseKnown)
+    }
+
+    @Test func theNicknameIsComparedOnTheNewestItemLikeTheBaseIs() async throws {
+        try db.setSetting(.nickname, "New")
+        try await session.setNickname("Ada")
+        server.nicks = ["a-old": "Old", "b-new": "New"]
+
+        connect()
+        await send()
+
+        #expect(server.publishes.map(\.node) == [NS.nick])
+        #expect(!session.nicknamePending)
+        #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func retryingARefusedAvatarWhoseOldPictureIsNotStoredKeepsTheBase() async throws {
+        try db.setAvatarHash(Self.base, for: me)
+        server.avatar = Self.base
+        try await session.publishAvatar(small, mimeType: "image/png", width: 8, height: 8)
+        server.fail("forbidden", type: "auth")
+
+        connect()
+        await send()
+
+        #expect(avatarHash == nil)
+        #expect(warning("profile/avatar")?.retry != nil)
+
+        server.recover()
+        #expect(await session.warnings.retry("profile/avatar"))
+        #expect(server.avatar == AvatarStore.hash(of: small))
+        #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func retryingARefusedNicknameKeepsAnUnknownBase() async throws {
+        server.nicks = ["current": "Theirs"]
+        try await session.setNickname("New")
+        server.fail("forbidden", type: "auth")
+
+        connect()
+        await send()
+        #expect(session.nickname == nil)
+
+        server.recover()
+        #expect(await session.warnings.retry("profile/nickname"))
+        #expect(server.nicks == ["current": "New"])
     }
 
     // MARK: Sending

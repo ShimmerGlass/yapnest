@@ -19,6 +19,10 @@ struct OwedAvatarChange: Codable, Equatable, Sendable {
     /// not yet sent was made; nil for none. Ours is only sent if the server
     /// still has this one.
     var base: String?
+    /// Whether `base` is what the server had. A fresh install, or one that
+    /// hasn't read our avatar from the server yet, doesn't know, and then
+    /// nil in `base` doesn't mean the server has none.
+    var baseKnown = true
 }
 
 /// A new name, or taking it back, that the server doesn't have yet.
@@ -28,6 +32,27 @@ struct OwedNicknameChange: Codable, Equatable, Sendable {
     /// The name the server had, as far as we knew, when the first change not
     /// yet sent was made.
     var base: String?
+    /// As for `OwedAvatarChange.baseKnown`.
+    var baseKnown = true
+}
+
+/// A change stored before `baseKnown` existed knew its base.
+extension OwedAvatarChange {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        image = try values.decodeIfPresent(Image.self, forKey: .image)
+        base = try values.decodeIfPresent(String.self, forKey: .base)
+        baseKnown = try values.decodeIfPresent(Bool.self, forKey: .baseKnown) ?? true
+    }
+}
+
+extension OwedNicknameChange {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        value = try values.decodeIfPresent(String.self, forKey: .value)
+        base = try values.decodeIfPresent(String.self, forKey: .base)
+        baseKnown = try values.decodeIfPresent(Bool.self, forKey: .baseKnown) ?? true
+    }
 }
 
 /// What our avatar and name are waiting to send. They are kept as settings
@@ -50,25 +75,55 @@ extension AppDatabase {
         try reader.read { try Self.owed($0, .owedNicknameChange, as: OwedNicknameChange.self) }
     }
 
+    /// The server's value as it was known when a change was made.
+    struct OwedBase: Equatable, Sendable {
+        var value: String?
+        var known: Bool
+    }
+
     /// Records the change and shows it at once, in one transaction. The base
-    /// is kept from the change it replaces, or is the avatar shown now.
-    func queueAvatarChange(_ image: OwedAvatarChange.Image?, for account: JID) throws {
+    /// is kept from the change it replaces, or is `base` when given (a retry
+    /// of a refused change, whose picture is no longer shown), or is the
+    /// avatar shown now. That is unknown when none is shown and this install
+    /// hasn't read ours from the server.
+    func queueAvatarChange(_ image: OwedAvatarChange.Image?, for account: JID, base given: OwedBase? = nil) throws {
         try writer.write { db in
-            let base = try Self.owed(db, .owedAvatarChange, as: OwedAvatarChange.self).map(\.base)
-                ?? Contact.fetchOne(db, key: account)?.avatarHash
-            try Self.setOwed(db, .owedAvatarChange, OwedAvatarChange(image: image, base: base))
+            let base: OwedBase
+            if let previous = try Self.owed(db, .owedAvatarChange, as: OwedAvatarChange.self) {
+                base = OwedBase(value: previous.base, known: previous.baseKnown)
+            } else if let given {
+                base = given
+            } else {
+                let shown = try Contact.fetchOne(db, key: account)?.avatarHash
+                let read = try Self.setting(db, .ownAvatarRead) != nil
+                base = OwedBase(value: shown, known: shown != nil || read)
+            }
+            try Self.setOwed(db, .owedAvatarChange, OwedAvatarChange(image: image, base: base.value, baseKnown: base.known))
             try Self.updateContact(db, account) { $0.avatarHash = image?.hash }
         }
     }
 
-    func queueNicknameChange(_ value: String?) throws {
+    func queueNicknameChange(_ value: String?, base given: OwedBase? = nil) throws {
         try writer.write { db in
-            let base = try Self.owed(db, .owedNicknameChange, as: OwedNicknameChange.self).map(\.base)
-                ?? Self.setting(db, .nickname)
-            try Self.setOwed(db, .owedNicknameChange, OwedNicknameChange(value: value, base: base))
+            let base: OwedBase
+            if let previous = try Self.owed(db, .owedNicknameChange, as: OwedNicknameChange.self) {
+                base = OwedBase(value: previous.base, known: previous.baseKnown)
+            } else if let given {
+                base = given
+            } else {
+                let shown = try Self.setting(db, .nickname)
+                let read = try Self.setting(db, .ownNicknameRead) != nil
+                base = OwedBase(value: shown, known: shown != nil || read)
+            }
+            try Self.setOwed(db, .owedNicknameChange, OwedNicknameChange(value: value, base: base.value, baseKnown: base.known))
             try Self.setSetting(db, .nickname, value)
         }
     }
+
+    /// Records that this install has our own avatar or name as the server
+    /// holds it, even if that is none.
+    func markOwnAvatarRead() throws { try setSetting(.ownAvatarRead, "1") }
+    func markOwnNicknameRead() throws { try setSetting(.ownNicknameRead, "1") }
 
     /// Ends the owing of `sent`, which the server has answered. A change made
     /// meanwhile stays, now based on what the server holds from `sent`.
@@ -77,8 +132,10 @@ extension AppDatabase {
     func settleAvatarChange(_ sent: OwedAvatarChange, serverNow: String?) throws -> Bool {
         try writer.write { db in
             guard var current = try Self.owed(db, .owedAvatarChange, as: OwedAvatarChange.self) else { return false }
+            try Self.setSetting(db, .ownAvatarRead, "1")
             guard current == sent else {
                 current.base = serverNow
+                current.baseKnown = true
                 try Self.setOwed(db, .owedAvatarChange, current)
                 return false
             }
@@ -91,8 +148,10 @@ extension AppDatabase {
     func settleNicknameChange(_ sent: OwedNicknameChange, serverNow: String?) throws -> Bool {
         try writer.write { db in
             guard var current = try Self.owed(db, .owedNicknameChange, as: OwedNicknameChange.self) else { return false }
+            try Self.setSetting(db, .ownNicknameRead, "1")
             guard current == sent else {
                 current.base = serverNow
+                current.baseKnown = true
                 try Self.setOwed(db, .owedNicknameChange, current)
                 return false
             }
