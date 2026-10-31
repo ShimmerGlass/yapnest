@@ -14,14 +14,13 @@ struct ShareView: View {
                     // Once it's over, a cancel would report a share that went.
                     if !isDone {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") { model.dismiss() }
+                            SheetCancelButton { model.dismiss() }
                                 .disabled(isSending)
                         }
                     }
                     if model.phase != .signedOut, !isDone {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Send") { model.send() }
-                                .fontWeight(.semibold)
+                            SheetConfirmButton("Send") { model.send() }
                                 .disabled(!model.canSend)
                         }
                     }

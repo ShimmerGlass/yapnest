@@ -1,15 +1,7 @@
 import SwiftUI
 
-/// Where the app differs between iOS and the Mac (Catalyst, Mac idiom).
-/// This is the one place that asks which it is for a value; code that needs
-/// a Mac-only API still has to be compiled out where it uses it.
-enum Platform {
-    #if targetEnvironment(macCatalyst)
-    static let isMac = true
-    #else
-    static let isMac = false
-    #endif
-
+/// The rest of `Platform` (`isMac` is in `App/Shared`, for the share extension).
+extension Platform {
     /// Whether the message list is turned upside down, with each row turned
     /// back, so the newest message is where the scroll view rests. The
     /// software keyboard moves the list's room on iOS, which a list anchored to
