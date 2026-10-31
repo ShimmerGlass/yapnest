@@ -845,6 +845,23 @@ public final class AppDatabase: Sendable {
                 """)
         }
 
+        migrator.registerMigration("v51-read-state-owed") { db in
+            try db.alter(table: "conversation") { t in
+                t.add(column: "readStateOwed", .boolean).notNull().defaults(to: false)
+            }
+        }
+
+        migrator.registerMigration("v52-pending-block-changes") { db in
+            try db.create(table: "pendingBlockChange") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("jid", .text).notNull().unique()
+                t.column("blocked", .boolean).notNull()
+                t.column("reason", .text)
+                t.column("declinesRequest", .boolean).notNull()
+                t.column("wasBlocked", .boolean).notNull()
+            }
+        }
+
         return migrator
     }
 

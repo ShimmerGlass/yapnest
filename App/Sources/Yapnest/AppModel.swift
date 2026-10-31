@@ -128,6 +128,10 @@ final class AppModel {
         var changePassword: @MainActor (XMPPSession, _ new: String, _ current: String) async throws -> Void = {
             try await $0.changePassword(to: $1, current: $2)
         }
+        /// Makes the session's install a new encryption device.
+        var replaceEncryptionDevice: @MainActor (XMPPSession) async throws -> Void = {
+            try await $0.replaceEncryptionDevice()
+        }
         /// Whether the server accepts a password for the session's account, by a
         /// sign-in of its own. Asked when the typed current password differs from
         /// the keychain's, which another client's change leaves stale.
@@ -267,7 +271,8 @@ final class AppModel {
 
     /// Signs in to the saved account. A welcome the last run was closed
     /// before answering is shown again.
-    func restoreSession(_ saved: XMPPSession.Credentials) async {
+    @discardableResult
+    func restoreSession(_ saved: XMPPSession.Credentials) async -> Error? {
         do {
             let session = try await makeSession(saved)
             showsWelcome = await offMain { (try? session.database.setting(.welcomeShown)) == "pending" }
@@ -275,10 +280,12 @@ final class AppModel {
             connect(session)
             didSignIn(session)
             applyScenePhase(to: session)
+            return nil
         } catch {
             DiagLog.error(.app, "Failed to restore account", .error(error))
             if let error = error as? AppDatabaseError { openProblem = error.localizedDescription }
             phase = .signedOut
+            return error
         }
     }
 
@@ -448,6 +455,13 @@ final class AppModel {
             encryptionDeviceProblem = String(localized: "End the call first: resetting encryption reconnects your account.")
             return
         }
+        // While an extension holds the lock, it runs as the old device and
+        // would have its sessions deleted under it.
+        let stillOpening = String(localized: "Your account is still being opened. Try again in a moment.")
+        guard sessionLock.isLocked else {
+            encryptionDeviceProblem = stillOpening
+            return
+        }
         let saved: XMPPSession.Credentials
         do {
             guard let stored = try await offMain({ [credentials] in try credentials.load() }), stored.jid == session.account else {
@@ -461,16 +475,31 @@ final class AppModel {
         }
         // Signed out, or signed in again, while the keychain was read.
         guard case .signedIn(let current) = phase, current === session else { return }
+        guard sessionLock.isLocked else {
+            encryptionDeviceProblem = stillOpening
+            return
+        }
         phase = .loading
         loadingIsSlow = true
         defer { loadingIsSlow = false }
         // Before teardown lets go of the lock: an extension taking it would
         // set up as the old device and store sessions built on its key.
-        let result = await offMain { Result { try session.replaceEncryptionDevice() } }
+        var replaceError: Error?
+        do {
+            try await environment.replaceEncryptionDevice(session)
+        } catch {
+            replaceError = error
+        }
         teardown(session)
         // It reopens either way: a replacement that failed left the old device whole.
-        await restoreSession(saved)
-        if case .failure(let error) = result { encryptionDeviceProblem = error.localizedDescription }
+        let reopenError = await restoreSession(saved)
+        if let replaceError, let reopenError {
+            encryptionDeviceProblem = String(localized: "\(replaceError.localizedDescription)\n\nYour account couldn't be opened again: \(reopenError.localizedDescription)")
+        } else if let replaceError {
+            encryptionDeviceProblem = replaceError.localizedDescription
+        } else if let reopenError {
+            encryptionDeviceProblem = String(localized: "Encryption was reset, but your account couldn't be opened again: \(reopenError.localizedDescription)")
+        }
     }
 
     /// A session that held a candidate password has signed in, with the stored

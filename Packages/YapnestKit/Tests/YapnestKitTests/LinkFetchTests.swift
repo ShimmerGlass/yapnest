@@ -233,6 +233,14 @@ struct HTTP1ParserTests {
         }
     }
 
+    @Test func aPageAnnouncingMoreThanTheLimitIsReadUpToItsOwn() throws {
+        let page = "<html><head><title>Big</title></head>" + String(repeating: "x", count: 600)
+        let html = try parse(["HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 50000000\r\n\r\n", page], close: false)
+        #expect(html.isComplete)
+        #expect(html.body.count == 500)
+        #expect(String(decoding: html.body.prefix(25), as: UTF8.self) == "<html><head><title>Big</t")
+    }
+
     @Test func cutsOffAtTheLimit() throws {
         let image = try parse(["HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n", String(repeating: "x", count: 900), String(repeating: "x", count: 900)], close: false)
         #expect(image.isComplete)
@@ -307,6 +315,10 @@ final class FakeTransport: FetchTransport, @unchecked Sendable {
     var scripts: [String: [[Data]]] = [:]
     var hangs = false
     var remote: ((IPAddress) -> IPAddress)?
+    /// What connecting to an address fails with.
+    var startErrors: [IPAddress: FetchError] = [:]
+    /// The addresses whose connection never completes, like one that swallows packets.
+    var startHangs: Set<IPAddress> = []
     private(set) var lookups: [String] = []
     private(set) var connects: [Connect] = []
 
@@ -326,7 +338,7 @@ final class FakeTransport: FetchTransport, @unchecked Sendable {
             var queue = scripts[serverName] ?? []
             let script = queue.isEmpty ? [] : queue.removeFirst()
             scripts[serverName] = queue
-            let connection = FakeConnection(address: remote?(address) ?? address, script: script, hangs: hangs)
+            let connection = FakeConnection(address: remote?(address) ?? address, script: script, hangs: hangs, startError: startErrors[address], startHangs: startHangs.contains(address))
             connects.append(Connect(address: address, serverName: serverName, request: ""))
             connection.onSend = { [weak self] request in
                 self?.lock.withLock { self?.connects[(self?.connects.count ?? 1) - 1].request = request }
@@ -340,18 +352,33 @@ final class FakeConnection: FetchConnection, @unchecked Sendable {
     let address: IPAddress
     var script: [Data]
     let hangs: Bool
+    let startError: FetchError?
+    let startHangs: Bool
     var onSend: (@Sendable (String) -> Void)?
     private let lock = NSLock()
     private var waiter: CheckedContinuation<Data?, Error>?
+    private var startWaiter: CheckedContinuation<Void, Error>?
     private var closed = false
 
-    init(address: IPAddress, script: [Data], hangs: Bool) {
+    init(address: IPAddress, script: [Data], hangs: Bool, startError: FetchError? = nil, startHangs: Bool = false) {
+        self.startError = startError
+        self.startHangs = startHangs
         self.address = address
         self.script = script
         self.hangs = hangs
     }
 
-    func start() async throws {}
+    func start() async throws {
+        if let startError { throw startError }
+        guard startHangs else { return }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let wasClosed = lock.withLock { () -> Bool in
+                if !closed { startWaiter = continuation }
+                return closed
+            }
+            if wasClosed { continuation.resume(throwing: FetchError.unreachable("closed")) }
+        }
+    }
     func send(_ data: Data) async throws { onSend?(String(decoding: data, as: UTF8.self)) }
     func remoteAddress() -> IPAddress? { address }
 
@@ -369,12 +396,13 @@ final class FakeConnection: FetchConnection, @unchecked Sendable {
     }
 
     func close() {
-        let pending = lock.withLock { () -> CheckedContinuation<Data?, Error>? in
+        let (pending, pendingStart) = lock.withLock { () -> (CheckedContinuation<Data?, Error>?, CheckedContinuation<Void, Error>?) in
             closed = true
-            defer { waiter = nil }
-            return waiter
+            defer { waiter = nil; startWaiter = nil }
+            return (waiter, startWaiter)
         }
         pending?.resume(throwing: FetchError.unreachable("closed"))
+        pendingStart?.resume(throwing: FetchError.unreachable("closed"))
     }
 }
 
@@ -478,6 +506,60 @@ struct SafeFetcherTests {
         transport.remote = { _ in ip("192.168.1.1") }
         transport.scripts["site.example"] = [Self.response(200)]
         await #expect(throws: FetchError.refused("connected elsewhere")) { try await fetch("https://site.example/") }
+    }
+
+    @Test func triesTheNextAddressWhenOneCannotBeReached() async throws {
+        transport.dns["site.example"] = [ip("93.184.216.34"), ip("93.184.216.35")]
+        transport.startErrors[ip("93.184.216.34")] = .unreachable("refused")
+        // The first script is the unreachable address's, which is never read.
+        transport.scripts["site.example"] = [[], Self.response(200, ["Content-Type": "text/plain"], body: "second")]
+        let result = try await fetch("https://site.example/")
+        #expect(String(decoding: result.body, as: UTF8.self) == "second")
+        #expect(transport.connects.map(\.address) == [ip("93.184.216.34"), ip("93.184.216.35")])
+    }
+
+    @Test func anAddressThatNeverAnswersDoesNotUseUpTheTimeoutForTheNext() async throws {
+        transport.dns["site.example"] = [ip("93.184.216.34"), ip("93.184.216.35")]
+        transport.startHangs = [ip("93.184.216.34")]
+        transport.scripts["site.example"] = [[], Self.response(200, ["Content-Type": "text/plain"], body: "second")]
+        let fetcher = SafeFetcher(transport: transport, requestTimeout: 2, totalTimeout: 2, connectTimeout: 0.2)
+        let result = try await fetcher.fetch(URL(string: "https://site.example/")!, limits: Self.limits)
+        #expect(String(decoding: result.body, as: UTF8.self) == "second")
+        #expect(transport.connects.map(\.address) == [ip("93.184.216.34"), ip("93.184.216.35")])
+    }
+
+    @Test func theLastAddressKeepsTheWholeTimeToConnect() async {
+        transport.startHangs = [ip("93.184.216.34")]
+        let fetcher = SafeFetcher(transport: transport, requestTimeout: 0.5, totalTimeout: 0.5, connectTimeout: 0.05)
+        await #expect(throws: FetchError.timedOut) { try await fetcher.fetch(URL(string: "https://site.example/")!, limits: Self.limits) }
+    }
+
+    @Test func failsWithTheLastAddressesErrorWhenNoneCanBeReached() async {
+        transport.dns["site.example"] = [ip("93.184.216.34"), ip("93.184.216.35")]
+        transport.startErrors[ip("93.184.216.34")] = .unreachable("first")
+        transport.startErrors[ip("93.184.216.35")] = .unreachable("second")
+        await #expect(throws: FetchError.unreachable("second")) { try await fetch("https://site.example/") }
+    }
+
+    @Test func aRefusedConnectionIsNotRetriedOnAnotherAddress() async {
+        transport.dns["site.example"] = [ip("93.184.216.34"), ip("93.184.216.35")]
+        transport.startErrors[ip("93.184.216.34")] = .refused("TLS")
+        await #expect(throws: FetchError.refused("TLS")) { try await fetch("https://site.example/") }
+        #expect(transport.connects.count == 1)
+    }
+
+    @Test func aConnectionThatWentElsewhereIsNotRetriedOnAnotherAddress() async {
+        transport.dns["site.example"] = [ip("93.184.216.34"), ip("93.184.216.35")]
+        transport.remote = { _ in ip("192.168.1.1") }
+        await #expect(throws: FetchError.refused("connected elsewhere")) { try await fetch("https://site.example/") }
+        #expect(transport.connects.count == 1)
+    }
+
+    @Test func aFailureAfterTheRequestWasSentIsNotRetriedOnAnotherAddress() async {
+        transport.dns["site.example"] = [ip("93.184.216.34"), ip("93.184.216.35")]
+        transport.scripts["site.example"] = [[Data("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc".utf8)]]
+        await #expect(throws: FetchError.badResponse) { try await fetch("https://site.example/") }
+        #expect(transport.connects.count == 1)
     }
 
     @Test func followsRedirectsThroughEveryCheck() async throws {

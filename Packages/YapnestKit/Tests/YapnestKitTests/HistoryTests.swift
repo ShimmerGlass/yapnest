@@ -183,6 +183,53 @@ struct HistoryTests {
         #expect(try shown().contains { $0.body == "readable" })
     }
 
+    @Test func anUndecryptableCorrectionLeavesNoStrayMessageWhenTheOriginalArrives() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        var lock = try correction("c1", of: "m1", body: "🔒", at: 300)
+        lock.encryption = .omemoUndecryptable
+        try db.ingest([lock])
+        #expect(try pendingCount() == 1)
+        var original = try archived("m1", body: "typo", at: 100, history: true)
+        original.encryption = .omemo
+        try db.ingest([original])
+
+        let messages = try shown()
+        #expect(messages.map(\.body) == ["typo"])
+        #expect(messages[0].encryption == .omemo)
+        #expect(messages[0].editedAt == nil)
+        #expect(try pendingCount() == 0)
+    }
+
+    @Test func anUndecryptableCorrectionOfAnUndecryptableOriginalChangesNothing() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        var lock = try correction("c1", of: "m1", body: "🔒 fix", at: 300)
+        lock.encryption = .omemoUndecryptable
+        try db.ingest([lock])
+        var original = try archived("m1", body: "🔒", at: 100, history: true)
+        original.encryption = .omemoUndecryptable
+        try db.ingest([original])
+
+        let messages = try shown()
+        #expect(messages.map(\.body) == ["🔒"])
+        let stored = try #require(messages.first { $0.remoteId == "m1" })
+        #expect(stored.editedAt == nil)
+        #expect(try pendingCount() == 0)
+    }
+
+    @Test func anUndecryptableCorrectionFromSomeoneElseNeverTouchesTheOriginal() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        var lock = try archivedXML("c1", payload: "<body>🔒</body><replace id='m1' xmlns='urn:xmpp:message-correct:0'/>", from: "mallory@example.org/x", at: 300)
+        lock.encryption = .omemoUndecryptable
+        try db.ingest([lock])
+        var original = try archived("m1", body: "mine", at: 100, history: true)
+        original.encryption = .omemo
+        try db.ingest([original])
+
+        let original1 = try #require(try shown().first { $0.remoteId == "m1" })
+        #expect(original1.body == "mine")
+        #expect(original1.editedAt == nil)
+    }
+
     @Test func aPendingRetractionDoesNotApplyToANewerMessageReusingTheId() throws {
         try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
         try db.ingest([try retraction("r1", of: "m1", at: 300)])

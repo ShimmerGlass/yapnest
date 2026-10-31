@@ -193,7 +193,7 @@ extension AppDatabase {
                     try attachment.insert(db)
                     result.newAttachment = attachment
                 }
-                if let target = inbound.correctionOf, inbound.encryption != .omemoUndecryptable, let id = stored.id {
+                if let target = inbound.correctionOf, let id = stored.id {
                     if try fitting(.retract, target).isEmpty {
                         // A stand-in with a file is never linked: nothing would delete it.
                         if file == nil {

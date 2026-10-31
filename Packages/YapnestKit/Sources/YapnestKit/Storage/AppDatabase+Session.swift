@@ -347,12 +347,14 @@ extension AppDatabase {
             .fetchAll(db)
     }
 
-    /// Makes the server's blocklist (XEP-0191) ours: exactly these are blocked.
-    func setBlocklist(_ blocked: Set<JID>) throws {
+    /// Makes the server's blocklist (XEP-0191) ours: exactly these are
+    /// blocked, except where a change of ours is still waiting to be sent.
+    func setBlocklist(_ server: Set<JID>) throws {
         var newlyBlocked: [JID] = []
         defer { ShareSuggestions.remove(newlyBlocked) }
         try writer.write { db in
             newlyBlocked = []
+            let blocked = try Self.blocklist(db, server: server)
             for var contact in try Contact.filter(Column("isBlocked") == true).fetchAll(db) where !blocked.contains(contact.jid) {
                 contact.isBlocked = false
                 try contact.update(db)

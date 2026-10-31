@@ -123,6 +123,7 @@ extension XMPPSession {
     /// Tells `peer` we've read their messages, up to the newest that asked
     /// to know (XEP-0333) at or before `date`, once per message.
     func sendDisplayed(conversationId: Int64, to peer: JID, through date: Date = .distantFuture) {
+        // A receipt only matters in the moment, so offline it is dropped.
         guard isConnected, let target = claimDisplayed(conversationId: conversationId, to: peer, through: date) else { return }
         write(OutboundStanza.displayed(to: peer, target: target))
     }

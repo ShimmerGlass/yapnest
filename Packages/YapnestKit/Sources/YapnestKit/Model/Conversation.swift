@@ -38,6 +38,10 @@ public struct Conversation: Codable, Hashable, Sendable, Identifiable, Fetchable
     /// nothing newer than it has arrived, which is what the other devices
     /// are told; `isArchived` is that answer.
     public var archivedAt: Date?
+    /// Whether we read the chat and our other devices may not have been told
+    /// (XEP-0490): set with the read, cleared when the server takes the
+    /// newest read state. It survives being offline and the app being killed.
+    public var readStateOwed: Bool
 
     public init(
         id: Int64? = nil,
@@ -55,6 +59,7 @@ public struct Conversation: Codable, Hashable, Sendable, Identifiable, Fetchable
         notificationInterval: Int? = nil,
         lastLoudNotificationAt: Date? = nil,
         archivedAt: Date? = nil,
+        readStateOwed: Bool = false,
     ) {
         self.id = id
         self.peer = peer
@@ -71,6 +76,7 @@ public struct Conversation: Codable, Hashable, Sendable, Identifiable, Fetchable
         self.notificationInterval = notificationInterval
         self.lastLoudNotificationAt = lastLoudNotificationAt
         self.archivedAt = archivedAt
+        self.readStateOwed = readStateOwed
     }
 
     public static let databaseTableName = "conversation"

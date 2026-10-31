@@ -81,13 +81,23 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// Runs `body` in one immediate transaction with deleted pages zeroed,
     /// and goes on as the identity it returns.
     private func writeIdentity(_ body: (Database) throws -> (StoredIdentity, erasedKeys: Bool)) throws {
+        let previous = try? identityKeys.load()
         let identity = try database.writer.writeWithoutTransaction { db -> StoredIdentity in
             try db.execute(sql: "PRAGMA secure_delete = ON")
             defer { try? db.execute(sql: "PRAGMA secure_delete = OFF") }
             var result: (StoredIdentity, erasedKeys: Bool)?
-            try db.inTransaction(.immediate) {
-                result = try body(db)
-                return .commit
+            do {
+                try db.inTransaction(.immediate) {
+                    result = try body(db)
+                    return .commit
+                }
+            } catch {
+                // The keychain is written inside the transaction, so a commit
+                // that fails after it would leave the keychain on an identity
+                // the database doesn't name, and the next launch would make a
+                // third device without ever noting the old id as replaced.
+                if let previous, let kept = try? identityKeys.load(), kept != previous { try? identityKeys.save(previous) }
+                throw error
             }
             guard let (identity, erasedKeys) = result else { throw OMEMOError.keyGenerationFailed }
             // A key's page is zeroed in the WAL; the checkpoint copies it over

@@ -91,7 +91,7 @@ extension AppDatabase {
             guard let id = edit.standInId, let standIn = try Message.fetchOne(db, key: id) else { return nil }
             return (edit, standIn)
         }.sorted { ($0.1.editedAt ?? $0.1.timestamp) < ($1.1.editedAt ?? $1.1.timestamp) }
-        for (edit, standIn) in corrections where edit.encryption == message.encryption && !standIn.isRetracted {
+        for (edit, standIn) in corrections where edit.encryption == message.encryption && edit.encryption != .omemoUndecryptable && !standIn.isRetracted {
             let result = try applyCorrection(
                 db, to: &message, body: standIn.body, at: standIn.editedAt ?? standIn.timestamp, mentionsMe: standIn.mentionsMe,
                 quickResponses: standIn.quickResponses, omemoDevice: standIn.omemoDevice, omemoTrust: standIn.omemoTrust,
@@ -101,6 +101,13 @@ extension AppDatabase {
                 changed = true
                 applied.append(edit)
             }
+        }
+        // A correction we couldn't decrypt has no text to apply, and the
+        // original must keep its own. Its stand-in is only a lock, so it goes
+        // when the original is protected too; against a plain original it
+        // could be anyone's forgery, and stays a message of its own.
+        if message.encryption != .none {
+            applied += corrections.map(\.0).filter { $0.encryption == .omemoUndecryptable }
         }
         // A stand-in that wasn't applied stays a message of its own.
         try deleteStandIns(db, applied)

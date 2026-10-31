@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 import YapnestKit
 @testable import Yapnest
@@ -55,6 +56,16 @@ final class AppModelFixture {
     var acceptedPasswords: Set<String> = []
     /// What stops a verification before the server answers; nil lets it answer.
     var passwordVerificationError: Error?
+    /// What a device replacement fails with; nil lets it go through.
+    var replacementError: Error?
+    /// Whether the process lock was held by the app at each device replacement.
+    private(set) var lockHeldDuringReplacement: [Bool] = []
+    /// Makes opening the account fail, as a folder that can't be made would.
+    var accountCantBeOpened: Bool {
+        get { opening.withLock { $0 } }
+        set { opening.withLock { $0 = newValue } }
+    }
+    private let opening = OSAllocatedUnfairLock(initialState: false)
     private(set) var fastTokenWipes = 0
     private(set) var diagnosticsWipes = 0
 
@@ -68,7 +79,17 @@ final class AppModelFixture {
         environment.credentials = credentials
         environment.sessionLock = lock
         environment.lockTimeout = lockTimeout
-        environment.accountDirectory = { [root] in AccountDirectory(url: root.appending(path: $0.description)) }
+        let opening = opening
+        environment.accountDirectory = { [root] in
+            // Under a file, where no folder can be made.
+            if opening.withLock({ $0 }) { return AccountDirectory(url: root.appending(path: "blocker").appending(path: $0.description)) }
+            return AccountDirectory(url: root.appending(path: $0.description))
+        }
+        environment.replaceEncryptionDevice = { [unowned self] session in
+            lockHeldDuringReplacement.append(lock.isLocked)
+            if let replacementError { throw replacementError }
+            try await session.replaceEncryptionDevice()
+        }
         environment.suspendDelay = suspendDelay
         environment.slowStatusDelay = slowStatusDelay
         environment.typingLifetime = typingLifetime

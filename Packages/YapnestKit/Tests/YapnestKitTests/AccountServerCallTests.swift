@@ -140,6 +140,7 @@ struct AccountServerCallTests {
         await eventually("blocking") { self.session.canBlock }
 
         try await session.block(spammer)
+        #expect(await eventually { wire.written.contains { ($0 as? Iq)?.firstChild(name: "block", xmlns: "urn:xmpp:blocking") != nil } })
 
         let written = wire.written
         let decline = try #require(written.firstIndex { ($0 as? Presence)?.type == .unsubscribed })

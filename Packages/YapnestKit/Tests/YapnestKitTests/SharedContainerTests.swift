@@ -105,6 +105,55 @@ struct ProcessLockTests {
         #expect(ProcessLock(url: url).holder == nil)
     }
 
+    @Test func aShorterRoleLeavesNothingOfALongerOne() throws {
+        let url = try lockURL()
+        let first = ProcessLock(url: url)
+        #expect(first.tryLock(as: .notification))
+        first.unlock()
+        let second = ProcessLock(url: url)
+        #expect(second.tryLock(as: .app))
+        #expect(ProcessLock(url: url).holder == .app)
+        #expect(try Data(contentsOf: url) == Data("app".utf8))
+    }
+
+    @Test func aHolderWhoHasNotWrittenItsRoleYetIsAskedAgain() async throws {
+        let url = try lockURL()
+        let lock = ProcessLock(url: url)
+        #expect(lock.tryLock())
+        let reader = ProcessLock(url: url)
+        #expect(reader.holder(attempts: 1) == nil)
+
+        let writer = Task.detached {
+            try? await Task.sleep(for: .milliseconds(30))
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.write(contentsOf: Data("app".utf8))
+            try handle.close()
+        }
+        let found = await Task.detached { reader.holder(attempts: 500, pause: 0.002) }.value
+        try await writer.value
+        #expect(found == .app)
+    }
+
+    @Test func aHolderWhoseRoleIsStillBeingWrittenIsAskedAgain() async throws {
+        let url = try lockURL()
+        let lock = ProcessLock(url: url)
+        #expect(lock.tryLock())
+        // A half-written role parses as nothing, and is not the holder's last word.
+        try Data("ap".utf8).write(to: url)
+        let reader = ProcessLock(url: url)
+        #expect(reader.holder(attempts: 1) == nil)
+
+        let writer = Task.detached {
+            try? await Task.sleep(for: .milliseconds(30))
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.write(contentsOf: Data("app".utf8))
+            try handle.close()
+        }
+        let found = await Task.detached { reader.holder(attempts: 500, pause: 0.002) }.value
+        try await writer.value
+        #expect(found == .app)
+    }
+
     @Test func secondHolderCannotTakeALockInUse() throws {
         let url = try lockURL()
         let first = ProcessLock(url: url), second = ProcessLock(url: url)

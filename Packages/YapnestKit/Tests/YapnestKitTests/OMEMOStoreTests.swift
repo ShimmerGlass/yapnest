@@ -1,6 +1,8 @@
 import CryptoKit
+import GRDB
 import Foundation
 import Security
+@preconcurrency import Martin
 @preconcurrency import MartinOMEMO
 import libsignal
 import Testing
@@ -307,6 +309,84 @@ struct OMEMOStoreTests {
         #expect(again.deviceId == old.deviceId)
         #expect(again.store.sessionRecord(forAddress: bobsDevice) == Data([1]))
         #expect(again.store.replacedDeviceIds().isEmpty)
+    }
+
+    /// The keychain is written before the commit, so a commit that fails
+    /// after it must put the old identity back: the database still names the
+    /// old device, and the next launch would otherwise make a third.
+    @Test func aReplacementThatFailsToCommitPutsTheOldKeyBack() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let old = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        let oldIdentity = try #require(try keys.load())
+        let veto = CommitVeto()
+        try database.writer.write { $0.add(transactionObserver: veto, extent: .databaseLifetime) }
+        veto.isActive = true
+
+        #expect(throws: (any Error).self) { try old.replaceDevice() }
+
+        veto.isActive = false
+        #expect(try keys.load() == oldIdentity)
+        #expect(try database.setting(.omemoRegistrationId) == String(old.deviceId))
+        let again = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(again.deviceId == old.deviceId)
+        #expect(again.store.replacedDeviceIds().isEmpty)
+    }
+
+    private final class CommitVeto: TransactionObserver, @unchecked Sendable {
+        struct Vetoed: Error {}
+        var isActive = false
+        func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool { true }
+        func databaseDidChange(with event: DatabaseEvent) {}
+        func databaseWillCommit() throws { if isActive { throw Vetoed() } }
+        func databaseDidRollback(_ db: Database) {}
+        func databaseDidCommit(_ db: Database) {}
+    }
+
+    /// A session MartinOMEMO builds from a fetched bundle holds neither of
+    /// our locks, only libsignal's, so the swap waits for that one.
+    @Test func aReplacementWaitsForWhoeverHoldsLibsignalsLock() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let old = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        let context = try #require(old.store.signalContext), oldId = old.deviceId
+        let held = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0), replaced = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            context.withLock {
+                held.signal()
+                release.wait()
+            }
+        }
+        held.wait()
+        Thread.detachNewThread {
+            try? old.replaceDevice()
+            replaced.signal()
+        }
+
+        #expect(replaced.wait(timeout: .now() + .milliseconds(300)) == .timedOut, "nothing is swapped while the lock is held")
+        #expect(try keys.load()?.registrationId == oldId)
+        release.signal()
+        #expect(replaced.wait(timeout: .now() + .seconds(10)) == .success)
+        #expect(try keys.load()?.registrationId != oldId)
+    }
+
+    /// The module stays registered as the old device, so an instance that has
+    /// swapped neither decrypts, which would store sessions built on the old
+    /// key and start repairs under the new id, nor encrypts.
+    @Test func aReplacedInstanceNeitherDecryptsNorEncrypts() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let old = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        try old.replaceDevice()
+
+        let stanza = Martin.Message()
+        let encrypted = Martin.Element(name: "encrypted", xmlns: NS.omemoLegacy)
+        let header = Martin.Element(name: "header")
+        header.setAttribute("sid", value: "5")
+        encrypted.addChild(header)
+        stanza.addChild(encrypted)
+        let result = old.decrypt(stanza, from: JID(bob)!, ownCopy: false)
+        guard case .failed(let reason) = result else { Issue.record("decrypted as a replaced device: \(result)"); return }
+        #expect(reason == "the device was replaced", "refused before the module decodes, which would start a repair")
+
+        guard case .failure = old.encodeKeepingSessions(Martin.Message(), for: []) else { Issue.record("encrypted as a replaced device"); return }
     }
 
     private struct RefusingIdentityKeys: IdentityKeyStore {

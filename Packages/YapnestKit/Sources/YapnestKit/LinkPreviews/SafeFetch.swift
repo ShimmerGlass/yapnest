@@ -129,9 +129,11 @@ final class SafeFetcher: LinkFetching {
     private let transport: FetchTransport
     private let requestTimeout: TimeInterval
     private let totalTimeout: TimeInterval
+    private let connectTimeout: TimeInterval
 
-    init(transport: FetchTransport = SystemTransport(), requestTimeout: TimeInterval = 15, totalTimeout: TimeInterval = 30) {
+    init(transport: FetchTransport = SystemTransport(), requestTimeout: TimeInterval = 15, totalTimeout: TimeInterval = 30, connectTimeout: TimeInterval = 4) {
         self.transport = transport
+        self.connectTimeout = connectTimeout
         self.requestTimeout = requestTimeout
         self.totalTimeout = totalTimeout
     }
@@ -162,27 +164,80 @@ final class SafeFetcher: LinkFetching {
         case .name(let name): candidates = try await transport.resolve(name, timeout: timeout)
         }
         // The networks are read after resolving, right before connecting.
-        let address: IPAddress
+        let addresses: [IPAddress]
         switch try AddressPolicy.vet(candidates, transport: transport) {
         case .blocked(let blocked): throw FetchError.refused("address \(blocked.bytes) is local")
-        case .allowed(let addresses): address = addresses[0]
+        case .allowed(let allowed): addresses = allowed
         }
 
+        // One timeout covers every address: a fetch that is slow everywhere
+        // shouldn't take a timeout per address. Connecting to an address that
+        // isn't the last has a deadline of its own, though, as one that
+        // swallows packets would use up the whole timeout before the next
+        // was tried; a connection that failed or didn't answer in time goes
+        // on to the next, and a request that timed out doesn't.
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        var failure = FetchError.unreachable("no address")
+        for (index, address) in addresses.enumerated() {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { throw FetchError.timedOut }
+            // Half of what is left, so the others share the rest, and at most
+            // a few round trips of a slow mobile network.
+            let isLast = index == addresses.count - 1
+            let connectTimeout = isLast ? nil : min(remaining / 2, self.connectTimeout)
+            do {
+                return try await fetchOnce(url, target: target, from: address, limits: limits, timeout: remaining, connectTimeout: connectTimeout)
+            } catch let error as NotConnected {
+                failure = error.error
+            }
+        }
+        throw failure
+    }
+
+    /// The connection to an address failed before anything was sent, so
+    /// another address may do.
+    private struct NotConnected: Error {
+        var error: FetchError
+    }
+
+    private func fetchOnce(_ url: URL, target: FetchTarget, from address: IPAddress, limits: FetchLimits, timeout: TimeInterval, connectTimeout: TimeInterval?) async throws -> FetchedResource {
         let connection = transport.makeConnection(to: address, serverName: target.hostName)
         let timedOut = OSAllocatedUnfairLock(initialState: false)
+        let connectTimedOut = OSAllocatedUnfairLock(initialState: false)
         let timer = Task {
             try await Task.sleep(for: .seconds(timeout))
             timedOut.withLock { $0 = true }
             connection.close()
         }
+        let connectTimer = connectTimeout.map { limit in
+            Task {
+                try await Task.sleep(for: .seconds(limit))
+                connectTimedOut.withLock { $0 = true }
+                connection.close()
+            }
+        }
         defer {
             timer.cancel()
+            connectTimer?.cancel()
             connection.close()
         }
 
         do {
             return try await withTaskCancellationHandler {
-                try await connection.start()
+                do {
+                    try await connection.start()
+                    connectTimer?.cancel()
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch where connectTimedOut.withLock({ $0 }) {
+                    throw NotConnected(error: .unreachable("no answer in time"))
+                } catch let error as FetchError {
+                    // A refusal, such as a certificate that doesn't fit, is final.
+                    guard case .unreachable = error else { throw error }
+                    throw NotConnected(error: error)
+                } catch {
+                    throw NotConnected(error: .unreachable("\(error)"))
+                }
                 guard let remote = connection.remoteAddress(), AddressPolicy.endpoint(remote, matches: address) else {
                     throw FetchError.refused("connected elsewhere")
                 }
@@ -209,6 +264,8 @@ final class SafeFetcher: LinkFetching {
             throw CancellationError()
         } catch let error as HTTP1ResponseParser.Failure {
             throw error == .tooLarge ? FetchError.tooLarge : FetchError.badResponse
+        } catch let error as NotConnected {
+            throw timedOut.withLock { $0 } ? FetchError.timedOut : error
         } catch let error as FetchError {
             throw timedOut.withLock { $0 } ? FetchError.timedOut : error
         } catch is CancellationError {

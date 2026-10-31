@@ -146,10 +146,28 @@ struct ReplyFallbackTrustTests {
 
 struct BodyCapTests {
     @Test func anOversizedBodyIsCutBetweenCharacters() throws {
-        let text = String(repeating: "👨‍👩‍👧", count: InboundMessage.maxBodyCharacters)
+        let family = "👨‍👩‍👧"
+        let text = String(repeating: family, count: InboundMessage.maxBodyBytes)
         let m = try #require(parse("<message from='alice@example.org/phone' type='chat' id='b'><body>\(text)</body></message>"))
-        #expect(m.body?.count == InboundMessage.maxBodyCharacters)
-        #expect(m.body?.hasSuffix("👨‍👩‍👧") == true)
+        let body = try #require(m.body)
+        #expect(body.utf8.count <= InboundMessage.maxBodyBytes)
+        #expect(body.utf8.count > InboundMessage.maxBodyBytes - family.utf8.count)
+        #expect(body.hasSuffix(family))
+    }
+
+    @Test func oneCharacterOfEndlessCombiningMarksIsCutToTheCap() throws {
+        let text = "e" + String(repeating: "\u{0301}", count: 100_000)
+        let m = try #require(parse("<message from='alice@example.org/phone' type='chat' id='b'><body>\(text)</body></message>"))
+        let body = try #require(m.body)
+        #expect(body.utf8.count <= InboundMessage.maxBodyBytes)
+        #expect(body.unicodeScalars.first == "e")
+        #expect(body.unicodeScalars.count > 30_000)
+    }
+
+    @Test func aBodyOfLongJoinedSequencesIsCutToTheCap() throws {
+        let text = String(repeating: "👨\u{200D}", count: 50_000) + "👧"
+        let m = try #require(parse("<message from='alice@example.org/phone' type='chat' id='b'><body>\(text)</body></message>"))
+        #expect(try #require(m.body).utf8.count <= InboundMessage.maxBodyBytes)
     }
 
     @Test func aBodyUnderTheCapIsUntouched() throws {

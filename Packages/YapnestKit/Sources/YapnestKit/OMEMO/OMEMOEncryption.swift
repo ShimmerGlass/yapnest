@@ -46,9 +46,12 @@ final class OMEMOEncryption: @unchecked Sendable {
     private let encodeLock = NSLock()
     /// Held group messages are decrypted off the queue that decrypts what
     /// arrives, and two decodes of one device's messages at once would each
-    /// store the session as they left it. Not `encodeLock`, which is held
-    /// while device lists and bundles are fetched.
+    /// store the session as they left it. Not `encodeLock`, so that a decode
+    /// doesn't wait behind the encryption of a send.
     private let decodeLock = NSLock()
+    /// Whether `replaceDevice` has made the module's device a stale one. Set
+    /// holding both locks, and read holding either.
+    private var isRetired = false
     /// Replaced devices to take off our list: see `retireReplacedDevices`.
     private struct Retirement {
         /// Whether any are noted, so that every other install's list reads
@@ -101,13 +104,21 @@ final class OMEMOEncryption: @unchecked Sendable {
     var deviceId: UInt32 { store.localRegistrationId() }
 
     /// Makes the install a new device: see `OMEMOStore.replaceIdentity`. The
-    /// module stays registered as the old one, so only the next
-    /// `OMEMOEncryption` over the database may be used.
+    /// module stays registered as the old one, so this instance refuses to
+    /// encrypt or decrypt from then on, and only the next `OMEMOEncryption`
+    /// over the database may be used.
     func replaceDevice() throws {
         // A send or decode still under way would store its session after
-        // they're all deleted, built on the old key.
+        // they're all deleted, built on the old key. So would a session
+        // MartinOMEMO builds from a fetched bundle, which holds neither lock
+        // but takes libsignal's, so the swap takes that one too. Always in
+        // this order: a decode takes its lock and then libsignal's, a send
+        // its lock and then the store's.
         try encodeLock.withLock {
-            try decodeLock.withLock { try store.replaceIdentity(context: context) }
+            try decodeLock.withLock {
+                try context.withLock { try store.replaceIdentity(context: context) }
+                isRetired = true
+            }
         }
     }
 
@@ -126,6 +137,9 @@ final class OMEMOEncryption: @unchecked Sendable {
     func decrypt(_ stanza: Martin.Message, from sender: JID, ownCopy: Bool, isHistory: Bool = false, sentAt: Date = Date(), claim: SenderClaim = .stanza) -> DecryptResult {
         decodeLock.lock()
         defer { decodeLock.unlock() }
+        // Decoding as the old device would store a session built on its key,
+        // and a failure would start a session repair under the new, unpublished id.
+        if isRetired { return .failed("the device was replaced") }
         // Martin only rebuilds broken sessions for messages that came through
         // the server, which it recognizes by a server id; ours are all such,
         // except old history. Sessions have moved on since then, so most of
@@ -543,6 +557,7 @@ final class OMEMOEncryption: @unchecked Sendable {
     func encodeKeepingSessions(_ stanza: Martin.Message, for addresses: [SignalAddress]) -> EncryptionResult<Martin.Message, SignalError> {
         nonisolated(unsafe) var encoded: EncryptionResult<Martin.Message, SignalError> = .failure(.unknown)
         encodeLock.withLock {
+            guard !isRetired else { return }
             let kept = store.batchingSessions(for: addresses) {
                 // `addresses` has our own devices already; MartinOMEMO would add the inactive ones too.
                 // The store hint is the one `_encode` puts on every message it encrypts.

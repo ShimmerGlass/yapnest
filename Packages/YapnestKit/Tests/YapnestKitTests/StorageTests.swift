@@ -36,6 +36,28 @@ struct StorageTests {
         #expect(try db.reader.read { try Message.fetchCount($0) } == 1)
     }
 
+    @Test(arguments: [true, false]) func twoStanzaIdsAreTwoMessagesWhateverIdTheSenderGaveThem(newestFirst: Bool) throws {
+        let conversation = try db.conversation(with: alice)
+        let first = incoming(conversation, body: "one", remoteId: "same", serverId: "s1")
+        let second = incoming(conversation, body: "two", remoteId: "same", serverId: "s2")
+        for message in newestFirst ? [second, first] : [first, second] {
+            _ = try db.insert(message)
+        }
+
+        let bodies = try db.reader.read { try Message.fetchAll($0).map(\.body) }
+        #expect(Set(bodies) == ["one", "two"])
+    }
+
+    @Test func aPendingMessageStillMergesWithItsReflection() throws {
+        let conversation = try db.conversation(with: alice)
+        let pending = try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "lunch?", remoteId: "out1", originId: "out1"))
+        let reflected = try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "lunch?", remoteId: "out1", originId: "out1", serverId: "s9"))
+
+        #expect(reflected.id == pending.id)
+        #expect(reflected.serverId == "s9")
+        #expect(try db.reader.read { try Message.fetchCount($0) } == 1)
+    }
+
     @Test func reactionsReplaceSendersSet() throws {
         let conversation = try db.conversation(with: alice)
         let message = try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "lunch?", remoteId: "out1", originId: "out1"))

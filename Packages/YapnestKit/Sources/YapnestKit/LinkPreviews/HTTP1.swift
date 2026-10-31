@@ -231,7 +231,9 @@ struct HTTP1ResponseParser {
             let values = Set(length.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
             guard values.count == 1, let text = values.first, !text.isEmpty, text.allSatisfy(\.isASCII), text.allSatisfy(\.isNumber),
                   let size = Int(text) else { throw Failure.malformed }
-            guard size <= limits.maxBytes else { throw Failure.tooLarge }
+            // A page is read up to its own, lower limit and left there, however
+            // much more it announces.
+            guard isHTML || size <= limits.maxBytes else { throw Failure.tooLarge }
             state = size == 0 ? .done : .fixed(size)
         } else {
             state = .untilClose

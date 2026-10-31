@@ -107,10 +107,13 @@ public final class ProcessLock: @unchecked Sendable {
                 return false
             }
             fd = opened
-            // The file's contents are the holder's role. Wiped first, as
-            // what's there is the last holder's, which says nothing now.
+            // The file's contents are the holder's role. Emptied first and then
+            // written, so a reader finds it empty or whole, never the last
+            // holder's role or a mix of the two; `holder` waits out the
+            // empty moment.
             _ = ftruncate(opened, 0)
-            if let bytes = role?.rawValue.data(using: .utf8) {
+            let bytes = role?.rawValue.data(using: .utf8) ?? Data()
+            if !bytes.isEmpty {
                 _ = bytes.withUnsafeBytes { pwrite(opened, $0.baseAddress, bytes.count, 0) }
             }
             return true
@@ -121,18 +124,26 @@ public final class ProcessLock: @unchecked Sendable {
     /// it or it didn't say. The record is only believed while the lock is
     /// held: a holder that crashed leaves its role behind, but the system
     /// released its lock, so we can take it ourselves and know it's stale.
-    public var holder: Role? {
+    public var holder: Role? { holder(attempts: 5) }
+
+    /// Reading the file again a few times when the lock is held but it says
+    /// nothing, or something that isn't a role, as the holder may be between
+    /// taking the lock and writing its role.
+    func holder(attempts: Int, pause: TimeInterval = 0.002) -> Role? {
         let reader = open(url.path, O_RDONLY | O_CLOEXEC)
         guard reader >= 0 else { return nil }
         defer { close(reader) }
-        if flock(reader, LOCK_SH | LOCK_NB) == 0 {
-            flock(reader, LOCK_UN)
-            return nil
+        for attempt in 0..<max(attempts, 1) {
+            if attempt > 0 { Thread.sleep(forTimeInterval: pause) }
+            if flock(reader, LOCK_SH | LOCK_NB) == 0 {
+                flock(reader, LOCK_UN)
+                return nil
+            }
+            var buffer = [UInt8](repeating: 0, count: 16)
+            let count = pread(reader, &buffer, buffer.count, 0)
+            if count > 0, let role = Role(rawValue: String(decoding: buffer[..<count], as: UTF8.self)) { return role }
         }
-        var buffer = [UInt8](repeating: 0, count: 16)
-        let count = pread(reader, &buffer, buffer.count, 0)
-        guard count > 0 else { return nil }
-        return Role(rawValue: String(decoding: buffer[..<count], as: UTF8.self))
+        return nil
     }
 
     public var isLocked: Bool { fd.withLock { $0 >= 0 } }

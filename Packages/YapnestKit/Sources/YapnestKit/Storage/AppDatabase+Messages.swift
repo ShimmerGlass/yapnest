@@ -134,10 +134,17 @@ extension AppDatabase {
         // The conversation is in each branch of the OR: SQLite doesn't carry
         // it in from outside, and would scan the whole conversation.
         let conversation = Column("conversationId") == message.conversationId
-        return try Message
+        var request = Message
             .filter(Column("sender") == message.sender)
             .filter((conversation && ids.contains(Column("originId"))) || (conversation && ids.contains(Column("remoteId"))))
-            .fetchOne(db)
+        // Two stanza-ids from the server are two messages, whatever ids the
+        // sender gave them: a copied origin-id in an anonymous room, or a bot
+        // that reuses one. Only a copy that has no stanza-id yet can be ours;
+        // a row with this very stanza-id was found above.
+        if message.serverId != nil {
+            request = request.filter(Column("serverId") == nil)
+        }
+        return try request.fetchOne(db)
     }
 
     /// Finds the message a XEP-0444 reaction or XEP-0461 reply refers to.
@@ -265,8 +272,88 @@ extension AppDatabase {
     }
 
     /// Marks every incoming message in the conversation up to `date` as read.
-    public func markRead(conversationId: Int64, through date: Date = .distantFuture) throws {
-        try writer.write { db in try Self.markRead(db, conversationId: conversationId, through: date) }
+    /// With `owingReadState`, a read that moved the read point also records
+    /// that our other devices are owed the news, in the same transaction, so
+    /// that being offline or killed before publishing it loses nothing.
+    public func markRead(conversationId: Int64, through date: Date = .distantFuture, owingReadState: Bool = false) throws {
+        try writer.write { db in
+            let changed = try Self.markRead(db, conversationId: conversationId, through: date)
+            if owingReadState, changed > 0 {
+                try Conversation.filter(key: conversationId).updateAll(db, Column("readStateOwed").set(to: true))
+            }
+        }
+    }
+
+    /// The chats whose read state hasn't been confirmed by the server.
+    func conversationsOwingReadState() throws -> [Conversation] {
+        try reader.read { try Conversation.filter(Column("readStateOwed") == true).fetchAll($0) }
+    }
+
+    /// Whether any chat's read state hasn't been confirmed by the server.
+    func owesReadStates() throws -> Bool {
+        try reader.read { try !Conversation.filter(Column("readStateOwed") == true).isEmpty($0) }
+    }
+
+    /// The newest message we've read that the server numbered, which is the
+    /// only kind a read state can name.
+    func newestReadMessageWithServerId(conversationId: Int64) throws -> Message? {
+        try reader.read { try Self.newestReadMessageWithServerId($0, conversationId: conversationId) }
+    }
+
+    private static func newestReadMessageWithServerId(_ db: Database, conversationId: Int64) throws -> Message? {
+        try Message
+            .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming
+                && Column("isRead") == true && Column("serverId") != nil && Column("event") == nil)
+            .order(Column("timestamp").desc)
+            .fetchOne(db)
+    }
+
+    func hasMessage(conversationId: Int64, serverId: String) throws -> Bool {
+        try reader.read { db in try Message.filter(Column("conversationId") == conversationId && Column("serverId") == serverId).isEmpty(db) == false }
+    }
+
+    /// Whether a read state naming `stanzaId` is as far as our newest read
+    /// message or further, by time: another device may have read on to a
+    /// message of ours or one we don't count, and publishing ours over it
+    /// would move the read point back. A message we don't have can't be
+    /// placed, so it covers nothing.
+    func readState(conversationId: Int64, naming stanzaId: String) throws -> Bool {
+        try reader.read { try Self.readState($0, conversationId: conversationId, naming: stanzaId) }
+    }
+
+    private static func readState(_ db: Database, conversationId: Int64, naming stanzaId: String) throws -> Bool {
+        guard let named = try Message
+            .filter(Column("conversationId") == conversationId && Column("serverId") == stanzaId)
+            .fetchOne(db) else { return false }
+        guard let newest = try newestReadMessageWithServerId(db, conversationId: conversationId) else { return false }
+        return named.timestamp >= newest.timestamp
+    }
+
+    /// The server took the read state naming `stanzaId`, or refused it for
+    /// good (`stanzaId` nil). It stays owed when we've read further since:
+    /// the newer state is still on its way.
+    func clearReadStateOwed(conversationId: Int64, ifNewest stanzaId: String?) throws {
+        try writer.write { db in
+            if let stanzaId {
+                guard try Self.readState(db, conversationId: conversationId, naming: stanzaId) else { return }
+            }
+            // Only a chat that owes one: an update that changes nothing still
+            // wakes every observation of the table.
+            try Conversation.filter(key: conversationId).filter(Column("readStateOwed") == true)
+                .updateAll(db, Column("readStateOwed").set(to: false))
+        }
+    }
+
+    /// Every chat's read state is let go, such as when the server has nowhere to keep them.
+    func clearAllReadStatesOwed() throws {
+        try writer.write { db in
+            try Conversation.filter(Column("readStateOwed") == true).updateAll(db, Column("readStateOwed").set(to: false))
+        }
+    }
+
+    func clearReadStateOwed(peer: JID, ifNewest stanzaId: String) throws {
+        guard let id = try reader.read({ try Self.conversationId($0, peer: peer) }) else { return }
+        try clearReadStateOwed(conversationId: id, ifNewest: stanzaId)
     }
 
     /// Whether an incoming message up to `date` is still unread, so reading
@@ -280,8 +367,9 @@ extension AppDatabase {
         }
     }
 
-    static func markRead(_ db: Database, conversationId: Int64, through date: Date) throws {
-        _ = try Message
+    @discardableResult
+    static func markRead(_ db: Database, conversationId: Int64, through date: Date) throws -> Int {
+        try Message
             .filter(Column("conversationId") == conversationId && Column("timestamp") <= date)
             .unread()
             .updateAll(db, Column("isRead").set(to: true))

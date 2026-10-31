@@ -189,3 +189,208 @@ struct HeldNotificationsTests {
         #endif
     }
 }
+
+/// A chat read while offline owes its state to our other devices until the
+/// server takes it.
+struct OwedReadStateTests {
+    let db: AppDatabase
+    let session: XMPPSession
+    let wire = FakeWire()
+    let me = YapnestKit.JID("me@example.org")!
+    let alice = YapnestKit.JID("alice@example.org")!
+    var conversation: Conversation
+
+    init() throws {
+        db = try AppDatabase.inMemory()
+        session = try makeSession(me, database: db)
+        conversation = try db.conversation(with: alice)
+        for (index, serverId) in ["s1", "s2", "s3"].enumerated() {
+            try db.insert(Message(conversationId: conversation.id!, direction: .incoming, sender: alice, body: "m\(index)",
+                                  timestamp: Date(timeIntervalSince1970: Double(index)), serverId: serverId))
+        }
+    }
+
+    private var owed: Bool {
+        (try? db.reader.read { try Conversation.fetchOne($0, key: conversation.id!)?.readStateOwed }) ?? false
+    }
+
+    private func publishes() -> [Iq] {
+        wire.written.compactMap { $0 as? Iq }.filter { $0.firstChild(name: "pubsub")?.firstChild(name: "publish") != nil }
+    }
+
+    private func publishedStanzaIds() -> [String] {
+        publishes().compactMap { $0.firstChild(name: "pubsub")?.firstChild(name: "publish")?.firstChild(name: "item")?.firstChild(name: "displayed")?.firstChild(name: "stanza-id")?.attribute("id") }
+    }
+
+    /// A server whose read-state node holds `states`, taking publishes as `publish` says.
+    private func serve(holding states: [DisplayedState] = [], publish: @escaping @Sendable (Iq) -> Iq = { FakeWire.result(to: $0) }) {
+        wire.answer { iq in
+            guard let pubsub = iq.firstChild(name: "pubsub") else { return nil }
+            if pubsub.firstChild(name: "publish") != nil { return publish(iq) }
+            guard let items = pubsub.firstChild(name: "items") else { return nil }
+            let result = Element(name: "items", attributes: ["node": items.attribute("node") ?? ""])
+            for state in states {
+                let item = Element(name: "item", attributes: ["id": state.peer.description])
+                item.addChild(state.element)
+                result.addChild(item)
+            }
+            return FakeWire.result(to: iq, Element(name: "pubsub", xmlns: "http://jabber.org/protocol/pubsub", children: [result]))
+        }
+    }
+
+    private func readOffline() throws {
+        try session.markRead(conversation)
+        #expect(owed)
+        #expect(wire.written.isEmpty)
+    }
+
+    @Test func aChatReadOfflineIsPublishedAtTheNextCatchUp() async throws {
+        try readOffline()
+        serve()
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { publishedStanzaIds() == ["s3"] && !owed })
+    }
+
+    @Test func aReadWhileOnlineIsOwedUntilTheServerTakesIt() async throws {
+        serve { FakeWire.error(to: $0, condition: "resource-constraint", type: "wait") }
+        session.connectForTesting(wire)
+        try session.markRead(conversation)
+        #expect(await eventually { publishes().count == 1 })
+        #expect(owed)
+        #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func aStateTheServerTakesClearsWhatWasOwed() async throws {
+        serve()
+        session.connectForTesting(wire)
+        try session.markRead(conversation)
+        #expect(await eventually { !owed })
+    }
+
+    @Test func anotherDevicesNewerStateWinsAndOursIsNotPublishedOverIt() async throws {
+        try db.markRead(conversationId: conversation.id!, through: Date(timeIntervalSince1970: 1), owingReadState: true)
+        #expect(owed)
+        serve(holding: [DisplayedState(peer: alice, stanzaId: "s3", by: me)])
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { !owed })
+        #expect(publishes().isEmpty)
+        #expect(try db.unreadMessageCount(peer: alice) == 0)
+    }
+
+    @Test func aStateOlderThanOursIsReplacedByOurs() async throws {
+        try readOffline()
+        serve(holding: [DisplayedState(peer: alice, stanzaId: "s1", by: me)])
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { publishedStanzaIds() == ["s3"] && !owed })
+    }
+
+    @Test func aStateForAMessageWeDontHaveIsNotPublishedOver() async throws {
+        try readOffline()
+        serve(holding: [DisplayedState(peer: alice, stanzaId: "unknown", by: me)])
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(publishes().isEmpty)
+        #expect(owed)
+    }
+
+    @Test func aNewerMessageOfOursNamedByAnotherDeviceIsNotPublishedOver() async throws {
+        try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "reply",
+                              timestamp: Date(timeIntervalSince1970: 10), serverId: "mine"))
+        try readOffline()
+        serve(holding: [DisplayedState(peer: alice, stanzaId: "mine", by: me)])
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { !owed })
+        #expect(publishes().isEmpty)
+    }
+
+    @Test func aPushedStateOfANewerMessageClearsWhatWasOwed() async throws {
+        try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "reply",
+                              timestamp: Date(timeIntervalSince1970: 10), serverId: "mine"))
+        try readOffline()
+        session.displayedChanged(DisplayedState(peer: alice, stanzaId: "mine", by: me))
+        #expect(!owed)
+    }
+
+    @Test func aPushedStateOlderThanOursLeavesItOwed() async throws {
+        try readOffline()
+        session.displayedChanged(DisplayedState(peer: alice, stanzaId: "s1", by: me))
+        #expect(owed)
+    }
+
+    @Test func aServerWithoutReadStateSyncLetsGoOfWhatWasOwed() async throws {
+        try readOffline()
+        wire.answer { iq in
+            iq.firstChild(name: "pubsub") != nil ? FakeWire.error(to: iq, condition: "service-unavailable") : nil
+        }
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { !owed })
+        #expect(publishes().isEmpty)
+    }
+
+    @Test func aFailedReadKeepsWhatWasOwed() async throws {
+        try readOffline()
+        wire.answer { iq in
+            iq.firstChild(name: "pubsub") != nil ? FakeWire.error(to: iq, condition: "resource-constraint", type: "wait") : nil
+        }
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(owed)
+    }
+
+    @Test func aRefusalForGoodDropsWhatWasOwedAndIsShown() async throws {
+        try readOffline()
+        serve { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { session.warnings.current.map(\.key) == ["readState"] && !owed })
+    }
+
+    @Test func aPassingErrorKeepsItOwedForTheNextConnect() async throws {
+        try readOffline()
+        serve { FakeWire.error(to: $0, condition: "resource-constraint", type: "wait") }
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { publishes().count == 1 })
+        _ = await eventually(timeout: 0.3) { false }
+        #expect(owed)
+        #expect(session.warnings.current.isEmpty)
+        // The next connect, with the server taking it now.
+        serve()
+        session.fetchDisplayed()
+        #expect(await eventually { !owed })
+    }
+
+    @Test func anExtensionLeavesItToTheApp() async throws {
+        let quiet = try makeSession(me, database: db, mode: .notificationService)
+        try db.markRead(conversationId: conversation.id!, owingReadState: true)
+        serve()
+        quiet.connectForTesting(wire)
+        quiet.fetchDisplayed()
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(publishes().isEmpty)
+        #expect(owed)
+    }
+
+    @Test func readingNothingNewOwesNothing() throws {
+        try db.markRead(conversationId: conversation.id!, owingReadState: true)
+        try db.markRead(conversationId: conversation.id!)
+        try db.clearReadStateOwed(conversationId: conversation.id!, ifNewest: nil)
+        try db.markRead(conversationId: conversation.id!, owingReadState: true)
+        #expect(!owed)
+    }
+
+    @Test func theColumnIsAddedToADatabaseFromBefore() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v50-query-indices")
+        try queue.write { try $0.execute(sql: "INSERT INTO conversation (peer, kind, lastActivityAt, isPinned, isArchived, isEncrypted, historyComplete) VALUES ('a@example.org', 'chat', 0, 0, 0, 1, 0)") }
+        try AppDatabase.migrator.migrate(queue)
+        #expect(try queue.read { try Bool.fetchOne($0, sql: "SELECT readStateOwed FROM conversation") } == false)
+    }
+}

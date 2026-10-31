@@ -72,7 +72,9 @@ public struct InboundMessage: Sendable, Equatable {
     /// keeps such a message from landing before what's already stored.
     public var isDelayed = false
 
-    public static let maxBodyCharacters = 64 * 1024
+    /// The most a body may take, in UTF-8 bytes: a few characters can be
+    /// megabytes of combining marks, so counting characters caps nothing.
+    public static let maxBodyBytes = 64 * 1024
 
     public var id: String?
     public var originId: String?
@@ -455,11 +457,28 @@ extension InboundMessage {
         }
     }
 
-    /// `text` cut to `maxBodyCharacters`, between characters. Nothing sensible
+    /// `text` cut to `maxBodyBytes`, between characters. Nothing sensible
     /// is that long, and every copy we store, index and draw would pay for it.
+    /// A single character larger than the cap is cut between its scalars.
     static func capped(_ text: String) -> String {
-        guard text.utf8.count > maxBodyCharacters else { return text }
-        return String(text.prefix(maxBodyCharacters))
+        guard text.utf8.count > maxBodyBytes else { return text }
+        var end = text.startIndex
+        var used = 0
+        for index in text.indices {
+            let next = text.index(after: index)
+            let size = text.utf8.distance(from: index, to: next)
+            if used + size > maxBodyBytes { break }
+            used += size
+            end = next
+        }
+        if end > text.startIndex { return String(text[..<end]) }
+        var scalars = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            used += UTF8.width(scalar)
+            if used > maxBodyBytes { break }
+            scalars.append(scalar)
+        }
+        return String(scalars)
     }
 
     /// `text` without the characters that mark a match in a search result, as

@@ -145,6 +145,12 @@ public final class XMPPSession: @unchecked Sendable {
     let omemo: OMEMOEncryption
     let logger = Logger(subsystem: "Yapnest", category: "XMPPSession")
     let lock = OSAllocatedUnfairLock(initialState: Mutable())
+    /// Keeps the sender's choice of the next block change and its marking as
+    /// in flight, and a queued change's check of that mark, from interleaving.
+    let blockQueueLock = NSLock()
+    /// Runs in the sender between choosing a block change and marking it as
+    /// in flight, for tests to make a change at that moment.
+    var afterBlockChangeChosenForTesting: (@Sendable () -> Void)?
     /// Orders what `reportClientState` decides and writes.
     private let clientStateLock = NSLock()
     /// Keep a snapshot's sends in the order the snapshots were built: see
@@ -212,7 +218,8 @@ public final class XMPPSession: @unchecked Sendable {
         var token: Int
     }
 
-    /// Where the run that checks held group messages' devices is.
+    /// Where a run that coalesces the requests made while it goes is: the
+    /// one checking held group messages' devices, or the one sending blocks.
     enum HeldRun { case idle, running, runAgain }
 
     struct Mutable {
@@ -329,6 +336,10 @@ public final class XMPPSession: @unchecked Sendable {
         var pushEnableFailed = false
         /// The archive version our server speaks, from account discovery.
         var archiveVersion: MessageArchiveManagementModule.Version?
+        /// The run sending queued blocks and unblocks.
+        var blockRun = HeldRun.idle
+        /// The person whose block or unblock is on its way to the server.
+        var blockInFlight: JID?
         /// The last read message we know our devices agree on, by chat (XEP-0490).
         var publishedDisplayed: [JID: String] = [:]
         /// Where our settings node stands this session: see `SettingsSyncState`.
@@ -1523,8 +1534,14 @@ public final class XMPPSession: @unchecked Sendable {
         // written to the dead connection, or never written, is sent
         // here; what the server may still hold is claimed and left.
         // An extension sends nothing it didn't write itself.
-        if policy.resendsPending { sendUnclaimedPending() }
+        if policy.resendsPending {
+            sendUnclaimedPending()
+            sendPendingBlocks()
+        }
         resumeInterruptedCatchUps()
+        // Chats read while the stream was down owe their state; another device
+        // may have read further meanwhile, so the states are read first.
+        if policy.resendsPending, (try? database.owesReadStates()) == true { fetchDisplayed() }
         if lock.withLock({ $0.pushEnableFailed }) { enablePush() }
         // A settings sync the drop cut off never reconciled or started
         // watching for changes; one that finished only has changes to send.
@@ -2369,6 +2386,7 @@ public final class XMPPSession: @unchecked Sendable {
         // the app isn't opened. Resending with the same id is safe: recipients
         // dedupe on it.
         sendUnclaimedPending()
+        sendPendingBlocks()
         restoreChatsIfPending()
     }
 
@@ -3051,8 +3069,12 @@ public final class XMPPSession: @unchecked Sendable {
     /// contacts' apps hold on to the old key: see `OMEMOStore.replaceIdentity`.
     /// It disconnects this session for good, as its module stays registered
     /// as the old device; a new session over the database registers the new one.
-    public func replaceEncryptionDevice() throws {
-        disconnect()
+    /// The stream is closed first: stanzas still being handled would otherwise
+    /// run against the store after the swap.
+    public func replaceEncryptionDevice() async throws {
+        lock.withLock { $0.wantsConnection = false }
+        // Throws when there's no connection to close.
+        try? await client.disconnect(force: false)
         try omemo.replaceDevice()
     }
 
@@ -3142,7 +3164,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// Marks the conversation read and tells the peer and our other devices.
     public func markRead(_ conversation: Conversation) throws {
         guard let id = conversation.id else { return }
-        try database.markRead(conversationId: id)
+        try database.markRead(conversationId: id, owingReadState: true)
         announceRead(conversation, id: id, last: try database.lastIncoming(conversationId: id))
     }
 
@@ -3153,7 +3175,7 @@ public final class XMPPSession: @unchecked Sendable {
     public func markRead(_ conversation: Conversation, through message: Message) throws {
         guard let id = conversation.id, message.direction == .incoming,
               try database.hasUnread(conversationId: id, through: message.timestamp) else { return }
-        try database.markRead(conversationId: id, through: message.timestamp)
+        try database.markRead(conversationId: id, through: message.timestamp, owingReadState: true)
         announceRead(conversation, id: id, through: message.timestamp, last: message)
     }
 
