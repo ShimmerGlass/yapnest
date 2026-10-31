@@ -340,6 +340,12 @@ public final class XMPPSession: @unchecked Sendable {
         var blockRun = HeldRun.idle
         /// The person whose block or unblock is on its way to the server.
         var blockInFlight: JID?
+        /// The run sending the bookmarks we owe, and the task doing it.
+        var bookmarkRun = HeldRun.idle
+        var bookmarkTask: Task<Void, Never>?
+        /// Groups whose bookmark the server refused for good, until the
+        /// user's Retry asks about them.
+        var bookmarkRefusals: [JID: Error] = [:]
         /// The last read message we know our devices agree on, by chat (XEP-0490).
         var publishedDisplayed: [JID: String] = [:]
         /// Where our settings node stands this session: see `SettingsSyncState`.
@@ -1540,6 +1546,7 @@ public final class XMPPSession: @unchecked Sendable {
         if policy.resendsPending {
             sendUnclaimedPending()
             sendPendingBlocks()
+            sendOwedBookmarks()
         }
         resumeInterruptedCatchUps()
         // Chats read while the stream was down owe their state; another device

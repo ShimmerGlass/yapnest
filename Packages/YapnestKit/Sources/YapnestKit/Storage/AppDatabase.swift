@@ -862,6 +862,12 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v53-bookmark-owed") { db in
+            try db.alter(table: "groupChat") { t in
+                t.add(column: "bookmarkOwed", .boolean).notNull().defaults(to: false)
+            }
+        }
+
         return migrator
     }
 

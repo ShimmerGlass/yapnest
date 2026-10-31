@@ -10,6 +10,10 @@ extension AppDatabase {
         try reader.read { db in try GroupChat.order(Column("jid")).fetchAll(db) }
     }
 
+    func groupChatsOwingBookmark() throws -> [GroupChat] {
+        try reader.read { db in try GroupChat.filter(Column("bookmarkOwed") == true).order(Column("jid")).fetchAll(db) }
+    }
+
     public func observeGroupChat(_ jid: JID) -> ValueObservation<ValueReducers.Fetch<GroupChat?>> {
         ValueObservation.tracking { db in try GroupChat.filter(Column("jid") == jid).fetchOne(db) }
     }
@@ -89,7 +93,11 @@ extension AppDatabase {
             group.isMembersOnly = isMembersOnly
             group.isNonAnonymous = isNonAnonymous
             group.hasOccupantIds = hasOccupantIds
-            if let name, !name.isEmpty { group.name = name }
+            if let name, !name.isEmpty {
+                // Our bookmark carries the name, and would put the old one back.
+                if name != group.name, group.isBookmarked, !group.hasLeft { group.bookmarkOwed = true }
+                group.name = name
+            }
             try group.update(db)
 
             if !group.isPrivate {

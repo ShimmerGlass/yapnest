@@ -38,6 +38,12 @@ public struct GroupChat: Codable, Hashable, Sendable, FetchableRecord, Persistab
     /// The room's password, from the invitation that gave it. Kept here and
     /// not in the bookmark: it is only ever sent back to the room, on joining.
     public var password: String?
+    /// What we hold for this group's bookmark isn't on the server yet: a
+    /// publish of our fields (name, nickname, notify, autojoin) if we're in,
+    /// a retraction if we left. Kept until the server confirms, so a change
+    /// made offline, or a kick whose retraction failed, survives the next
+    /// catch-up, which would otherwise put the server's copy back.
+    public var bookmarkOwed: Bool
 
     public init(
         conversationId: Int64,
@@ -53,6 +59,7 @@ public struct GroupChat: Codable, Hashable, Sendable, FetchableRecord, Persistab
         notify: Notify = .always,
         hasOccupantIds: Bool = false,
         password: String? = nil,
+        bookmarkOwed: Bool = false,
     ) {
         self.conversationId = conversationId
         self.jid = jid
@@ -67,6 +74,7 @@ public struct GroupChat: Codable, Hashable, Sendable, FetchableRecord, Persistab
         self.notify = notify
         self.hasOccupantIds = hasOccupantIds
         self.password = password
+        self.bookmarkOwed = bookmarkOwed
     }
 
     /// A private group, as Conversations calls it: the only kind OMEMO works in.

@@ -48,6 +48,11 @@ extension Bookmark {
     }
 }
 
+/// The old kind of bookmark only says whether it worked, and not why.
+enum BookmarkError: Error {
+    case legacyFailed
+}
+
 extension XMPPSession {
     /// How long a bookmark publish may go unanswered.
     static let bookmarkTimeout: TimeInterval = 10
@@ -63,14 +68,16 @@ extension XMPPSession {
         return !features.contains(NS.bookmarks + "#compat") && !features.contains(NS.bookmarks + "#compat-pep")
     }
 
-    func publishLegacyBookmark(_ bookmark: Bookmark, for group: GroupChat) {
+    func publishLegacyBookmark(_ bookmark: Bookmark) async throws {
         let room = bookmark.jid
-        updateLegacyBookmarks { storage in
-            storage.removeChildren { $0.getAttribute("jid") == room.description }
-            storage.addChild(bookmark.legacyElement)
-        } then: { [weak self] succeeded in
-            if succeeded { try? self?.database.updateGroupChat(group.jid) { $0.isBookmarked = true } }
+        let published = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            updateLegacyBookmarks { storage in
+                storage.removeChildren { $0.getAttribute("jid") == room.description }
+                storage.addChild(bookmark.legacyElement)
+            } then: { continuation.resume(returning: $0) }
         }
+        guard published else { throw BookmarkError.legacyFailed }
+        try? database.updateGroupChat(room) { $0.isBookmarked = true }
     }
 
     func removeLegacyBookmark(_ room: JID, then done: @escaping @Sendable (Bool) -> Void = { _ in }) {

@@ -603,8 +603,9 @@ extension XMPPSession {
         // Members are only listed on joining, and a room that has just
         // started showing addresses has nobody listed to encrypt for.
         if group.isNonAnonymous, before?.isNonAnonymous != true { fetchMembers(room, lists: Self.memberLists) }
-        // Our bookmark carries the name too, and would put the old one back.
-        if group.name != before?.name, group.isBookmarked, !group.hasLeft { publishBookmark(group) }
+        // Our bookmark carries the name too, and would put the old one back;
+        // `setRoomInfo` owed it in the write that stored the name.
+        if group.name != before?.name, group.bookmarkOwed { sendOwedBookmarks() }
     }
 
     /// XEP-0486: the room's info form carries the hash of its picture, which
@@ -786,8 +787,19 @@ extension XMPPSession {
     }
 
     /// Records that we're out of the group, whose people are counted afresh if we return.
-    func markLeft(_ room: JID) {
-        try? database.updateGroupChat(room) { $0.hasLeft = true }
+    /// `owingBookmark` is for leaving without having asked the server to drop
+    /// our bookmark (a kick, a destroy): it is retracted once connected, and
+    /// until it is, no catch-up may join the group again from it.
+    func markLeft(_ room: JID, owingBookmark: Bool = false) {
+        try? database.updateGroupChat(room) {
+            $0.hasLeft = true
+            if owingBookmark {
+                $0.bookmarkOwed = true
+                $0.isBookmarked = false
+            } else {
+                $0.bookmarkOwed = false
+            }
+        }
         rosterForget(room)
     }
 
@@ -945,8 +957,8 @@ extension XMPPSession {
         if retryable { scheduleRejoin(room) }
         // Kicks and restarts end this visit; the rest end membership.
         if statuses.contains(301) || statuses.contains(321) || statuses.contains(322) {
-            markLeft(room)
-            retractBookmark(room)
+            markLeft(room, owingBookmark: true)
+            sendOwedBookmarks()
         } else {
             // Those who leave while we are out are compared with on the rejoin.
             rosterJoinStarted(room)
@@ -980,8 +992,8 @@ extension XMPPSession {
             $0?.canRetry = false
         }
         cancelRejoin(room, resettingBackoff: true)
-        markLeft(room)
-        retractBookmark(room)
+        markLeft(room, owingBookmark: true)
+        sendOwedBookmarks()
     }
 
     func didJoin(_ room: JID) {
@@ -1864,6 +1876,9 @@ extension XMPPSession {
         let groups = Dictionary(((try? database.groupChats()) ?? []).map { ($0.jid, $0) }, uniquingKeysWith: { a, _ in a })
         for bookmark in bookmarks {
             let group = groups[bookmark.jid]
+            // What we owe the server is newer than what it says, unless it
+            // says another device left a group we had bookmarked.
+            if let group, group.bookmarkOwed, bookmark.autojoin || group.hasLeft || !group.isBookmarked { continue }
             let isIn = group.map { !$0.hasLeft } ?? false
             if bookmark.autojoin {
                 if let group, isIn, group.isBookmarked, group.notify == bookmark.notify,
@@ -1886,6 +1901,9 @@ extension XMPPSession {
         for bookmark in bookmarks where bookmark.autojoin {
             try? database.removeGroupInvitation(bookmark.jid)
             let group = groups[bookmark.jid]
+            // Owed, we publish ours, or retract it if we left: neither the
+            // server's fields nor its autojoin may undo that.
+            if group?.bookmarkOwed == true { continue }
             if group == nil || group?.hasLeft == true {
                 _ = try? joinBookmarked(bookmark, existing: group)
             }
@@ -1895,12 +1913,13 @@ extension XMPPSession {
             let bookmark = byJID[group.jid]
             if bookmark?.autojoin == true { continue }
             if group.isBookmarked {
-                // Left on another device.
+                // Left on another device, which wins over what we owe.
                 markLeft(group.jid)
-            } else {
-                publishBookmark(group)
+            } else if !group.bookmarkOwed {
+                try? database.updateGroupChat(group.jid) { $0.bookmarkOwed = true }
             }
         }
+        sendOwedBookmarks()
         joinRooms()
     }
 
@@ -1917,6 +1936,18 @@ extension XMPPSession {
     }
 
     func bookmarkChanged(_ change: BookmarksModule.Change) {
+        let jid: JID = switch change {
+        case .published(let bookmark): bookmark.jid
+        case .retracted(let jid): jid
+        }
+        if let group = try? database.groupChat(jid), group.bookmarkOwed {
+            // Another device leaving a group we had bookmarked wins over what we owe.
+            let leftElsewhere = switch change {
+            case .published(let bookmark): !bookmark.autojoin
+            case .retracted: true
+            }
+            guard leftElsewhere, !group.hasLeft, group.isBookmarked else { return }
+        }
         switch change {
         case .published(let bookmark) where bookmark.autojoin:
             try? database.removeGroupInvitation(bookmark.jid)
@@ -1934,52 +1965,140 @@ extension XMPPSession {
         }
     }
 
-    func publishBookmark(_ group: GroupChat) {
+    /// Sends the bookmarks we owe, in the order the groups are listed, once
+    /// connected: a publish for a group we're in, a retraction for one we
+    /// left. A passing error leaves it owed for the next connect, and a
+    /// refusal for good shows a warning. Only the app sends. The task is
+    /// returned so that a caller who needs what's owed to have gone first,
+    /// as leaving a group does, can wait for it.
+    @discardableResult
+    func sendOwedBookmarks() -> Task<Void, Never>? {
+        guard policy.resendsPending else { return nil }
+        return lock.withLock { state in
+            // Asked again while a round goes: it reads the groups once more.
+            if let task = state.bookmarkTask {
+                state.bookmarkRun = .runAgain
+                return task
+            }
+            state.bookmarkRun = .running
+            let task = Task { [weak self] in
+                while let self {
+                    // Asked again before this round read the groups: it covers that.
+                    lock.withLock { $0.bookmarkRun = .running }
+                    await sendOwedRound()
+                    let again = lock.withLock { state in
+                        if state.bookmarkRun == .runAgain {
+                            state.bookmarkRun = .running
+                            return true
+                        }
+                        state.bookmarkRun = .idle
+                        state.bookmarkTask = nil
+                        return false
+                    }
+                    guard again else { return }
+                }
+            }
+            state.bookmarkTask = task
+            return task
+        }
+    }
+
+    /// One at a time and in order, so a retraction sent right after a
+    /// publish, as when the user leaves a group they just joined, reaches the
+    /// server second; otherwise the bookmark would come back and our other
+    /// devices would rejoin.
+    private func sendOwedRound() async {
+        let owed: [GroupChat]
+        do {
+            owed = try database.groupChatsOwingBookmark()
+        } catch {
+            logger.error("Failed to read the bookmarks owed: \(error)")
+            return
+        }
+        for group in owed {
+            guard isConnected else { return }
+            do {
+                if group.hasLeft { try await retractBookmark(group.jid) } else { try await publishBookmark(group) }
+                // A change made meanwhile has to be sent too.
+                try database.updateGroupChat(group.jid) { current in
+                    current.isBookmarked = !group.hasLeft
+                    if current.hasLeft == group.hasLeft, current.notify == group.notify,
+                       current.name == group.name, current.nickname == group.nickname { current.bookmarkOwed = false }
+                }
+                lock.withLock { _ = $0.bookmarkRefusals.removeValue(forKey: group.jid) }
+                warnings.clear("bookmark/\(group.jid)")
+            } catch {
+                logger.info("Couldn't send the bookmark for \(group.jid, privacy: .private): \(error.localizedDescription, privacy: .private)")
+                // Whatever passes by itself stays owed for the next connect.
+                guard ServerError.isFromServer(error), ServerError.classify(error).isFinal else { continue }
+                try? database.updateGroupChat(group.jid) { $0.bookmarkOwed = false }
+                lock.withLock { $0.bookmarkRefusals[group.jid] = error }
+                postBookmarkWarning(group, error: error)
+            }
+        }
+    }
+
+    private func postBookmarkWarning(_ group: GroupChat, error: Error) {
+        let jid = group.jid
+        let retraction = group.hasLeft
+        let title = retraction ? String(localized: "Couldn't remove the group's bookmark") : String(localized: "Couldn't save the group's bookmark")
+        let friendly = retraction ? String(localized: "The server wouldn't remove the bookmark") : String(localized: "The server wouldn't save the bookmark")
+        warnings.post("bookmark/\(jid)", title: title, friendly: friendly, error: error) { [weak self] in
+            guard let self else { return }
+            try database.updateGroupChat(jid) { $0.bookmarkOwed = true }
+            await sendOwedBookmarks()?.value
+            if let refusal = lock.withLock({ $0.bookmarkRefusals.removeValue(forKey: jid) }) { throw refusal }
+        }
+    }
+
+    /// Publishes the group's bookmark, and the old kind when the server
+    /// doesn't keep this one where other clients see it or never answers.
+    func publishBookmark(_ group: GroupChat) async throws {
         let bookmark = Bookmark(jid: group.jid, name: group.name, autojoin: true, nick: group.nickname, notify: group.notify)
         if usesLegacyBookmarks {
-            publishLegacyBookmark(bookmark, for: group)
+            try await publishLegacyBookmark(bookmark)
             return
         }
         let options = Self.dataForm(type: "submit", formType: NS.publishOptions, fields: Self.settingsNodeFields(maxItems: "max"))
         // Some servers never answer a publish with max_items=max (Openfire),
         // so the wait is bounded, and the old kind of bookmark takes over.
-        // Written before this returns, not from a task: a retraction sent
-        // right after it, as when the user leaves, must reach the server
-        // second, or the bookmark comes back and other devices rejoin.
-        let once = Once()
-        let failed: @Sendable (String) -> Void = { [weak self] reason in
-            guard let self else { return }
-            self.logger.warning("Couldn't bookmark \(group.jid, privacy: .private): \(reason, privacy: .private)")
-            self.publishLegacyBookmark(bookmark, for: group)
+        do {
+            try await publishPEPItem(
+                node: NS.bookmarks, itemId: group.jid.description, payload: bookmark.element,
+                options: options, timeout: Self.bookmarkTimeout,
+            )
+        } catch let refusal {
+            logger.warning("Couldn't bookmark \(group.jid, privacy: .private): \(refusal.localizedDescription, privacy: .private)")
+            // Its failure is the one to report: the old kind says only whether it worked.
+            do { try await publishLegacyBookmark(bookmark) } catch { throw refusal }
         }
-        client.module(.pubsub).publishItem(
-            at: nil, to: NS.bookmarks, itemId: group.jid.description, payload: bookmark.element,
-            publishOptions: options, errorDecoder: PubSubError.from(stanza:),
-        ) { [weak self] (result: Result<Iq, PubSubError>) in
-            guard once.first() else { return }
-            switch result {
-            case .success:
-                try? self?.database.updateGroupChat(group.jid) { $0.isBookmarked = true }
-            case .failure(let error):
-                failed(error.localizedDescription)
-            }
-        }
-        DispatchQueue.global().asyncAfter(deadline: .now() + Self.bookmarkTimeout) {
-            if once.first() { failed("no answer") }
-        }
+        try? database.updateGroupChat(group.jid) { $0.isBookmarked = true }
     }
 
-    /// With notifications, which XEP-0402 relies on to tell our other
-    /// devices we left.
-    private func retractBookmark(_ room: JID) {
+    /// Takes the bookmark off the server, with notifications, which XEP-0402
+    /// relies on to tell our other devices we left. A server with no
+    /// bookmark to remove counts as having removed it.
+    func retractBookmark(_ room: JID) async throws {
         if usesLegacyBookmarks {
-            removeLegacyBookmark(room)
+            let removed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                removeLegacyBookmark(room) { continuation.resume(returning: $0) }
+            }
+            guard removed else { throw BookmarkError.legacyFailed }
             try? database.updateGroupChat(room) { $0.isBookmarked = false }
             return
         }
-        client.module(.pubsub).retractItem(at: nil, from: NS.bookmarks, itemId: room.description, notify: true) { [weak self] result in
-            if case .failure(let error) = result {
-                self?.logger.warning("Couldn't remove bookmark for \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            client.module(.pubsub).retractItem(
+                at: nil, from: NS.bookmarks, itemId: room.description, notify: true, errorDecoder: PubSubError.from(stanza:),
+            ) { (result: Result<Iq, PubSubError>) in
+                switch result {
+                case .success:
+                    continuation.resume()
+                case .failure(let error) where Self.hasNoBookmarkToRemove(error):
+                    continuation.resume()
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
             }
         }
         try? database.updateGroupChat(room) { $0.isBookmarked = false }
@@ -2026,7 +2145,7 @@ extension XMPPSession {
             throw error
         }
         try database.removeGroupInvitation(room)
-        if let joined = try database.groupChat(room) { publishBookmark(joined) }
+        try oweBookmark(room)
     }
 
     /// Joins a group we were invited to, once the user has decided to. The
@@ -2106,7 +2225,7 @@ extension XMPPSession {
             throw error
         }
         if let hasArchive = await refreshedRoomInfo(room) { updateRoom(room) { $0?.hasArchive = hasArchive } }
-        if let group = try database.groupChat(room) { publishBookmark(group) }
+        try oweBookmark(room)
         if !invitees.isEmpty {
             do {
                 try await invite(invitees, to: room)
@@ -2212,9 +2331,19 @@ extension XMPPSession {
     static let inviteAcknowledgementTimeout: TimeInterval = 10
 
     /// Changes which of the group's messages notify, on all our devices.
+    /// Made offline too: it is kept and sent once connected.
     public func setNotify(_ notify: GroupChat.Notify, in room: JID) throws {
-        try database.updateGroupChat(room) { $0.notify = notify }
-        if let group = try database.groupChat(room), !group.hasLeft, isConnected { publishBookmark(group) }
+        try database.updateGroupChat(room) {
+            $0.notify = notify
+            if !$0.hasLeft { $0.bookmarkOwed = true }
+        }
+        sendOwedBookmarks()
+    }
+
+    /// Owes our bookmark for a group we're in, and sends it.
+    private func oweBookmark(_ room: JID) throws {
+        try database.updateGroupChat(room) { if !$0.hasLeft { $0.bookmarkOwed = true } }
+        sendOwedBookmarks()
     }
 
     /// Leaves the group for good on all our devices. Its history stays.
@@ -2224,40 +2353,20 @@ extension XMPPSession {
     /// first for that reason; once it's gone, nothing can undo leaving.
     public func leaveGroup(_ room: JID) async throws {
         guard await waitForConnection() else { throw GroupError.notConnected }
-        try await retractBookmarkAwaiting(room)
+        // A publish still owed, as after joining just now, goes first, or it
+        // would reach the server after the retraction and bring the bookmark back.
+        await sendOwedBookmarks()?.value
+        do {
+            try await retractBookmark(room)
+        } catch {
+            logger.warning("Couldn't remove bookmark for \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
+            throw GroupError.couldntLeave
+        }
+        try? database.updateGroupChat(room) { $0.bookmarkOwed = false }
         leaveRoom(room)
     }
 
-    /// Like `retractBookmark`, but says whether it worked.
-    private func retractBookmarkAwaiting(_ room: JID) async throws {
-        if usesLegacyBookmarks {
-            let removed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-                removeLegacyBookmark(room) { continuation.resume(returning: $0) }
-            }
-            guard removed else { throw GroupError.couldntLeave }
-            try? database.updateGroupChat(room) { $0.isBookmarked = false }
-            return
-        }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            client.module(.pubsub).retractItem(
-                at: nil, from: NS.bookmarks, itemId: room.description, notify: true, errorDecoder: PubSubError.from(stanza:),
-            ) { [weak self] (result: Result<Iq, PubSubError>) in
-                switch result {
-                case .success:
-                    continuation.resume()
-                // There was no bookmark to remove, or the server keeps none.
-                case .failure(let error) where Self.hasNoBookmarkToRemove(error):
-                    continuation.resume()
-                case .failure(let error):
-                    self?.logger.warning("Couldn't remove bookmark for \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
-                    continuation.resume(throwing: GroupError.couldntLeave)
-                }
-            }
-        }
-        try? database.updateGroupChat(room) { $0.isBookmarked = false }
-    }
-
-    private static func hasNoBookmarkToRemove(_ error: PubSubError) -> Bool {
+    static func hasNoBookmarkToRemove(_ error: PubSubError) -> Bool {
         switch NodeRead(error) {
         case .noNode, .unsupported: true
         case .items, .failed: false
