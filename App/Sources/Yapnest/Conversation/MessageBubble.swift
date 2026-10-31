@@ -89,7 +89,7 @@ struct MessageBubble: View {
             }
             if let text = content.text {
                 // The bold action reads as part of the text when it sits tight under it.
-                MessageBody(text: text, isOutgoing: isOutgoing, isRetracted: message.isRetracted, openLink: { model.open(link: $0) })
+                MessageBody(text: text, isOutgoing: isOutgoing, isRetracted: message.isRetracted, hover: Platform.isMac ? model.hoverState(for: row.id) : nil, openLink: { model.open(link: $0) })
                     .bubbleSpacingAfter(hasActions ? 10 : BubbleSpacingKey.defaultValue)
             }
             footer(foreground: foreground)
@@ -209,6 +209,10 @@ struct MessageBody: View {
     let text: RenderedText
     let isOutgoing: Bool
     let isRetracted: Bool
+    /// The row's pointer state, on the Mac, which decides where the text is
+    /// selectable. Only `SegmentText` reads it, so a hover redraws that and
+    /// not the bubble.
+    var hover: RowHover?
     let openLink: (URL) -> Void
 
     var body: some View {
@@ -254,7 +258,7 @@ struct MessageBody: View {
     private func segmentText(_ segment: RenderedText.Segment) -> some View {
         #if targetEnvironment(macCatalyst)
         if let native = segment.native {
-            SelectableText(text: native, isOutgoing: isOutgoing, openLink: openLink)
+            SegmentText(native: native, isOutgoing: isOutgoing, hover: hover, openLink: openLink)
         } else {
             Text(segment.text)
         }
@@ -263,6 +267,21 @@ struct MessageBody: View {
         #endif
     }
 }
+
+#if targetEnvironment(macCatalyst)
+/// One stretch of text, which only gets a text view to select in once the
+/// pointer is on its bubble. A view of its own, so that is all a hover redraws.
+private struct SegmentText: View {
+    let native: NSAttributedString
+    let isOutgoing: Bool
+    let hover: RowHover?
+    let openLink: (URL) -> Void
+
+    var body: some View {
+        SelectableText(text: native, isOutgoing: isOutgoing, isActive: hover?.isBubbleHovered ?? false, openLink: openLink)
+    }
+}
+#endif
 
 /// A text button on the footer's line. Its hit area reaches past the line, as
 /// the padding is taken back out of the layout, so the line stays footer-high.

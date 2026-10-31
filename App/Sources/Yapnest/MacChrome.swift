@@ -30,11 +30,9 @@ extension View {
             safeAreaInset(edge: .top, spacing: 0) {
                 SidebarSearchBar(text: text, onCompose: onCompose).background(.bar)
             }
-        } else if let focus {
-            searchable(text: text, placement: .navigationBarDrawer(displayMode: .automatic))
-                .searchFocused(focus)
         } else {
             searchable(text: text, placement: .navigationBarDrawer(displayMode: .automatic))
+                .modifier(SearchFocus(focus: focus))
         }
     }
 
@@ -339,6 +337,15 @@ private struct AccountFooter<Call: View>: View {
             .padding(.vertical, 10)
         }
         .background(.bar)
+    }
+}
+
+/// Focuses the drawer's search field from the caller's state, where there is one.
+private struct SearchFocus: ViewModifier {
+    let focus: FocusState<Bool>.Binding?
+
+    func body(content: Content) -> some View {
+        if let focus { content.searchFocused(focus) } else { content }
     }
 }
 

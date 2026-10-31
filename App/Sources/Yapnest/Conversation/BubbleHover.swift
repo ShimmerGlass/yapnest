@@ -1,4 +1,5 @@
 import CoreGraphics
+import Observation
 
 /// Where the built rows' bubbles are, so one pointer recognizer can tell which
 /// the pointer is on. Per-row hover handlers made SwiftUI hit-test every row
@@ -29,4 +30,18 @@ struct BubbleHover {
         }
         return nil
     }
+}
+
+/// What one row needs to know about the pointer. A box of its own per row, so
+/// a move from one bubble to another redraws those two rows and not every
+/// row the list has built.
+@Observable
+final class RowHover {
+    /// The pointer is on this row's bubble now.
+    var isBubbleHovered = false
+    /// This row was the last one entered, which is the only one to show its bar.
+    var isRowHovered = false
+    /// Where across the row the pointer came into the bubble, which the bar
+    /// is centred on.
+    var barX: CGFloat = 0
 }

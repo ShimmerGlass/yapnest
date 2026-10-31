@@ -1,5 +1,34 @@
 import SwiftUI
 
+/// How a stretch of message text looks, shared by the text view that selects
+/// it and the plain drawing that stands in until one is needed.
+enum SelectableTextStyle {
+    static func textColor(isOutgoing: Bool) -> UIColor { isOutgoing ? .white : .label }
+
+    static func linkAttributes(isOutgoing: Bool) -> [NSAttributedString.Key: Any] {
+        [
+            .foregroundColor: isOutgoing ? UIColor.white : UIColor(Color.accentColor),
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+        ]
+    }
+
+    /// The text with the colours a text view gives it: the default on every
+    /// run, and the link style on links. The links themselves go: drawn, a
+    /// run that is a link takes the system's blue over its own colour.
+    static func displayText(_ text: NSAttributedString, isOutgoing: Bool) -> NSAttributedString {
+        let display = NSMutableAttributedString(attributedString: text)
+        let whole = NSRange(location: 0, length: display.length)
+        display.addAttribute(.foregroundColor, value: textColor(isOutgoing: isOutgoing), range: whole)
+        let link = linkAttributes(isOutgoing: isOutgoing)
+        display.enumerateAttribute(.link, in: whole) { value, range, _ in
+            guard value != nil else { return }
+            display.removeAttribute(.link, range: range)
+            display.addAttributes(link, range: range)
+        }
+        return display
+    }
+}
+
 #if targetEnvironment(macCatalyst)
 
 /// AppKit's pointing-hand cursor, which UIKit has no way to ask for. Each
@@ -20,46 +49,39 @@ final class HandCursor {
 /// One stretch of a message's text that the Mac can select and copy from,
 /// which SwiftUI's `Text` can't be. It sizes like `Text` does: as wide as its
 /// words, up to the width it's offered.
+///
+/// A text view costs a lot to make and lay out, and a long chat builds many
+/// rows as it scrolls, so the words are drawn plainly until the pointer is on
+/// the bubble (`isActive`). The text view then takes over and stays, so a
+/// selection outlives the pointer.
 struct SelectableText: UIViewRepresentable {
     let text: NSAttributedString
     let isOutgoing: Bool
+    let isActive: Bool
     let openLink: (URL) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIView(context: Context) -> SelectableTextView {
-        let view = SelectableTextView()
-        view.isEditable = false
-        view.isSelectable = true
-        view.isScrollEnabled = false
-        view.backgroundColor = .clear
-        view.textContainerInset = .zero
-        view.textContainer.lineFragmentPadding = 0
-        view.delegate = context.coordinator
-        let hover = UIHoverGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.hovered(_:)))
-        view.addGestureRecognizer(hover)
+    func makeUIView(context: Context) -> SelectableTextContainer {
+        let view = SelectableTextContainer()
+        view.coordinator = context.coordinator
         // The view isn't sized by its content, so a lower priority lets the
         // layout squeeze it rather than SwiftUI asking for its intrinsic width.
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
     }
 
-    func updateUIView(_ view: SelectableTextView, context: Context) {
+    func updateUIView(_ view: SelectableTextContainer, context: Context) {
         let coordinator = context.coordinator
         coordinator.openLink = openLink
-        guard coordinator.text != text else { return }
-        coordinator.text = text
-        view.attributedText = text
-        // After the text, as setting it leaves the default color on runs
-        // without one. Links take theirs from `linkTextAttributes`.
-        view.textColor = isOutgoing ? .white : .label
-        view.linkTextAttributes = [
-            .foregroundColor: isOutgoing ? UIColor.white : UIColor(Color.accentColor),
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-        ]
+        if coordinator.text != text {
+            coordinator.text = text
+            view.set(text: text, isOutgoing: isOutgoing)
+        }
+        if isActive { view.activate() }
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectableTextView, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectableTextContainer, context: Context) -> CGSize? {
         // Measured here from the words, as the view may not hold them yet.
         let offered = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 100_000
         // The lazy stack asks again for every row it lays out, and measuring
@@ -70,7 +92,7 @@ struct SelectableText: UIViewRepresentable {
             coordinator.sizes = [:]
         }
         if let known = coordinator.sizes[offered] { return known }
-        let options: NSStringDrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
+        let options = SelectableTextContainer.drawingOptions
         let wanted = text.boundingRect(with: CGSize(width: offered, height: .greatestFiniteMagnitude), options: options, context: nil)
         // A point of slack, so rounding can't wrap the last word of a line
         // that just fits.
@@ -82,7 +104,7 @@ struct SelectableText: UIViewRepresentable {
         return size
     }
 
-    static func dismantleUIView(_ view: SelectableTextView, coordinator: Coordinator) {
+    static func dismantleUIView(_ view: SelectableTextContainer, coordinator: Coordinator) {
         coordinator.cursor.update(false)
     }
 
@@ -123,6 +145,75 @@ struct SelectableText: UIViewRepresentable {
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
             nil
         }
+    }
+}
+
+/// Draws the words itself, with no text view, accessibility element or
+/// recognizer: the row describes its message as a whole. `activate()` puts the
+/// text view over it, set up as a selectable one.
+final class SelectableTextContainer: UIView {
+    /// What `sizeThatFits` measures with, so the drawing wraps where it said.
+    static let drawingOptions: NSStringDrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
+
+    weak var coordinator: SelectableText.Coordinator?
+    private var textView: SelectableTextView?
+    private var text: NSAttributedString?
+    private var display: NSAttributedString?
+    private var isOutgoing = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        contentMode = .redraw
+        isAccessibilityElement = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func set(text: NSAttributedString, isOutgoing: Bool) {
+        self.text = text
+        self.isOutgoing = isOutgoing
+        if let textView {
+            fill(textView)
+        } else {
+            display = SelectableTextStyle.displayText(text, isOutgoing: isOutgoing)
+            setNeedsDisplay()
+        }
+    }
+
+    func activate() {
+        guard textView == nil, let coordinator else { return }
+        let view = SelectableTextView()
+        view.isEditable = false
+        view.isSelectable = true
+        view.isScrollEnabled = false
+        view.backgroundColor = .clear
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.delegate = coordinator
+        let hover = UIHoverGestureRecognizer(target: coordinator, action: #selector(SelectableText.Coordinator.hovered(_:)))
+        view.addGestureRecognizer(hover)
+        fill(view)
+        view.frame = bounds
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(view)
+        textView = view
+        display = nil
+        setNeedsDisplay()
+    }
+
+    private func fill(_ view: SelectableTextView) {
+        view.attributedText = text
+        // After the text, as setting it leaves the default color on runs
+        // without one. Links take theirs from `linkTextAttributes`.
+        view.textColor = SelectableTextStyle.textColor(isOutgoing: isOutgoing)
+        view.linkTextAttributes = SelectableTextStyle.linkAttributes(isOutgoing: isOutgoing)
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard textView == nil else { return }
+        display?.draw(with: bounds, options: Self.drawingOptions, context: nil)
     }
 }
 

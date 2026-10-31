@@ -13,14 +13,14 @@ struct MessageRowView: View, Equatable {
     @State private var swipe: CGFloat = 0
     /// The pointer is on the bar, which is partly outside the bubble. The
     /// bubble itself is found by one recognizer over the whole list
-    /// (`model.hoveredBubble`): a hover handler on every row made SwiftUI
+    /// (`model.pointerMoved`): a hover handler on every row made SwiftUI
     /// hit-test them all on each pointer move and scroll frame, which took
     /// tenths of a second at a time on a long chat.
     @State private var barHovered = false
     /// The bar's More menu is open, with the pointer in it. Catalyst tells
     /// the menu's contents when they appear but not when they go, so this is
     /// cleared when the pointer next moves anywhere in the conversation
-    /// (`hoverMenuClosed`). Another row taking `hoveredRow` hides the bar
+    /// (`hoverMenuClosed`). Another row being entered hides the bar
     /// without it.
     @State private var menuOpen = false
     /// Room under the bubble for the reactions chip, which grows with Dynamic Type.
@@ -31,8 +31,13 @@ struct MessageRowView: View, Equatable {
     /// reads as belonging to that message rather than the one above.
     private static let barOverlap: CGFloat = 10
 
+    /// Only on the Mac, so the other platforms make no hover state.
+    private var hover: RowHover { model.hoverState(for: row.id) }
+
     private var showsHoverBar: Bool {
-        Platform.isMac && (model.hoveredBubble == row.id || barHovered || menuOpen) && model.hoveredRow == row.id
+        guard Platform.isMac else { return false }
+        let hover = hover
+        return (hover.isBubbleHovered || barHovered || menuOpen) && hover.isRowHovered
     }
 
     private var rowSpace: String { Self.rowSpace(row.id) }
@@ -73,7 +78,7 @@ struct MessageRowView: View, Equatable {
 
     /// The Mac's hover bar, on the bubble's top edge under the pointer.
     private var hoverBar: some View {
-        HoverBarLayout(centerX: model.hoverBarX, overlap: Self.barOverlap, margin: 12) {
+        HoverBarLayout(centerX: hover.barX, overlap: Self.barOverlap, margin: 12) {
             MessageHoverBar(row: row, model: model, onHover: { barHovered = $0 }, onMenuOpen: {
                 menuOpen = true
                 model.hoverMenuOpen = true

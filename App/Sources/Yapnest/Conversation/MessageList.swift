@@ -197,6 +197,7 @@ private struct PointerTracker: UIViewRepresentable {
 
     static func dismantleUIView(_ view: TrackerView, coordinator: ()) {
         view.model?.scrollingChanged = nil
+        view.model?.currentPointer = nil
     }
 }
 
@@ -213,11 +214,19 @@ private final class TrackerView: UIView, UIGestureRecognizerDelegate {
         didSet {
             guard model !== oldValue else { return }
             oldValue?.scrollingChanged = nil
+            oldValue?.currentPointer = nil
             model?.scrollingChanged = { [weak self] scrolling in self?.pauseHover(scrolling) }
+            model?.currentPointer = { [weak self] in self?.pointerInView }
         }
     }
     private var recognizer: UIHoverGestureRecognizer?
     private weak var recognizerWindow: UIWindow?
+    /// The pointer in the window's space, which stays put as the list scrolls
+    /// under it. Nil once it has left.
+    private var pointerInWindow: CGPoint?
+
+    /// The pointer in the list stack's space, which moves with the content.
+    var pointerInView: CGPoint? { pointerInWindow.map { convert($0, from: nil) } }
     private var paused: [Weak] = []
 
     private struct Weak {
@@ -263,8 +272,12 @@ private final class TrackerView: UIView, UIGestureRecognizerDelegate {
 
     @objc private func hovered(_ recognizer: UIHoverGestureRecognizer) {
         switch recognizer.state {
-        case .began, .changed: model?.pointerMoved(to: recognizer.location(in: self))
-        case .ended, .cancelled: model?.pointerMoved(to: nil)
+        case .began, .changed:
+            pointerInWindow = recognizer.location(in: nil)
+            model?.pointerMoved(to: recognizer.location(in: self))
+        case .ended, .cancelled:
+            pointerInWindow = nil
+            model?.pointerMoved(to: nil)
         default: break
         }
     }

@@ -143,37 +143,62 @@ final class ConversationModel {
     var emojiPicker: EmojiPickerRequest?
     /// The row the pointer last entered on the Mac, the only one that shows
     /// its hover bar. A row can miss the pointer leaving, as when its bar's
-    /// menu was open, so the next row entered takes the bar from it.
-    var hoveredRow: Int64?
+    /// menu was open, so the next row entered takes the bar from it. Rows
+    /// read their own `RowHover`, never this: all of them would redraw.
+    @ObservationIgnored private(set) var hoveredRow: Int64?
     /// A hover bar's More menu was opened and the pointer hasn't moved in the
     /// conversation since. Not observed: the rows hear of the menu closing
     /// by `hoverMenuClosed` instead, so none of them reads this.
     @ObservationIgnored var hoverMenuOpen = false
     /// The bubble the pointer is on now, on the Mac. Unlike `hoveredRow` it
     /// clears when the pointer leaves, and while the list scrolls.
-    private(set) var hoveredBubble: Int64?
+    @ObservationIgnored private(set) var hoveredBubble: Int64?
     /// Where across the row the pointer came into the bubble, which the hover
     /// bar is centred on. Set on entering only: a bar that followed the
     /// pointer would move away from the button it was heading for.
-    private(set) var hoverBarX: CGFloat = 0
+    @ObservationIgnored private(set) var hoverBarX: CGFloat = 0
     @ObservationIgnored private var bubbleHover = BubbleHover()
+    /// The rows' hover state, made when a row first asks and dropped when the
+    /// row leaves the window.
+    @ObservationIgnored private var rowHovers: [Int64: RowHover] = [:]
+    /// The pointer's last place in the list stack's space, to find the bubble
+    /// under a pointer that stayed still while the list scrolled.
+    @ObservationIgnored private var lastPointer: CGPoint?
+    /// Where the pointer is now in the list stack's space, when the Mac's
+    /// tracker can say: the stack moves under a still pointer, so `lastPointer`
+    /// is out of date once the list has scrolled.
+    @ObservationIgnored var currentPointer: (() -> CGPoint?)?
 
     func bubbleFrameChanged(_ frame: BubbleHover.Frame?, for id: Int64) {
         bubbleHover.set(frame, for: id)
+    }
+
+    /// The row's hover state. Not observed, so asking in a row's body costs
+    /// it nothing; the row observes the box it gets.
+    func hoverState(for id: Int64) -> RowHover {
+        if let known = rowHovers[id] { return known }
+        let made = RowHover()
+        made.isBubbleHovered = hoveredBubble == id
+        made.isRowHovered = hoveredRow == id
+        made.barX = hoverBarX
+        rowHovers[id] = made
+        return made
     }
 
     /// Told when the list starts and stops moving, by the Mac's pointer tracker.
     @ObservationIgnored var scrollingChanged: ((Bool) -> Void)?
     @ObservationIgnored private var isScrollingForHover = false
 
-    /// The bar hides while the list moves, and comes back with the next
-    /// pointer move.
+    /// The bar hides while the list moves. When it stops, the bubble under a
+    /// pointer that didn't move is hovered again: a click there would
+    /// otherwise land on text that can't be clicked until the pointer moves.
     func scrollPhaseChangedForHover(_ phase: ScrollPhase) {
         let scrolling = phase != .idle
-        if scrolling, hoveredBubble != nil { hoveredBubble = nil }
+        if scrolling { setHoveredBubble(nil) }
         guard scrolling != isScrollingForHover else { return }
         isScrollingForHover = scrolling
         scrollingChanged?(scrolling)
+        if !scrolling, let point = currentPointer?() ?? lastPointer { updateHover(at: point) }
     }
 
     /// The pointer moved to a point in the list stack's space, or left
@@ -187,18 +212,34 @@ final class ConversationModel {
             hoverMenuOpen = false
             NotificationCenter.default.post(name: .hoverMenuClosed, object: self)
         }
+        lastPointer = point
+        updateHover(at: point)
+    }
+
+    private func updateHover(at point: CGPoint?) {
         guard let point, scrollPhase == .idle else {
-            if hoveredBubble != nil { hoveredBubble = nil }
+            setHoveredBubble(nil)
             return
         }
         let hit = bubbleHover.hit(at: point)
         guard hit?.id != hoveredBubble else { return }
-        hoveredBubble = hit?.id
-        if let hit {
-            hoveredRow = hit.id
-            hoverBarX = hit.barX
-        }
+        setHoveredBubble(hit?.id, barX: hit?.barX ?? 0)
     }
+
+    private func setHoveredBubble(_ id: Int64?, barX: CGFloat = 0) {
+        guard id != hoveredBubble else { return }
+        if let old = hoveredBubble { rowHovers[old]?.isBubbleHovered = false }
+        hoveredBubble = id
+        guard let id else { return }
+        if let old = hoveredRow, old != id { rowHovers[old]?.isRowHovered = false }
+        hoveredRow = id
+        hoverBarX = barX
+        let box = hoverState(for: id)
+        box.barX = barX
+        box.isRowHovered = true
+        box.isBubbleHovered = true
+    }
+
     /// The contact whose OMEMO devices are listed, in a sheet.
     var devicesSheet: JID?
     var showsLocationPicker = false
@@ -1028,6 +1069,10 @@ final class ConversationModel {
         guard new != rows else { return }
         rows = new
         listRows = isFlipped ? new.reversed() : new
+        if !rowHovers.isEmpty {
+            let present = Set(new.map(\.id))
+            rowHovers = rowHovers.filter { present.contains($0.key) }
+        }
     }
 
     // MARK: Rows
