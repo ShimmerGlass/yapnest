@@ -24,14 +24,16 @@ final class SettingsWrites {
     }
 
     /// The control moves at once; the write follows, and the control goes
-    /// back if it fails.
-    func setOptimistically<Value>(
+    /// back if it fails. Not when the user has moved it again since: that
+    /// later write follows this one and decides what is stored, so going
+    /// back would show a value the database doesn't hold.
+    func setOptimistically<Value: Equatable>(
         _ field: Binding<Value>, to value: Value, _ work: @escaping @Sendable () throws -> Void, onFailure: @escaping @MainActor (Error) -> Void,
     ) {
         let previous = field.wrappedValue
         field.wrappedValue = value
         run(work, onFailure: { error in
-            field.wrappedValue = previous
+            if field.wrappedValue == value { field.wrappedValue = previous }
             onFailure(error)
         })
     }

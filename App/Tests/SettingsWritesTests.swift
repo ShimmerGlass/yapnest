@@ -33,6 +33,20 @@ struct SettingsWritesTests {
         #expect(!value)
     }
 
+    // Going back to what the first write replaced would show a value the
+    // second, which follows and succeeds, never stored.
+    @Test func aFailedWriteLeavesALaterChangeShown() async {
+        let writes = SettingsWrites()
+        var value = 0
+        let binding = Binding(get: { value }, set: { value = $0 })
+        await withCheckedContinuation { finished in
+            writes.setOptimistically(binding, to: 1, { Thread.sleep(forTimeInterval: 0.2); throw CocoaError(.fileWriteUnknown) }, onFailure: { _ in })
+            writes.setOptimistically(binding, to: 2, {}, onFailure: { _ in })
+            writes.run({}, onSuccess: { _ in finished.resume() }, onFailure: { _ in finished.resume() })
+        }
+        #expect(value == 2)
+    }
+
     private final class Log: @unchecked Sendable {
         private let lock = NSLock()
         private var items: [String] = []

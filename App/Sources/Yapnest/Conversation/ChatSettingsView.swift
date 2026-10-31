@@ -685,7 +685,7 @@ struct ChatSettingsView: View {
         setOptimistically($isEncrypted, to: encrypted) { [session, peer] in try session.setEncrypted(encrypted, with: peer) }
     }
 
-    private func setOptimistically<Value>(_ field: Binding<Value>, to value: Value, _ work: @escaping @Sendable () throws -> Void) {
+    private func setOptimistically<Value: Equatable>(_ field: Binding<Value>, to value: Value, _ work: @escaping @Sendable () throws -> Void) {
         saves.setOptimistically(field, to: value, work) { saveError = $0.localizedDescription }
     }
 
