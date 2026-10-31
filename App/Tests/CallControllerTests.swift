@@ -181,25 +181,62 @@ struct CallControllerTests {
         #expect(!asked)
     }
 
-    @Test func aPeerWhoIsNoLongerCallableIsNotRung() throws {
+    @Test func aPeerWhoIsNoLongerCallableIsNotRung() async throws {
         let fixture = try ConversationFixture()
         let controller = CallController()
+        controller.prepareCall = { _, _, video in throw CallError.peerNotCallable(video: video) }
         controller.attach(fixture.session)
         defer { controller.detach() }
 
         controller.startCall(to: fixture.peer)
 
+        try await waitUntil { controller.error != nil }
         #expect(controller.error == "This contact can't take a call right now.")
         #expect(fixture.session.callState.value == nil)
+        #expect(controller.startingCall == nil)
+    }
+
+    @Test func aCallWaitsForTheConnectionBeforeAskingAnythingOfTheSystem() async throws {
+        let fixture = try ConversationFixture()
+        let controller = CallController()
+        let release = AsyncStream<Void>.makeStream()
+        controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }
+        controller.attach(fixture.session)
+        defer { controller.detach() }
+
+        controller.startCall(to: fixture.peer)
+        #expect(controller.startingCall == fixture.peer)
+        // A second tap while the first waits does nothing.
+        controller.startCall(to: JID("other@example.com")!)
+        #expect(controller.startingCall == fixture.peer)
+        #expect(controller.error == nil)
+
+        release.continuation.finish()
+        try await waitUntil { controller.startingCall == nil }
+        #expect(controller.startingCall == nil)
+    }
+
+    @Test func aCallThatCantBePreparedShowsWhyAndStopsSpinning() async throws {
+        let fixture = try ConversationFixture()
+        let controller = CallController()
+        controller.prepareCall = { _, _, _ in throw CallError.notConnected }
+        controller.attach(fixture.session)
+        defer { controller.detach() }
+
+        controller.startCall(to: fixture.peer)
+
+        try await waitUntil { controller.error != nil }
+        #expect(controller.error == "You're offline.")
+        #expect(controller.startingCall == nil)
     }
 
     @Test func aPeerWhoTakesOnlyAudioIsNotRungForVideo() async throws {
         let fixture = try ConversationFixture()
         let controller = CallController()
         controller.cameraAccess = { true }
+        controller.prepareCall = { _, _, video in throw CallError.peerNotCallable(video: video) }
         controller.attach(fixture.session)
         defer { controller.detach() }
-        fixture.session.callablePeers.send([fixture.peer])
 
         controller.startCall(to: fixture.peer, video: true)
 
@@ -226,15 +263,17 @@ struct CallControllerTests {
         #expect(try logged("Call asked for video=true camera=") > 0)
     }
 
-    @Test func aPeerWhoIsNotCallableLeavesAReasonInTheLog() throws {
+    @Test func aPeerWhoIsNotCallableLeavesAReasonInTheLog() async throws {
         let fixture = try ConversationFixture()
         let controller = CallController()
+        controller.prepareCall = { _, _, video in throw CallError.peerNotCallable(video: video) }
         controller.attach(fixture.session)
         defer { controller.detach() }
         let before = try logged("Call not started reason=peerNotCallable video=false")
 
         controller.startCall(to: fixture.peer)
 
+        try await waitUntil { controller.error != nil }
         #expect(try logged("Call not started reason=peerNotCallable video=false") > before)
     }
 

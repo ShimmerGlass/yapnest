@@ -157,6 +157,25 @@ extension XMPPSession {
         return devices.map { .some($0) } ?? .every
     }
 
+    static let defaultCallablePeerGrace: TimeInterval = 5
+
+    /// Waits until a call to `peer` can be started: for the connection, as
+    /// ad-hoc commands do, then for `peer` to be known to take the call, as
+    /// the presences and capabilities of a session that has just connected
+    /// arrive after it. Throws if either doesn't come in time.
+    public func prepareCall(to peer: JID, video: Bool = false) async throws {
+        guard callMedia != nil else { throw CallError.unavailable }
+        guard await waitForConnection() else { throw CallError.notConnected }
+        let callable = video ? videoCallablePeers : callablePeers
+        guard !callable.value.contains(peer) else { return }
+        let grace = lock.withLock { $0.callablePeerGrace }
+        let found = try? await withTimeout(grace) { [self] in
+            for await peers in (video ? videoCallablePeers : callablePeers).values where peers.contains(peer) { return true }
+            return false
+        }
+        guard found == true else { throw CallError.peerNotCallable(video: video) }
+    }
+
     /// Rings `peer`. Throws if another call is going on or the session can't call.
     public func startCall(to peer: JID, video: Bool = false) throws {
         guard callMedia != nil else { throw CallError.unavailable }

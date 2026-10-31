@@ -261,18 +261,19 @@ public enum CameraAuthorization: String, DiagEnum {
 
 /// Why starting a call stopped in the app, before or while handing it to the session.
 public enum CallStartExit: String, DiagEnum {
-    case noCameraAccess, peerNotCallable, audioActivation, sessionStart, callKitRequest, callKitStart
+    case noCameraAccess, notConnected, peerNotCallable, audioActivation, sessionStart, callKitRequest, callKitStart
 }
 
 /// Which `CallError` the session refused a call with.
 public enum CallErrorKind: String, DiagEnum {
-    case unavailable, notConnected, busy, other
+    case unavailable, notConnected, busy, peerNotCallable, other
 
     public init(_ error: Error) {
         switch error as? CallError {
         case .unavailable: self = .unavailable
         case .notConnected: self = .notConnected
         case .busy: self = .busy
+        case .peerNotCallable: self = .peerNotCallable
         case nil: self = .other
         }
     }

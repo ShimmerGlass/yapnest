@@ -74,6 +74,8 @@ struct ConversationView: View {
         model.callablePeers.contains(peer) && group == nil && !hasBlockedContact
     }
 
+    private var isStartingCall: Bool { model.calls.startingCall == peer }
+
     private var canVideoCall: Bool {
         canCall && model.videoCallablePeers.contains(peer)
     }
@@ -131,8 +133,12 @@ struct ConversationView: View {
                 }
                 if canCall, !Platform.usesChatHeader {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Call", systemImage: "phone") { model.calls.startCall(to: peer) }
-                            .disabled(model.calls.isInCall)
+                        Button { model.calls.startCall(to: peer) } label: {
+                            Label("Call", systemImage: "phone")
+                                .opacity(isStartingCall ? 0 : 1)
+                                .overlay { if isStartingCall { ProgressView() } }
+                        }
+                        .disabled(model.calls.isInCall || isStartingCall)
                     }
                 }
             }
@@ -370,9 +376,15 @@ struct ConversationView: View {
     /// Room for the three buttons at the header's trailing edge.
     private static let macHeaderButtonsRoom: CGFloat = 112
 
-    private func macHeaderButton(_ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(title, systemImage: systemImage, action: action)
-            .labelStyle(.iconOnly)
+    private func macHeaderButton(_ title: LocalizedStringKey, systemImage: String, isBusy: Bool = false, action: @escaping () -> Void) -> some View {
+        // The icon stays under the spinner so the header doesn't change size.
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+                .opacity(isBusy ? 0 : 1)
+                .overlay { if isBusy { ProgressView().controlSize(.small) } }
+        }
+        .disabled(isBusy)
             .buttonStyle(.plain)
             .font(.title3)
             .foregroundStyle(.secondary)
@@ -398,11 +410,11 @@ struct ConversationView: View {
             HStack(spacing: 16) {
                 macHeaderButton("Search", systemImage: "magnifyingglass") { search.open() }
                 if canVideoCall {
-                    macHeaderButton("Video Call", systemImage: "video") { model.calls.startCall(to: peer, video: true) }
+                    macHeaderButton("Video Call", systemImage: "video", isBusy: isStartingCall) { model.calls.startCall(to: peer, video: true) }
                         .disabled(model.calls.isInCall)
                 }
                 if canCall {
-                    macHeaderButton("Call", systemImage: "phone") { model.calls.startCall(to: peer) }
+                    macHeaderButton("Call", systemImage: "phone", isBusy: isStartingCall) { model.calls.startCall(to: peer) }
                         .disabled(model.calls.isInCall)
                 }
             }

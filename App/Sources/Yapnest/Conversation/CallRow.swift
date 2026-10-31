@@ -43,15 +43,19 @@ struct CallRowView: View {
 
     @Environment(AppModel.self) private var app
 
+    private var isStarting: Bool { app.calls.startingCall == model.peer }
     private var isCallable: Bool { app.callablePeers.contains(model.peer) }
 
     var body: some View {
         Button {
-            guard isCallable, !app.calls.isInCall else { return }
+            guard isCallable, !app.calls.isInCall, !isStarting else { return }
             app.calls.startCall(to: model.peer, video: call.callsBackWithVideo(peerTakesVideo: app.videoCallablePeers.contains(model.peer)))
         } label: {
             HStack(spacing: 6) {
+                // The symbol stays under the spinner so the row keeps its size.
                 Image(systemName: call.symbol)
+                    .opacity(isStarting ? 0 : 1)
+                    .overlay { if isStarting { ProgressView().controlSize(.mini) } }
                 Text(call.title)
                 Text(row.content.time).foregroundStyle(.tertiary)
             }

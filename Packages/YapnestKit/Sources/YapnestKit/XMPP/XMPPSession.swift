@@ -374,6 +374,9 @@ public final class XMPPSession: @unchecked Sendable {
         /// How long an action that needs the connection waits for it to come
         /// back before it fails as offline. Tests shrink it.
         var connectionGrace: TimeInterval = XMPPSession.defaultConnectionGrace
+        /// How long a call waits for the peer's presence and capabilities,
+        /// which come back some moments after a new session. Tests shrink it.
+        var callablePeerGrace: TimeInterval = XMPPSession.defaultCallablePeerGrace
         /// Chat states (XEP-0085) by contact.
         var chatStates: [JID: ChatStateTracker] = [:]
         /// Archive results of the pages being fetched, each stored with the

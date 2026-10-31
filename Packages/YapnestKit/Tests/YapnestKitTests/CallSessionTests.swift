@@ -471,6 +471,64 @@ struct CallSessionOutgoingTests {
         #expect(throws: CallError.unavailable) { try plain.session.startCall(to: alice) }
     }
 
+    private func prepared(_ h: CallSessionHarness, grace: TimeInterval = 0.3, peerGrace: TimeInterval = 0.3) {
+        h.session.lock.withLock {
+            $0.wantsConnection = true
+            $0.connectionGrace = grace
+            $0.callablePeerGrace = peerGrace
+        }
+    }
+
+    @Test func aCallAskedForWhileReconnectingWaitsAndGoesThroughOnceConnected() async throws {
+        let h = try CallSessionHarness(connected: false)
+        prepared(h, grace: 5, peerGrace: 5)
+        let ready = Task { try await h.session.prepareCall(to: alice) }
+        try await Task.sleep(for: .milliseconds(100))
+        h.session.connectForTesting(h.wire)
+        h.session.client.module(.resourceBind).bindedJid = Martin.JID("me@example.org/phone")
+        // The peer's presence comes back after the connection, as on a new session.
+        h.session.callablePeers.send([alice])
+        try await ready.value
+        try h.session.startCall(to: alice)
+        #expect(h.phase == .proposing)
+    }
+
+    @Test func aCallWhileOfflinePastTheGraceFailsAsOffline() async throws {
+        let h = try CallSessionHarness(connected: false)
+        prepared(h, grace: 0.2)
+        h.session.callablePeers.send([alice])
+        let start = Date()
+        await #expect(throws: CallError.notConnected) { try await h.session.prepareCall(to: alice) }
+        #expect(Date().timeIntervalSince(start) >= 0.2)
+        #expect(CallError.notConnected.errorDescription == "You're offline.")
+    }
+
+    @Test func aPeerWhoBecomesCallableDuringTheWaitIsRung() async throws {
+        let h = try CallSessionHarness()
+        prepared(h, peerGrace: 5)
+        let ready = Task { try await h.session.prepareCall(to: alice) }
+        try await Task.sleep(for: .milliseconds(100))
+        h.session.callablePeers.send([alice])
+        try await ready.value
+    }
+
+    @Test func aVideoCallWaitsForTheVideoListNotTheAudioOne() async throws {
+        let h = try CallSessionHarness()
+        prepared(h, peerGrace: 0.2)
+        h.session.callablePeers.send([alice])
+        await #expect(throws: CallError.peerNotCallable(video: true)) { try await h.session.prepareCall(to: alice, video: true) }
+    }
+
+    @Test func aPeerWhoNeverBecomesCallableFailsAfterTheGrace() async throws {
+        let h = try CallSessionHarness()
+        prepared(h, peerGrace: 0.2)
+        let start = Date()
+        await #expect(throws: CallError.peerNotCallable(video: false)) { try await h.session.prepareCall(to: alice) }
+        #expect(Date().timeIntervalSince(start) >= 0.2)
+        #expect(CallError.peerNotCallable(video: false).errorDescription == "This contact can't take a call right now.")
+        #expect(CallError.peerNotCallable(video: true).errorDescription == "This contact can't take a video call right now.")
+    }
+
     @Test func aNewCallCanFollowAnEndedOne() throws {
         let h = try CallSessionHarness()
         try h.session.startCall(to: alice)

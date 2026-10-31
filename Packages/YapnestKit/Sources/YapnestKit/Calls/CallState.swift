@@ -6,6 +6,20 @@ public enum CallError: Error, Sendable, Equatable {
     case notConnected
     /// Another call is going on.
     case busy
+    /// None of the peer's devices that are online take a call, with video if asked.
+    case peerNotCallable(video: Bool)
+}
+
+extension CallError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable: String(localized: "Calls aren't available here.")
+        case .notConnected: String(localized: "You're offline.")
+        case .busy: String(localized: "You're already in a call.")
+        case .peerNotCallable(video: false): String(localized: "This contact can't take a call right now.")
+        case .peerNotCallable(video: true): String(localized: "This contact can't take a video call right now.")
+        }
+    }
 }
 
 /// The current call, for the screen and CallKit to follow.

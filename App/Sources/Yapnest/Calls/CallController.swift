@@ -362,33 +362,50 @@ final class CallController {
     /// Tests replace it, as the real one prompts.
     @ObservationIgnored var cameraAccess: () async -> Bool = { await CallController.hasCameraAccess() }
 
-    /// Asks CallKit to start a call, which comes back to `perform(start:)`.
+    /// Waits until a call to the peer can be made. Tests replace it, as the
+    /// real one waits on a connection.
+    @ObservationIgnored var prepareCall: (XMPPSession, JID, Bool) async throws -> Void = { try await $0.prepareCall(to: $1, video: $2) }
+
+    /// Who a call is being started to, while it waits for the connection and
+    /// for the contact to be known to take calls. The call buttons spin.
+    private(set) var startingCall: JID?
+
+    /// Asks CallKit to start a call, which comes back to `perform(start:)`,
+    /// once the connection and the peer are there: as the session has just
+    /// reconnected, they may take a few seconds, and CallKit's start action
+    /// must not be held waiting for them.
     func startCall(to peer: JID, video: Bool = false) {
         DiagLog.info(.calls, "Call asked for", .bool("video", video), .value("camera", Self.cameraAuthorization()))
-        guard video else { return begin(peer, video: false) }
+        guard startingCall == nil else { return }
+        startingCall = peer
         Task {
-            guard await cameraAccess() else {
+            defer { startingCall = nil }
+            if video, !(await cameraAccess()) {
                 DiagLog.notice(.calls, "Call not started", .value("reason", CallStartExit.noCameraAccess))
                 error = Platform.isMac
                     ? String(localized: "Yapnest needs the camera for video calls. Turn it on in System Settings > Privacy & Security > Camera.")
                     : String(localized: "Yapnest needs the camera for video calls. Turn it on in Settings > Yapnest.")
                 return
             }
-            begin(peer, video: true)
+            if let session {
+                do {
+                    try await prepareCall(session, peer, video)
+                } catch {
+                    let reason: CallStartExit = switch error as? CallError {
+                    case .peerNotCallable: .peerNotCallable
+                    case .notConnected: .notConnected
+                    default: .sessionStart
+                    }
+                    DiagLog.notice(.calls, "Call not started", .value("reason", reason), .bool("video", video))
+                    self.error = error.localizedDescription
+                    return
+                }
+            }
+            begin(peer, video: video)
         }
     }
 
     private func begin(_ peer: JID, video: Bool) {
-        // The button stays a moment after the peer stops taking calls, so
-        // it doesn't blink when they drop out briefly; a tap then gets this
-        // rather than a call no device rings for.
-        if let session, !(video ? session.videoCallablePeers : session.callablePeers).value.contains(peer) {
-            DiagLog.notice(.calls, "Call not started", .value("reason", CallStartExit.peerNotCallable), .bool("video", video))
-            error = video
-                ? String(localized: "This contact can't take a video call right now.")
-                : String(localized: "This contact can't take a call right now.")
-            return
-        }
         guard Self.usesCallKit else {
             var step = CallStartExit.audioActivation
             do {
