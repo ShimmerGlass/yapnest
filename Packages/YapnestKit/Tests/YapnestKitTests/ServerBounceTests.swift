@@ -386,7 +386,7 @@ struct ServerBounceTests {
             conversationId: conversation, direction: .outgoing, sender: me, body: "hi", status: .sent, remoteId: "g1", serverId: "s1",
         ))
         _ = try database.applyEdit("hi all", to: mine.id!, actionId: "A")
-        try database.clearPendingAction(id: "A", error: "nope")
+        try database.clearPending(.action, id: "A", error: "nope")
         let incoming = try database.insert(Message(conversationId: conversation, direction: .incoming, sender: room, body: "x", remoteId: "g2", serverId: "s2"))
         session.leaveRoom(room)
 

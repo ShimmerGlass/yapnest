@@ -262,7 +262,7 @@ struct ConversationObservationTests {
             .values(in: db.reader, bufferingPolicy: .bufferingNewest(1)).makeAsyncIterator()
         let first = try #require(try await iterator.next())
         #expect(first.flatMap(\.reactions).contains { $0.isPending })
-        try db.clearPendingReactions(id: "r1")
+        try db.clearPending(.reaction, id: "r1")
         let second = try #require(try await iterator.next())
         #expect(!second.flatMap(\.reactions).contains { $0.isPending })
         #expect(second == (try fresh()))

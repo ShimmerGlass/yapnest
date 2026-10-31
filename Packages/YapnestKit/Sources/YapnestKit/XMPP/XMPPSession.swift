@@ -1364,7 +1364,7 @@ public final class XMPPSession: @unchecked Sendable {
             giveUp = { [self] in
                 DiagLog.error(.send, "Reactions given up", .id("stanza", blamed), .value("reason", reason))
                 lock.withLock { _ = $0.writtenReactions.remove(id) }
-                try? database.clearPendingReactions(id: id, error: String(localized: "The server closed the connection each time this was sent."))
+                try? database.clearPending(.reaction, id: id, error: String(localized: "The server closed the connection each time this was sent."))
             }
         } else if let message = try? database.pendingOutgoing(remoteId: id) {
             giveUp = { [self] in
@@ -1969,7 +1969,7 @@ public final class XMPPSession: @unchecked Sendable {
         }
         if stanza.name == "message", let id = stanza.id, lock.withLock({ $0.writtenActions.remove(id) != nil }) {
             do {
-                try database.clearPendingAction(id: id)
+                try database.clearPending(.action, id: id)
             } catch {
                 logger.error("Failed to mark a correction or retraction \(id, privacy: .private) sent: \(error)")
             }
@@ -1978,7 +1978,7 @@ public final class XMPPSession: @unchecked Sendable {
         if stanza.name == "message", let id = stanza.id, stanza.firstChild(name: "reactions", xmlns: NS.reactions) != nil {
             lock.withLock { _ = $0.writtenReactions.remove(id) }
             do {
-                try database.clearPendingReactions(id: id)
+                try database.clearPending(.reaction, id: id)
             } catch {
                 logger.error("Failed to mark reactions \(id, privacy: .private) sent: \(error)")
             }
@@ -2546,13 +2546,13 @@ public final class XMPPSession: @unchecked Sendable {
             // A room we left never becomes ready, so it would be queued again
             // every session for good.
             if (try? database.groupChat(peer))?.hasLeft == true {
-                try? database.clearPendingReactions(messageId: messageId)
+                try? database.clearPending(.reaction, messageId: messageId)
                 continue
             }
             // Rebuilt from what we hold now, which the stored id names.
             guard !message.isRetracted, let target = reference(to: message),
                   let mine = try? database.reactions(on: message, from: account) else {
-                try? database.clearPendingReactions(messageId: messageId)
+                try? database.clearPending(.reaction, messageId: messageId)
                 continue
             }
             let route = route(to: peer)
@@ -2574,8 +2574,8 @@ public final class XMPPSession: @unchecked Sendable {
             },
             fail: { [weak self] error in
                 guard let self else { return }
-                try? database.clearPendingReactions(
-                    messageId: messageId, from: account, error: error.describe(ConversationItem.ReactionGroup.notDelivered), unlessSupersededBy: id,
+                try? database.clearPending(
+                    .reaction, messageId: messageId, from: account, error: error.describe(ConversationItem.ReactionGroup.notDelivered), unlessSupersededBy: id,
                 )
             },
         )
@@ -2960,7 +2960,7 @@ public final class XMPPSession: @unchecked Sendable {
                     repend: { [weak self] in try? self?.database.repend(.action(messageId: messageId), id: id, ifNotSupersededBy: id) },
                     fail: { [weak self] error in
                         let friendly = isRetraction ? String(localized: "The deletion couldn't be delivered.") : String(localized: "The edit couldn't be delivered.")
-                        try? self?.database.clearPendingAction(messageId: messageId, error: error.describe(friendly), unlessSupersededBy: id)
+                        try? self?.database.clearPending(.action, messageId: messageId, error: error.describe(friendly), unlessSupersededBy: id)
                     },
                 )
                 let dropped: @Sendable () -> Void = { [weak self] in self?.lock.withLock { _ = $0.writtenActions.remove(id) } }
@@ -2985,7 +2985,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// Stops sending the correction or retraction `id`. With a reason, the
     /// message shows that it didn't reach the others, with a way to try again.
     private func giveUpAction(_ id: String, because reason: String?) {
-        try? database.clearPendingAction(id: id, error: reason)
+        try? database.clearPending(.action, id: id, error: reason)
     }
 
     /// Sends a correction or retraction that did not reach the others again,

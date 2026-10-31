@@ -153,14 +153,6 @@ extension AppDatabase {
         }
     }
 
-    /// The server has our reactions stanza `id`; or, with an `error`, it was
-    /// given up on and they show as failed.
-    func clearPendingReactions(id: String, error: String? = nil) throws {
-        try writer.write { db in
-            try Reaction.filter(Column("pendingId") == id).updateAll(db, Self.clearing("pendingId", errorColumn: "error", error: error))
-        }
-    }
-
     /// Our reactions the server hasn't acknowledged, as the message they are
     /// on, its conversation's peer, and the id of the stanza that carries them.
     func pendingReactions() throws -> [(message: Message, peer: JID, id: String)] {
@@ -179,38 +171,51 @@ extension AppDatabase {
         }
     }
 
-    /// Gives up on reactions that can no longer be sent, so they don't stay
-    /// marked as sending for good. With an `error` they show as failed, which
-    /// is for a bounce that came after the stanza was acknowledged; `sender`
-    /// then keeps it to our own rows.
-    /// `bouncedId` is the stanza that bounced: rows pending under another id
-    /// belong to a newer change, which stands.
-    func clearPendingReactions(messageId: Int64, from sender: JID? = nil, error: String? = nil, unlessSupersededBy bouncedId: String? = nil) throws {
+    /// The two kinds of change that wait for the server's acknowledgement of a
+    /// stanza of their own, each pending under that stanza's id.
+    enum PendingKind: Hashable, CaseIterable {
+        /// Our reactions on a message, in the reaction rows.
+        case reaction
+        /// A correction or retraction, on the message itself.
+        case action
+
+        fileprivate var pendingColumn: String { self == .reaction ? "pendingId" : "actionPendingId" }
+        fileprivate var errorColumn: String { self == .reaction ? "error" : "actionError" }
+    }
+
+    /// The server has the stanza `id` of a `kind` of change; or, with an
+    /// `error`, it was given up on and shows as failed.
+    func clearPending(_ kind: PendingKind, id: String, error: String? = nil) throws {
         try writer.write { db in
-            var request = Reaction.filter(Column("messageId") == messageId)
-            if let sender { request = request.filter(Column("sender") == sender) }
-            if let bouncedId { request = request.filter(Self.notSuperseded("pendingId", by: bouncedId)) }
-            try request.updateAll(db, Self.clearing("pendingId", errorColumn: "error", error: error))
+            let assignments = Self.clearing(kind.pendingColumn, errorColumn: kind.errorColumn, error: error)
+            switch kind {
+            case .reaction: try Reaction.filter(Column(kind.pendingColumn) == id).updateAll(db, assignments)
+            case .action: try Message.filter(Column(kind.pendingColumn) == id).updateAll(db, assignments)
+            }
         }
     }
 
-    /// The server has our correction or retraction stanza `id`; or, with an
-    /// `error`, it was given up on and the message shows that it didn't reach
-    /// the others.
-    func clearPendingAction(id: String, error: String? = nil) throws {
+    /// Gives up on a message's pending changes of a `kind` that can no longer be
+    /// sent, so they don't stay marked as sending for good. With an `error` they
+    /// show as failed, which is for a bounce that came after the stanza was
+    /// acknowledged and which the stanza's id no longer finds; `sender` then
+    /// keeps reactions to our own rows (an action is the message's own).
+    /// `bouncedId` is the stanza that bounced: a change pending under another
+    /// id is a newer one, which stands.
+    func clearPending(_ kind: PendingKind, messageId: Int64, from sender: JID? = nil, error: String? = nil, unlessSupersededBy bouncedId: String? = nil) throws {
         try writer.write { db in
-            try Message.filter(Column("actionPendingId") == id).updateAll(db, Self.clearing("actionPendingId", errorColumn: "actionError", error: error))
-        }
-    }
-
-    /// The same for a bounce that came after the acknowledgement, which the
-    /// stanza's id no longer finds.
-    /// A newer change pending under another id than `bouncedId` stands.
-    func clearPendingAction(messageId: Int64, error: String, unlessSupersededBy bouncedId: String) throws {
-        try writer.write { db in
-            try Message.filter(key: messageId)
-                .filter(Self.notSuperseded("actionPendingId", by: bouncedId))
-                .updateAll(db, Self.clearing("actionPendingId", errorColumn: "actionError", error: error))
+            let assignments = Self.clearing(kind.pendingColumn, errorColumn: kind.errorColumn, error: error)
+            switch kind {
+            case .reaction:
+                var request = Reaction.filter(Column("messageId") == messageId)
+                if let sender { request = request.filter(Column("sender") == sender) }
+                if let bouncedId { request = request.filter(Self.notSuperseded(kind.pendingColumn, by: bouncedId)) }
+                try request.updateAll(db, assignments)
+            case .action:
+                var request = Message.filter(key: messageId)
+                if let bouncedId { request = request.filter(Self.notSuperseded(kind.pendingColumn, by: bouncedId)) }
+                try request.updateAll(db, assignments)
+            }
         }
     }
 
