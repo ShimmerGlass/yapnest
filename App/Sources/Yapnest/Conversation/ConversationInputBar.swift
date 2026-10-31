@@ -73,8 +73,8 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     /// Built when the first recording starts: most chats never record, and
     /// opening one is when its cost is felt.
     private var recordingRow: VoiceRecordingRow?
-    /// The view the recording row is added to, over the field.
-    private var fieldContent: UIView?
+    /// The view the recording row is added to, over the field. Set when the field is made, in init.
+    private var fieldContent: UIView!
     /// The column of the field that holds the text, hidden while recording.
     private var fieldColumn: UIView?
     private var recordingClock: Timer?
@@ -767,9 +767,8 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
 
     /// The row, built on first use. Hidden and transparent, as it was when
     /// built with the field, so the fade-in starts from the same state.
-    private func makeRecordingRow() -> VoiceRecordingRow? {
+    private func makeRecordingRow() -> VoiceRecordingRow {
         if let recordingRow { return recordingRow }
-        guard let fieldContent else { return nil }
         let row = VoiceRecordingRow()
         row.translatesAutoresizingMaskIntoConstraints = false
         row.alpha = 0
@@ -790,8 +789,10 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         return row
     }
 
+    #if DEBUG
     /// Whether a recording has built its row yet.
     var hasRecordingRow: Bool { recordingRow != nil }
+    #endif
 
     private func tickRecording() {
         guard let voice else { return }

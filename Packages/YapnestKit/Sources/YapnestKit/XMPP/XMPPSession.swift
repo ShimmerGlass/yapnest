@@ -2899,7 +2899,6 @@ public final class XMPPSession: @unchecked Sendable {
                 case .failure(.failed(let text, let reason)):
                     // Like a message that can't be encrypted for the chat, it
                     // won't go next session either.
-                    dropped()
                     giveUpPending(.action, id: id, because: text)
                     DiagLog.error(.send, "Correction or retraction failed", .value("reason", reason))
                 }

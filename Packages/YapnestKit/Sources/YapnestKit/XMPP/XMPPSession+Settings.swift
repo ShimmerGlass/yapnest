@@ -443,8 +443,8 @@ extension XMPPSession {
         lock.withLock { state in
             guard state.settingsSync.epoch == epoch, state.settingsSync.observer == nil else { return }
             state.settingsSync.observer = Task.detached(priority: .utility) { [weak self, database] in
-                // With the newest version of each, so that an item changed again while
-                // it is still marked (one the server refused) is published again.
+                // It watches syncedEntry too, so that an item changed again while it is
+                // still marked (one the server refused) is published again.
                 let observation = ValueObservation.tracking(regions: AppDatabase.dirtySettingsTables, fetch: AppDatabase.dirtySettings)
                 do {
                     for try await dirty in observation.values(in: database.reader, bufferingPolicy: .bufferingNewest(1)) {

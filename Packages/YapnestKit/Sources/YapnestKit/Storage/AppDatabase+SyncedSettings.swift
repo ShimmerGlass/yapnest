@@ -214,10 +214,7 @@ extension AppDatabase {
 
     /// The items marked for publishing.
     static func dirtySettings(_ db: Database) throws -> [String] {
-        try Row.fetchAll(db, sql: """
-            SELECT d.item AS item, COALESCE((SELECT MAX(e.version) FROM syncedEntry e WHERE e.item = d.item), '') AS version
-            FROM syncedItemDirty d
-            """).map { $0["item"] as String }
+        try String.fetchAll(db, sql: "SELECT item FROM syncedItemDirty")
     }
 
     static func markDirty(_ db: Database, _ item: String) throws {

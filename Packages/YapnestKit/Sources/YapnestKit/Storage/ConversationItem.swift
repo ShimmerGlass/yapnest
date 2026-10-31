@@ -29,6 +29,9 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
         public var messageId: Int64?
     }
 
+    // Equal stamps short-cut `==`, so every stored content property must take a new stamp
+    // in its `didSet` and be compared in `==` and hashed. One that doesn't would keep the
+    // stamp when changed, and the rows built from it would never be rebuilt.
     public var message: Message {
         didSet { stamp = Self.nextStamp() }
     }
