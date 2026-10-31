@@ -29,8 +29,7 @@ struct DevicesList: View {
 
     /// Our own devices waiting for the user to confirm taking them off the account.
     @State private var pendingRemoval: [OMEMODevice]?
-    @State private var isRemoving = false
-    @State private var removalError: String?
+    @State private var removal = ServerAction()
     @State private var confirmsReset = false
 
     private struct PendingVerification: Identifiable {
@@ -74,7 +73,7 @@ struct DevicesList: View {
                     DeviceRow(
                         device: device,
                         setTrust: { trust in change(trust, of: device) },
-                        remove: peer == nil && !isRemoving ? { pendingRemoval = [device] } : nil,
+                        remove: peer == nil && !removal.isBusy ? { pendingRemoval = [device] } : nil,
                     )
                 }
             } header: {
@@ -93,10 +92,10 @@ struct DevicesList: View {
                     } label: {
                         HStack {
                             Text("Remove \(unusedDevices.count) unused")
-                            if isRemoving { ProgressView() }
+                            if removal.isBusy { ProgressView() }
                         }
                     }
-                    .disabled(isRemoving)
+                    .disabled(removal.isBusy)
                     .accessibilityIdentifier("removeUnusedDevices")
                 } footer: {
                     Text("The inactive devices: none has sent anything for \(Self.thresholdDays) days. A recently added device isn't counted, even if it hasn't sent anything yet.")
@@ -108,7 +107,7 @@ struct DevicesList: View {
         .sheetDoneButton()
         .task { await reload() }
         .toolbar {
-            if isRemoving {
+            if removal.isBusy {
                 ToolbarItem(placement: .topBarTrailing) { ProgressView() }
             }
         }
@@ -141,7 +140,7 @@ struct DevicesList: View {
                 ? "It will stop receiving your encrypted messages. If you still use it, it adds itself back the next time it connects."
                 : "They will stop receiving your encrypted messages. Any you still use add themselves back the next time they connect.")
         }
-        .errorAlert("Couldn't remove", $removalError)
+        .actionAlert("Couldn't remove", removal)
         .alert("Reset encryption for this device?", isPresented: $confirmsReset) {
             Button("Reset", role: .destructive) {
                 Task { await model.replaceEncryptionDevice() }
@@ -153,15 +152,14 @@ struct DevicesList: View {
     }
 
     private func remove(_ targets: [OMEMODevice]) {
-        isRemoving = true
-        Task {
+        removal.run { [session] in
             do {
                 try await session.removeOwnDevices(targets)
             } catch {
-                removalError = error.localizedDescription
+                await reload()
+                throw error
             }
             await reload()
-            isRemoving = false
         }
     }
 

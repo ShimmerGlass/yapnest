@@ -71,7 +71,7 @@ struct CommandsListView: View {
             // A cancelled load (the list changed under it) isn't a failure; the
             // entity stays unloaded and the next run fetches it.
             if Task.isCancelled { return }
-            loaded[jid] = .failed(error.localizedDescription)
+            loaded[jid] = .failed(ServerError.userMessage(for: error))
         }
     }
 }

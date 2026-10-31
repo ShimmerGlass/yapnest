@@ -340,7 +340,7 @@ struct EditGroupView: View {
     }
 
     private func attempt(_ part: LocalizedStringResource, _ failed: inout [String], _ work: @MainActor () async throws -> Void) async {
-        do { try await work() } catch { failed.append("\(String(localized: part)): \(error.localizedDescription)") }
+        do { try await work() } catch { failed.append("\(String(localized: part)): \(ServerError.userMessage(for: error))") }
     }
 }
 
