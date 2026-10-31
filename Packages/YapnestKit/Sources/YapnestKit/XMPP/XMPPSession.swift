@@ -851,6 +851,7 @@ public final class XMPPSession: @unchecked Sendable {
             .sink { [weak self] change in
                 // A list made up after a failed read would make every device we have look new later.
                 guard change.readFromServer else { return }
+                if !change.activeDevices.isEmpty, let member = JID(change.jid.description) { self?.memberMayNowHaveOMEMO(member) }
                 self?.deviceListHeard(of: change.jid.description, ids: change.activeDevices)
             }
             .store(in: &cancellables)
@@ -1798,6 +1799,7 @@ public final class XMPPSession: @unchecked Sendable {
         if source == .live, let sid = CallSignal.proposeReceipt(in: stanza) { callProposeDelivered(sid) }
 
         var encryption = Message.Encryption.none
+        var undecryptableReason: Message.UndecryptableReason?
         var sender: (device: Int32?, trust: OMEMODevice.Trust?)?
         if stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) != nil {
             let from = from ?? account
@@ -1825,11 +1827,19 @@ public final class XMPPSession: @unchecked Sendable {
                     logger.warning("Couldn't decrypt message \(stanza.id ?? "?", privacy: .private): \(reason, privacy: .private)")
                 }
                 encryption = .omemoUndecryptable
+                if case .failed = result {
+                    let holders = omemo.keyHolders(in: stanza)
+                    if !holders.forThisDevice {
+                        undecryptableReason = .notForThisDevice
+                        ReceiveEvent.log(.notEncryptedForThisDevice(room: nil, sender: from, forOtherOwnDevices: holders.forOtherOwnDevices))
+                    }
+                }
                 // Keep a placeholder even if the sender sent no fallback body.
                 if stanza.body?.isEmpty ?? true { stanza.body = "🔒" }
             }
         }
         guard var inbound = InboundMessage(stanza, account: account, source: source, encryption: encryption) else { return }
+        inbound.undecryptableReason = undecryptableReason
         inbound.omemoDevice = sender?.device ?? nil
         inbound.omemoTrust = sender?.trust
         inbound.isHistory = isHistory

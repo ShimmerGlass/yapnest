@@ -35,6 +35,13 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
         case omemoUndecryptable
     }
 
+    /// Why an undecryptable message couldn't be read, where it is known.
+    public enum UndecryptableReason: String, Codable, Sendable, DatabaseValueConvertible {
+        /// The sender's message held no key for this device: it was never
+        /// written for it, and nothing here can recover it.
+        case notForThisDevice
+    }
+
     public var id: Int64?
     public var conversationId: Int64
     public var direction: Direction
@@ -53,6 +60,8 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
     public var status: Status
     public var isRead: Bool
     public var encryption: Encryption
+    /// For `omemoUndecryptable` messages, if known.
+    public var undecryptableReason: UndecryptableReason?
 
     /// The `id` attribute of the `<message>` stanza. XEP-0444 and XEP-0461
     /// reference 1:1 messages by this value.
@@ -161,6 +170,7 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
         status: Status? = nil,
         isRead: Bool? = nil,
         encryption: Encryption = .none,
+        undecryptableReason: UndecryptableReason? = nil,
         remoteId: String? = nil,
         originId: String? = nil,
         serverId: String? = nil,
@@ -182,6 +192,7 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
         self.status = status ?? (direction == .incoming ? .received : .pending)
         self.isRead = isRead ?? (direction == .outgoing)
         self.encryption = encryption
+        self.undecryptableReason = undecryptableReason
         self.remoteId = remoteId
         self.originId = originId
         self.serverId = serverId

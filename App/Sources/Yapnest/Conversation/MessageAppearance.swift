@@ -42,7 +42,7 @@ extension Message {
         case .none:
             return Security(symbol: "lock.slash.fill", color: .red, title: String(localized: "Not encrypted"))
         case .omemoUndecryptable:
-            return Security(symbol: "lock.trianglebadge.exclamationmark.fill", color: .red, title: String(localized: "Couldn't decrypt"))
+            return Security(symbol: "lock.trianglebadge.exclamationmark.fill", color: .red, title: undecryptableReason == .notForThisDevice ? String(localized: "Not encrypted for this device") : String(localized: "Couldn't decrypt"))
         case .omemo:
             switch omemoTrust {
             case .verified:

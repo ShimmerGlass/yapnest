@@ -80,6 +80,7 @@ enum MessageText {
         /// Taken back by a group's moderator rather than by its author.
         case moderated
         case undecryptable
+        case notForThisDevice
     }
 
     /// A body longer than this many lines, or characters, is shown cut short
@@ -137,6 +138,8 @@ enum MessageText {
             .plain(String(localized: "Removed by a moderator"), font: .italicBody)
         case .undecryptable:
             .plain(String(localized: "This message is encrypted and couldn't be decrypted."), font: .italicBody)
+        case .notForThisDevice:
+            .plain(String(localized: "Not encrypted for this device"), font: .italicBody)
         case .action(let name):
             render("\(name) \(Message.meAction(in: body) ?? "")", font: .italicBody)
         case .normal:

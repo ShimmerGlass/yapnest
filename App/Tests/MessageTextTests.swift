@@ -256,6 +256,12 @@ struct MessageTextTests {
         #expect(!shown.isEmpty)
     }
 
+    @Test func aMessageNotEncryptedForThisDeviceSaysSoAndNeverShowsItsBody() {
+        let shown = runs("secret", kind: .notForThisDevice).flatMap { $0 }.map(\.text).joined()
+        #expect(shown == "Not encrypted for this device")
+        #expect(shown != runs("secret", kind: .undecryptable).flatMap { $0 }.map(\.text).joined())
+    }
+
     @Test func aDeletedMessageSaysWhoDeletedIt() {
         let mine = runs("old text", kind: .retracted(outgoing: true)).flatMap { $0 }.map(\.text).joined()
         let theirs = runs("old text", kind: .retracted(outgoing: false)).flatMap { $0 }.map(\.text).joined()

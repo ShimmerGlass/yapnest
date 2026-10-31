@@ -21,6 +21,14 @@ struct MessageAppearanceTests {
         #expect(message(direction, .omemoUndecryptable).security.color == .red)
     }
 
+    @Test func aMessageNotEncryptedForThisDeviceSaysSo() {
+        var notForUs = message(.incoming, .omemoUndecryptable)
+        notForUs.undecryptableReason = .notForThisDevice
+        #expect(notForUs.security.title == "Not encrypted for this device")
+        #expect(notForUs.security.color == .red)
+        #expect(message(.incoming, .omemoUndecryptable).security.title == "Couldn't decrypt")
+    }
+
     @Test func undecidedAndCompromisedDevicesAreWarnedAbout() {
         for trust in [OMEMODevice.Trust.undecided, .compromised] {
             for direction in [Message.Direction.incoming, .outgoing] {

@@ -83,7 +83,8 @@ extension ConversationItem {
         if message.isRetracted {
             String(localized: "Deleted message")
         } else if message.encryption == .omemoUndecryptable {
-            String(localized: "Couldn't decrypt this message")
+            message.undecryptableReason == .notForThisDevice
+                ? String(localized: "Not encrypted for this device") : String(localized: "Couldn't decrypt this message")
         } else {
             Attachment.quoteSummary(text: message.body, attachment: attachment) ?? message.body
         }

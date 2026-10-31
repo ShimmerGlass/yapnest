@@ -883,6 +883,12 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v55-undecryptable-reason") { db in
+            try db.alter(table: "message") { t in
+                t.add(column: "undecryptableReason", .text)
+            }
+        }
+
         return migrator
     }
 

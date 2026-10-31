@@ -252,6 +252,16 @@ final class OMEMOEncryption: @unchecked Sendable {
         !keysForUs(in: stanza).isEmpty
     }
 
+    /// Which of the devices `stanza` holds keys for are ours: this one, and
+    /// the other devices of the account.
+    func keyHolders(in stanza: Martin.Message) -> (forThisDevice: Bool, forOtherOwnDevices: Bool) {
+        let ours = String(deviceId)
+        let others = Set(store.ownDevicesToEncryptTo().map { String($0) }).subtracting([ours])
+        let rids = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
+            .filterChildren(name: "key", xmlns: nil).compactMap { $0.getAttribute("rid") } ?? []
+        return (rids.contains(ours), rids.contains { others.contains($0) })
+    }
+
     /// The keys in `stanza` for this device. Martin tries each of them.
     private func keysForUs(in stanza: Martin.Message) -> [Element] {
         let ours = String(deviceId)
@@ -359,7 +369,8 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// Blocks while fetching device lists and bundles; never call it on a
     /// queue those callbacks need (Martin's or the main queue).
     func encrypt(_ stanza: Martin.Message, for recipients: [JID]) -> Result<(Martin.Message, OMEMODevice.Trust), EncryptError> {
-        encrypt(stanza, for: recipients, skippingUnreachable: false).map { ($0.message, $0.trust) }
+        var unsupported = Set<JID>()
+        return encrypt(stanza, for: recipients, skippingUnreachable: false, unsupported: &unsupported).map { ($0.message, $0.trust) }
     }
 
     /// Whether `stanza` has an `<encrypted>` element with keys and no
@@ -369,21 +380,29 @@ final class OMEMOEncryption: @unchecked Sendable {
         return encrypted.firstChild(name: "payload") == nil
     }
 
+    struct KeyTransportOutcome {
+        var result: Result<(message: Martin.Message, reached: Set<JID>), EncryptError>
+        var unsupported: Set<JID>
+    }
+
     /// Encrypts the body-less `stanza` into keys alone for the devices of
     /// `recipients` that can be reached and our own, by the rules of
     /// `encrypt(_:for:)`. A recipient with no device to encrypt to is left
     /// out, as the others are still to be reached; only when none can be
-    /// does it fail. `reached` is who the message holds a key for.
-    func keyTransport(_ stanza: Martin.Message, for recipients: [JID]) -> Result<(message: Martin.Message, reached: Set<JID>), EncryptError> {
-        encrypt(stanza, for: recipients, skippingUnreachable: true).map { encrypted in
+    /// does it fail. `reached` is who the message holds a key for, and
+    /// `unsupported` who has no OMEMO at all, whether or not it succeeded.
+    func keyTransport(_ stanza: Martin.Message, for recipients: [JID]) -> KeyTransportOutcome {
+        var unsupported = Set<JID>()
+        let result: Result<(message: Martin.Message, reached: Set<JID>), EncryptError> = encrypt(stanza, for: recipients, skippingUnreachable: true, unsupported: &unsupported).map { encrypted in
             // MartinOMEMO's `encode` puts the fallback text on every message
             // it encrypts, which would show as one here.
             encrypted.message.body = nil
             return (encrypted.message, encrypted.reached)
         }
+        return KeyTransportOutcome(result: result, unsupported: unsupported)
     }
 
-    private func encrypt(_ stanza: Martin.Message, for recipients: [JID], skippingUnreachable: Bool) -> Result<(message: Martin.Message, trust: OMEMODevice.Trust, reached: Set<JID>), EncryptError> {
+    private func encrypt(_ stanza: Martin.Message, for recipients: [JID], skippingUnreachable: Bool, unsupported: inout Set<JID>) -> Result<(message: Martin.Message, trust: OMEMODevice.Trust, reached: Set<JID>), EncryptError> {
         dispatchPrecondition(condition: .notOnQueue(.main))
         let done = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var fetched: [SignalAddress]?
@@ -404,8 +423,11 @@ final class OMEMOEncryption: @unchecked Sendable {
         var firstFailure: EncryptError?
         var skipped = 0
         var allVerified = true
+        var unsupportedRecipients = Set<JID>()
+        defer { unsupported = unsupportedRecipients }
         // The failure to return, or nil for a recipient that is left out.
-        func unreachable(_ failure: EncryptError) -> EncryptError? {
+        func unreachable(_ failure: EncryptError, of recipient: JID? = nil) -> EncryptError? {
+            if case .unsupported = failure, let recipient { unsupportedRecipients.insert(recipient) }
             guard skippingUnreachable else { return failure }
             firstFailure = firstFailure ?? failure
             return nil
@@ -416,7 +438,7 @@ final class OMEMOEncryption: @unchecked Sendable {
             let identities = state.statuses
             let devices = Set(fetched.filter { $0.name == recipient.description })
             guard !devices.isEmpty else {
-                if let failure = unreachable(Self.missingDevices(of: recipient, listError: module.deviceListError(for: recipient.martin), bundleError: module.bundleError(for: recipient.martin))) { return .failure(failure) }
+                if let failure = unreachable(Self.missingDevices(of: recipient, listError: module.deviceListError(for: recipient.martin), bundleError: module.bundleError(for: recipient.martin)), of: recipient) { return .failure(failure) }
                 continue
             }
             let trustedAll = devices.filter { address in

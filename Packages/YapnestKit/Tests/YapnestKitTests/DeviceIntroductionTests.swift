@@ -123,6 +123,16 @@ final class IntroductionHarness: @unchecked Sendable {
         session.handleRoomStanza(reflected, source: .live)
     }
 
+    /// A member's device list read from their server, as a notification of a
+    /// new one is.
+    func hearDeviceList(of member: YapnestKit.JID) async {
+        session.omemo.forgetFetchFailures(of: [member])
+        let module = session.omemoModuleForTesting
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            module.addresses(for: [member.martin]) { _ in continuation.resume() }
+        }
+    }
+
     /// What was written to the room that has an `<encrypted>` element.
     var introductions: [Martin.Message] {
         wire.messages.filter { $0.to?.bareJid.stringValue == room.description && $0.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) != nil }
@@ -294,13 +304,51 @@ struct DeviceIntroductionTests {
         #expect(h.introduced.isEmpty)
     }
 
+    @Test func aMemberWithoutOMEMOIsKeptApartAndNotTriedAtEachJoin() async throws {
+        let h = try await IntroductionHarness(members: [bob, carol], withDevices: [bob])
+        await h.join()
+        #expect(h.introduced == [bob])
+        #expect(h.database.unsupportedMembers(device: h.session.omemoDeviceId) == [carol])
+
+        h.listed.withLock { _ = $0.insert(carol) }
+        h.session.omemo.forgetFetchFailures(of: [carol])
+        await h.join()
+        #expect(h.introductions.count == 1, "Carol was looked up again, though nothing told us she has OMEMO now")
+    }
+
+    @Test func aMemberWhoPublishesADeviceListIsIntroducedAfterwards() async throws {
+        let h = try await IntroductionHarness(members: [bob, carol], withDevices: [bob])
+        await h.join()
+        #expect(h.database.unsupportedMembers(device: h.session.omemoDeviceId) == [carol])
+
+        h.listed.withLock { _ = $0.insert(carol) }
+        await h.hearDeviceList(of: carol)
+        h.session.drainSendQueue(room)
+        await eventually("Carol to be introduced") { h.introductions.count == 2 }
+        #expect(h.keyIds(of: h.introductions.last) == [h.carolsPhone.device.omemoId])
+        #expect(h.database.unsupportedMembers(device: h.session.omemoDeviceId).isEmpty)
+        h.reflectPending()
+        #expect(h.introduced == [bob, carol])
+    }
+
+    @Test func aMarkOfAMemberWithoutOMEMOExpires() throws {
+        let database = try AppDatabase.inMemory()
+        let marked = Date(timeIntervalSince1970: 1_000_000)
+        try database.markUnsupported([carol], device: 5, at: marked)
+        #expect(database.unsupportedMembers(device: 5, now: marked.addingTimeInterval(60)) == [carol])
+        #expect(database.unsupportedMembers(device: 5, now: marked.addingTimeInterval(AppDatabase.unsupportedRetryInterval + 1)).isEmpty)
+        #expect(database.unsupportedMembers(device: 6, now: marked).isEmpty, "a new device id starts over")
+        try database.markIntroduced([bob], in: room, device: 5)
+        #expect(database.unsupportedMembers(device: 5, now: marked) == [carol], "marking an introduction keeps the others")
+    }
+
     @Test func aMemberWhoseFetchFailedIsLeftUnmarkedAndIntroducedAloneNextJoin() async throws {
         let h = try await IntroductionHarness(members: [bob, carol], withDevices: [bob])
         await h.join()
         #expect(h.introduced == [bob])
 
         h.listed.withLock { _ = $0.insert(carol) }
-        h.session.omemo.forgetFetchFailures(of: [carol])
+        await h.hearDeviceList(of: carol)
         await h.join()
         #expect(h.introductions.count == 2)
         #expect(h.keyIds(of: h.introductions.last) == [h.carolsPhone.device.omemoId], "Bob was introduced already")
@@ -335,7 +383,7 @@ struct DeviceIntroductionTests {
 
     /// Bob in the room with his real address, and a message from his phone
     /// that has keys for other devices but none for this one.
-    private func messageWithNoKeyForUs(from h: IntroductionHarness, id: String, history: Bool = false) {
+    private func messageWithNoKeyForUs(from h: IntroductionHarness, id: String, history: Bool = false, keyFor rid: String = "12345") {
         h.session.updateRoom(room) { $0?.isSyncing = false }
         h.session.roomPresence(parseStanza("""
             <presence from='\(room)/Bob' to='me@example.org/t'><x xmlns='http://jabber.org/protocol/muc#user'>\
@@ -345,7 +393,7 @@ struct DeviceIntroductionTests {
         let stanza: Martin.Message = parseStanza("""
             <message from='\(room)/Bob' type='groupchat' id='\(id)'><body>🔒</body>\
             <encrypted xmlns='\(NS.omemoLegacy)'><header sid='\(h.bobsPhone.device.omemoId)'>\
-            <key rid='12345'>AAAA</key><iv>AAAAAAAAAAAAAAAA</iv></header><payload>AAAA</payload></encrypted></message>
+            <key rid='\(rid)'>AAAA</key><iv>AAAAAAAAAAAAAAAA</iv></header><payload>AAAA</payload></encrypted></message>
             """)
         if history { stanza.addChild(Element(name: "delay", attributes: ["xmlns": "urn:xmpp:delay", "stamp": "2026-10-01T10:00:00Z"])) }
         h.session.handleRoomStanza(stanza, source: .live)
@@ -366,6 +414,42 @@ struct DeviceIntroductionTests {
         #expect(h.introduced == [], "marked again only once the room echoes it")
         h.reflectPending()
         #expect(h.introduced == [bob])
+    }
+
+    private func stored(_ id: String, in h: IntroductionHarness) throws -> YapnestKit.Message {
+        try #require(try h.database.reader.read { try YapnestKit.Message.filter(Column("remoteId") == id).fetchOne($0) })
+    }
+
+    @Test func aMessageWithNoKeyForThisDeviceIsStoredAsNotEncryptedForIt() async throws {
+        let h = try await IntroductionHarness()
+        await h.join()
+        messageWithNoKeyForUs(from: h, id: "m1")
+        let message = try stored("m1", in: h)
+        #expect(message.encryption == .omemoUndecryptable)
+        #expect(message.undecryptableReason == .notForThisDevice)
+    }
+
+    @Test func aMessageWithAKeyForThisDeviceThatFailedKeepsTheGenericReason() async throws {
+        let h = try await IntroductionHarness()
+        await h.join()
+        messageWithNoKeyForUs(from: h, id: "m1", keyFor: String(h.session.omemoDeviceId))
+        let message = try stored("m1", in: h)
+        #expect(message.encryption == .omemoUndecryptable)
+        #expect(message.undecryptableReason == nil)
+    }
+
+    @Test func aDirectMessageWithNoKeyForThisDeviceIsStoredAsNotEncryptedForIt() async throws {
+        let h = try await IntroductionHarness()
+        for (id, rid) in [("d1", "12345"), ("d2", String(h.session.omemoDeviceId))] {
+            let stanza: Martin.Message = parseStanza("""
+                <message from='bob@example.org/phone' to='me@example.org/t' type='chat' id='\(id)'><body>🔒</body>\
+                <encrypted xmlns='\(NS.omemoLegacy)'><header sid='\(h.bobsPhone.device.omemoId)'>\
+                <key rid='\(rid)'>AAAA</key><iv>AAAAAAAAAAAAAAAA</iv></header><payload>AAAA</payload></encrypted></message>
+                """)
+            h.session.handle(stanza, source: .live)
+        }
+        #expect(try stored("d1", in: h).undecryptableReason == .notForThisDevice)
+        #expect(try stored("d2", in: h).undecryptableReason == nil, "it had a key for us, so the reason is not that")
     }
 
     @Test func aMemberIsIntroducedAgainAtMostEveryInterval() async throws {

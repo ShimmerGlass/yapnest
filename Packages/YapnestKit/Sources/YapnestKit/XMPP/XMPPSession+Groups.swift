@@ -1520,6 +1520,7 @@ extension XMPPSession {
         )
 
         var encryption = Message.Encryption.none
+        var undecryptableReason: Message.UndecryptableReason?
         var device: (id: Int32?, trust: OMEMODevice.Trust?)?
         var held: HeldStanza?
         if stanza.type == .groupchat, stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) != nil, let nick = stanza.from?.resource {
@@ -1543,6 +1544,11 @@ extension XMPPSession {
                 case .failed(let reason):
                     logger.warning("Couldn't decrypt group message \(stanza.id ?? "?", privacy: .private): \(reason, privacy: .private)")
                     encryption = .omemoUndecryptable
+                    let holders = omemo.keyHolders(in: stanza)
+                    if !holders.forThisDevice {
+                        undecryptableReason = .notForThisDevice
+                        ReceiveEvent.log(.notEncryptedForThisDevice(room: room, sender: real, forOtherOwnDevices: holders.forOtherOwnDevices))
+                    }
                     // Only what is written now: an archived or replayed one may
                     // predate this device.
                     if source == .live, !isHistory, !Self.isDelayed(stanza), real != account, !omemo.hasKeyForThisDevice(stanza) {
@@ -1550,6 +1556,7 @@ extension XMPPSession {
                     }
                 case .unvouched(let id):
                     // As it came, before the placeholder's body goes in.
+                    ReceiveEvent.log(.heldUnvouched(room: room, sender: real))
                     held = HeldStanza(sender: real, device: id, stanza: stanza.element.stringValue, source: source, isHistory: isHistory)
                     encryption = .omemoUndecryptable
                 }
@@ -1565,6 +1572,7 @@ extension XMPPSession {
         }
 
         guard var inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: source, encryption: encryption) else { return }
+        inbound.undecryptableReason = undecryptableReason
         // The server can't block someone's group messages, which come from
         // the room; where it shows who they are, we drop them ourselves.
         if !inbound.isOutgoing, inbound.sender != room, (try? database.isBlocked(inbound.sender)) == true { return }
@@ -1636,7 +1644,9 @@ extension XMPPSession {
     ///
     /// Kept per member, once the room has echoed the message back, so a
     /// join without a connection, a member without keys, and members who
-    /// join later are each tried again at the next join.
+    /// join later are each tried again at the next join. A member with no
+    /// OMEMO at all is kept apart (`markUnsupported`) and not tried at each
+    /// join, as the same fruitless lookup would run in every room.
     func introduceDevice(to room: JID) {
         guard policy.publishesOMEMOKeys, omemo.module.isReady,
               let status = roomStatus(room), status.isJoined, !status.isSyncing, status.membersListed,
@@ -1652,8 +1662,19 @@ extension XMPPSession {
             let members = membersToIntroduce(in: room, device: device)
             guard !members.isEmpty else { return }
             let id = OutboundStanza.newId()
-            switch omemo.keyTransport(OutboundStanza.keyTransport(to: room, id: id), for: members.sorted()) {
+            let transport = omemo.keyTransport(OutboundStanza.keyTransport(to: room, id: id), for: members.sorted())
+            let (outcome, unsupported) = (transport.result, transport.unsupported)
+            if !unsupported.isEmpty {
+                do {
+                    try database.markUnsupported(unsupported, device: device)
+                    DiagLog.notice(.omemo, "Members without OMEMO left out of introductions", .id("room", Redacted.id(room.description)), .int("members", unsupported.count))
+                } catch {
+                    DiagLog.error(.omemo, "Device introduction not kept", .error(error))
+                }
+            }
+            switch outcome {
             case .success(let (stanza, reached)):
+                DiagLog.notice(.omemo, "Device introduction sent", .id("room", Redacted.id(room.description)), .int("reached", reached.count), .int("unsupported", unsupported.count))
                 lock.withLock { $0.pendingIntroductions[room] = PendingIntroduction(id: id, device: device, members: reached) }
                 client.context.writer.write(stanza) { [self] result in
                     guard case .failure = result else { return }
@@ -1664,9 +1685,25 @@ extension XMPPSession {
             case .failure(let error):
                 // Safe to only log: nothing the user sent is lost and there is
                 // nothing for them to do about it; the members not reached are
-                // tried again at the next join.
-                DiagLog.error(.omemo, "Device not introduced to a group", .id("room", Redacted.id(room.description)), .value("reason", EncryptFailure(error)))
+                // tried again at the next join. Members with no OMEMO at all
+                // are expected, not a fault.
+                let fields: [DiagField] = [.id("room", Redacted.id(room.description)), .value("reason", EncryptFailure(error)), .int("reached", 0), .int("unsupported", unsupported.count)]
+                if case .unsupported = error {
+                    DiagLog.notice(.omemo, "Device not introduced to a group", fields: fields)
+                } else {
+                    DiagLog.error(.omemo, "Device not introduced to a group", fields: fields)
+                }
             }
+        }
+    }
+
+    /// A member who had no OMEMO has published a device list: they are
+    /// introduced to again in the groups they share with us, rather than
+    /// when the mark expires.
+    func memberMayNowHaveOMEMO(_ member: JID) {
+        guard (try? database.forgetUnsupported(member, device: omemo.deviceId)) == true else { return }
+        for (room, status) in rooms.value where status.recipients(excluding: account).contains(member) {
+            introduceDevice(to: room)
         }
     }
 
@@ -1698,7 +1735,7 @@ extension XMPPSession {
     }
 
     private func membersToIntroduce(in room: JID, device: UInt32) -> Set<JID> {
-        Set(groupRecipients(room)).subtracting(database.introducedMembers(in: room, device: device))
+        Set(groupRecipients(room)).subtracting(database.introducedMembers(in: room, device: device)).subtracting(database.unsupportedMembers(device: device))
     }
 
     private func introductionIsPending(in room: JID) -> Bool {

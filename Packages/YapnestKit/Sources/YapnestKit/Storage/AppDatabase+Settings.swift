@@ -141,7 +141,15 @@ extension AppDatabase {
     private struct Introductions: Codable {
         var device: UInt32
         var rooms: [String: [String]]
+        /// Members found to have no OMEMO, by when. Not per room: support is
+        /// the member's account's. Absent in what older builds wrote.
+        var unsupported: [String: Date]?
     }
+
+    /// How long a member found without OMEMO is left alone before the next
+    /// join looks again. A device list they publish ends it sooner, but a
+    /// room member who isn't a contact doesn't send us their notifications.
+    public static let unsupportedRetryInterval: TimeInterval = 3 * 24 * 60 * 60
 
     /// The members of `room` that OMEMO device `device` has introduced itself
     /// to. Another device id, from a fresh install or a new identity, has
@@ -166,6 +174,37 @@ extension AppDatabase {
             var kept = try Self.keptIntroductions(db).flatMap { $0.device == device ? $0 : nil } ?? Introductions(device: device, rooms: [:])
             kept.rooms[room.description] = Set(kept.rooms[room.description] ?? []).union(members.map(\.description)).sorted()
             try Self.setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
+        }
+    }
+
+    /// The members `device` found to have no OMEMO, and has not looked at
+    /// again since `unsupportedRetryInterval`.
+    public func unsupportedMembers(device: UInt32, now: Date = Date()) -> Set<JID> {
+        let kept = (try? reader.read { try Self.keptIntroductions($0) }) ?? nil
+        guard let kept, kept.device == device else { return [] }
+        return Set((kept.unsupported ?? [:]).filter { now.timeIntervalSince($0.value) < Self.unsupportedRetryInterval }.keys.compactMap(JID.init(_:)))
+    }
+
+    /// Keeps that `members` have no OMEMO, so the joins that follow leave
+    /// them out.
+    public func markUnsupported(_ members: Set<JID>, device: UInt32, at now: Date = Date()) throws {
+        try writer.write { db in
+            var kept = try Self.keptIntroductions(db).flatMap { $0.device == device ? $0 : nil } ?? Introductions(device: device, rooms: [:])
+            var unsupported = kept.unsupported ?? [:]
+            for member in members { unsupported[member.description] = now }
+            kept.unsupported = unsupported
+            try Self.setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
+        }
+    }
+
+    /// Whether `member` was kept as having no OMEMO, and no longer is.
+    @discardableResult
+    public func forgetUnsupported(_ member: JID, device: UInt32) throws -> Bool {
+        try writer.write { db in
+            guard var kept = try Self.keptIntroductions(db), kept.device == device, kept.unsupported?[member.description] != nil else { return false }
+            kept.unsupported?[member.description] = nil
+            try Self.setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
+            return true
         }
     }
 

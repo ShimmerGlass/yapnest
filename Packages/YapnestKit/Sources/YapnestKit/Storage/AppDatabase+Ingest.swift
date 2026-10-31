@@ -145,6 +145,7 @@ extension AppDatabase {
                 timestamp: timestamp,
                 status: inbound.isOutgoing ? .sent : .received,
                 encryption: inbound.encryption,
+                undecryptableReason: inbound.undecryptableReason,
                 remoteId: inbound.id,
                 originId: inbound.originId,
                 serverId: inbound.serverId,

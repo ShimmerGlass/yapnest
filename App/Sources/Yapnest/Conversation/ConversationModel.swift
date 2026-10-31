@@ -1121,7 +1121,7 @@ final class ConversationModel {
         let kind: MessageText.Kind = if message.isRetracted {
             message.isModerated ? .moderated : .retracted(outgoing: isOutgoing)
         } else if message.encryption == .omemoUndecryptable {
-            .undecryptable
+            message.undecryptableReason == .notForThisDevice ? .notForThisDevice : .undecryptable
         } else if message.meAction != nil {
             .action(name: isOutgoing ? String(localized: "You") : authorName(for: message.author, in: environment))
         } else {

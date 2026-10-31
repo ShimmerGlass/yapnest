@@ -84,6 +84,7 @@ public struct InboundMessage: Sendable, Equatable {
     /// Body with any XEP-0428 reply fallback removed.
     public var body: String?
     public var encryption: Message.Encryption
+    public var undecryptableReason: Message.UndecryptableReason?
     /// For decrypted messages: the sending device and how far it's trusted.
     public var omemoDevice: Int32?
     public var omemoTrust: OMEMODevice.Trust?

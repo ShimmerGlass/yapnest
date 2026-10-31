@@ -129,6 +129,32 @@ extension OMEMOEvent {
     }
 }
 
+/// What a message holding no key for this device says of why, from the keys
+/// it does hold.
+enum MissingKeyHint: String, DiagEnum {
+    /// Keys for our other devices only: the sender's list of our devices is out of date.
+    case staleDeviceList
+    /// Keys for none of our devices: the sender doesn't trust any of them, or doesn't know the account.
+    case noKeysForAccount
+}
+
+enum ReceiveEvent {
+    case notEncryptedForThisDevice(room: JID?, sender: JID, forOtherOwnDevices: Bool)
+    case heldUnvouched(room: JID, sender: JID)
+
+    static func log(_ event: ReceiveEvent) {
+        switch event {
+        case let .notEncryptedForThisDevice(room, sender, forOtherOwnDevices):
+            var fields: [DiagField] = [.id("sender", Redacted.id(sender.description)), .bool("group", room != nil), .bool("keysForOtherOwnDevices", forOtherOwnDevices),
+                                       .value("hint", forOtherOwnDevices ? MissingKeyHint.staleDeviceList : .noKeysForAccount)]
+            if let room { fields.append(.id("room", Redacted.id(room.description))) }
+            DiagLog.notice(.omemo, "Message not encrypted for this device", fields: fields)
+        case let .heldUnvouched(room, sender):
+            DiagLog.notice(.omemo, "Group message held until the sender's device is vouched for", .id("room", Redacted.id(room.description)), .id("sender", Redacted.id(sender.description)))
+        }
+    }
+}
+
 enum UploadPhase: String, DiagEnum {
     case prepare, service, slot, put, store
 }
