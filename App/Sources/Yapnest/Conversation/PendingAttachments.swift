@@ -106,27 +106,7 @@ extension ConversationModel {
     }
 
     private static func copyOut(_ provider: NSItemProvider, kind: AttachmentIntake.Kind) async throws -> URL {
-        let types = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
-        let type: UTType?
-        if kind == .image {
-            type = types.first { $0.conforms(to: .image) }
-        } else {
-            type = types.first { $0 != .fileURL && $0 != .url && $0.conforms(to: .data) } ?? .item
-        }
-        if let type {
-            do { return try await AttachmentPicker.copy(from: provider, type: type) } catch where kind != .image { throw error }
-        }
-        // A picture that only exists as an object, with no file behind it.
-        let image: UIImage = try await withCheckedThrowingContinuation { continuation in
-            _ = provider.loadObject(ofClass: UIImage.self) { image, error in
-                if let image = image as? UIImage {
-                    continuation.resume(returning: image)
-                } else {
-                    continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown))
-                }
-            }
-        }
-        return try await AttachmentPicker.writeJPEG(image)
+        try await ProviderCopy.copyOut(provider, kind: kind, under: FileManager.default.temporaryDirectory)
     }
 }
 

@@ -64,8 +64,11 @@ struct SharedItemLoader: Sendable {
 
     private func load(_ provider: NSItemProvider) async -> SharedItem.Content? {
         let types = provider.registeredTypeIdentifiers.compactMap(UTType.init)
-        if let type = types.first(where: { $0.conforms(to: .image) }) ?? types.first(where: { $0.conforms(to: .movie) }) {
-            return await file(from: provider, type: type, isPhoto: Self.isPhoto(type))
+        if AttachmentIntake.kind(of: provider.registeredTypeIdentifiers) == .image {
+            return await fileOut(of: provider, kind: .image)
+        }
+        if types.contains(where: { $0.conforms(to: .movie) }) {
+            return await fileOut(of: provider, kind: .file)
         }
         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
             return await fileFromURL(of: provider)
@@ -83,8 +86,8 @@ struct SharedItemLoader: Sendable {
             }
             return nil
         }
-        if let type = types.first(where: { $0.conforms(to: .data) }) {
-            return await file(from: provider, type: type, isPhoto: false)
+        if types.contains(where: { $0.conforms(to: .data) }) {
+            return await fileOut(of: provider, kind: .file)
         }
         return nil
     }
@@ -97,14 +100,18 @@ struct SharedItemLoader: Sendable {
         return .file(.init(url: file, name: file.lastPathComponent, isPhoto: false), size: file.fileSize)
     }
 
-    /// The provider's own file, copied before its callback returns.
-    private func file(from provider: NSItemProvider, type: UTType, isPhoto: Bool) async -> SharedItem.Content? {
-        let folder = folder
-        return await withCheckedContinuation { continuation in
-            provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
-                guard let url else { return continuation.resume(returning: nil) }
-                continuation.resume(returning: Self.copy(url, into: folder, isPhoto: isPhoto))
-            }
+    /// The provider's own file, copied before its callback returns the way the
+    /// composer copies a paste, so the name it suggests is kept and a picture
+    /// that is only an image object is taken.
+    private func fileOut(of provider: NSItemProvider, kind: AttachmentIntake.Kind) async -> SharedItem.Content? {
+        do {
+            let url = try await ProviderCopy.copyOut(provider, kind: kind, under: folder, maxSize: Self.maxFileSize)
+            let isPhoto = kind == .image && Self.isPhoto(UTType(filenameExtension: url.pathExtension))
+            return .file(.init(url: url, name: url.lastPathComponent, isPhoto: isPhoto), size: url.fileSize)
+        } catch let tooLarge as ProviderCopy.TooLarge {
+            return .unsupported(name: tooLarge.name, reason: String(localized: "Too large to send"))
+        } catch {
+            return .unsupported(name: provider.suggestedName ?? "", reason: String(localized: "Couldn't be read"))
         }
     }
 

@@ -246,8 +246,7 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
     /// staged attachment removes.
     static func writeJPEG(_ image: UIImage) async throws -> URL {
         try await offMain {
-            guard let data = image.jpegData(compressionQuality: 0.95) else { throw CocoaError(.fileWriteUnknown) }
-            return try writeIntoOwnFolder(data, named: "photo-\(UUID().uuidString.prefix(8)).jpg")
+            try ProviderCopy.writeJPEG(image, under: FileManager.default.temporaryDirectory)
         }
     }
 
@@ -255,11 +254,7 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
     /// directory, which is the layout `discardCopy` relies on. Blocking, so
     /// call it off the main thread.
     nonisolated static func writeIntoOwnFolder(_ data: Data, named name: String) throws -> URL {
-        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let file = folder.appending(path: name)
-        try data.write(to: file)
-        return file
+        try ProviderCopy.writeIntoOwnFolder(data, named: name, under: FileManager.default.temporaryDirectory)
     }
 
     /// Copies a file the system handed over into a folder of our own, off the
@@ -283,20 +278,7 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
     /// Copies the picked item out of the provider, whose file is deleted as
     /// soon as its callback returns.
     static func copy(from provider: NSItemProvider, type: UTType) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, error in
-                guard let url else {
-                    continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown))
-                    return
-                }
-                let name = provider.suggestedName.map { url.pathExtension.isEmpty ? $0 : $0 + "." + url.pathExtension } ?? url.lastPathComponent
-                do {
-                    continuation.resume(returning: try FileManager.default.copyIntoUniqueFolder(url, named: name, under: FileManager.default.temporaryDirectory))
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
+        try await ProviderCopy.copy(from: provider, type: type, under: FileManager.default.temporaryDirectory)
     }
 }
 
