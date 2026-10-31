@@ -2512,24 +2512,11 @@ public final class XMPPSession: @unchecked Sendable {
     /// Writes a reactions stanza once, asking for its acknowledgement, or
     /// pinging for it where the stream has no stream management.
     func writeReactions(_ stanza: Martin.Message, id: String, messageId: Int64, peer: JID) {
-        guard isConnected, !isHeldByProbation(id), lock.withLock({ $0.pendingStanzas.insert(id, of: .reaction) }) else { return }
-        expectBounce(
-            of: id, key: .reactions(messageId), peer: peer,
-            release: { [weak self] in self?.lock.withLock { _ = $0.pendingStanzas.remove(id, of: .reaction) } },
-            repend: { [weak self] in
-                guard let self else { return }
-                try? database.repend(.reactions(messageId: messageId, from: account), id: id, ifNotSupersededBy: id)
-            },
-            fail: { [weak self] error in
-                guard let self else { return }
-                try? database.clearPending(
-                    .reaction, messageId: messageId, from: account, error: error.describe(ConversationItem.ReactionGroup.notDelivered), unlessSupersededBy: id,
-                )
-            },
-        )
+        guard isConnected, !isHeldByProbation(id),
+              beginWrite(.reaction, id: id, messageId: messageId, peer: peer, failure: ConversationItem.ReactionGroup.notDelivered) else { return }
         let acknowledges = streamAcknowledges
         client.context.writer.write(stanza) { [weak self] result in
-            if case .failure = result { self?.lock.withLock { _ = $0.pendingStanzas.remove(id, of: .reaction) } }
+            if case .failure = result { self?.endWrite(.reaction, id: id) }
         }
         if acknowledges {
             requestAcknowledgement()
@@ -2900,18 +2887,9 @@ public final class XMPPSession: @unchecked Sendable {
                                                  mentions: mentions(in: message.body, route: route))
                     stanza.addChild(Element(name: "replace", attributes: ["xmlns": NS.correction, "id": original]))
                 }
-                guard lock.withLock({ $0.pendingStanzas.insert(id, of: .action) }) else { return }
-                let isRetraction = message.isRetracted
-                expectBounce(
-                    of: id, key: .action(messageId), peer: peer,
-                    release: { [weak self] in self?.lock.withLock { _ = $0.pendingStanzas.remove(id, of: .action) } },
-                    repend: { [weak self] in try? self?.database.repend(.action(messageId: messageId), id: id, ifNotSupersededBy: id) },
-                    fail: { [weak self] error in
-                        let friendly = isRetraction ? String(localized: "The deletion couldn't be delivered.") : String(localized: "The edit couldn't be delivered.")
-                        try? self?.database.clearPending(.action, messageId: messageId, error: error.describe(friendly), unlessSupersededBy: id)
-                    },
-                )
-                let dropped: @Sendable () -> Void = { [weak self] in self?.lock.withLock { _ = $0.pendingStanzas.remove(id, of: .action) } }
+                let failure = message.isRetracted ? String(localized: "The deletion couldn't be delivered.") : String(localized: "The edit couldn't be delivered.")
+                guard beginWrite(.action, id: id, messageId: messageId, peer: peer, failure: failure) else { return }
+                let dropped: @Sendable () -> Void = { [weak self] in self?.endWrite(.action, id: id) }
                 switch deliver(stanza, to: peer, encrypted: !message.isRetracted && message.encryption == .omemo, onDropped: dropped) {
                 case .success(let (_, acknowledged)):
                     if !acknowledged { confirmByPing(stanza) }

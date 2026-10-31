@@ -130,4 +130,40 @@ extension XMPPSession {
         let stanza = OutboundStanza.reactions(mine, to: route, target: target, id: row.id)
         whenReady(route) { [self] in writeReactions(stanza, id: row.id, messageId: row.messageId, peer: row.peer) }
     }
+
+    /// Marks the stanza `id` written this session, and records whose it is
+    /// for the error that may bounce it: where the error may pass the item is
+    /// made pending again and sent after a wait, where it won't `failure` is
+    /// shown. A newer change to the item stands either way. False, with
+    /// nothing done, if the stanza was written already.
+    func beginWrite(_ kind: PendingKind, id: String, messageId: Int64, peer: JID, failure: String) -> Bool {
+        guard lock.withLock({ $0.pendingStanzas.insert(id, of: kind) }) else { return false }
+        let account = account
+        let key: BounceKey
+        let resend: AppDatabase.Resend
+        switch kind {
+        case .reaction:
+            key = .reactions(messageId)
+            resend = .reactions(messageId: messageId, from: account)
+        case .action:
+            key = .action(messageId)
+            resend = .action(messageId: messageId)
+        }
+        expectBounce(
+            of: id, key: key, peer: peer,
+            release: { [weak self] in self?.endWrite(kind, id: id) },
+            repend: { [weak self] in try? self?.database.repend(resend, id: id, ifNotSupersededBy: id) },
+            fail: { [weak self] error in
+                try? self?.database.clearPending(
+                    kind, messageId: messageId, from: kind == .reaction ? account : nil, error: error.describe(failure), unlessSupersededBy: id,
+                )
+            },
+        )
+        return true
+    }
+
+    /// The stanza `id` wasn't written after all, or its error came: it may be written again.
+    func endWrite(_ kind: PendingKind, id: String) {
+        lock.withLock { _ = $0.pendingStanzas.remove(id, of: kind) }
+    }
 }
