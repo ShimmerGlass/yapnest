@@ -1,0 +1,338 @@
+import Foundation
+import GRDB
+import os
+@preconcurrency import Martin
+import Testing
+@testable import YapnestKit
+
+/// Roster changes and answers to contact requests made offline are kept until
+/// the server confirms them.
+struct PendingRosterTests {
+    let db: AppDatabase
+    let session: XMPPSession
+    let wire = FakeWire()
+    let alice = YapnestKit.JID("alice@example.org")!
+    let stranger = YapnestKit.JID("stranger@example.net")!
+
+    init() throws {
+        db = try AppDatabase.inMemory()
+        session = try makeSession(YapnestKit.JID("me@example.org")!, database: db)
+        session.lock.withLock { $0.retryBackoff = 0 }
+        try db.updateRosterItem(jid: alice, name: "Alice", subscription: .both, isPending: false, groups: ["Friends"])
+        try db.recordContactRequest(from: stranger, nickname: "Stranger")
+    }
+
+    private func isRosterIq(_ iq: Iq) -> Bool { iq.firstChild(name: "query", xmlns: "jabber:iq:roster") != nil }
+
+    private var rosterSets: [Element] {
+        wire.written.compactMap { $0 as? Iq }.filter { $0.type == .set }
+            .compactMap { $0.firstChild(name: "query", xmlns: "jabber:iq:roster")?.firstChild(name: "item") }
+    }
+
+    private func presences(_ type: StanzaType) -> [Presence] { wire.written.compactMap { $0 as? Presence }.filter { $0.type == type } }
+
+    private var queued: [PendingRosterChange] { (try? db.pendingRosterChanges()) ?? [] }
+
+    private func connect(answering answer: @escaping @Sendable (Iq) -> Iq = { FakeWire.result(to: $0) }) {
+        wire.answer { iq in self.isRosterIq(iq) && iq.type == .set ? answer(iq) : FakeWire.result(to: iq) }
+        session.connectForTesting(wire)
+    }
+
+    private func contact(_ jid: YapnestKit.JID) throws -> Contact { try #require(try db.contact(jid)) }
+
+    // MARK: Queued while offline
+
+    @Test func anAcceptMadeOfflineWaitsOnTheListAndIsSentOnConnect() async throws {
+        try await session.acceptContactRequest(from: stranger)
+        #expect(queued.map(\.kind) == [.accept])
+        let waiting = try contact(stranger)
+        #expect(waiting.hasContactRequest)
+        #expect(waiting.pendingRoster == .accept)
+        #expect(try await db.reader.read(AppDatabase.contactRequests).map(\.jid) == [stranger])
+        #expect(wire.written.isEmpty)
+
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        let done = try contact(stranger)
+        #expect(!done.hasContactRequest)
+        #expect(done.pendingRoster == nil)
+        #expect(done.isAddedByUser)
+        #expect(rosterSets.map { $0.attribute("jid") } == ["stranger@example.net"])
+        #expect(presences(.subscribe).count == 1)
+    }
+
+    @Test func aDeclineMadeOfflineWaitsAndIsSentOnConnect() async throws {
+        try session.declineContactRequest(from: stranger)
+        #expect(try contact(stranger).pendingRoster == .decline)
+        #expect(try contact(stranger).hasContactRequest)
+
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(try !contact(stranger).hasContactRequest)
+        #expect(presences(.unsubscribed).count == 1)
+    }
+
+    @Test func aRemovalMadeOfflineKeepsTheContactUntilSent() async throws {
+        try await session.removeContact(alice)
+        #expect(try contact(alice).isInRoster)
+        #expect(try contact(alice).pendingRoster == .remove)
+
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(try !contact(alice).isInRoster)
+        #expect(try contact(alice).pendingRoster == nil)
+        #expect(wire.written.compactMap { $0 as? Iq }.contains { $0.firstChild(name: "query", xmlns: "jabber:iq:roster")?.firstChild(name: "item")?.attribute("subscription") == "remove" })
+    }
+
+    @Test func aRenameMadeOfflineShowsTheNameAtOnceAndSendsItWithTheGroups() async throws {
+        try await session.setContactName(alice, name: "  Ally  ")
+        let waiting = try contact(alice)
+        #expect(waiting.displayName == "Ally")
+        #expect(waiting.name == "Alice")
+        #expect(waiting.pendingRename)
+
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(rosterSets.first?.attribute("name") == "Ally")
+        #expect(rosterSets.first?.filterChildren(name: "group", xmlns: nil).compactMap(\.value) == ["Friends"])
+        #expect(try !contact(alice).pendingRename)
+    }
+
+    @Test func aRenameBackToTheirOwnNameShowsTheNameTheyPublish() async throws {
+        try await db.writer.write { db in try AppDatabase.updateContact(db, alice) { $0.nickname = "Alice L." ; $0.isAddedByUser = true } }
+        try await session.setContactName(alice, name: " ")
+        #expect(try contact(alice).displayName == "Alice L.")
+    }
+
+    @Test func aRenameOfSomeoneNotInTheRosterIsRefusedAtOnce() async throws {
+        await #expect(throws: XMPPSession.ContactError.self) { try await session.setContactName(stranger, name: "Nope") }
+        #expect(queued.isEmpty)
+    }
+
+    @Test func changesAreSentInTheOrderTheyWereMade() async throws {
+        let bob = YapnestKit.JID("bob@example.org")!
+        try db.updateRosterItem(jid: bob, name: nil, subscription: .both, isPending: false)
+        try await session.removeContact(bob)
+        try await session.setContactName(alice, name: "Ally")
+        try await session.acceptContactRequest(from: stranger)
+        #expect(queued.map(\.kind) == [.remove, .rename, .accept])
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(rosterSets.map { $0.attribute("jid") } == ["bob@example.org", "alice@example.org", "stranger@example.net"])
+    }
+
+    @Test func aChangeMadeOnlineIsSentAtOnce() async throws {
+        connect()
+        try await session.setContactName(alice, name: "Ally")
+        #expect(await eventually(timeout: 20) { queued.isEmpty && rosterSets.count == 1 })
+    }
+
+    // MARK: Replacement
+
+    @Test func aLaterRenameReplacesAQueuedOne() async throws {
+        try await session.setContactName(alice, name: "Ally")
+        try await session.setContactName(alice, name: "Al")
+        #expect(queued.map(\.name) == ["Al"])
+        #expect(try contact(alice).displayName == "Al")
+    }
+
+    @Test func aRemovalDropsQueuedRenamesOfThem() async throws {
+        try await session.setContactName(alice, name: "Ally")
+        try await session.removeContact(alice)
+        #expect(queued.map(\.kind) == [.remove])
+        #expect(try !contact(alice).pendingRename)
+        #expect(try contact(alice).displayName == "Alice")
+    }
+
+    @Test func aLaterAnswerReplacesAQueuedOne() async throws {
+        try await session.acceptContactRequest(from: stranger)
+        try session.declineContactRequest(from: stranger)
+        #expect(queued.map(\.kind) == [.decline])
+        #expect(try contact(stranger).pendingRoster == .decline)
+    }
+
+    @Test func aChangeBeingSentIsNotReplaced() async throws {
+        try await session.setContactName(alice, name: "Ally")
+        let once = OSAllocatedUnfairLock(initialState: false)
+        session.afterRosterChangeChosenForTesting = { [session, alice] in
+            guard once.withLock({ defer { $0 = true }; return !$0 }) else { return }
+            // Between the sender's choice and its marking: the queue's lock holds this back.
+            Task { try? await session.setContactName(alice, name: "Al") }
+        }
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { queued.isEmpty && rosterSets.count == 2 })
+        #expect(rosterSets.map { $0.attribute("name") } == ["Ally", "Al"])
+    }
+
+    @Test func aRenameQueuedWhileAnotherIsOnItsWayFollowsIt() async throws {
+        try await session.setContactName(alice, name: "Ally")
+        let first = try #require(queued.first?.id)
+        session.lock.withLock { $0.rosterInFlight = first }
+        try await session.setContactName(alice, name: "Al")
+        #expect(queued.map(\.name) == ["Ally", "Al"])
+        try await session.setContactName(alice, name: "A")
+        #expect(queued.map(\.name) == ["Ally", "A"])
+        try await session.removeContact(alice)
+        #expect(queued.map(\.kind) == [.rename, .remove])
+    }
+
+    // MARK: Errors
+
+    @Test func aRefusalForGoodPutsItBackAsItWasAndOffersRetry() async throws {
+        try await session.acceptContactRequest(from: stranger)
+        connect { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        let back = try contact(stranger)
+        #expect(back.hasContactRequest)
+        #expect(back.pendingRoster == nil)
+        #expect(presences(.subscribe).isEmpty)
+        let warning = try #require(session.warnings.current.first)
+        #expect(warning.key == "roster/stranger@example.net")
+        #expect(warning.detail.contains("forbidden"))
+
+        wire.answer { FakeWire.result(to: $0) }
+        #expect(await session.warnings.retry(warning.key))
+        #expect(await eventually(timeout: 20) { (try? contact(stranger).hasContactRequest) == false })
+        #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func aRefusedRenameShowsTheOldNameAgain() async throws {
+        try await session.setContactName(alice, name: "Ally")
+        connect { FakeWire.error(to: $0, condition: "not-allowed", type: "cancel") }
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(try contact(alice).displayName == "Alice")
+        #expect(session.warnings.current.first?.title == "Couldn't save the nickname")
+        #expect(session.warnings.current.first?.retry != nil)
+    }
+
+    @Test func aRefusedRemovalKeepsTheContact() async throws {
+        try await session.removeContact(alice)
+        connect { FakeWire.error(to: $0, condition: "not-allowed", type: "cancel") }
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(try contact(alice).isInRoster)
+        #expect(try contact(alice).pendingRoster == nil)
+    }
+
+    @Test func aPassingErrorLeavesItQueuedForTheNextConnect() async throws {
+        try await session.removeContact(alice)
+        connect { FakeWire.error(to: $0, condition: "resource-constraint", type: "wait") }
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { rosterSets.count == ServerRetry.attempts })
+        _ = await eventually(timeout: 0.3) { false }
+        #expect(queued.count == 1)
+        #expect(session.warnings.current.isEmpty)
+        #expect(try contact(alice).pendingRoster == .remove)
+
+        wire.answer { FakeWire.result(to: $0) }
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(try !contact(alice).isInRoster)
+    }
+
+    @Test func aRenameOfSomeoneRemovedMeanwhileIsDroppedWithAWarning() async throws {
+        try await session.setContactName(alice, name: "Ally")
+        try db.removeRosterItem(jid: alice)
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(session.warnings.current.first?.retry == nil)
+        #expect(rosterSets.isEmpty)
+    }
+
+    @Test func aRequestAnsweredElsewhereSendsNothing() async throws {
+        try await session.acceptContactRequest(from: stranger)
+        try db.clearContactRequest(from: stranger)
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(rosterSets.isEmpty)
+        #expect(presences(.subscribe).isEmpty)
+    }
+
+    // MARK: Sessions
+
+    @Test func nothingIsSentBeforeANewSessionsRosterArrives() async throws {
+        try await session.setContactName(alice, name: "Ally")
+        wire.answer { iq in
+            self.isRosterIq(iq) && iq.type == .get ? FakeWire.error(to: iq, condition: "forbidden", type: "auth") : FakeWire.result(to: iq)
+        }
+        session.connectForTesting(wire)
+        #expect(await eventually(timeout: 20) { session.warnings.current.contains { $0.key == "roster" } })
+        session.sendPendingRosterChanges()
+        _ = await eventually(timeout: 0.3) { false }
+        #expect(rosterSets.isEmpty)
+        #expect(queued.count == 1)
+
+        wire.answer { FakeWire.result(to: $0) }
+        session.fetchRoster(attempt: session.lock.withLock { $0.attempt })
+        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(rosterSets.count == 1)
+    }
+
+    @Test func theQueueSurvivesANewSessionOnTheSameDatabase() async throws {
+        try await session.setContactName(alice, name: "Ally")
+        try await session.acceptContactRequest(from: stranger)
+
+        let later = try makeSession(YapnestKit.JID("me@example.org")!, database: db)
+        later.lock.withLock { $0.retryBackoff = 0 }
+        wire.answer { FakeWire.result(to: $0) }
+        later.connectForTesting(wire)
+        later.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(rosterSets.count == 2)
+    }
+
+    @Test func aShareExtensionSessionDoesNotSend() async throws {
+        let extensionSession = try makeSession(YapnestKit.JID("me@example.org")!, database: db, mode: .share)
+        try await extensionSession.setContactName(alice, name: "Ally")
+        wire.answer { FakeWire.result(to: $0) }
+        extensionSession.connectForTesting(wire)
+        extensionSession.sendPendingRosterChanges()
+        _ = await eventually(timeout: 0.3) { false }
+        #expect(rosterSets.isEmpty)
+        #expect(queued.count == 1)
+    }
+
+    // MARK: Befriending
+
+    @Test func befriendingWaitsForTheAcceptItDoes() async throws {
+        connect()
+        await session.befriendForNewChat(stranger)
+        #expect(try !contact(stranger).hasContactRequest)
+        #expect(queued.isEmpty)
+    }
+
+    @Test func befriendingLeavesAnAcceptTheUserQueuedToTheQueue() async throws {
+        try await session.acceptContactRequest(from: stranger)
+        // The roster never arrives, so the queued accept is still there when befriending looks.
+        wire.answer { iq in
+            self.isRosterIq(iq) && iq.type == .get ? FakeWire.error(to: iq, condition: "forbidden", type: "auth") : FakeWire.result(to: iq)
+        }
+        session.connectForTesting(wire)
+        await session.befriendForNewChat(stranger)
+        #expect(rosterSets.isEmpty)
+        #expect(queued.map(\.kind) == [.accept])
+    }
+
+    // MARK: Storage
+
+    @Test func theTableAndColumnsAreAddedToADatabaseFromBefore() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v53-bookmark-owed")
+        try queue.write { try $0.execute(sql: "INSERT INTO contact (jid, subscription, isSubscriptionPending, isInRoster, isAddedByUser, isBlocked, rosterGroups) VALUES ('a@example.org', 'none', 0, 0, 0, 0, '[]')") }
+        try AppDatabase.migrator.migrate(queue)
+        #expect(try queue.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM pendingRosterChange") } == 0)
+        let contact = try queue.read { try Contact.fetchOne($0, key: YapnestKit.JID("a@example.org")!) }
+        #expect(contact?.pendingRoster == nil)
+        #expect(contact?.pendingRename == false)
+    }
+}

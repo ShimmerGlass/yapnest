@@ -189,6 +189,7 @@ extension LiveServer {
             try await LiveServer.requireUpload(of: a)
             // Photos from the roster download on their own, which drops the preview.
             try await b.removeContact(alice)
+            try await b.rosterChangesSent()
             try await waitUntil("bob to drop alice from his roster") { try !b.database.isInRoster(alice) }
 
             let file = FileManager.default.temporaryDirectory.appending(path: "yapnest-\(UUID().uuidString).jpg")

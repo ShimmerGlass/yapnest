@@ -29,6 +29,11 @@ struct ContactRequestRow: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                        if isWaiting {
+                            Text("Waiting to send")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -39,25 +44,30 @@ struct ContactRequestRow: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.circle)
-                .disabled(answer.isBusy)
+                .disabled(answer.isBusy || isWaiting)
             Button("Accept", systemImage: "checkmark", action: accept)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.circle)
-                .disabled(answer.isBusy)
+                .disabled(answer.isBusy || isWaiting)
         }
         .padding(.vertical, 8)
         .contextMenu {
             Button("Accept", systemImage: "checkmark", action: accept)
+                .disabled(isWaiting)
             Button("Decline", systemImage: "xmark") { perform(session.declineContactRequest) }
+                .disabled(isWaiting)
             Button("Block", systemImage: "hand.raised", role: .destructive) { confirmsBlock = true }
         }
         .blockConfirmation(isPresented: $confirmsBlock, session: session, peer: contact.jid, name: contact.requestTitle)
         .actionAlert("Couldn't answer", answer)
     }
 
-    /// Waits for the server to take the contact, and keeps the request on the
-    /// list if it refuses.
+    /// Whether an answer is queued and the server hasn't taken it yet.
+    private var isWaiting: Bool { contact.pendingRoster != nil }
+
+    /// Queues the answer: the request stays on the list as waiting until the
+    /// server has taken it, and comes back with a warning if it refuses.
     private func accept() {
         let (session, jid) = (session, contact.jid)
         answer.run { try await session.acceptContactRequest(from: jid) }

@@ -868,6 +868,21 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v54-pending-roster-changes") { db in
+            try db.create(table: "pendingRosterChange") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("jid", .text).notNull().indexed()
+                t.column("kind", .text).notNull()
+                t.column("name", .text)
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.alter(table: "contact") { t in
+                t.add(column: "pendingRoster", .text)
+                t.add(column: "pendingRename", .boolean).notNull().defaults(to: false)
+                t.add(column: "pendingName", .text)
+            }
+        }
+
         return migrator
     }
 

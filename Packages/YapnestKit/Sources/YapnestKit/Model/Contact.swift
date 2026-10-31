@@ -35,6 +35,13 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
     /// When they were last seen, as their server told us (XEP-0012). Only set
     /// while the user shares their own last seen, and cleared when they stop.
     public var lastSeenAt: Date?
+    /// The latest answer to their request, or removal of them, that the
+    /// server hasn't confirmed. Nothing else about the contact has changed yet.
+    public var pendingRoster: PendingRosterKind?
+    /// Whether a name the user gave them is waiting for the server, shown
+    /// meanwhile as `pendingName` (nil: back to the name they publish).
+    public var pendingRename: Bool
+    public var pendingName: String?
 
     public init(
         jid: JID,
@@ -50,6 +57,9 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
         nickname: String? = nil,
         rosterGroups: [String] = [],
         lastSeenAt: Date? = nil,
+        pendingRoster: PendingRosterKind? = nil,
+        pendingRename: Bool = false,
+        pendingName: String? = nil,
     ) {
         self.jid = jid
         self.name = name
@@ -64,6 +74,9 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
         self.nickname = nickname
         self.rosterGroups = rosterGroups
         self.lastSeenAt = lastSeenAt
+        self.pendingRoster = pendingRoster
+        self.pendingRename = pendingRename
+        self.pendingName = pendingName
     }
 
     /// They asked to add us as a contact, and we haven't answered.
@@ -100,7 +113,8 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
     /// else the bare address.
     public var displayName: String {
         // The name the user gave them always wins over the one they chose.
-        if let name, !name.isEmpty { return name }
+        let chosen = pendingRename ? pendingName : name
+        if let chosen, !chosen.isEmpty { return chosen }
         if isKnown, let nickname, !nickname.isEmpty { return nickname }
         return jid.shortName
     }

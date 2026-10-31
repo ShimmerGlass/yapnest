@@ -174,11 +174,18 @@ struct ChatSettingsView: View {
                 if group == nil, peer != session.account, contact?.isInRoster == true {
                     Section {
                         Button {
-                            nicknameDraft = contact?.name ?? ""
+                            nicknameDraft = (contact?.pendingRename == true ? contact?.pendingName : contact?.name) ?? ""
                             asksNickname = true
                         } label: {
                             LabeledContent {
-                                Text(contact?.name ?? "None")
+                                VStack(alignment: .trailing) {
+                                    Text((contact?.pendingRename == true ? contact?.pendingName : contact?.name) ?? "None")
+                                    if contact?.pendingRename == true {
+                                        Text("Waiting to send")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
                             } label: {
                                 // Not `.row`: its label inside LabeledContent made
                                 // the row several times its height. The tint
@@ -285,7 +292,12 @@ struct ChatSettingsView: View {
 
                 if group == nil, peer != session.account, contact?.isBlocked != true {
                     Section {
-                        if contact?.isInRoster == true {
+                        if contact?.pendingRoster == .remove {
+                            LabeledContent("Remove from Contacts") {
+                                Text("Waiting to send")
+                            }
+                            .foregroundStyle(.secondary)
+                        } else if contact?.isInRoster == true {
                             destructiveRow("Remove from Contacts", systemImage: "person.badge.minus", action: remove, confirming: $confirmsRemove)
                         } else if contact?.hasContactRequest != true {
                             AddContactButton(session: session, peer: peer)

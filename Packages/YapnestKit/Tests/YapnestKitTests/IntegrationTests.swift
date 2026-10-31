@@ -209,7 +209,9 @@ extension LiveServer.IntegrationTests {
         defer { phone.disconnect(); c.disconnect() }
         // Strangers to each other, whatever earlier runs left.
         try? await phone.removeContact(carol)
+        try? await phone.rosterChangesSent()
         try? await c.removeContact(alice)
+        try? await c.rosterChangesSent()
         try await Task.sleep(for: .milliseconds(500))
         func request(on device: XMPPSession) throws -> Bool {
             try device.database.contact(carol)?.hasContactRequest == true
@@ -228,6 +230,7 @@ extension LiveServer.IntegrationTests {
         laptop.disconnect()
 
         try phone.declineContactRequest(from: carol)
+        try await phone.rosterChangesSent()
         #expect(try !request(on: phone))
         try await waitUntil("carol to hear no") { try c.database.contact(alice)?.isSubscriptionPending == false }
         #expect(try c.database.contact(alice)?.seesPresence == false)
@@ -247,6 +250,7 @@ extension LiveServer.IntegrationTests {
         try await waitUntil("alice to get the second request") { try request(on: phone) }
         try await waitUntil("carol's roster to show it") { try c.database.contact(alice)?.isSubscriptionPending == true }
         try await c.removeContact(alice)
+        try await c.rosterChangesSent()
         #expect(try !c.database.isInRoster(alice))
         for _ in 0..<20 where try request(on: phone) { try await Task.sleep(for: .milliseconds(100)) }
         if try request(on: phone) {
@@ -263,6 +267,7 @@ extension LiveServer.IntegrationTests {
         c.addContact(alice)
         try await waitUntil("alice to get the third request") { try request(on: phone) }
         try await phone.acceptContactRequest(from: carol)
+        try await phone.rosterChangesSent()
         try await waitUntil("both to see each other") {
             try phone.database.contact(carol)?.subscription == .both && c.database.contact(alice)?.subscription == .both
         }
@@ -271,6 +276,7 @@ extension LiveServer.IntegrationTests {
         later.disconnect()
 
         try? await phone.removeContact(carol)
+        try? await phone.rosterChangesSent()
     }
 
     @Test func removeContact() async throws {
@@ -280,23 +286,28 @@ extension LiveServer.IntegrationTests {
         try await connected(c)
         defer { a.disconnect(); c.disconnect() }
         try? await a.removeContact(carol)
+        try? await a.rosterChangesSent()
         try? await c.removeContact(alice)
+        try? await c.rosterChangesSent()
         try await Task.sleep(for: .milliseconds(500))
 
         a.addContact(carol)
         try await waitUntil("carol to get the request") { try c.database.contact(alice)?.hasContactRequest == true }
         try await c.acceptContactRequest(from: alice)
+        try await c.rosterChangesSent()
         try await waitUntil("both to see each other") {
             try a.database.contact(carol)?.subscription == .both && c.database.contact(alice)?.subscription == .both
         }
 
         try await a.removeContact(carol)
+        try await a.rosterChangesSent()
         #expect(try !a.database.isInRoster(carol))
         // Carol keeps alice in her contacts, but neither sees the other.
         try await waitUntil("carol to lose both subscriptions") { try c.database.contact(alice)?.subscription == Contact.Subscription.none }
         #expect(try c.database.isInRoster(alice))
         #expect(try c.database.contact(alice)?.hasContactRequest == false)
         try? await c.removeContact(alice)
+        try? await c.rosterChangesSent()
     }
 
     @Test func newDeviceTakesOurEncryptedReplyAsRead() async throws {

@@ -32,6 +32,10 @@ extension XMPPSession {
     /// answers. The subscription request is only sent once it has.
     public func addContactAndWait(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {
         guard await waitForConnection() else { throw ContactError.offline }
+        try await addContactNow(jid, name: name, preauth: preauth)
+    }
+
+    private func addContactNow(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {
         guard jid != account else { return }
         _ = try await retryingPassingErrors {
             try await client.module(.roster).addItem(jid: Martin.JID(jid.martin), name: name, groups: [])
@@ -80,43 +84,41 @@ extension XMPPSession {
 
     private func requestRoster() async throws {
         try await retryingPassingErrors { try await client.module(.roster).requestRoster() }
+        lock.withLock { $0.awaitsRoster = false }
+        sendPendingRosterChanges()
     }
 
     /// Takes `jid` off the roster on all our devices: neither of us sees the
     /// other's presence any more, and a request we sent them is withdrawn.
-    /// The chat stays, and they can still message us.
+    /// The chat stays, and they can still message us. Like the other roster
+    /// changes it is queued and returns at once; the contact shows it as
+    /// waiting until the server has taken it.
     public func removeContact(_ jid: JID) async throws {
-        guard await waitForConnection() else { throw ContactError.offline }
-        // Removing the item should withdraw our request too (RFC 6121),
-        // but ejabberd keeps it, and they'd still be asked.
-        if (try? database.contact(jid))??.isSubscriptionPending == true {
-            try await client.module(.presence).unsubscribe(from: Martin.JID(jid.martin))
-        }
-        _ = try await client.module(.roster).removeItem(jid: Martin.JID(jid.martin))
-        // The server's push says the same; this is for the UI, right away.
-        try database.removeRosterItem(jid: jid)
+        try queueRosterChange(jid, kind: .remove)
     }
 
     /// Gives a contact the name the user chose for them, on all their devices;
     /// nil or blank goes back to the name they publish. Only for people
     /// already in the roster: a roster set would otherwise add them, which
-    /// shares our presence. The database follows the server's roster push.
+    /// shares our presence. The contact shows the new name at once, as
+    /// waiting; the database follows the server's roster push.
     public func setContactName(_ jid: JID, name: String?) async throws {
-        guard await waitForConnection() else { throw ContactError.offline }
         guard let contact = try database.contact(jid), contact.isInRoster else { throw ContactError.notInRoster }
-        // A roster set replaces the item's name and groups, so the groups are
-        // the current ones. Its subscription is left out, which keeps it.
-        _ = try await client.module(.roster).updateItem(jid: Martin.JID(jid.martin), name: Self.normalizedNickname(name), groups: contact.rosterGroups)
+        try queueRosterChange(jid, kind: .rename, name: Self.normalizedNickname(name))
     }
 
     /// Adds them back and lets them see our presence, as `addContactAndWait`
-    /// does. The request stays on the list if the server refuses the roster
-    /// item, and nothing is sent to them.
+    /// does. The request stays on the list, marked as waiting, until the
+    /// server has taken the roster item; if it refuses, the request is as it
+    /// was and nothing is sent to them.
     public func acceptContactRequest(from jid: JID) async throws {
-        guard await waitForConnection() else { throw ContactError.offline }
+        try queueRosterChange(jid, kind: .accept)
+    }
+
+    func acceptNow(_ jid: JID) async throws {
         // Their chosen name isn't copied into the roster: it would be ours on
         // every device, set by a stranger. The roster name stays the user's.
-        try await addContactAndWait(jid)
+        try await addContactNow(jid)
         try database.clearContactRequest(from: jid)
         // Only now: asking a stranger's server for their avatar tells it that
         // we exist and are online, which the user hasn't agreed to before this.
@@ -146,7 +148,11 @@ extension XMPPSession {
 
     private func befriend(_ jid: JID) async throws {
         if (try? database.contact(jid))??.hasContactRequest == true {
-            try await acceptContactRequest(from: jid)
+            // Befriending is awaited and warns by itself, so it doesn't go
+            // through the queue; one the user already queued is left to it.
+            guard (try? database.hasPendingRosterChange(jid, kind: .accept)) != true else { return }
+            guard await waitForConnection() else { throw ContactError.offline }
+            try await acceptNow(jid)
         } else if (try? database.hasConsented(jid)) != true {
             try await addContactAndWait(jid)
         }
@@ -155,9 +161,7 @@ extension XMPPSession {
     /// Refuses to share our presence. They aren't told anything else, and
     /// can still message us.
     public func declineContactRequest(from jid: JID) throws {
-        guard isConnected else { throw ContactError.offline }
-        client.module(.presence).unsubscribed(by: Martin.JID(jid.martin))
-        try database.clearContactRequest(from: jid)
+        try queueRosterChange(jid, kind: .decline)
     }
 
     /// A stranger's request. The name they give is their own claim, so it's

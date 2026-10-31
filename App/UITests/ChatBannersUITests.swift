@@ -85,12 +85,11 @@ final class ContactRequestBannerUITests: InteractionsTestCase {
         }
     }
 
-    func testAnsweringOfflineSaysSoAndKeepsTheBanner() {
+    func testAnsweringOfflineKeepsTheBannerAsWaitingToBeSent() {
         app.buttons["Decline"].tap()
-        let alert = app.alerts["Couldn't answer"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 10), "no word that the request couldn't be answered offline")
-        alert.buttons["OK"].tap()
+        XCTAssertTrue(app.staticTexts["Waiting to send"].waitForExistence(timeout: 10), "no word that the answer waits to be sent")
         XCTAssertTrue(app.buttons["Accept"].exists, "the banner went though the request wasn't answered")
+        XCTAssertFalse(app.buttons["Accept"].isEnabled, "the request can be answered twice")
     }
 }
 

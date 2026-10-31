@@ -198,3 +198,15 @@ extension AppDatabase {
         }
     }
 }
+
+extension XMPPSession {
+    /// Waits for the server to have taken every queued roster change, which
+    /// the contact calls return before.
+    func rosterChangesSent(timeout: TimeInterval = 15) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while try !database.pendingRosterChanges().isEmpty {
+            if Date() > deadline { throw CancellationError() }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+}

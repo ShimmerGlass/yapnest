@@ -154,7 +154,9 @@ extension LiveServer {
             try await LiveServer.connected(a, c)
             defer { a.disconnect(); c.disconnect() }
             try? await a.removeContact(carol)
+            try? await a.rosterChangesSent()
             try? await c.removeContact(alice)
+            try? await c.rosterChangesSent()
             try await Task.sleep(for: .milliseconds(500))
             defer { Task { try? await a.removeContact(carol); try? await c.removeContact(alice) } }
             func requested() throws -> Bool { try a.database.contact(carol)?.hasContactRequest == true }
@@ -164,6 +166,7 @@ extension LiveServer {
             try await LiveServer.waitUntil("carol's roster to show it pending") { try c.database.contact(alice)?.isSubscriptionPending == true }
 
             try await c.removeContact(alice)
+            try await c.rosterChangesSent()
             for _ in 0..<50 where try requested() { try await Task.sleep(for: .milliseconds(100)) }
             if try requested(), LiveServer.target.name == "ejabberd" {
                 try Test.cancel("ejabberd only stops repeating a withdrawn request, so it goes at the receiver's next sign-in")

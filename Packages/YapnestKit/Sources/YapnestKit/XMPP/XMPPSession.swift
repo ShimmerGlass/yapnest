@@ -151,6 +151,10 @@ public final class XMPPSession: @unchecked Sendable {
     /// Runs in the sender between choosing a block change and marking it as
     /// in flight, for tests to make a change at that moment.
     var afterBlockChangeChosenForTesting: (@Sendable () -> Void)?
+    /// The same for the queued roster changes: the sender's choice of the
+    /// next one and its marking as in flight, and a queued change's check of it.
+    let rosterQueueLock = NSLock()
+    var afterRosterChangeChosenForTesting: (@Sendable () -> Void)?
     /// Orders what `reportClientState` decides and writes.
     private let clientStateLock = NSLock()
     /// Keep a snapshot's sends in the order the snapshots were built: see
@@ -341,6 +345,13 @@ public final class XMPPSession: @unchecked Sendable {
         var blockRun = HeldRun.idle
         /// The person whose block or unblock is on its way to the server.
         var blockInFlight: JID?
+        /// The run sending queued roster changes, and the one on its way to the server.
+        var rosterRun = HeldRun.idle
+        var rosterInFlight: Int64?
+        /// A new session's roster hasn't arrived yet. The queued changes wait
+        /// for it, as removing and renaming need the item and accepting
+        /// checks the request against it.
+        var awaitsRoster = false
         /// The run sending the bookmarks we owe, and the task doing it.
         var bookmarkRun = HeldRun.idle
         var bookmarkTask: Task<Void, Never>?
@@ -1445,6 +1456,7 @@ public final class XMPPSession: @unchecked Sendable {
                     $0.publishedDisplayed = [:]
                     $0.settingsSync.startSession()
                     $0.repeatedContactRequests = []
+                    $0.awaitsRoster = true
                     $0.prunesContactRequests = policy.prunesContactRequests
                     // What we last told each contact went with the old session.
                     for peer in $0.chatStates.keys { $0.chatStates[peer]?.sent = nil }
@@ -1544,6 +1556,7 @@ public final class XMPPSession: @unchecked Sendable {
         if policy.resendsPending {
             sendUnclaimedPending()
             sendPendingBlocks()
+            sendPendingRosterChanges()
             sendOwedBookmarks()
         }
         resumeInterruptedCatchUps()
@@ -2398,6 +2411,7 @@ public final class XMPPSession: @unchecked Sendable {
         // dedupe on it.
         sendUnclaimedPending()
         sendPendingBlocks()
+        sendPendingRosterChanges()
         restoreChatsIfPending()
     }
 

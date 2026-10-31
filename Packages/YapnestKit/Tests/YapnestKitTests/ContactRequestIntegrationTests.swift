@@ -29,7 +29,9 @@ extension LiveServer {
             let a = try await connected(alice), c = try await connected(carol)
             defer { a.disconnect(); c.disconnect() }
             try? await a.removeContact(carol)
+            try? await a.rosterChangesSent()
             try? await c.removeContact(alice)
+            try? await c.rosterChangesSent()
             try await Task.sleep(for: .milliseconds(500))
 
             try a.database.setSetting(.nickname, "\u{202E}Mom")
@@ -39,6 +41,7 @@ extension LiveServer {
             #expect(try c.database.contact(alice)?.requestedNickname == "Mom")
 
             try await c.acceptContactRequest(from: alice)
+            try await c.rosterChangesSent()
             try await waitUntil("carol's roster to show alice") { try c.database.contact(alice)?.subscription == .both }
             let contact = try #require(try c.database.contact(alice))
             #expect(contact.name == nil)
@@ -51,7 +54,9 @@ extension LiveServer {
             #expect(contact.displayName == (contact.nickname ?? "alice"))
 
             try? await a.removeContact(carol)
+            try? await a.rosterChangesSent()
             try? await c.removeContact(alice)
+            try? await c.rosterChangesSent()
         }
 
         /// Opening a chat with someone new puts them on the roster.
@@ -59,7 +64,9 @@ extension LiveServer {
             let a = try await connected(alice), c = try await connected(carol)
             defer { a.disconnect(); c.disconnect() }
             try? await a.removeContact(carol)
+            try? await a.rosterChangesSent()
             try? await c.removeContact(alice)
+            try? await c.rosterChangesSent()
             try await waitUntil("carol to be off alice's roster") { try !a.database.isInRoster(carol) }
 
             await a.befriendForNewChat(carol)
@@ -67,7 +74,9 @@ extension LiveServer {
             try await waitUntil("carol to get the request") { try c.database.contact(alice)?.hasContactRequest == true }
 
             try? await a.removeContact(carol)
+            try? await a.rosterChangesSent()
             try? await c.removeContact(alice)
+            try? await c.rosterChangesSent()
         }
 
         /// Starting a chat with someone who asked to be a contact accepts
@@ -76,7 +85,9 @@ extension LiveServer {
             let a = try await connected(alice), c = try await connected(carol)
             defer { a.disconnect(); c.disconnect() }
             try? await a.removeContact(carol)
+            try? await a.rosterChangesSent()
             try? await c.removeContact(alice)
+            try? await c.rosterChangesSent()
             try await Task.sleep(for: .milliseconds(500))
 
             c.addContact(alice)
@@ -90,7 +101,9 @@ extension LiveServer {
             try await waitUntil("carol to be subscribed to alice") { try c.database.contact(alice)?.subscription == .both }
 
             try? await a.removeContact(carol)
+            try? await a.rosterChangesSent()
             try? await c.removeContact(alice)
+            try? await c.rosterChangesSent()
         }
     }
 }

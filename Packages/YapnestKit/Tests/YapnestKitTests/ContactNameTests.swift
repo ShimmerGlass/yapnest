@@ -37,6 +37,7 @@ struct ContactNameTests {
         wire.answer { FakeWire.result(to: $0) }
         try push(session, jid: "alice@example.org", name: nil, groups: groups)
         try await session.setContactName(alice, name: name)
+        #expect(await eventually(timeout: 20) { (try? session.database.pendingRosterChanges().isEmpty) == true })
         let iq = try #require(wire.written.compactMap { $0 as? Iq }.last)
         #expect(iq.type == .set)
         return try item(of: iq)
@@ -76,10 +77,9 @@ struct ContactNameTests {
         #expect(contact.subscription == .both)
     }
 
-    @Test func aRenameIsRefusedOffline() async throws {
+    @Test func aRenameOfSomeoneNotInTheRosterIsRefused() async throws {
         let session = try makeSession(me)
-        try push(session, jid: "alice@example.org", name: nil)
         await #expect(throws: XMPPSession.ContactError.self) { try await session.setContactName(alice, name: "Ally") }
-        #expect(try session.database.contact(alice)?.name == nil)
+        #expect(try session.database.pendingRosterChanges().isEmpty)
     }
 }

@@ -57,16 +57,6 @@ struct ContactRequestTests {
 
     // MARK: Session
 
-    @Test func answeringOrRemovingOffline() async throws {
-        let session = try makeSession(JID("me@example.org")!, database: db)
-        try db.recordContactRequest(from: stranger, nickname: nil)
-        await #expect(throws: XMPPSession.ContactError.self) { try await session.removeContact(alice) }
-        await #expect(throws: XMPPSession.ContactError.self) { try await session.acceptContactRequest(from: stranger) }
-        #expect(throws: XMPPSession.ContactError.self) { try session.declineContactRequest(from: stranger) }
-        // The request waits for the user to try again.
-        #expect(try db.contact(stranger)?.hasContactRequest == true)
-    }
-
     @Test func addingAndWaitingSendsTheRequestOnceTheRosterAnswers() async throws {
         let session = try makeSession(JID("me@example.org")!, database: db)
         let wire = FakeWire()
@@ -109,7 +99,7 @@ struct ContactRequestTests {
         wire.answer { FakeWire.result(to: $0) }
         try session.recordContactRequest(from: stranger, nickname: nil)
         try await session.acceptContactRequest(from: stranger)
-        #expect(avatarRequests(wire, to: stranger).count == 1)
+        #expect(await eventually(timeout: 20) { avatarRequests(wire, to: stranger).count == 1 })
     }
 
     @Test func addingAndWaitingFailsWhenTheRosterRefuses() async throws {

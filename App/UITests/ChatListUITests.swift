@@ -118,15 +118,14 @@ final class ChatListUITests: InteractionsTestCase {
         XCTAssertTrue(app.buttons["Delete"].exists, "no Delete on the trailing swipe")
     }
 
-    func testAContactRequestShowsAtTheTopAndAnsweringNeedsAConnection() {
+    func testAContactRequestShowsAtTheTopAndAnsweringOfflineWaitsToBeSent() {
         let request = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "robin@fixture.test")).firstMatch
         XCTAssertTrue(request.waitForExistence(timeout: ConversationDriver.listTimeout), "the request isn't in the list")
         XCTAssertTrue(request.label.contains("Robin"), "the request doesn't name who asked: \(request.label)")
         XCTAssertTrue(app.buttons["Decline"].exists, "no Decline")
         app.buttons["Accept"].tap()
-        let alert = app.alerts["Couldn't answer"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 10), "no word that the request couldn't be answered offline")
-        alert.buttons["OK"].tap()
+        XCTAssertTrue(app.staticTexts["Waiting to send"].waitForExistence(timeout: 10), "no word that the answer waits to be sent")
+        XCTAssertFalse(app.buttons["Accept"].isEnabled, "the request can be answered twice")
         XCTAssertTrue(request.exists, "the request went though it wasn't answered")
     }
 

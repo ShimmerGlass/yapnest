@@ -37,7 +37,8 @@ struct AccountServerCallTests {
         session.connectForTesting(wire)
         wire.answer { iq in self.isRosterSet(iq) ? FakeWire.error(to: iq, condition: "forbidden") : FakeWire.result(to: iq) }
 
-        await #expect(throws: (any Error).self) { try await session.acceptContactRequest(from: alice) }
+        try await session.acceptContactRequest(from: alice)
+        #expect(await eventually { session.warnings.current.count == 1 })
 
         #expect(try db.contact(alice)?.hasContactRequest == true)
         #expect(presences(.subscribe).isEmpty)
@@ -55,6 +56,7 @@ struct AccountServerCallTests {
 
         try await session.acceptContactRequest(from: alice)
 
+        #expect(await eventually { (try? db.contact(alice)?.hasContactRequest) == false })
         #expect(rosterSets().count == 2)
         #expect(try db.contact(alice)?.hasContactRequest == false)
         #expect(presences(.subscribed).count == 1)

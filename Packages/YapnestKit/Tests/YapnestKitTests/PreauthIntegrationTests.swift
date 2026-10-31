@@ -37,7 +37,9 @@ extension LiveServer {
 
         private func reset(_ a: XMPPSession, _ b: XMPPSession) async throws {
             try? await a.removeContact(bob)
+            try? await a.rosterChangesSent()
             try? await b.removeContact(alice)
+            try? await b.rosterChangesSent()
             try await waitUntil("bob to be off alice's roster") { try !a.database.isInRoster(bob) }
         }
 

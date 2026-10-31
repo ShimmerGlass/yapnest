@@ -448,28 +448,34 @@ struct ConversationView: View {
     /// They asked to add us: what they'd see is our presence, so that's
     /// what accepting shares.
     private func requestBanner(_ contact: Contact) -> some View {
-        banner(Text("\(contact.requestTitle) (\(peer.description)) wants to add you as a contact and see when you're online.")) {
+        let waiting = contact.pendingRoster != nil
+        return banner(Text("\(contact.requestTitle) (\(peer.description)) wants to add you as a contact and see when you're online."), status: waiting ? Text("Waiting to send") : nil) {
             Button("Accept") {
                 let (session, peer) = (session, peer)
                 answering.run { try await session.acceptContactRequest(from: peer) }
             }
                 .buttonStyle(.borderedProminent)
-                .disabled(answering.isBusy)
+                .disabled(answering.isBusy || waiting)
             Button("Decline") { answer { try $0.declineContactRequest(from: $1) } }
                 .buttonStyle(.bordered)
-                .disabled(answering.isBusy)
+                .disabled(answering.isBusy || waiting)
             Button("Block", role: .destructive) { confirmsBlock = true }
                 .buttonStyle(.bordered)
         }
     }
 
     /// A line of explanation over the actions it offers.
-    private func banner<Buttons: View>(_ message: Text, @ViewBuilder buttons: () -> Buttons) -> some View {
+    private func banner<Buttons: View>(_ message: Text, status: Text? = nil, @ViewBuilder buttons: () -> Buttons) -> some View {
         VStack(spacing: 10) {
             message
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            if let status {
+                status
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
             HStack(spacing: 12) {
                 buttons()
             }
