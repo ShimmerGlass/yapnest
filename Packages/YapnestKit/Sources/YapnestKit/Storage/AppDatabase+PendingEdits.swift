@@ -76,8 +76,7 @@ extension AppDatabase {
         try PendingEdit.deleteAll(db, keys: waiting.compactMap(\.id))
 
         let fitting = waiting.filter { edit in
-            (message.direction == .outgoing) == edit.outgoing
-                && (edit.outgoing || message.author.isSame(as: edit.author, room: room))
+            mayEdit(message.direction == .outgoing, by: message.author, from: edit.author, outgoing: edit.outgoing, room: room)
                 && message.timestamp <= edit.editedAt
         }
         if fitting.contains(where: { $0.kind == .retract }) {
@@ -120,7 +119,7 @@ extension AppDatabase {
             .filter(Column("conversationId") == conversationId && Column("ref") == ref && Column("kind") == kind.rawValue)
             .order(Column("id"))
             .fetchAll(db)
-            .filter { $0.outgoing == outgoing && (outgoing || $0.author.isSame(as: author, room: room)) }
+            .filter { mayEdit($0.outgoing, by: $0.author, from: author, outgoing: outgoing, room: room) }
     }
 
     /// A retraction of a message we don't have also takes back the text of

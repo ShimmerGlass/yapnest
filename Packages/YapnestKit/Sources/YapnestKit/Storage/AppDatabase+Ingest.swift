@@ -290,10 +290,18 @@ extension AppDatabase {
         try referencedMessages(db, conversationId: conversationId, id: ref)
             .filter { message in
                 !message.isRetracted
-                    && (message.direction == .outgoing) == outgoing
-                    && (outgoing || message.author.isSame(as: author, room: room))
+                    && mayEdit(message.direction == .outgoing, by: message.author, from: author, outgoing: outgoing, room: room)
             }
             .bestMatch(for: ref)
+    }
+
+    /// Whether an edit (a correction or retraction) from `editor` may change
+    /// a message `writer` sent. Only its sender may (XEP-0308, XEP-0424): a
+    /// message of ours only by us, one of theirs only by the same person or,
+    /// in a group, the same occupant where the room vouches for it. This is
+    /// the one check against forged edits, live or waiting for their message.
+    static func mayEdit(_ messageIsOutgoing: Bool, by writer: Author, from editor: Author, outgoing editIsOutgoing: Bool, room: JID?) -> Bool {
+        messageIsOutgoing == editIsOutgoing && (editIsOutgoing || writer.isSame(as: editor, room: room))
     }
 
     /// Changes `original` to the correcting message's text, unless that is
