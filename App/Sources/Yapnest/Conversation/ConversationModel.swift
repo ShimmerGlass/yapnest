@@ -289,6 +289,12 @@ final class ConversationModel {
 
     @ObservationIgnored private var items: [Int64: ConversationItem] = [:]
     @ObservationIgnored private var order: [Int64] = []
+    /// The stamp of each item in `items`, to see which ones an emission changed without reading them.
+    @ObservationIgnored private var stamps: [Int64: Int64] = [:]
+    /// The items in `order`.
+    @ObservationIgnored private var orderedItems: [ConversationItem] = []
+    /// The order the rows were last built for.
+    @ObservationIgnored private var builtOrder: [Int64] = []
     /// Where each id is in `order`, for the lookups the visible rows ask for.
     @ObservationIgnored private var orderIndex: [Int64: Int] = [:]
     @ObservationIgnored private var rowsByID: [Int64: MessageRow] = [:]
@@ -761,13 +767,21 @@ final class ConversationModel {
         isFetchingHistory = fetching
     }
 
+    #if DEBUG
+    /// How long the last `apply` took on the main actor, for a measurement.
+    @ObservationIgnored private(set) var lastApplyDuration: Duration = .zero
+    #endif
+
     private func apply(_ newItems: [ConversationItem], generation: Int, prebuilt: Prebuilt? = nil) {
         guard generation == self.generation else { return }
         let wasNearBottom = isNearBottom
         let previousOrder = order
-        let old = items
         FrameLog.event("apply begin items=\(newItems.count) previous=\(previousOrder.count)")
         defer { FrameLog.event("apply end rows=\(rows.count)") }
+        #if DEBUG
+        let applyStart = ContinuousClock.now
+        defer { lastApplyDuration = ContinuousClock.now - applyStart }
+        #endif
         // Older messages came in above: the ones on screen have to stay put.
         let prepended = hasLoaded && (previousOrder.first.flatMap { first in newItems.firstIndex { $0.id == first } } ?? 0) > 0
         let trimming = isTrimming
@@ -786,9 +800,27 @@ final class ConversationModel {
             // above the oldest one loaded.
             unreadDividerId = newItems.first { $0.message.direction == .incoming && !$0.message.isRead }?.id
         }
-        items = Dictionary(uniqueKeysWithValues: newItems.map { ($0.id, $0) })
+        // An item with the stamp it had is the one already held, so only the
+        // others are looked at: the rest of the dictionary stays as it is.
+        var changedItems: [(before: ConversationItem?, after: ConversationItem)] = []
+        for item in newItems where stamps[item.id] != item.stamp {
+            changedItems.append((items[item.id], item))
+        }
+        orderedItems = newItems
         order = newItems.map(\.id)
-        orderIndex = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
+        // Same order, or messages only added at the end: what is held stays,
+        // and just the changed and the new are put in.
+        if order.count >= previousOrder.count, order.starts(with: previousOrder) {
+            for (_, item) in changedItems {
+                items[item.id] = item
+                stamps[item.id] = item.stamp
+            }
+            for index in previousOrder.count..<order.count { orderIndex[order[index]] = index }
+        } else {
+            items = Dictionary(uniqueKeysWithValues: newItems.map { ($0.id, $0) })
+            stamps = items.mapValues(\.stamp)
+            orderIndex = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
+        }
         // A removed row never reports again.
         if !fillingIDs.isEmpty { fillingIDs.formIntersection(orderIndex.keys) }
         if !builtIDs.isEmpty { builtIDs.formIntersection(orderIndex.keys) }
@@ -798,15 +830,15 @@ final class ConversationModel {
         if !bounded || !hasLoaded { unreadCount = newItems.count { $0.message.direction == .incoming && !$0.message.isRead } }
         // Only what is new or whose link or preview changed can need a fetch;
         // anything else was looked at on an earlier emission.
-        fetchMissingPreviews(in: newItems.lazy.filter { item in
-            guard let before = old[item.id] else { return true }
+        fetchMissingPreviews(in: changedItems.lazy.filter { before, item in
+            guard let before else { return true }
             return before.message.link != item.message.link || before.preview != item.preview
-        })
+        }.map(\.after))
 
         let lastIsMine = !extending && !bounded && followsOwnSend && (newItems.last.map { $0.message.direction == .outgoing && $0.id != previousOrder.last } ?? false)
         if lastIsMine { followsOwnSend = false }
         let reshapeOnly = previousOrder == order
-            && order.contains { id in old[id].map { $0.preview != items[id]?.preview || $0.attachment != items[id]?.attachment } ?? false }
+            && changedItems.contains { before, item in before.map { $0.preview != item.preview || $0.attachment != item.attachment } ?? false }
 
         var jumped = false
         // The window asked for with the jump has arrived. If the target isn't
@@ -861,7 +893,6 @@ final class ConversationModel {
         // Where the anchor row is now is what the recorder measures its move from.
         if prepended { recorder?.update { $0.olderRowsComing() } }
         #endif
-        let previousRows = rowsByID
         let built = buildRows(prebuilt: prebuilt)
         defer { followsWithRows = false }
         // Rows the user sees changing in place animate, and so do new ones.
@@ -869,10 +900,11 @@ final class ConversationModel {
         // must stay put. Nor a bubble whose text or media changed: it resizes
         // in one frame and its bottom edge sinks below the screen until the
         // scroll view catches up, which looks worse than not animating.
-        let resizes = built.contains { row in
-            previousRows[row.id].map {
-                $0.content.text != row.content.text || $0.content.preview != row.content.preview
-                    || $0.content.attachment != row.content.attachment || $0.content.location != row.content.location
+        // Only a row that was made again can differ from the one drawn.
+        let resizes = built.changes.contains { change in
+            change.before.map {
+                $0.content.text != change.after.content.text || $0.content.preview != change.after.content.preview
+                    || $0.content.attachment != change.after.content.attachment || $0.content.location != change.after.content.location
             } ?? false
         }
         // Scrolled up, rows added below or rows changing height there make
@@ -880,8 +912,8 @@ final class ConversationModel {
         // done when the list is near the bottom (it follows, or the cases
         // above scroll), and not for a change that moves nothing.
         let appendedBelow = previousOrder.last.flatMap { orderIndex[$0] }.map { $0 < order.count - 1 } ?? false
-        let changesHeight = resizes || built.contains { row in
-            previousRows[row.id].map { $0.content.item.reactions.isEmpty != row.content.item.reactions.isEmpty } ?? false
+        let changesHeight = resizes || built.changes.contains { change in
+            change.before.map { $0.content.item.reactions.isEmpty != change.after.content.item.reactions.isEmpty } ?? false
         }
         // Flipped, a list on its way to the newest end gets there whatever
         // comes in, and holding a row would stop it.
@@ -894,13 +926,14 @@ final class ConversationModel {
             // its bottom edge where it is the whole way.
             let holdsBottom = wasNearBottom && isAtBottomEdge && !lastIsMine
             let lastBefore = previousOrder.last.flatMap { orderIndex[$0] }
-            let arriving = Set(order.enumerated().compactMap { index, id in
-                previousRows[id] == nil && lastBefore.map { index > $0 } ?? false ? id : nil
-            })
+            let positions = orderIndex
+            let arriving: Set<Int64> = lastBefore.map { lastBefore in
+                Set(built.changes.lazy.filter { $0.before == nil && (positions[$0.after.id] ?? -1) > lastBefore }.map(\.after.id))
+            } ?? []
             notePulse(for: arriving)
             withAnimation(.easeOut(duration: 0.25)) {
                 if arrivingIDs != arriving { arrivingIDs = arriving }
-                replaceRows(built)
+                replaceRows(built.rows)
                 if followsWithRows {
                     followNewestRow()
                 } else if holdsBottom, !isFlipped, let last = order.last {
@@ -913,7 +946,7 @@ final class ConversationModel {
         } else {
             withoutAnimation {
                 if !arrivingIDs.isEmpty { arrivingIDs = [] }
-                replaceRows(built)
+                replaceRows(built.rows)
                 if followsWithRows { followNewestRow() }
             }
         }
@@ -1188,7 +1221,7 @@ final class ConversationModel {
     }
 
     private func rebuildRows() {
-        replaceRows(buildRows())
+        replaceRows(buildRows().rows)
     }
 
     /// What of a message's neighbour decides how it is drawn: whether they
@@ -1209,13 +1242,35 @@ final class ConversationModel {
         }
     }
 
+    /// What a row's `RowInputs` come to for comparing. The row's item is the
+    /// same one if it has the stamp it had, which is all that is looked at
+    /// for the rows an emission didn't touch. A different stamp doesn't mean
+    /// a different item (a window opened again builds them all anew), so
+    /// then the items are compared. A neighbour is compared by what a row
+    /// reads of it: its body changing leaves the row beside it as it was.
+    private struct RowKey: Equatable, Sendable {
+        var item: ConversationItem
+        var previous: Neighbour?
+        var next: Neighbour?
+        var hasUnreadDivider: Bool
+        var showsWholeBody: Bool
+        var isNewest: Bool
+        var epoch: Int
+
+        static func == (a: Self, b: Self) -> Bool {
+            a.previous == b.previous && a.next == b.next && a.hasUnreadDivider == b.hasUnreadDivider
+                && a.showsWholeBody == b.showsWholeBody && a.isNewest == b.isNewest && a.epoch == b.epoch
+                && a.item.id == b.item.id && (a.item.stamp == b.item.stamp || a.item == b.item)
+        }
+    }
+
     /// Everything `makeContent` reads for one row, apart from what is fixed
     /// for the screen's life (the account, whether it's a group, the link
     /// preview service) and the time zone and locale, which `buildRows`
-    /// checks once for all rows. A row whose inputs are equal to those it
+    /// checks once for all rows. A row whose inputs have the key of those it
     /// was last built from has the same content, so it isn't built again.
     /// Anything new that `makeContent` reads belongs here.
-    private struct RowInputs: Equatable, Sendable {
+    private struct RowInputs: Sendable {
         var item: ConversationItem
         var previous: Neighbour?
         var next: Neighbour?
@@ -1225,13 +1280,20 @@ final class ConversationModel {
         var isNewest: Bool
         /// Names, link preview choices and the day: see `inputsEpoch`.
         var epoch: Int
+
+        var key: RowKey {
+            RowKey(
+                item: item, previous: previous, next: next,
+                hasUnreadDivider: hasUnreadDivider, showsWholeBody: showsWholeBody, isNewest: isNewest, epoch: epoch,
+            )
+        }
     }
 
     /// Bumped when something row-wide that isn't in a row's item changes: the
     /// contacts' names, the link preview choices, or the day, time or locale
     /// (which the day headers read).
     @ObservationIgnored private var inputsEpoch = 0
-    @ObservationIgnored private var inputsByID: [Int64: RowInputs] = [:]
+    @ObservationIgnored private var inputsByID: [Int64: RowKey] = [:]
     /// The time zone and locale the rows were last built in.
     @ObservationIgnored private var builtIn: (calendar: Calendar, locale: Locale)?
 
@@ -1286,7 +1348,7 @@ final class ConversationModel {
         var newestIsOffered: Bool
         var epoch: Int
         /// What the rows on screen were built from; those aren't built again.
-        var built: [Int64: RowInputs]
+        var built: [Int64: RowKey]
         var texts: [Int64: CachedText]
         var environment: RowEnvironment
     }
@@ -1311,16 +1373,48 @@ final class ConversationModel {
     }
 
     private nonisolated static func prebuild(_ snapshot: PrebuildSnapshot) -> Prebuilt {
-        let inputs = rowInputs(
-            for: snapshot.items, dividerId: snapshot.dividerId, showingWhole: snapshot.showingWhole,
-            newestIsOffered: snapshot.newestIsOffered, epoch: snapshot.epoch,
-        )
         var rows: [Int64: Prebuilt.Row] = [:]
-        for input in inputs where snapshot.built[input.item.id] != input {
-            let (content, text) = makeContent(input, cached: snapshot.texts[input.item.id], environment: snapshot.environment)
-            rows[input.item.id] = Prebuilt.Row(inputs: input, content: content, text: text)
+        let neighbours = snapshot.items.map(Neighbour.init)
+        for index in snapshot.items.indices {
+            let key = rowKey(
+                at: index, in: snapshot.items, neighbours: neighbours, dividerId: snapshot.dividerId, showingWhole: snapshot.showingWhole,
+                newestIsOffered: snapshot.newestIsOffered, epoch: snapshot.epoch,
+            )
+            guard snapshot.built[key.item.id] != key else { continue }
+            let input = rowInputs(at: index, in: snapshot.items, key: key)
+            let (content, text) = makeContent(input, cached: snapshot.texts[key.item.id], environment: snapshot.environment)
+            rows[key.item.id] = Prebuilt.Row(inputs: input, content: content, text: text)
         }
         return Prebuilt(rows: rows, calendar: snapshot.environment.calendar, locale: snapshot.environment.locale)
+    }
+
+    private nonisolated static func rowKey(
+        at index: Int, in items: [ConversationItem], neighbours: [Neighbour], dividerId: Int64?, showingWhole: Set<Int64>, newestIsOffered: Bool, epoch: Int,
+    ) -> RowKey {
+        let item = items[index]
+        return RowKey(
+            item: item,
+            previous: index > 0 ? neighbours[index - 1] : nil,
+            next: index + 1 < items.count ? neighbours[index + 1] : nil,
+            hasUnreadDivider: item.id == dividerId,
+            showsWholeBody: showingWhole.contains(item.id),
+            // Held, it was the newest when the user scrolled up; its
+            // quick responses going would move the list by their height.
+            isNewest: index == items.count - 1 && newestIsOffered,
+            epoch: epoch,
+        )
+    }
+
+    private nonisolated static func rowInputs(at index: Int, in items: [ConversationItem], key: RowKey) -> RowInputs {
+        RowInputs(
+            item: items[index],
+            previous: key.previous,
+            next: key.next,
+            hasUnreadDivider: key.hasUnreadDivider,
+            showsWholeBody: key.showsWholeBody,
+            isNewest: key.isNewest,
+            epoch: key.epoch,
+        )
     }
 
     private nonisolated static func rowInputs(
@@ -1328,17 +1422,9 @@ final class ConversationModel {
     ) -> [RowInputs] {
         let neighbours = items.map(Neighbour.init)
         return items.indices.map { index in
-            RowInputs(
-                item: items[index],
-                previous: index > 0 ? neighbours[index - 1] : nil,
-                next: index + 1 < items.count ? neighbours[index + 1] : nil,
-                hasUnreadDivider: items[index].id == dividerId,
-                showsWholeBody: showingWhole.contains(items[index].id),
-                // Held, it was the newest when the user scrolled up; its
-                // quick responses going would move the list by their height.
-                isNewest: index == items.count - 1 && newestIsOffered,
-                epoch: epoch,
-            )
+            rowInputs(at: index, in: items, key: rowKey(
+                at: index, in: items, neighbours: neighbours, dividerId: dividerId, showingWhole: showingWhole, newestIsOffered: newestIsOffered, epoch: epoch,
+            ))
         }
     }
 
@@ -1365,18 +1451,38 @@ final class ConversationModel {
             prebuilt.rows[id]?.content.accessibilityLabel = "prebuilt"
             if !stillCurrent { prebuilt.rows[id]?.inputs.epoch += 1 }
         }
-        return buildRows(prebuilt: prebuilt)
+        return buildRows(prebuilt: prebuilt).rows
     }
     #endif
 
-    private func buildRows(prebuilt: Prebuilt? = nil) -> [MessageRow] {
+    /// A row that was made again, with the one it replaces.
+    private struct RowChange {
+        var before: MessageRow?
+        var after: MessageRow
+    }
+
+    /// The rows for `order`, and the ones among them that are new or changed.
+    /// The rest are the rows already held, the very same ones: the caches
+    /// are updated in place for the rows that changed, instead of being
+    /// built again for every row on every emission.
+    private func buildRows(prebuilt: Prebuilt? = nil) -> (rows: [MessageRow], changes: [RowChange]) {
         var built: [MessageRow] = []
         built.reserveCapacity(order.count)
-        var newTexts: [Int64: CachedText] = [:]
-        var byID: [Int64: MessageRow] = [:]
-        byID.reserveCapacity(order.count)
-        var newInputs: [Int64: RowInputs] = [:]
-        newInputs.reserveCapacity(order.count)
+        var changes: [RowChange] = []
+        // Taken out of the model, so that updating them doesn't copy them.
+        var rowsByID = rowsByID
+        var inputsByID = inputsByID
+        var textCache = textCache
+        self.rowsByID = [:]
+        self.inputsByID = [:]
+        self.textCache = [:]
+        if builtOrder != order {
+            for id in builtOrder where orderIndex[id] == nil {
+                rowsByID[id] = nil
+                inputsByID[id] = nil
+                textCache[id] = nil
+            }
+        }
         let environment = (calendar: Calendar.current, locale: Locale.current)
         let sameEnvironment = builtIn.map { $0.calendar == environment.calendar && $0.locale == environment.locale } ?? false
         builtIn = environment
@@ -1385,56 +1491,60 @@ final class ConversationModel {
         let holds = holdsRowsBelow
         let boundary = holds ? visibleIDs.compactMap { orderIndex[$0] }.max() : nil
         var held: Set<Int64> = []
-        let allInputs = Self.rowInputs(
-            for: order.map { items[$0]! }, dividerId: unreadDividerId, showingWhole: showingWhole,
-            newestIsOffered: !isBounded || holdsNewest, epoch: inputsEpoch,
-        )
+        let ordered = orderedItems
+        let neighbours = ordered.map(Neighbour.init)
+        let dividerId = unreadDividerId, newestIsOffered = !isBounded || holdsNewest
         for index in order.indices {
             let id = order[index]
-            let inputs = allInputs[index]
-            newInputs[id] = inputs
-            if sameEnvironment, let existing = rowsByID[id], inputsByID[id] == inputs {
+            let key = Self.rowKey(
+                at: index, in: ordered, neighbours: neighbours, dividerId: dividerId, showingWhole: showingWhole,
+                newestIsOffered: newestIsOffered, epoch: inputsEpoch,
+            )
+            if sameEnvironment, inputsByID[id] == key, let existing = rowsByID[id] {
                 built.append(existing)
-                byID[id] = existing
-                newTexts[id] = textCache[id]
                 continue
             }
+            inputsByID[id] = key
             // Held too once it's scrolled into view, where growing would
             // move the rows above it.
             if holds, (boundary.map { index > $0 } ?? false) || heldIDs.contains(id), let existing = rowsByID[id] {
                 // Without its inputs, so it's built again once it's let go.
-                newInputs[id] = nil
+                inputsByID[id] = nil
                 held.insert(id)
                 built.append(existing)
-                byID[id] = existing
-                newTexts[id] = textCache[id]
                 continue
             }
+            let inputs = Self.rowInputs(at: index, in: ordered, key: key)
             let content: MessageRow.Content
-            if let ready = prebuilt?.rows[id], ready.inputs == inputs {
+            if let ready = prebuilt?.rows[id], ready.inputs.key == key {
                 content = ready.content
-                newTexts[id] = ready.text
+                textCache[id] = ready.text
             } else {
                 rowsBuiltOnMain += 1
                 if shared == nil { shared = rowEnvironment() }
                 let made = Self.makeContent(inputs, cached: textCache[id], environment: shared!)
                 content = made.content
-                newTexts[id] = made.text
+                textCache[id] = made.text
             }
+            let before = rowsByID[id]
             let row: MessageRow
-            if let existing = rowsByID[id], existing.content == content {
-                row = existing
+            if let before, before.content == content {
+                row = before
             } else {
-                row = MessageRow(content: content, revision: (rowsByID[id]?.revision ?? 0) + 1)
+                row = MessageRow(content: content, revision: (before?.revision ?? 0) + 1)
+                changes.append(RowChange(before: before, after: row))
             }
             built.append(row)
-            byID[id] = row
+            rowsByID[id] = row
         }
-        rowsByID = byID
-        inputsByID = newInputs
-        textCache = newTexts
+        // What an emission rendered ahead for an item that never came to be a row.
+        if textCache.count > order.count { textCache = textCache.filter { orderIndex[$0.key] != nil } }
+        builtOrder = order
+        self.rowsByID = rowsByID
+        self.inputsByID = inputsByID
+        self.textCache = textCache
         heldIDs = held
-        return built
+        return (built, changes)
     }
 
     /// Whether rows newer than the newest one on screen keep the content they

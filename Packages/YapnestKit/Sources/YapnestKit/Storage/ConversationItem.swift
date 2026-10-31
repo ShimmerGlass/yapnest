@@ -28,14 +28,60 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
         public var messageId: Int64?
     }
 
-    public var message: Message
-    public var reactions: [ReactionGroup]
-    public var quote: Quote?
+    public var message: Message {
+        didSet { stamp = Self.nextStamp() }
+    }
+    public var reactions: [ReactionGroup] {
+        didSet { stamp = Self.nextStamp() }
+    }
+    public var quote: Quote? {
+        didSet { stamp = Self.nextStamp() }
+    }
     /// The preview of `message.link`, once fetched.
-    public var preview: LinkPreview?
-    public var attachment: Attachment?
+    public var preview: LinkPreview? {
+        didSet { stamp = Self.nextStamp() }
+    }
+    public var attachment: Attachment? {
+        didSet { stamp = Self.nextStamp() }
+    }
+
+    /// Names this content: two items of one message with the same stamp are
+    /// the same, which saves comparing them field by field. Every build and
+    /// every change gets one no other content in the process has had, and the
+    /// cache keeps an item's stamp for as long as the item is the same.
+    /// Equality ignores it, so equal items built apart are still equal.
+    public private(set) var stamp: Int64 = ConversationItem.nextStamp()
 
     public var id: Int64 { message.id! }
+
+    private static let stamps = ManagedAtomicCounter()
+
+    private static func nextStamp() -> Int64 { stamps.next() }
+
+    public static func == (a: Self, b: Self) -> Bool {
+        a.message == b.message && a.reactions == b.reactions && a.quote == b.quote
+            && a.preview == b.preview && a.attachment == b.attachment
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(message)
+        hasher.combine(reactions)
+        hasher.combine(quote)
+        hasher.combine(preview)
+        hasher.combine(attachment)
+    }
+}
+
+private final class ManagedAtomicCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int64 = 0
+
+    func next() -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        value += 1
+        return value
+    }
 }
 
 /// A place in a conversation's message order, which is by time and then id.
@@ -571,9 +617,20 @@ final class ConversationItemCache: @unchecked Sendable {
     /// Keeps `entries` and moves the version only if the items differ. Reused
     /// items are the ones already published, so only rebuilt ones are compared.
     private func publish(_ order: [Int64], _ next: [Int64: Entry], rebuilt: [Int64] = []) -> AppDatabase.ConversationSnapshot {
+        var next = next
         var changed = order != self.order
-        if !changed {
-            changed = rebuilt.contains { entries[$0]?.item != next[$0]!.item }
+        for id in rebuilt {
+            // A rebuild that came out the same keeps the published item, and
+            // with it the stamp that says nothing changed.
+            guard let old = entries[id]?.item else {
+                changed = true
+                continue
+            }
+            if old == next[id]!.item {
+                next[id]!.item = old
+            } else {
+                changed = true
+            }
         }
         entries = next
         if changed {

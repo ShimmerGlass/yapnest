@@ -55,6 +55,69 @@ struct ConversationObservationTests {
         #expect((after == before) == !changes, sourceLocation: sourceLocation)
     }
 
+    private func stamps(_ cache: ConversationItemCache) throws -> [Int64: Int64] {
+        let snapshot = try db.reader.read { try cache.fetch($0, peer: alice, since: nil) }
+        return Dictionary(uniqueKeysWithValues: snapshot.items.map { ($0.id, $0.stamp) })
+    }
+
+    @Test func anUnchangedMessageKeepsItsStampAndAChangedOneGetsANewOne() throws {
+        try fill(40)
+        let cache = ConversationItemCache(me: me)
+        var before = try stamps(cache)
+        #expect(Set(before.values).count == before.count)
+        // Nothing changed: nothing is restamped.
+        #expect(try stamps(cache) == before)
+
+        func expectOnlyChanged(_ ids: [Int64], _ what: String, sourceLocation: SourceLocation = #_sourceLocation) throws {
+            let after = try stamps(cache)
+            #expect(Set(after.keys) == Set(before.keys), Comment(rawValue: what), sourceLocation: sourceLocation)
+            let moved = Set(after.filter { before[$0.key] != $0.value }.keys)
+            #expect(moved == Set(ids), Comment(rawValue: what), sourceLocation: sourceLocation)
+            before = after
+        }
+
+        _ = try db.applyEdit("edited", to: try id("m8"))
+        // m9 replies to m8.
+        try expectOnlyChanged([try id("m8"), try id("m9")], "edit")
+        _ = try db.setReactions(["🎉"], from: bob, conversationId: conversationId, messageRef: "m5")
+        try expectOnlyChanged([try id("m5")], "reaction")
+        try db.updateStatus(.delivered, conversationId: conversationId, remoteId: "m10")
+        try expectOnlyChanged([try id("m10")], "receipt")
+        let withFile = try id("m12")
+        try db.writer.write { try Attachment(messageId: withFile, url: nil, name: "a.png", state: .pendingUpload).insert($0) }
+        try expectOnlyChanged([withFile], "attachment")
+        _ = try db.applyRetraction(of: try id("m16"))
+        try expectOnlyChanged([try id("m16")], "retraction")
+        // m14 replies to m13: its quote shows what m13 says.
+        _ = try db.applyEdit("quoted, changed", to: try id("m13"))
+        try expectOnlyChanged([try id("m13"), try id("m14")], "a reply whose quote changed")
+        try db.insert(Message(conversationId: conversationId, direction: .incoming, sender: alice, body: "new", timestamp: t0 + 1000, remoteId: "new"))
+        let after = try stamps(cache)
+        #expect(after.count == before.count + 1)
+        #expect(Set(after.filter { before[$0.key] != $0.value }.keys) == [try id("new")])
+    }
+
+    @Test func aRebuildThatComesOutTheSameKeepsTheStamp() throws {
+        try fill(40)
+        let cache = ConversationItemCache(me: me)
+        let before = try stamps(cache)
+        // m4 replies to m3, which is rebuilt as it is marked read, but what the
+        // quote shows doesn't change.
+        try db.markRead(conversationId: conversationId)
+        let after = try stamps(cache)
+        #expect(after[try id("m3")] != before[try id("m3")])
+        #expect(after[try id("m4")] == before[try id("m4")])
+    }
+
+    @Test func aMutatedItemGetsANewStamp() throws {
+        try fill(3)
+        let cache = ConversationItemCache(me: me)
+        var item = try #require(try db.reader.read { try cache.fetch($0, peer: alice, since: nil) }.items.first)
+        let stamp = item.stamp
+        item.message.body = "changed"
+        #expect(item.stamp != stamp)
+    }
+
     @Test func firstFetchEqualsFullFetch() throws {
         try fill(60)
         let cache = ConversationItemCache(me: me)
