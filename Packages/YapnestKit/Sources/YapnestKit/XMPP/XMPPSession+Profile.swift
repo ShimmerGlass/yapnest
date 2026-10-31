@@ -165,33 +165,7 @@ extension XMPPSession {
     @discardableResult
     func sendOwedProfile() -> Task<Void, Never>? {
         guard policy.syncsAccountState else { return nil }
-        return lock.withLock { state in
-            // Asked again while a round goes: it reads what is owed once more.
-            if let task = state.profileTask {
-                state.profileRun = .runAgain
-                return task
-            }
-            state.profileRun = .running
-            let task = Task { [weak self] in
-                while let self {
-                    // Asked again before this round read what is owed: it covers that.
-                    lock.withLock { $0.profileRun = .running }
-                    await sendOwedProfileRound()
-                    let again = lock.withLock { state in
-                        if state.profileRun == .runAgain {
-                            state.profileRun = .running
-                            return true
-                        }
-                        state.profileRun = .idle
-                        state.profileTask = nil
-                        return false
-                    }
-                    guard again else { return }
-                }
-            }
-            state.profileTask = task
-            return task
-        }
+        return coalesced(\.profileRun) { await $0.sendOwedProfileRound() }
     }
 
     private func sendOwedProfileRound() async {

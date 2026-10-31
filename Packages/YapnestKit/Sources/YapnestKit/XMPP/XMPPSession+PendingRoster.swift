@@ -20,23 +20,7 @@ extension XMPPSession {
     /// user. Only the app sends.
     func sendPendingRosterChanges() {
         guard policy.resendsPending else { return }
-        let start = lock.withLock { state in
-            defer { state.rosterRun = state.rosterRun == .idle ? .running : .runAgain }
-            return state.rosterRun == .idle
-        }
-        guard start else { return }
-        Task { [weak self] in
-            while let self {
-                // Asked again before this round read the queue: it covers that.
-                lock.withLock { $0.rosterRun = .running }
-                await sendQueuedRosterChanges()
-                let again = lock.withLock { state in
-                    defer { state.rosterRun = state.rosterRun == .runAgain ? .running : .idle }
-                    return state.rosterRun == .runAgain
-                }
-                guard again else { return }
-            }
-        }
+        coalesced(\.rosterRun) { await $0.sendQueuedRosterChanges() }
     }
 
     /// The oldest queued change, marked as in flight in the same step so that

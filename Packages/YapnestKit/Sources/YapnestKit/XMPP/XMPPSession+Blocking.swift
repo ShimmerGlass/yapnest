@@ -76,23 +76,7 @@ extension XMPPSession {
     /// app sends.
     func sendPendingBlocks() {
         guard policy.resendsPending else { return }
-        let start = lock.withLock { state in
-            defer { state.blockRun = state.blockRun == .idle ? .running : .runAgain }
-            return state.blockRun == .idle
-        }
-        guard start else { return }
-        Task { [weak self] in
-            while let self {
-                // Asked again before this round read the queue: it covers that.
-                lock.withLock { $0.blockRun = .running }
-                await sendQueuedBlocks()
-                let again = lock.withLock { state in
-                    defer { state.blockRun = state.blockRun == .runAgain ? .running : .idle }
-                    return state.blockRun == .runAgain
-                }
-                guard again else { return }
-            }
-        }
+        coalesced(\.blockRun) { await $0.sendQueuedBlocks() }
     }
 
     /// The oldest queued change, marked as in flight in the same step so that

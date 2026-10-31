@@ -44,21 +44,7 @@ extension XMPPSession {
     /// ask for it meanwhile.
     func resolveHeldGroupMessages() {
         guard mode == .app else { return }
-        let start = lock.withLock { state in
-            defer { state.heldRun = state.heldRun == .idle ? .running : .runAgain }
-            return state.heldRun == .idle
-        }
-        guard start else { return }
-        Task.detached(priority: .utility) { [weak self] in
-            while let self {
-                await self.resolveHeld()
-                let again = self.lock.withLock { state in
-                    defer { state.heldRun = state.heldRun == .runAgain ? .running : .idle }
-                    return state.heldRun == .runAgain
-                }
-                guard again else { return }
-            }
-        }
+        coalesced(\.heldRun, priority: .utility) { await $0.resolveHeld() }
     }
 
     /// How long a hold whose sender's server doesn't answer is kept trying.

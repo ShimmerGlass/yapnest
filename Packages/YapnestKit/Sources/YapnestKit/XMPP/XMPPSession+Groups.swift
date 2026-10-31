@@ -1974,33 +1974,7 @@ extension XMPPSession {
     @discardableResult
     func sendOwedBookmarks() -> Task<Void, Never>? {
         guard policy.resendsPending else { return nil }
-        return lock.withLock { state in
-            // Asked again while a round goes: it reads the groups once more.
-            if let task = state.bookmarkTask {
-                state.bookmarkRun = .runAgain
-                return task
-            }
-            state.bookmarkRun = .running
-            let task = Task { [weak self] in
-                while let self {
-                    // Asked again before this round read the groups: it covers that.
-                    lock.withLock { $0.bookmarkRun = .running }
-                    await sendOwedRound()
-                    let again = lock.withLock { state in
-                        if state.bookmarkRun == .runAgain {
-                            state.bookmarkRun = .running
-                            return true
-                        }
-                        state.bookmarkRun = .idle
-                        state.bookmarkTask = nil
-                        return false
-                    }
-                    guard again else { return }
-                }
-            }
-            state.bookmarkTask = task
-            return task
-        }
+        return coalesced(\.bookmarkRun) { await $0.sendOwedRound() }
     }
 
     /// One at a time and in order, so a retraction sent right after a

@@ -222,13 +222,64 @@ public final class XMPPSession: @unchecked Sendable {
         var token: Int
     }
 
-    /// Where a run that coalesces the requests made while it goes is: the
-    /// one checking held group messages' devices, or the one sending blocks.
-    enum HeldRun { case idle, running, runAgain }
+    /// A run that coalesces the requests made while it goes: however many
+    /// ask, one runner goes round until nobody asked during its last round.
+    /// A round starts with `beginRound`, which absorbs the requests made so
+    /// far, since it is about to read the work they are about. Otherwise a
+    /// request made just before the round would leave a second, needless one.
+    struct CoalescedRun {
+        private enum Phase { case idle, running, runAgain }
+        private var phase = Phase.idle
+        /// The runner, for a caller that waits for it.
+        var task: Task<Void, Never>?
+
+        /// True when no runner goes, so the caller starts one.
+        mutating func request() -> Bool {
+            defer { phase = phase == .idle ? .running : .runAgain }
+            return phase == .idle
+        }
+
+        mutating func beginRound() { phase = .running }
+
+        /// True when a request came during the round, so another follows.
+        mutating func endRound() -> Bool {
+            if phase == .runAgain {
+                phase = .running
+                return true
+            }
+            phase = .idle
+            task = nil
+            return false
+        }
+    }
+
+    /// Starts the runner of `run` going round, or has the one under way go
+    /// round again, and returns it. Weak, so a session that is gone ends it.
+    @discardableResult
+    func coalesced(
+        _ run: WritableKeyPath<Mutable, CoalescedRun> & Sendable,
+        priority: TaskPriority? = nil,
+        round: @escaping @Sendable (XMPPSession) async -> Void
+    ) -> Task<Void, Never> {
+        lock.withLock { state in
+            guard state[keyPath: run].request() else { return state[keyPath: run].task! }
+            // Created under the lock, which the runner takes first, so it
+            // can't finish before it is kept here.
+            let task = Task(priority: priority) { [weak self] in
+                while let self {
+                    lock.withLock { $0[keyPath: run].beginRound() }
+                    await round(self)
+                    guard lock.withLock({ $0[keyPath: run].endRound() }) else { return }
+                }
+            }
+            state[keyPath: run].task = task
+            return task
+        }
+    }
 
     struct Mutable {
         var isSyncing = false
-        var heldRun = HeldRun.idle
+        var heldRun = CoalescedRun()
         /// What the send queues have taken up, and edits made before that.
         var sends = SendClaims()
         /// Ids of reactions stanzas written this session and not yet
@@ -342,25 +393,23 @@ public final class XMPPSession: @unchecked Sendable {
         /// The archive version our server speaks, from account discovery.
         var archiveVersion: MessageArchiveManagementModule.Version?
         /// The run sending queued blocks and unblocks.
-        var blockRun = HeldRun.idle
+        var blockRun = CoalescedRun()
         /// The person whose block or unblock is on its way to the server.
         var blockInFlight: JID?
         /// The run sending queued roster changes, and the one on its way to the server.
-        var rosterRun = HeldRun.idle
+        var rosterRun = CoalescedRun()
         var rosterInFlight: Int64?
         /// A new session's roster hasn't arrived yet. The queued changes wait
         /// for it, as removing and renaming need the item and accepting
         /// checks the request against it.
         var awaitsRoster = false
         /// The run sending the bookmarks we owe, and the task doing it.
-        var bookmarkRun = HeldRun.idle
-        var bookmarkTask: Task<Void, Never>?
+        var bookmarkRun = CoalescedRun()
         /// Groups whose bookmark the server refused for good, until the
         /// user's Retry asks about them.
         var bookmarkRefusals: [JID: Error] = [:]
         /// The run sending our avatar and name changes, and the task doing it.
-        var profileRun = HeldRun.idle
-        var profileTask: Task<Void, Never>?
+        var profileRun = CoalescedRun()
         /// The profile warning keys whose change the server refused for good,
         /// until the user's Retry asks about it.
         var profileRefusals: [String: Error] = [:]
