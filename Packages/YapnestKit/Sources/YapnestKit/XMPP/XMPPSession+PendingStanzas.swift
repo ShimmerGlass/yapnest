@@ -44,7 +44,7 @@ extension XMPPSession {
     /// Which kind of pending stanza `stanza` is, if any: one written this
     /// session, or else one that says so itself, as a new session forgets what
     /// it wrote and the server's acknowledgement may still come.
-    private func pendingKind(of stanza: Stanza, id: String) -> PendingKind? {
+    func pendingKind(of stanza: Stanza, id: String) -> PendingKind? {
         guard stanza.name == "message" else { return nil }
         if let kind = lock.withLock({ $0.pendingStanzas.kind(of: id) }) { return kind }
         if stanza.firstChild(name: "reactions", xmlns: NS.reactions) != nil { return .reaction }

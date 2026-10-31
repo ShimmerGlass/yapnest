@@ -1349,7 +1349,7 @@ public final class XMPPSession: @unchecked Sendable {
         let alone = !queue.dropFirst().contains { $0.name == "message" }
         let blamed = Redacted.id(id)
         let reason = SendFailure.serverClosedStream
-        let pendingKind = lock.withLock { $0.pendingStanzas.kind(of: id) }
+        let pendingKind = pendingKind(of: stanza, id: id)
         let giveUp: () -> Void
         if let pendingKind {
             giveUp = { [self] in

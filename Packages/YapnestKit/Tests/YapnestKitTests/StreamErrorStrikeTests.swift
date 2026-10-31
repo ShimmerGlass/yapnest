@@ -263,6 +263,32 @@ struct StreamErrorStrikeTests {
         #expect(written(id) == writes)
     }
 
+    @Test func aCorrectionTheLedgerLostIsStillBlamedFromWhatItSays() throws {
+        let conversation = try #require(try database.conversation(with: alice).id)
+        let original = try database.insert(YapnestKit.Message(
+            conversationId: conversation, direction: .outgoing, sender: me, body: "hello", status: .sent, remoteId: "m1",
+        ))
+        try session.edit(original, to: "hello there")
+        session.drainSendQueue(alice)
+        let actionId = try #require(try stored(original).actionPendingId)
+        session.lock.withLock { $0.pendingStanzas.remove(actionId) }
+        close(with: streamError("policy-violation"))
+        #expect(strikes(actionId) == 1)
+    }
+
+    @Test func reactionsTheLedgerLostAreStillBlamedFromWhatTheySay() throws {
+        let conversation = try #require(try database.conversation(with: alice).id)
+        let incoming = try database.insert(YapnestKit.Message(conversationId: conversation, direction: .incoming, sender: alice, body: "hi", remoteId: "1"))
+        wire.failsWrites = true
+        try session.toggleReaction("👍", on: incoming, peer: alice)
+        wire.failsWrites = false
+        let id = try #require(try database.reader.read { try Reaction.fetchOne($0)?.pendingId })
+        reconnect()
+        session.lock.withLock { $0.pendingStanzas.remove(id) }
+        close(with: streamError("policy-violation"))
+        #expect(strikes(id) == 1)
+    }
+
     // MARK: Probation
 
     @Test func aStanzaStruckOnceIsSentAloneAndTheRestWaitsForItsAcknowledgement() async throws {
