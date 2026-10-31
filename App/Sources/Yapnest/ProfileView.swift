@@ -12,16 +12,15 @@ struct ProfileView: View {
     @State private var me: Contact?
     @State private var pending = AppDatabase.ProfilePending(avatar: false, nickname: false)
     @State private var sharesProfilePublicly = false
-    @State private var isChangingProfileAccess = false
     @State private var confirmsSignOut = false
     @State private var photo: PhotosPickerItem?
-    @State private var isChangingAvatar = false
     @State private var profileError: String?
     @State private var saves = SettingsWrites()
     @State private var name = ""
     @State private var savedName = ""
-    @State private var isSavingName = false
     @State private var profileAction = ServerAction()
+    /// Which control the profile action is running for, for its spinner.
+    private enum Control { case avatar, name, access }
     @State private var availability = XMPPSession.Availability.available
     @State private var status = ""
     @State private var savedStatus = ""
@@ -45,7 +44,7 @@ struct ProfileView: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            if isChangingAvatar {
+                            if profileAction.isBusy(Control.avatar) {
                                 ProgressView()
                             } else if pending.avatar {
                                 Text("Waiting to send")
@@ -61,7 +60,7 @@ struct ProfileView: View {
                             .submitLabel(.done)
                             .onSubmit(saveName)
                             .disabled(profileAction.isBusy || !isLoaded)
-                        if isSavingName {
+                        if profileAction.isBusy(Control.name) {
                             ProgressView()
                         } else if pending.nickname {
                             Text("Waiting to send")
@@ -110,7 +109,7 @@ struct ProfileView: View {
                     HStack {
                         Toggle("Show My Name and Photo to Everyone", isOn: Binding(get: { sharesProfilePublicly }, set: setSharesProfilePublicly))
                             .disabled(profileAction.isBusy)
-                        if isChangingProfileAccess { ProgressView() }
+                        if profileAction.isBusy(Control.access) { ProgressView() }
                     }
                 } footer: {
                     Text("With this off, only your contacts see your name and photo. People you haven't added, including members of your groups, don't.")
@@ -221,20 +220,16 @@ struct ProfileView: View {
 
     private func setAvatar(from item: PhotosPickerItem) {
         let session = session
-        profileAction.run {
-            isChangingAvatar = true
-            defer { isChangingAvatar = false }
+        profileAction.run(tag: Control.avatar) {
             let prepared = try await AvatarImagePreparation.prepare(item)
             try await session.publishAvatar(prepared.data, mimeType: prepared.mimeType, width: prepared.side, height: prepared.side)
         }
     }
 
     private func saveName() {
-        guard !isSavingName, XMPPSession.normalizedNickname(name) ?? "" != savedName else { return }
+        guard !profileAction.isBusy(Control.name), XMPPSession.normalizedNickname(name) ?? "" != savedName else { return }
         let (session, typed) = (session, name)
-        profileAction.run {
-            isSavingName = true
-            defer { isSavingName = false }
+        profileAction.run(tag: Control.name) {
             try await session.setNickname(typed)
             savedName = await offMain { session.nickname ?? "" }
             name = savedName
@@ -259,9 +254,7 @@ struct ProfileView: View {
 
     private func removeAvatar() {
         let session = session
-        profileAction.run {
-            isChangingAvatar = true
-            defer { isChangingAvatar = false }
+        profileAction.run(tag: Control.avatar) {
             try await session.removeAvatar()
         }
     }
@@ -270,9 +263,7 @@ struct ProfileView: View {
     // profile alert's Retry if it didn't.
     private func setSharesProfilePublicly(_ on: Bool) {
         let session = session
-        profileAction.run {
-            isChangingProfileAccess = true
-            defer { isChangingProfileAccess = false }
+        profileAction.run(tag: Control.access) {
             try await session.setSharesProfilePublicly(on)
             sharesProfilePublicly = on
         }

@@ -13,15 +13,25 @@ import YapnestKit
 @Observable
 final class ServerAction {
     private(set) var isBusy = false
+    /// What the running work was started for, so a screen with several
+    /// controls on one action can show which of them is busy.
+    private(set) var busyTag: AnyHashable?
     var error: String?
     /// Whether the alert offers Retry: the failure came from the server or the connection.
     private(set) var canRetry = false
     private var lastWork: (@MainActor () async throws -> Void)?
+    private var lastTag: AnyHashable?
 
-    func run(_ work: @escaping @MainActor () async throws -> Void) {
+    func isBusy(_ tag: some Hashable) -> Bool {
+        isBusy && busyTag == AnyHashable(tag)
+    }
+
+    func run(tag: AnyHashable? = nil, _ work: @escaping @MainActor () async throws -> Void) {
         guard !isBusy else { return }
         isBusy = true
+        busyTag = tag
         lastWork = work
+        lastTag = tag
         canRetry = false
         Task {
             do {
@@ -31,12 +41,13 @@ final class ServerAction {
                 canRetry = ServerError.isFromServer(error)
             }
             isBusy = false
+            busyTag = nil
         }
     }
 
     func retry() {
         guard let lastWork else { return }
-        run(lastWork)
+        run(tag: lastTag, lastWork)
     }
 }
 

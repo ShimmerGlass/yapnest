@@ -12,8 +12,6 @@ struct BannedMembersView: View {
     @State private var loadList = ServerAction()
     @State private var lifting = ServerAction()
     @State private var isLoading = true
-    /// Who is being let back in, for the spinner on their row.
-    @State private var unbanning: JID?
     @State private var names: [JID: String] = [:]
 
     private var banned: [JID] {
@@ -58,7 +56,7 @@ struct BannedMembersView: View {
     }
 
     private func row(_ jid: JID) -> some View {
-        let busy = unbanning == jid
+        let busy = lifting.isBusy(jid)
         return HStack {
             VStack(alignment: .leading) {
                 if let name = names[jid], name != jid.description {
@@ -82,9 +80,7 @@ struct BannedMembersView: View {
     }
 
     private func lift(_ jid: JID) {
-        unbanning = jid
-        lifting.run { [session, room] in
-            defer { unbanning = nil }
+        lifting.run(tag: jid) { [session, room] in
             try await session.unban(jid, in: room)
         }
     }
