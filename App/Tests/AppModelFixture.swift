@@ -40,6 +40,8 @@ final class AppModelFixture {
     let appLock: ProcessLock
     /// What an extension asks, from its own open of the app's lock.
     let appIsRunning: @Sendable () -> Bool
+    /// Where the app lock is, for a test that holds it as an extension would.
+    let appLockURL: URL
     /// Another process's handle on the same lock.
     let otherProcess: ProcessLock
     let credentials = FakeCredentials()
@@ -80,6 +82,7 @@ final class AppModelFixture {
         otherProcess = ProcessLock(url: root.appending(path: "session.lock"))
         appLock = ProcessLock(url: root.appending(path: "app.lock"))
         let appLockURL = root.appending(path: "app.lock")
+        self.appLockURL = appLockURL
         appIsRunning = { ProcessLock(url: appLockURL).appIsRunning }
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         environment.credentials = credentials

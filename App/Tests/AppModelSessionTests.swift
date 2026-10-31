@@ -99,6 +99,42 @@ struct AppModelSessionTests {
         #expect(fixture.lock.isLocked)
     }
 
+    // The first sign-in's waiter, no longer wanted, found the lock taken by
+    // the second (one lock object per process) and let go of it, leaving the
+    // new session running beside whatever an extension started.
+    @Test func aWaiterLeftBehindBySigningInAgainKeepsTheNewSessionsLock() async throws {
+        let fixture = AppModelFixture(lockTimeout: 0.1)
+        #expect(fixture.otherProcess.tryLock())
+        let model = fixture.model!
+        let first = Task { try await model.signIn(fixture.credentialsToSignIn) }
+        try await Task.sleep(for: .milliseconds(150))
+        first.cancel()
+        model.signOut()
+        fixture.otherProcess.unlock()
+        try await model.signIn(fixture.credentialsToSignIn)
+
+        #expect(await stays(for: .milliseconds(600)) { fixture.lock.isLocked && fixture.appIsRunning() })
+    }
+
+    // An extension asking whether the app runs holds the app lock for an
+    // instant. The app waited for it on the main thread, and after a second
+    // went on without it, so extensions took the app for one of them.
+    @Test func aSignInWaitsOutAnExtensionAskingWhetherTheAppRuns() async throws {
+        let fixture = AppModelFixture(lockTimeout: 0.1)
+        let asking = open(fixture.appLockURL.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+        #expect(flock(asking, LOCK_SH | LOCK_NB) == 0)
+        let model = fixture.model!
+        let signIn = Task { try await model.signIn(fixture.credentialsToSignIn) }
+        defer { signIn.cancel() }
+        #expect(await stays(for: .milliseconds(1_300)) { fixture.connects.isEmpty })
+        flock(asking, LOCK_UN)
+        close(asking)
+
+        await eventually("the sign-in goes through") { model.session != nil }
+        #expect(fixture.appIsRunning())
+        #expect(fixture.lock.isLocked)
+    }
+
     @Test func comingBackConnectsOnlyOnceTheLockIsFree() async throws {
         let fixture = AppModelFixture(lockTimeout: 0.1)
         let model = fixture.model!

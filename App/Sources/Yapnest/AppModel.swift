@@ -166,11 +166,6 @@ final class AppModel {
     @ObservationIgnored private var sessionLock: ProcessLock { environment.sessionLock }
     @ObservationIgnored private var appLock: ProcessLock { environment.appLock }
 
-    /// Announces the app to the extensions before it waits for the session
-    /// lock. Taken first, so there is no moment when the session lock is
-    /// ours and the app lock isn't. Another process can hold it for an
-    /// instant, only while asking whether the app is running.
-    private func announceApp() { _ = appLock.lock(timeout: 1) }
 
     /// Lets go of the session lock, then the app lock, so an extension that
     /// finds the session free never sees the app as running without it.
@@ -650,8 +645,15 @@ final class AppModel {
         // The extension may have stored messages this process hasn't seen.
         let (database, badgeSync) = (session.database, badgeSync)
         Task { await offMain { badgeSync.externalChangesMayHaveArrived(in: database) } }
-        announceApp()
-        if sessionLock.tryLock() {
+        // The app lock announces the app to the extensions, and is taken
+        // before the session lock, so there is no moment when the session
+        // lock is ours and the app lock isn't. Another process holds it only
+        // for an instant, while asking whether the app is running; waiting
+        // that out is left to the task below, off the main thread.
+        if appLock.tryLock(), sessionLock.tryLock() {
+            // An older session still waiting would otherwise find the lock
+            // ours, see that it isn't wanted, and let go of this one's.
+            lockWaiter = nil
             environment.connect(session)
             return
         }
@@ -665,8 +667,8 @@ final class AppModel {
         Task {
             defer { if lockWaiter === session { lockWaiter = nil } }
             while true {
-                let (sessionLock, timeout) = (sessionLock, environment.lockTimeout)
-                let locked = await sessionLock.waitForLock(timeout: timeout)
+                let (appLock, sessionLock, timeout) = (appLock, sessionLock, environment.lockTimeout)
+                let locked = await appLock.waitForLock(timeout: timeout) ? await sessionLock.waitForLock(timeout: timeout) : false
                 guard isActive, SessionScope.isWanted(session, signedIn: self.session, pendingSignIn: pendingSignIn) else {
                     // Not if a newer session waits on the same lock: it would take it from there.
                     if lockWaiter === session { releaseProcessLocks() }
