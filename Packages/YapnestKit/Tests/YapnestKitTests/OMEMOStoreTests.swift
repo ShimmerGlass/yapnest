@@ -88,6 +88,21 @@ struct OMEMOStoreTests {
         #expect(!store.flushDeletedPreKeys())
     }
 
+    /// A contact holding an older bundle may still pick a used id; a new key
+    /// under it would fail as the wrong key rather than as an unknown one.
+    @Test func aFlushedPreKeyIdIsNeverGivenToANewKey() throws {
+        let database = try AppDatabase.inMemory()
+        let store = OMEMOStore(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        #expect(store.storePreKey(Data([1]), withId: 1))
+        #expect(store.storePreKey(Data([2]), withId: 2))
+        #expect(store.deletePreKey(withId: 2))
+        #expect(store.flushDeletedPreKeys())
+        #expect(store.currentPreKeyId() == 2)
+        // And after the app starts again.
+        let reopened = OMEMOStore(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        #expect(reopened.currentPreKeyId() == 2)
+    }
+
     @Test func identityIsCreatedOnceAndPersists() throws {
         let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
         let first = try OMEMOEncryption(database: database, account: me, identityKeys: keys)

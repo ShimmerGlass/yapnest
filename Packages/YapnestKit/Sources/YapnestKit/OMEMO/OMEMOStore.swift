@@ -390,8 +390,16 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
 
     // MARK: Prekeys
 
+    /// Where the next prekeys are numbered from. Not the highest id left: a
+    /// flush removes the used ones, and the next batch would reuse an id a
+    /// contact may still pick from an older bundle, so their message would
+    /// fail on the wrong key rather than as an unknown one.
     func currentPreKeyId() -> UInt32 {
-        (read { db in try UInt32.fetchOne(db, sql: "SELECT MAX(id) FROM omemoPreKey") } ?? nil) ?? 0
+        (read { db in
+            let left = try UInt32.fetchOne(db, sql: "SELECT MAX(id) FROM omemoPreKey") ?? 0
+            let made = try AppDatabase.setting(db, .omemoLastPreKeyId).flatMap { UInt32($0) } ?? 0
+            return max(left, made)
+        }) ?? 0
     }
 
     /// A prekey libsignal has deleted stays readable until
@@ -411,6 +419,8 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     func storePreKey(_ data: Data, withId id: UInt32) -> Bool {
         write { db in
             try db.execute(sql: "INSERT OR REPLACE INTO omemoPreKey (id, data, isDeleted) VALUES (?, ?, 0)", arguments: [id, data])
+            let made = try AppDatabase.setting(db, .omemoLastPreKeyId).flatMap { UInt32($0) } ?? 0
+            if id > made { try AppDatabase.setSetting(db, .omemoLastPreKeyId, String(id)) }
         }
     }
 

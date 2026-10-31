@@ -20,6 +20,8 @@ extension AppDatabase {
         /// see `OMEMOStore.findOrMakeIdentity`. Taken off the account's device
         /// list once connected.
         case omemoReplacedDeviceIds
+        /// The highest one-time prekey id ever made, which never goes down.
+        case omemoLastPreKeyId
         /// The members of private groups this install's OMEMO device has
         /// introduced itself to, as JSON: see `introducedMembers`.
         case introducedGroups
