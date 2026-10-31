@@ -292,11 +292,12 @@ extension AppDatabase {
     /// asked for a displayed marker (XEP-0333).
     func lastIncoming(conversationId: Int64, markable: Bool = false, through date: Date = .distantFuture) throws -> Message? {
         try reader.read { db in
-            var request = Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming
-                    && Column("timestamp") <= date)
+            var request = Message.all()
+                .inConversation(conversationId)
+                .incomingOnly()
+                .filter(Column("timestamp") <= date)
             if markable { request = request.filter(Column("isMarkable") == true) }
-            return try request.order(Column("timestamp").desc).fetchOne(db)
+            return try request.newestFirst().fetchOne(db)
         }
     }
 }
@@ -378,10 +379,12 @@ extension AppDatabase {
     /// The stanza-ids our server gave the latest messages `jid` sent us.
     func lastServerIds(from jid: JID, limit: Int) throws -> [String] {
         try reader.read { db in
-            guard let conversation = try Conversation.filter(Column("peer") == jid && Column("kind") == Conversation.Kind.chat).fetchOne(db) else { return [] }
-            return try Message
-                .filter(Column("conversationId") == conversation.id && Column("direction") == Message.Direction.incoming && Column("serverId") != nil)
-                .order(Column("timestamp").desc)
+            guard let conversationId = try Conversation.all().chat(with: jid).fetchOne(db)?.id else { return [] }
+            return try Message.all()
+                .inConversation(conversationId)
+                .incomingOnly()
+                .filter(Column("serverId") != nil)
+                .newestFirst()
                 .limit(limit)
                 .fetchAll(db)
                 .compactMap(\.serverId)

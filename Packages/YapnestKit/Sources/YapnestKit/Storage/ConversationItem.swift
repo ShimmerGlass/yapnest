@@ -102,7 +102,7 @@ extension AppDatabase {
         guard let conversation = try Self.existingConversation(db, peer: peer), let conversationId = conversation.id else {
             return []
         }
-        var request = Message.filter(Column("conversationId") == conversationId)
+        var request = Message.all().inConversation(conversationId)
         if let until {
             request = request.filter(until.sqlBefore(inclusive: true))
         }
@@ -113,7 +113,7 @@ extension AppDatabase {
         }
         // Newest first so that a limit keeps the newest; flipped below.
         let messages = try request
-            .order(Column("timestamp").desc, Column("id").desc)
+            .newestFirst()
             .fetchAll(db)
             .reversed()
 
@@ -230,10 +230,10 @@ extension AppDatabase {
     }
 
     private static func cursor(_ db: Database, conversationId: Int64, from cursor: MessageCursor, count: Int, newer: Bool) throws -> (cursor: MessageCursor, found: Int)? {
-        let request = Message.filter(Column("conversationId") == conversationId)
+        let request = Message.all().inConversation(conversationId)
         let rows = try Row.fetchAll(db, (newer
             ? request.filter(cursor.sqlAfter(inclusive: false)).order(Column("timestamp"), Column("id"))
-            : request.filter(cursor.sqlBefore(inclusive: false)).order(Column("timestamp").desc, Column("id").desc))
+            : request.filter(cursor.sqlBefore(inclusive: false)).newestFirst())
             .limit(count)
             .select(Column("id"), Column("timestamp")))
         return rows.last.map { (MessageCursor(row: $0), rows.count) }
@@ -250,8 +250,8 @@ extension AppDatabase {
             guard let conversationId = try Self.conversationId(db, peer: peer),
                   let message = try Message.fetchOne(db, key: messageId), message.conversationId == conversationId else { return nil }
             let target = MessageCursor(message)
-            let newer = try Message
-                .filter(Column("conversationId") == conversationId)
+            let newer = try Message.all()
+                .inConversation(conversationId)
                 .filter(target.sqlAfter(inclusive: false))
                 .fetchCount(db)
             guard newer > limit else {
@@ -277,8 +277,9 @@ extension AppDatabase {
 
     private static func unreadCount(_ db: Database, peer: JID) throws -> Int {
         guard let conversationId = try Self.conversationId(db, peer: peer) else { return 0 }
-        return try Message
-            .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming)
+        return try Message.all()
+            .inConversation(conversationId)
+            .incomingOnly()
             .unread()
             .fetchCount(db)
     }
@@ -306,22 +307,23 @@ extension AppDatabase {
     public func openingWindow(peer: JID, limit: Int = 2500) throws -> (firstUnread: Int64?, start: MessageCursor?) {
         try reader.read { db in
             guard let conversationId = try Self.conversationId(db, peer: peer),
-                  let unread = try Message
-                    .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming)
+                  let unread = try Message.all()
+                    .inConversation(conversationId)
+                    .incomingOnly()
                     .unread()
                     .order(Column("timestamp"), Column("id"))
                     .fetchOne(db),
                   let id = unread.id else { return (nil, nil) }
-            let newer = try Message
-                .filter(Column("conversationId") == conversationId)
+            let newer = try Message.all()
+                .inConversation(conversationId)
                 .filter(MessageCursor(unread).sqlAfter(inclusive: true))
                 .fetchCount(db)
             guard newer > Self.initialWindow else { return (id, nil) }
             guard newer <= limit else {
                 // Too much unread to show: as far back as the limit goes.
-                let start = try Row.fetchOne(db, Message
-                    .filter(Column("conversationId") == conversationId)
-                    .order(Column("timestamp").desc, Column("id").desc)
+                let start = try Row.fetchOne(db, Message.all()
+                    .inConversation(conversationId)
+                    .newestFirst()
                     .select(Column("id"), Column("timestamp"))
                     .limit(1, offset: limit - 1))
                     .map { MessageCursor(row: $0) }
@@ -344,7 +346,7 @@ extension AppDatabase {
     public func oldestMessage(peer: JID) throws -> Message? {
         try reader.read { db in
             guard let conversationId = try Self.conversationId(db, peer: peer) else { return nil }
-            return try Message.filter(Column("conversationId") == conversationId).excludingEvents().order(Column("timestamp"), Column("id")).fetchOne(db)
+            return try Message.all().inConversation(conversationId).excludingEvents().order(Column("timestamp"), Column("id")).fetchOne(db)
         }
     }
 
@@ -460,7 +462,7 @@ final class ConversationItemCache: @unchecked Sendable {
         guard let conversationId = try AppDatabase.conversationId(db, peer: peer) else {
             return publish([], [:])
         }
-        var window = Message.filter(Column("conversationId") == conversationId)
+        var window = Message.all().inConversation(conversationId)
         if let until {
             window = window.filter(until.sqlBefore(inclusive: true))
         }
@@ -469,7 +471,7 @@ final class ConversationItemCache: @unchecked Sendable {
         } else {
             window = window.limit(limit)
         }
-        window = window.order(Column("timestamp").desc, Column("id").desc)
+        window = window.newestFirst()
 
         // Newest first, as the window is cut; flipped below.
         var revisions: [(id: Int64, rev: Int64)] = []

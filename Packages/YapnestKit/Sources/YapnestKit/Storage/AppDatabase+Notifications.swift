@@ -165,8 +165,8 @@ extension AppDatabase {
                             // Everything unread counts, as in the badge: a
                             // group that notifies for every message has no
                             // unread one that doesn't.
-                            heldCount = try Message
-                                .filter(Column("conversationId") == message.conversationId)
+                            heldCount = try Message.all()
+                                .inConversation(message.conversationId)
                                 .unread()
                                 .fetchCount(db)
                         }

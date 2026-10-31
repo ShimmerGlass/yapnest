@@ -301,10 +301,11 @@ extension AppDatabase {
     }
 
     private static func newestReadMessageWithServerId(_ db: Database, conversationId: Int64) throws -> Message? {
-        try Message
-            .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming
-                && Column("isRead") == true && Column("serverId") != nil && Column("event") == nil)
-            .order(Column("timestamp").desc)
+        try Message.all()
+            .inConversation(conversationId)
+            .incomingOnly()
+            .filter(Column("isRead") == true && Column("serverId") != nil && Column("event") == nil)
+            .newestFirst()
             .fetchOne(db)
     }
 
@@ -360,8 +361,10 @@ extension AppDatabase {
     /// through it would move the read point forward.
     func hasUnread(conversationId: Int64, through date: Date) throws -> Bool {
         try reader.read { db in
-            try Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming && Column("timestamp") <= date)
+            try Message.all()
+                .inConversation(conversationId)
+                .incomingOnly()
+                .filter(Column("timestamp") <= date)
                 .unread()
                 .isEmpty(db) == false
         }
@@ -369,8 +372,9 @@ extension AppDatabase {
 
     @discardableResult
     static func markRead(_ db: Database, conversationId: Int64, through date: Date) throws -> Int {
-        try Message
-            .filter(Column("conversationId") == conversationId && Column("timestamp") <= date)
+        try Message.all()
+            .inConversation(conversationId)
+            .filter(Column("timestamp") <= date)
             .unread()
             .updateAll(db, Column("isRead").set(to: true))
     }

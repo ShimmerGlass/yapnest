@@ -35,7 +35,7 @@ struct QueryPlanTests {
 
     /// Every statement `body` runs that holds `marker`, with the plan of what
     /// was run (the values in place) and the SQL as GRDB made it.
-    private func statements(containing marker: String, _ body: () throws -> Void) throws -> [Statement] {
+    func statements(containing marker: String, _ body: () throws -> Void) throws -> [Statement] {
         let log = Collected<String>()
         try db.writer.write { database in
             database.trace { event in
@@ -59,7 +59,7 @@ struct QueryPlanTests {
         }
     }
 
-    private func expectIndexed(_ statements: [Statement], using index: String, sourceLocation: SourceLocation = #_sourceLocation) {
+    func expectIndexed(_ statements: [Statement], using index: String, sourceLocation: SourceLocation = #_sourceLocation) {
         #expect(!statements.isEmpty, "the statement was not run", sourceLocation: sourceLocation)
         for statement in statements {
             #expect(statement.plan.contains(index), "\(statement.plan)", sourceLocation: sourceLocation)
@@ -258,5 +258,13 @@ struct QueryPlanTests {
             try Row.fetchAll(database, sql: "EXPLAIN QUERY PLAN SELECT 1 FROM pendingEdit WHERE standInId = 1").map { $0["detail"] as String }.joined()
         }
         #expect(plan.contains("pendingEdit_on_standInId"), "\(plan)")
+    }
+}
+
+extension QueryPlanTests {
+    @Test func theNewestIncomingMessageIsFoundThroughTheConversationsTimestampIndex() throws {
+        let found = try statements(containing: "ORDER BY") { _ = try db.lastIncoming(conversationId: chat) }
+        expectIndexed(found, using: "message_on_conversation_timestamp")
+        #expect(found.allSatisfy { !$0.plan.contains("TEMP B-TREE") }, "\(found.map(\.plan))")
     }
 }

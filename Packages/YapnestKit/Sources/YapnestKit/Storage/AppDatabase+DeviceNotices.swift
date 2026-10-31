@@ -47,7 +47,7 @@ extension AppDatabase {
                 sql: "INSERT OR IGNORE INTO deviceNotice (deviceId, fingerprint, firstSeen) VALUES (?, ?, ?)",
                 arguments: [deviceId, fingerprint, date],
             )
-        } else if let peer = JID(name), let conversation = try Conversation.filter(Column("peer") == peer && Column("kind") == Conversation.Kind.chat.rawValue).fetchOne(db), let conversationId = conversation.id {
+        } else if let peer = JID(name), let conversation = try Conversation.all().chat(with: peer).fetchOne(db), let conversationId = conversation.id {
             var event = newDeviceEvent(conversationId: conversationId, peer: peer, deviceId: deviceId, fingerprint: fingerprint, at: date)
             try event.insert(db)
         }

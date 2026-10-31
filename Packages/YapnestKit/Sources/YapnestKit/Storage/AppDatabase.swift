@@ -921,8 +921,26 @@ extension DerivableRequest<Message> {
     /// Written by us: what `message_outgoing_status` holds.
     func outgoingOnly() -> Self { filter(sql: "message.direction = '\(Message.Direction.outgoing.rawValue)'") }
 
+    /// One conversation's messages, which `message_on_conversation_timestamp`
+    /// and the partial indexes above all lead with.
+    func inConversation(_ id: Int64) -> Self { filter(Column("conversationId") == id) }
+
+    /// What the peer sent. No index holds only these, so this is an ordinary
+    /// condition for the conversation's index to be filtered by.
+    func incomingOnly() -> Self { filter(Column("direction") == Message.Direction.incoming) }
+
+    /// Newest first, with the later row winning a tie, so that every query
+    /// for "the newest" agrees and `message_on_conversation_timestamp` still
+    /// serves it (the rowid ends every index entry).
+    func newestFirst() -> Self { order(Column("timestamp").desc, Column("id").desc) }
+
     /// Not sent yet: what `message_pending_remoteId` holds.
     func notYetSent() -> Self { filter(sql: "message.status = '\(Message.Status.pending.rawValue)'") }
+}
+
+extension DerivableRequest<Conversation> {
+    /// The one-to-one conversation with `peer`.
+    func chat(with peer: JID) -> Self { filter(Column("peer") == peer && Column("kind") == Conversation.Kind.chat.rawValue) }
 }
 
 public enum AppDatabaseError: Error, LocalizedError, Equatable, Sendable {

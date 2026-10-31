@@ -256,10 +256,11 @@ extension AppDatabase {
     /// offer already has the choice, as when this device made it, nothing
     /// changes: looking further back would answer an older offer.
     static func markActionChosen(_ db: Database, _ actionId: String, conversationId: Int64, through date: Date) throws {
-        let offers = try Message
-            .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming)
+        let offers = try Message.all()
+            .inConversation(conversationId)
+            .incomingOnly()
             .filter(Column("quickResponses") != nil && Column("timestamp") <= date)
-            .order(Column("timestamp").desc, Column("id").desc)
+            .newestFirst()
             .limit(50)
             .fetchAll(db)
         guard var message = offers.first(where: { $0.quickResponses?.actions.contains { $0.id == actionId } == true }),
@@ -272,8 +273,8 @@ extension AppDatabase {
     /// pending hasn't been sent (an upload under way, or queued offline), so
     /// nothing was read of it, and it must stay pending to be sent.
     static func markDisplayed(_ db: Database, conversationId: Int64, through date: Date) throws {
-        _ = try Message
-            .filter(Column("conversationId") == conversationId)
+        _ = try Message.all()
+            .inConversation(conversationId)
             .outgoingOnly()
             .filter(Column("timestamp") <= date && Column("isRetracted") == false)
             .filter([Message.Status.sent, .received, .delivered].contains(Column("status")))

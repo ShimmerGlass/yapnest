@@ -45,9 +45,11 @@ extension AppDatabase {
     /// as unread until it's opened again.
     public func markUnread(conversationId: Int64) throws {
         try writer.write { db in
-            guard var last = try Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming && Column("isRetracted") == false)
-                .order(Column("timestamp").desc, Column("id").desc)
+            guard var last = try Message.all()
+                .inConversation(conversationId)
+                .incomingOnly()
+                .filter(Column("isRetracted") == false)
+                .newestFirst()
                 .fetchOne(db) else { return }
             last.isRead = false
             try last.update(db)
