@@ -95,7 +95,7 @@ struct PendingReactionTests {
         #expect(reactionStanzas().count == 1)
 
         // A new one starts over, having lost what was unacknowledged.
-        session.lock.withLock { $0.writtenReactions = [] }
+        session.lock.withLock { $0.pendingStanzas.reset() }
         session.sendUnclaimedPending()
         session.sendUnclaimedPending()
         let sent = reactionStanzas()
@@ -112,7 +112,7 @@ struct PendingReactionTests {
         try database.writer.write { db in
             try db.execute(sql: "UPDATE message SET remoteId = NULL, originId = NULL WHERE id = ?", arguments: [message.id])
         }
-        session.lock.withLock { $0.writtenReactions = [] }
+        session.lock.withLock { $0.pendingStanzas.reset() }
         session.sendUnclaimedPending()
 
         #expect(reactionStanzas().count == 1)

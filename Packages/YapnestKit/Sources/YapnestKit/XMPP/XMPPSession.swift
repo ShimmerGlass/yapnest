@@ -282,12 +282,9 @@ public final class XMPPSession: @unchecked Sendable {
         var heldRun = CoalescedRun()
         /// What the send queues have taken up, and edits made before that.
         var sends = SendClaims()
-        /// Ids of reactions stanzas written this session and not yet
-        /// acknowledged, so none is written twice. A new session forgets
-        /// them, as the server never got what it hadn't acknowledged.
-        var writtenReactions: Set<String> = []
-        /// The same for the stanzas of corrections and retractions.
-        var writtenActions: Set<String> = []
+        /// The stanzas of reactions, corrections and retractions written this
+        /// session and not yet acknowledged, so none is written twice.
+        var pendingStanzas = PendingLedger()
         /// Who the errors that bounce our stanzas belong to.
         var bounces = BounceRouter()
         /// Stanzas a passing bounce made pending again, until they are written
@@ -1352,18 +1349,18 @@ public final class XMPPSession: @unchecked Sendable {
         let alone = !queue.dropFirst().contains { $0.name == "message" }
         let blamed = Redacted.id(id)
         let reason = SendFailure.serverClosedStream
-        let (isAction, isReactions) = lock.withLock { ($0.writtenActions.contains(id), $0.writtenReactions.contains(id)) }
+        let pendingKind = lock.withLock { $0.pendingStanzas.kind(of: id) }
         let giveUp: () -> Void
-        if isAction {
+        if pendingKind == .action {
             giveUp = { [self] in
                 DiagLog.error(.send, "Correction or retraction given up", .id("stanza", blamed), .value("reason", reason))
-                lock.withLock { _ = $0.writtenActions.remove(id) }
+                lock.withLock { _ = $0.pendingStanzas.remove(id, of: .action) }
                 giveUpAction(id, because: String(localized: "The server closed the connection each time this was sent."))
             }
-        } else if isReactions {
+        } else if pendingKind == .reaction {
             giveUp = { [self] in
                 DiagLog.error(.send, "Reactions given up", .id("stanza", blamed), .value("reason", reason))
-                lock.withLock { _ = $0.writtenReactions.remove(id) }
+                lock.withLock { _ = $0.pendingStanzas.remove(id, of: .reaction) }
                 try? database.clearPending(.reaction, id: id, error: String(localized: "The server closed the connection each time this was sent."))
             }
         } else if let message = try? database.pendingOutgoing(remoteId: id) {
@@ -1510,8 +1507,7 @@ public final class XMPPSession: @unchecked Sendable {
                     $0.interruptedRooms = []
                     // What was unacknowledged is sent again, and claims anew.
                     $0.sends.reset()
-                    $0.writtenReactions = []
-                    $0.writtenActions = []
+                    $0.pendingStanzas.reset()
                     $0.repended = []
                     $0.uploadService = nil
                     $0.mucService = nil
@@ -1967,23 +1963,7 @@ public final class XMPPSession: @unchecked Sendable {
             // is not the new one's.
             if lock.withLock({ $0.repended.contains(id) }) { return }
         }
-        if stanza.name == "message", let id = stanza.id, lock.withLock({ $0.writtenActions.remove(id) != nil }) {
-            do {
-                try database.clearPending(.action, id: id)
-            } catch {
-                logger.error("Failed to mark a correction or retraction \(id, privacy: .private) sent: \(error)")
-            }
-            return
-        }
-        if stanza.name == "message", let id = stanza.id, stanza.firstChild(name: "reactions", xmlns: NS.reactions) != nil {
-            lock.withLock { _ = $0.writtenReactions.remove(id) }
-            do {
-                try database.clearPending(.reaction, id: id)
-            } catch {
-                logger.error("Failed to mark reactions \(id, privacy: .private) sent: \(error)")
-            }
-            return
-        }
+        if let id = stanza.id, acknowledgePending(stanza, id: id) { return }
         guard stanza.name == "message", let message = stanza as? Martin.Message, message.type == .chat || message.type == .groupchat,
               message.body != nil || message.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) != nil,
               message.firstChild(name: "replace", xmlns: NS.correction) == nil,
@@ -2542,7 +2522,7 @@ public final class XMPPSession: @unchecked Sendable {
         guard let pending = try? database.pendingReactions() else { return }
         for (message, peer, id) in pending {
             guard let messageId = message.id else { continue }
-            guard !lock.withLock({ $0.writtenReactions.contains(id) }) else { continue }
+            guard !lock.withLock({ $0.pendingStanzas.contains(id, of: .reaction) }) else { continue }
             // A room we left never becomes ready, so it would be queued again
             // every session for good.
             if (try? database.groupChat(peer))?.hasLeft == true {
@@ -2564,10 +2544,10 @@ public final class XMPPSession: @unchecked Sendable {
     /// Writes a reactions stanza once, asking for its acknowledgement, or
     /// pinging for it where the stream has no stream management.
     private func writeReactions(_ stanza: Martin.Message, id: String, messageId: Int64, peer: JID) {
-        guard isConnected, !isHeldByProbation(id), lock.withLock({ $0.writtenReactions.insert(id).inserted }) else { return }
+        guard isConnected, !isHeldByProbation(id), lock.withLock({ $0.pendingStanzas.insert(id, of: .reaction) }) else { return }
         expectBounce(
             of: id, key: .reactions(messageId), peer: peer,
-            release: { [weak self] in self?.lock.withLock { _ = $0.writtenReactions.remove(id) } },
+            release: { [weak self] in self?.lock.withLock { _ = $0.pendingStanzas.remove(id, of: .reaction) } },
             repend: { [weak self] in
                 guard let self else { return }
                 try? database.repend(.reactions(messageId: messageId, from: account), id: id, ifNotSupersededBy: id)
@@ -2581,7 +2561,7 @@ public final class XMPPSession: @unchecked Sendable {
         )
         let acknowledges = streamAcknowledges
         client.context.writer.write(stanza) { [weak self] result in
-            if case .failure = result { self?.lock.withLock { _ = $0.writtenReactions.remove(id) } }
+            if case .failure = result { self?.lock.withLock { _ = $0.pendingStanzas.remove(id, of: .reaction) } }
         }
         if acknowledges {
             requestAcknowledgement()
@@ -2952,18 +2932,18 @@ public final class XMPPSession: @unchecked Sendable {
                                                  mentions: mentions(in: message.body, route: route))
                     stanza.addChild(Element(name: "replace", attributes: ["xmlns": NS.correction, "id": original]))
                 }
-                guard lock.withLock({ $0.writtenActions.insert(id).inserted }) else { return }
+                guard lock.withLock({ $0.pendingStanzas.insert(id, of: .action) }) else { return }
                 let isRetraction = message.isRetracted
                 expectBounce(
                     of: id, key: .action(messageId), peer: peer,
-                    release: { [weak self] in self?.lock.withLock { _ = $0.writtenActions.remove(id) } },
+                    release: { [weak self] in self?.lock.withLock { _ = $0.pendingStanzas.remove(id, of: .action) } },
                     repend: { [weak self] in try? self?.database.repend(.action(messageId: messageId), id: id, ifNotSupersededBy: id) },
                     fail: { [weak self] error in
                         let friendly = isRetraction ? String(localized: "The deletion couldn't be delivered.") : String(localized: "The edit couldn't be delivered.")
                         try? self?.database.clearPending(.action, messageId: messageId, error: error.describe(friendly), unlessSupersededBy: id)
                     },
                 )
-                let dropped: @Sendable () -> Void = { [weak self] in self?.lock.withLock { _ = $0.writtenActions.remove(id) } }
+                let dropped: @Sendable () -> Void = { [weak self] in self?.lock.withLock { _ = $0.pendingStanzas.remove(id, of: .action) } }
                 switch deliver(stanza, to: peer, encrypted: !message.isRetracted && message.encryption == .omemo, onDropped: dropped) {
                 case .success(let (_, acknowledged)):
                     if !acknowledged { confirmByPing(stanza) }
@@ -3065,7 +3045,7 @@ public final class XMPPSession: @unchecked Sendable {
     private func resendPendingActions() {
         guard let pending = try? database.pendingActions() else { return }
         for (messageId, peer, id) in pending {
-            guard !lock.withLock({ $0.writtenActions.contains(id) }) else { continue }
+            guard !lock.withLock({ $0.pendingStanzas.contains(id, of: .action) }) else { continue }
             sendAction(id: id, of: messageId, to: peer)
         }
     }

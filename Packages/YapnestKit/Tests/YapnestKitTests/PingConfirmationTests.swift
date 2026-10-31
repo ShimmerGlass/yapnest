@@ -44,7 +44,7 @@ struct PingConfirmationTests {
     private func startNewSession() {
         session.lock.withLock {
             $0.sends.reset()
-            $0.writtenReactions = []
+            $0.pendingStanzas.reset()
         }
     }
 

@@ -44,7 +44,7 @@ struct PendingActionTests {
     private func startNewSession() {
         session.lock.withLock {
             $0.sends.reset()
-            $0.writtenActions = []
+            $0.pendingStanzas.reset()
         }
     }
 
@@ -170,6 +170,31 @@ struct PendingActionTests {
         session.sendUnclaimedPending()
         session.drainSendQueue(alice)
         #expect(corrections().count == 1)
+    }
+
+    /// A new session forgets what it wrote, but the server may still acknowledge it.
+    @Test func anAcknowledgementAfterANewSessionStillClearsItOnceAndAnotherIdClearsNothing() throws {
+        try session.edit(message, to: "hello there")
+        session.drainSendQueue(alice)
+        let stanza = try #require(corrections().first)
+        startNewSession()
+
+        let unrelated = Martin.Message()
+        unrelated.id = "unrelated"
+        unrelated.addChild(Element(name: "replace", attributes: ["xmlns": NS.correction, "id": "m1"]))
+        session.acknowledged(unrelated)
+        #expect(try stored().actionPendingId == stanza.id)
+
+        session.acknowledged(stanza)
+        #expect(try stored().actionPendingId == nil)
+        #expect(try stored().actionError == nil)
+
+        try session.edit(try stored(), to: "hello again")
+        session.drainSendQueue(alice)
+        let newer = try #require(try stored().actionPendingId)
+        #expect(newer != stanza.id)
+        session.acknowledged(stanza)
+        #expect(try stored().actionPendingId == newer)
     }
 
     @Test func aStanzaStillUnacknowledgedIsNotWrittenAgainThisSession() throws {
