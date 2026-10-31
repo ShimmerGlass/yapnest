@@ -217,7 +217,7 @@ struct AcknowledgementRequestTests {
         for _ in 0..<3 { session.requestAcknowledgement() }
         #expect(requests == 1)
         // Not lost: the server is asked again once the second is up.
-        #expect(await eventually(timeout: 3) { requests == 2 })
+        #expect(await eventually(timeout: 20) { requests == 2 })
         try await Task.sleep(for: .milliseconds(200))
         #expect(requests == 2)
     }

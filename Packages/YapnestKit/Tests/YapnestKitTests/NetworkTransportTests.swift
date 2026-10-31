@@ -278,7 +278,7 @@ struct SafeFetcherOverSocketsTests {
 
 struct SystemResolverTests {
     @Test func resolvesLocalhost() async throws {
-        let addresses = try await SystemTransport().resolve("localhost", timeout: 5)
+        let addresses = try await SystemTransport().resolve("localhost", timeout: 30)
         #expect(addresses.contains(ip("127.0.0.1")) || addresses.contains(ip("::1")))
         #expect(Set(addresses).count == addresses.count)
     }

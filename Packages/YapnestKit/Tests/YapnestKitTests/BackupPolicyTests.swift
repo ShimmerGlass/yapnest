@@ -13,6 +13,14 @@ struct BackupPolicyTests {
         try URL(filePath: url.path).resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true
     }
 
+    /// The flag is an extended attribute, which a file system under heavy load
+    /// has been seen to show late (a full run of the suite).
+    private func isExcluded(_ url: URL, eventually expected: Bool) async throws -> Bool {
+        let deadline = Date().addingTimeInterval(20)
+        while try isExcluded(url) != expected, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        return try isExcluded(url) == expected
+    }
+
     private func defaults() -> UserDefaults {
         let name = "backup-tests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
@@ -30,14 +38,14 @@ struct BackupPolicyTests {
         #expect(!BackupPolicy.includesMessages(in: defaults))
     }
 
-    @Test func turningItOffExcludesBothFoldersAndOnClearsThem() throws {
+    @Test func turningItOffExcludesBothFoldersAndOnClearsThem() async throws {
         let (account, logs) = (try folder(), try folder())
         BackupPolicy.apply(included: false, to: [account, logs])
-        #expect(try isExcluded(account))
-        #expect(try isExcluded(logs))
+        #expect(try await isExcluded(account, eventually: true))
+        #expect(try await isExcluded(logs, eventually: true))
         BackupPolicy.apply(included: true, to: [account, logs])
-        #expect(try !isExcluded(account))
-        #expect(try !isExcluded(logs))
+        #expect(try await isExcluded(account, eventually: false))
+        #expect(try await isExcluded(logs, eventually: false))
     }
 
     @Test func aFolderThatDoesNotExistIsSkipped() throws {

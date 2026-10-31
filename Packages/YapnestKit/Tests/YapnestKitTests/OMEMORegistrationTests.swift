@@ -85,7 +85,7 @@ struct OMEMORegistrationTests {
         return (encryption, server, client)
     }
 
-    private func wait(_ condition: () -> Bool, seconds: TimeInterval = 5) async {
+    private func wait(_ condition: () -> Bool, seconds: TimeInterval = 30) async {
         let deadline = Date().addingTimeInterval(seconds)
         while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
     }

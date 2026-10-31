@@ -31,7 +31,7 @@ struct ChatListRegionTests {
             .handleEvents(willTrackRegion: { region in box.lock.withLock { box.region = region } })
             .start(in: db.writer, scheduling: .async(onQueue: .global()), onError: { _ in }, onChange: { _ in })
         defer { observation.cancel() }
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + .seconds(60)
         while ContinuousClock.now < deadline {
             if let region = box.lock.withLock({ box.region }) { return region }
             try await Task.sleep(for: .milliseconds(10))

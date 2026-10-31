@@ -211,8 +211,7 @@ struct ChatStateSessionTests {
         #expect(tracker()?.sent == .inactive)
 
         session.scheduleGone(to: alice, generation: second, after: 0.05)
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(tracker()?.sent == .gone)
+        #expect(await eventually { tracker()?.sent == .gone })
     }
 
     @Test func goneIsNotSentToAChatWeCameBackTo() async throws {

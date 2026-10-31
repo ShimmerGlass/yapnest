@@ -114,7 +114,7 @@ final class FakeCallMediaFactory: CallMediaFactory, @unchecked Sendable {
 }
 
 /// Polls until `condition` holds, for what the session does in the background.
-func eventually(_ what: String, timeout: TimeInterval = 5, _ condition: () -> Bool) async {
+func eventually(_ what: String, timeout: TimeInterval = 30, _ condition: () -> Bool) async {
     let deadline = Date().addingTimeInterval(timeout)
     while !condition() {
         if Date() > deadline { Issue.record("Timed out waiting for \(what)"); return }

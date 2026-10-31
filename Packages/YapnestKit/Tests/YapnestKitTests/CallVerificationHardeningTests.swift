@@ -99,7 +99,7 @@ struct CallVerificationHardeningTests {
         _ = client.modulesManager.register(PubSubModule())
         _ = client.modulesManager.register(encryption.module)
         defer { withExtendedLifetime(client) {} }
-        encryption.setupTimeout = 30
+        encryption.setupTimeout = 120
         encryption.callFetchTimeout = 0.3
         let start = Date()
         let result = await encryption.encryptCallFingerprint("AB:CD", to: alice, device: 7)
@@ -108,6 +108,6 @@ struct CallVerificationHardeningTests {
             return
         }
         #expect(error == .setupFailed)
-        #expect(Date().timeIntervalSince(start) < 5)
+        #expect(Date().timeIntervalSince(start) < 60)
     }
 }

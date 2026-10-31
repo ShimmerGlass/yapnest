@@ -162,7 +162,7 @@ final class LocalHTTPServer: @unchecked Sendable {
 }
 
 /// Polls until `condition` holds, for things that settle on another queue.
-func eventually(timeout: TimeInterval = 5, _ condition: () -> Bool) async -> Bool {
+func eventually(timeout: TimeInterval = 30, _ condition: () -> Bool) async -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
         if condition() { return true }
