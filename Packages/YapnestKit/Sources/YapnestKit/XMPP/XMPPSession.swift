@@ -413,7 +413,13 @@ public final class XMPPSession: @unchecked Sendable {
         /// The profile warning keys whose change the server refused for good,
         /// until the user's Retry asks about it.
         var profileRefusals: [String: Error] = [:]
-        /// The last read message we know our devices agree on, by chat (XEP-0490).
+        /// The run publishing the read states owed, and the task doing it.
+        var readStateRun = CoalescedRun()
+        /// Fetches of the read states under way. While one is, what the server
+        /// holds is not all known, so nothing is published.
+        var displayedFetches = 0
+        /// The last read message the server holds for each chat, as far as we
+        /// know (XEP-0490): from our publishes, the fetch and notifications.
         var publishedDisplayed: [JID: String] = [:]
         /// Where our settings node stands this session: see `SettingsSyncState`.
         var settingsSync = SettingsSyncState()
@@ -1509,6 +1515,7 @@ public final class XMPPSession: @unchecked Sendable {
                     $0.uploadService = nil
                     $0.mucService = nil
                     $0.publishedDisplayed = [:]
+                    $0.displayedFetches = 0
                     $0.settingsSync.startSession()
                     $0.repeatedContactRequests = []
                     $0.awaitsRoster = true
@@ -3250,7 +3257,7 @@ public final class XMPPSession: @unchecked Sendable {
     public func markRead(_ conversation: Conversation) throws {
         guard let id = conversation.id else { return }
         try database.markRead(conversationId: id, owingReadState: true)
-        announceRead(conversation, id: id, last: try database.lastIncoming(conversationId: id))
+        announceRead(conversation, id: id)
     }
 
     /// Marks the conversation read up to `message`, the newest one the user
@@ -3261,16 +3268,15 @@ public final class XMPPSession: @unchecked Sendable {
         guard let id = conversation.id, message.direction == .incoming,
               try database.hasUnread(conversationId: id, through: message.timestamp) else { return }
         try database.markRead(conversationId: id, through: message.timestamp, owingReadState: true)
-        announceRead(conversation, id: id, through: message.timestamp, last: message)
+        announceRead(conversation, id: id, through: message.timestamp)
     }
 
     /// `through` bounds which message the peer's marker names, since that
     /// needs a message that asked for one, which may be an older one.
-    private func announceRead(_ conversation: Conversation, id: Int64, through date: Date = .distantFuture, last: Message?) {
+    private func announceRead(_ conversation: Conversation, id: Int64, through date: Date = .distantFuture) {
         // Read markers in groups would tell everyone; only our devices hear.
         if conversation.kind == .chat { sendDisplayed(conversationId: id, to: conversation.peer, through: date) }
-        guard let last else { return }
-        publishDisplayed(last, route: route(for: conversation))
+        publishOwedReadStates()
     }
 
     func write(_ stanza: Stanza) {

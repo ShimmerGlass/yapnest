@@ -54,50 +54,26 @@ struct DisplayedState: Sendable, Equatable {
 }
 
 extension XMPPSession {
-    /// Tells our other devices we've read the chat with `peer` up to `message`.
-    /// The read recorded the chat as owing its state (`Conversation.readStateOwed`),
-    /// which stays until the server takes it: offline, or on a passing error,
-    /// `publishOwedDisplayed` sends it at the next connect.
-    func publishDisplayed(_ message: Message, route: Route) {
-        let peer = route.peer
-        guard isConnected, let stanzaId = message.serverId else { return }
-        let state = DisplayedState(peer: peer, stanzaId: stanzaId, by: route.isGroup ? peer : account)
-        // Reading while messages arrive marks the same one again and again.
-        let isNew = lock.withLock { $0.publishedDisplayed.updateValue(stanzaId, forKey: peer) != stanzaId }
-        guard isNew else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                // A node another client made with other options refuses the
-                // publish; this one reconfigures it and goes again.
-                try await publishPEPKeepingErrors(
-                    node: NS.mds, itemId: peer.description, payload: state.element, accessModel: "whitelist",
-                    config: Self.settingsNodeFields(maxItems: "max"),
-                )
-                warnings.clear("readState")
-                do {
-                    try database.clearReadStateOwed(conversationId: message.conversationId, ifNewest: stanzaId)
-                } catch {
-                    logger.error("Failed to record the read state as published: \(error)")
-                }
-            } catch {
-                lock.withLock { _ = $0.publishedDisplayed.removeValue(forKey: peer) }
-                logger.info("Couldn't publish read state for \(peer, privacy: .private): \(error.localizedDescription, privacy: .private)")
-                // The chat stays owed, so the next connect tries again; only a refusal for good is shown.
-                if ServerError.isFromServer(error), ServerError.classify(error).isFinal {
-                    try? database.clearReadStateOwed(conversationId: message.conversationId, ifNewest: nil)
-                    warnings.post("readState", title: String(localized: "Read state not synced"), friendly: String(localized: "The server wouldn't take the read state"), error: error)
-                }
-            }
-        }
+    /// Starts, or asks again for, the one run that sends the read states owed
+    /// (`Conversation.readStateOwed`), which is the only outbox for them: a read
+    /// records that the chat owes its state, and this sends it. Reading again
+    /// while it goes asks it for another round, not a second publish.
+    func publishOwedReadStates() {
+        guard policy.resendsPending else { return }
+        coalesced(\.readStateRun) { await $0.publishOwedRound() }
     }
 
-    /// Sends the read states that were owed while we were offline or that the
-    /// server didn't take, for the chats still owing one. It runs once the
-    /// server's states are applied, so a device that read further wins and
-    /// ours is never published over it. Only the app publishes.
-    func publishOwedDisplayed(fetched: [DisplayedState]) {
-        guard policy.resendsPending, isConnected else { return }
+    /// One round over the chats owing a state. It publishes from what the
+    /// server is known to hold (`publishedDisplayed`: our own publishes,
+    /// notifications and the fetch on connect) and the database, without
+    /// fetching: a fetch per read would cost a round trip for nothing, as the
+    /// server tells us when another device reads. Only the catch-up and a
+    /// return to the app fetch, and the round that follows is theirs: until
+    /// then the server's states are not all known, and publishing could move
+    /// another device's read point back.
+    private func publishOwedRound() async {
+        let settled = lock.withLock { !$0.isSyncing && $0.displayedFetches == 0 }
+        guard policy.resendsPending, isConnected, settled else { return }
         let owed: [Conversation]
         do {
             owed = try database.conversationsOwingReadState()
@@ -106,26 +82,53 @@ extension XMPPSession {
             return
         }
         for conversation in owed {
-            guard let id = conversation.id else { continue }
+            guard isConnected, let id = conversation.id else { return }
             do {
                 // Nothing we read can be named, such as messages without a stanza-id.
                 guard let last = try database.newestReadMessageWithServerId(conversationId: id), let stanzaId = last.serverId else {
                     try database.clearReadStateOwed(conversationId: id, ifNewest: nil)
                     continue
                 }
-                if let held = fetched.first(where: { $0.peer == conversation.peer }) {
+                if let held = lock.withLock({ $0.publishedDisplayed[conversation.peer] }) {
                     // A state for a message we don't have may be newer than ours; a room's
                     // catch-up stores it, and the next connect decides again.
-                    if try !database.hasMessage(conversationId: id, serverId: held.stanzaId) { continue }
-                    // One that reaches as far as ours is not ours to publish over.
-                    if try database.readState(conversationId: id, naming: held.stanzaId) {
-                        try database.clearReadStateOwed(conversationId: id, ifNewest: held.stanzaId)
+                    if try !database.hasMessage(conversationId: id, serverId: held) { continue }
+                    // One that reaches as far as ours, ours included, is not ours to publish over.
+                    if try database.readState(conversationId: id, naming: held) {
+                        try database.clearReadStateOwed(conversationId: id, ifNewest: held)
                         continue
                     }
                 }
-                publishDisplayed(last, route: route(for: conversation))
+                await publish(stanzaId: stanzaId, conversationId: id, route: route(for: conversation))
             } catch {
                 logger.error("Failed to publish an owed read state: \(error)")
+            }
+        }
+    }
+
+    private func publish(stanzaId: String, conversationId: Int64, route: Route) async {
+        let peer = route.peer
+        let state = DisplayedState(peer: peer, stanzaId: stanzaId, by: route.isGroup ? peer : account)
+        do {
+            // A node another client made with other options refuses the
+            // publish; this one reconfigures it and goes again.
+            try await publishPEPKeepingErrors(
+                node: NS.mds, itemId: peer.description, payload: state.element, accessModel: "whitelist",
+                config: Self.settingsNodeFields(maxItems: "max"),
+            )
+            lock.withLock { $0.publishedDisplayed[peer] = stanzaId }
+            warnings.clear("readState")
+            do {
+                try database.clearReadStateOwed(conversationId: conversationId, ifNewest: stanzaId)
+            } catch {
+                logger.error("Failed to record the read state as published: \(error)")
+            }
+        } catch {
+            logger.info("Couldn't publish read state for \(peer, privacy: .private): \(error.localizedDescription, privacy: .private)")
+            // The chat stays owed, so the next connect tries again; only a refusal for good is shown.
+            if ServerError.isFromServer(error), ServerError.classify(error).isFinal {
+                try? database.clearReadStateOwed(conversationId: conversationId, ifNewest: nil)
+                warnings.post("readState", title: String(localized: "Read state not synced"), friendly: String(localized: "The server wouldn't take the read state"), error: error)
             }
         }
     }
@@ -145,16 +148,19 @@ extension XMPPSession {
     /// the server held our notifications back and sent only the newest.
     /// `done` says whether the states were read.
     func fetchDisplayed(then done: (@Sendable (Bool) -> Void)? = nil) {
+        lock.withLock { $0.displayedFetches += 1 }
         // A failure is owed again by the callers: at the next catch-up (every
         // connect) or return to the app.
         readNode(NS.mds, as: "Read states") { [weak self] read in
+            self?.lock.withLock { $0.displayedFetches = max(0, $0.displayedFetches - 1) }
             switch read {
             case .items(let page):
                 let states = page.items.compactMap { DisplayedState(id: $0.id, payload: $0.payload) }
                 self?.applyFetchedDisplayed(states)
-                self?.publishOwedDisplayed(fetched: states)
+                self?.publishOwedReadStates()
             case .noNode:
-                self?.publishOwedDisplayed(fetched: [])
+                self?.lock.withLock { $0.publishedDisplayed = [:] }
+                self?.publishOwedReadStates()
             case .unsupported:
                 // There is nowhere to publish, so nothing stays owed to make
                 // every resume read the node again.

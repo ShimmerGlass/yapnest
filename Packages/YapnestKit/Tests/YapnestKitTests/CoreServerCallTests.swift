@@ -150,14 +150,14 @@ struct ReadStatePublishTests {
     let session: XMPPSession
     let wire = FakeWire()
     let alice = YapnestKit.JID("alice@example.org")!
+    let conversation: Conversation
 
     init() throws {
-        session = try makeSession(me)
+        let database = try AppDatabase.inMemory()
+        session = try makeSession(me, database: database)
+        conversation = try database.conversation(with: alice)
+        try database.insert(YapnestKit.Message(conversationId: conversation.id!, direction: .incoming, sender: alice, body: "hi", timestamp: Date(), serverId: "s1"))
         session.connectForTesting(wire)
-    }
-
-    private var message: YapnestKit.Message {
-        YapnestKit.Message(conversationId: 1, direction: .incoming, sender: alice, body: "hi", timestamp: Date(), serverId: "s1")
     }
 
     private func requests(_ kind: String) -> [Iq] {
@@ -172,19 +172,20 @@ struct ReadStatePublishTests {
             }
             return FakeWire.result(to: iq)
         }
-        session.publishDisplayed(message, route: .direct(alice))
+        try session.markRead(conversation)
         #expect(await eventually { requests("configure").count == 1 && requests("publish").count == 2 })
         let configured = try #require(requests("configure").first?.firstChild(name: "pubsub")?.firstChild(name: "configure")?.attribute("node"))
         #expect(configured == NS.mds)
         #expect(session.warnings.current.isEmpty)
-        #expect(session.lock.withLock { $0.publishedDisplayed[alice] } == "s1")
+        // Known once the server has taken it, not before.
+        #expect(await eventually { session.lock.withLock { $0.publishedDisplayed[alice] } == "s1" })
     }
 
     @Test func aPublishRefusedForGoodIsShownAndLetsTheNextReadTryAgain() async throws {
         wire.answer { iq in
             iq.firstChild(name: "pubsub")?.firstChild(name: "publish") != nil ? FakeWire.error(to: iq, condition: "forbidden", type: "auth") : nil
         }
-        session.publishDisplayed(message, route: .direct(alice))
+        try session.markRead(conversation)
         #expect(await eventually { session.warnings.current.map(\.key) == ["readState"] })
         #expect(session.lock.withLock { $0.publishedDisplayed[alice] } == nil)
     }

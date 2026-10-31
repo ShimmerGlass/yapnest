@@ -261,6 +261,65 @@ struct OwedReadStateTests {
         #expect(session.warnings.current.isEmpty)
     }
 
+    private func fetches() -> [Iq] {
+        wire.written.compactMap { $0 as? Iq }.filter { $0.firstChild(name: "pubsub")?.firstChild(name: "items") != nil }
+    }
+
+    @Test func readingTwiceQuicklyPublishesOnce() async throws {
+        serve()
+        session.connectForTesting(wire)
+        try session.markRead(conversation)
+        try session.markRead(conversation)
+        session.publishOwedReadStates()
+        #expect(await eventually(timeout: 20) { publishedStanzaIds() == ["s3"] && !owed })
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(publishedStanzaIds() == ["s3"])
+    }
+
+    @Test func aReadOnALiveConnectionPublishesWithoutAFetch() async throws {
+        serve()
+        session.connectForTesting(wire)
+        try session.markRead(conversation)
+        #expect(await eventually(timeout: 20) { publishedStanzaIds() == ["s3"] && !owed })
+        #expect(fetches().isEmpty)
+    }
+
+    @Test func aReadWhileTheCatchUpGoesWaitsForTheFetch() async throws {
+        serve(holding: [DisplayedState(peer: alice, stanzaId: "s3", by: me)])
+        session.connectForTesting(wire, syncing: true)
+        try session.markRead(conversation)
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(publishes().isEmpty)
+        #expect(owed)
+        // The fetch tells that another device read as far, so nothing is published.
+        session.lock.withLock { $0.isSyncing = false }
+        session.fetchDisplayed()
+        #expect(await eventually(timeout: 20) { !owed })
+        #expect(publishes().isEmpty)
+    }
+
+    @Test func aReadOfflineIsPublishedAfterTheConnect() async throws {
+        try readOffline()
+        serve()
+        session.connectForTesting(wire, syncing: true)
+        session.lock.withLock { $0.isSyncing = false }
+        session.fetchDisplayed()
+        #expect(await eventually(timeout: 20) { publishedStanzaIds() == ["s3"] && !owed })
+    }
+
+    @Test func aNotificationCoveringWhatWasOwedClearsItWithoutPublishing() async throws {
+        serve()
+        session.connectForTesting(wire, syncing: true)
+        try session.markRead(conversation)
+        #expect(owed)
+        session.displayedChanged(DisplayedState(peer: alice, stanzaId: "s3", by: me))
+        #expect(await eventually(timeout: 20) { !owed })
+        session.lock.withLock { $0.isSyncing = false }
+        session.publishOwedReadStates()
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(publishes().isEmpty)
+    }
+
     @Test func aStateTheServerTakesClearsWhatWasOwed() async throws {
         serve()
         session.connectForTesting(wire)
