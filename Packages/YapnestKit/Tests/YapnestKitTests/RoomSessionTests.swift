@@ -215,7 +215,7 @@ struct RoomCatchUpTests {
         endlessArchive { after in "\(after ?? "")+" }
         session.roomPresence(selfPresence(), room: room)
 
-        #expect(await eventually(timeout: 10) { session.roomStatus(room)?.isSyncing == false })
+        #expect(await eventually { session.roomStatus(room)?.isSyncing == false })
         #expect(archiveQueries == XMPPSession.roomArchivePageLimit)
         // What's left is read from the cursor next time, so live messages
         // don't move it past.
@@ -223,7 +223,7 @@ struct RoomCatchUpTests {
         #expect(try cursor?.hasPrefix("old+") == true)
         // The user is told, and a Retry that stops short again leaves it so.
         let key = "room-history:\(room)"
-        #expect(session.warnings.current.contains { $0.key == key })
+        #expect(await eventually { session.warnings.current.contains { $0.key == key } })
         #expect(await session.warnings.retry(key) == false)
         #expect(session.warnings.current.contains { $0.key == key })
     }

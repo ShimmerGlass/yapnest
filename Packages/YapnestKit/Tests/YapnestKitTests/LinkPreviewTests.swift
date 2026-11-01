@@ -319,15 +319,6 @@ final class GatedFetcher: LinkFetching, @unchecked Sendable {
     }
 }
 
-/// Polls `condition` for up to twenty seconds.
-func eventually(_ condition: () async throws -> Bool) async rethrows -> Bool {
-    for _ in 0..<4000 {
-        if try await condition() { return true }
-        try? await Task.sleep(for: .milliseconds(5))
-    }
-    return false
-}
-
 struct LinkPreviewerDecodingTests {
     @Test func declaredCharsetIsHonoured() {
         let latin1 = Data([0x63, 0x61, 0x66, 0xE9])

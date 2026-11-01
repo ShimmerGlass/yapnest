@@ -95,13 +95,11 @@ struct CarbonDelayTests {
               <delay xmlns='urn:xmpp:delay' from='example.org' stamp='\(ISO8601DateFormatter().string(from: stamp))'/>
             </message>
             """))
-        let deadline = Date().addingTimeInterval(5)
-        var stored: YapnestKit.Message?
-        while stored == nil, Date() < deadline {
-            stored = try await database.reader.read { try YapnestKit.Message.filter(Column("body") == "from the Mac").fetchOne($0) }
-            if stored == nil { try await Task.sleep(for: .milliseconds(50)) }
+        func fetch() async throws -> YapnestKit.Message? {
+            try await database.reader.read { try YapnestKit.Message.filter(Column("body") == "from the Mac").fetchOne($0) }
         }
-        let message = try #require(stored)
+        await eventually("the carbon to be stored") { (try? await fetch()) != nil }
+        let message = try #require(try await fetch())
         #expect(abs(message.timestamp.timeIntervalSince(stamp)) < 1)
     }
 }

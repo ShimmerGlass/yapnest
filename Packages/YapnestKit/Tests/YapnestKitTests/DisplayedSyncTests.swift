@@ -271,7 +271,7 @@ struct OwedReadStateTests {
         try session.markRead(conversation)
         try session.markRead(conversation)
         session.publishOwedReadStates()
-        #expect(await eventually(timeout: 20) { publishedStanzaIds() == ["s3"] && !owed })
+        #expect(await eventually { publishedStanzaIds() == ["s3"] && !owed })
         _ = await eventually(timeout: 0.5) { false }
         #expect(publishedStanzaIds() == ["s3"])
     }
@@ -280,7 +280,7 @@ struct OwedReadStateTests {
         serve()
         session.connectForTesting(wire)
         try session.markRead(conversation)
-        #expect(await eventually(timeout: 20) { publishedStanzaIds() == ["s3"] && !owed })
+        #expect(await eventually { publishedStanzaIds() == ["s3"] && !owed })
         #expect(fetches().isEmpty)
     }
 
@@ -294,7 +294,7 @@ struct OwedReadStateTests {
         // The fetch tells that another device read as far, so nothing is published.
         session.lock.withLock { $0.isSyncing = false }
         session.fetchDisplayed()
-        #expect(await eventually(timeout: 20) { !owed })
+        #expect(await eventually { !owed })
         #expect(publishes().isEmpty)
     }
 
@@ -304,7 +304,7 @@ struct OwedReadStateTests {
         session.connectForTesting(wire, syncing: true)
         session.lock.withLock { $0.isSyncing = false }
         session.fetchDisplayed()
-        #expect(await eventually(timeout: 20) { publishedStanzaIds() == ["s3"] && !owed })
+        #expect(await eventually { publishedStanzaIds() == ["s3"] && !owed })
     }
 
     @Test func aNotificationCoveringWhatWasOwedClearsItWithoutPublishing() async throws {
@@ -313,7 +313,7 @@ struct OwedReadStateTests {
         try session.markRead(conversation)
         #expect(owed)
         session.displayedChanged(DisplayedState(peer: alice, stanzaId: "s3", by: me))
-        #expect(await eventually(timeout: 20) { !owed })
+        #expect(await eventually { !owed })
         session.lock.withLock { $0.isSyncing = false }
         session.publishOwedReadStates()
         _ = await eventually(timeout: 0.5) { false }

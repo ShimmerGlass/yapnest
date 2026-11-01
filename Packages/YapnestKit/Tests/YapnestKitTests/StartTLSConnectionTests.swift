@@ -90,7 +90,7 @@ struct StartTLSConnectionTests {
         )
         session.connect()
         defer { session.disconnect() }
-        let deadline = Date().addingTimeInterval(10)
+        let deadline = Date().addingTimeInterval(defaultWait)
         while Date() < deadline {
             switch session.state.value {
             case .connecting, .disconnected(error: nil): try await Task.sleep(for: .milliseconds(20))
@@ -148,7 +148,7 @@ struct StartTLSConnectionTests {
         )
         session.connect()
         defer { session.disconnect() }
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(defaultWait)
         while Date() < deadline, server.firstConnectionReceived.count <= (Self.hello + Self.request).count {
             try await Task.sleep(for: .milliseconds(20))
         }

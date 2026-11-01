@@ -54,7 +54,7 @@ struct PendingRosterTests {
 
         connect()
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(await eventually { queued.isEmpty })
         let done = try contact(stranger)
         #expect(!done.hasContactRequest)
         #expect(done.pendingRoster == nil)
@@ -70,7 +70,7 @@ struct PendingRosterTests {
 
         connect()
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(await eventually { queued.isEmpty })
         #expect(try !contact(stranger).hasContactRequest)
         #expect(presences(.unsubscribed).count == 1)
     }
@@ -82,7 +82,7 @@ struct PendingRosterTests {
 
         connect()
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(await eventually { queued.isEmpty })
         #expect(try !contact(alice).isInRoster)
         #expect(try contact(alice).pendingRoster == nil)
         #expect(wire.written.compactMap { $0 as? Iq }.contains { $0.firstChild(name: "query", xmlns: "jabber:iq:roster")?.firstChild(name: "item")?.attribute("subscription") == "remove" })
@@ -97,7 +97,7 @@ struct PendingRosterTests {
 
         connect()
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(await eventually { queued.isEmpty })
         #expect(rosterSets.first?.attribute("name") == "Ally")
         #expect(rosterSets.first?.filterChildren(name: "group", xmlns: nil).compactMap(\.value) == ["Friends"])
         #expect(try !contact(alice).pendingRename)
@@ -123,14 +123,14 @@ struct PendingRosterTests {
         #expect(queued.map(\.kind) == [.remove, .rename, .accept])
         connect()
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(await eventually { queued.isEmpty })
         #expect(rosterSets.map { $0.attribute("jid") } == ["bob@example.org", "alice@example.org", "stranger@example.net"])
     }
 
     @Test func aChangeMadeOnlineIsSentAtOnce() async throws {
         connect()
         try await session.setContactName(alice, name: "Ally")
-        #expect(await eventually(timeout: 20) { queued.isEmpty && rosterSets.count == 1 })
+        #expect(await eventually { queued.isEmpty && rosterSets.count == 1 })
     }
 
     // MARK: Replacement
@@ -167,7 +167,7 @@ struct PendingRosterTests {
         }
         connect()
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { queued.isEmpty && rosterSets.count == 2 })
+        #expect(await eventually { queued.isEmpty && rosterSets.count == 2 })
         #expect(rosterSets.map { $0.attribute("name") } == ["Ally", "Al"])
     }
 
@@ -189,7 +189,7 @@ struct PendingRosterTests {
         try await session.acceptContactRequest(from: stranger)
         connect { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(await eventually { session.warnings.current.count == 1 && queued.isEmpty })
         let back = try contact(stranger)
         #expect(back.hasContactRequest)
         #expect(back.pendingRoster == nil)
@@ -200,7 +200,7 @@ struct PendingRosterTests {
 
         wire.answer { FakeWire.result(to: $0) }
         #expect(await session.warnings.retry(warning.key))
-        #expect(await eventually(timeout: 20) { (try? contact(stranger).hasContactRequest) == false })
+        #expect(await eventually { (try? contact(stranger).hasContactRequest) == false })
         #expect(session.warnings.current.isEmpty)
     }
 
@@ -208,7 +208,7 @@ struct PendingRosterTests {
         try await session.acceptContactRequest(from: stranger)
         connect { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(await eventually { session.warnings.current.count == 1 && queued.isEmpty })
         let retry = try #require(session.warnings.current.first?.retry)
 
         // Still refused: the Retry itself reports it, not a new warning later.
@@ -229,7 +229,7 @@ struct PendingRosterTests {
         try await session.acceptContactRequest(from: stranger)
         connect { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(await eventually { session.warnings.current.count == 1 && queued.isEmpty })
         let retry = try #require(session.warnings.current.first?.retry)
 
         // Never refused for being offline: the change waits, stored, for a connection.
@@ -240,7 +240,7 @@ struct PendingRosterTests {
 
         connect()
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { queued.isEmpty && session.warnings.current.isEmpty })
+        #expect(await eventually { queued.isEmpty && session.warnings.current.isEmpty })
         #expect(try !contact(stranger).hasContactRequest)
     }
 
@@ -248,7 +248,7 @@ struct PendingRosterTests {
         try await session.setContactName(alice, name: "Ally")
         connect { FakeWire.error(to: $0, condition: "not-allowed", type: "cancel") }
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(await eventually { session.warnings.current.count == 1 && queued.isEmpty })
         #expect(try contact(alice).displayName == "Alice")
         #expect(session.warnings.current.first?.title == "Couldn't save the nickname")
         #expect(session.warnings.current.first?.retry != nil)
@@ -258,7 +258,7 @@ struct PendingRosterTests {
         try await session.removeContact(alice)
         connect { FakeWire.error(to: $0, condition: "not-allowed", type: "cancel") }
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(await eventually { session.warnings.current.count == 1 && queued.isEmpty })
         #expect(try contact(alice).isInRoster)
         #expect(try contact(alice).pendingRoster == nil)
     }
@@ -267,7 +267,7 @@ struct PendingRosterTests {
         try await session.removeContact(alice)
         connect { FakeWire.error(to: $0, condition: "resource-constraint", type: "wait") }
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { rosterSets.count == ServerRetry.attempts })
+        #expect(await eventually { rosterSets.count == ServerRetry.attempts })
         _ = await eventually(timeout: 0.3) { false }
         #expect(queued.count == 1)
         #expect(session.warnings.current.isEmpty)
@@ -275,7 +275,7 @@ struct PendingRosterTests {
 
         wire.answer { FakeWire.result(to: $0) }
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(await eventually { queued.isEmpty })
         #expect(try !contact(alice).isInRoster)
     }
 
@@ -284,7 +284,7 @@ struct PendingRosterTests {
         try db.removeRosterItem(jid: alice)
         connect()
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(await eventually { session.warnings.current.count == 1 && queued.isEmpty })
         #expect(session.warnings.current.first?.retry == nil)
         #expect(rosterSets.isEmpty)
     }
@@ -294,7 +294,7 @@ struct PendingRosterTests {
         try db.clearContactRequest(from: stranger)
         connect()
         session.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(await eventually { queued.isEmpty })
         #expect(rosterSets.isEmpty)
         #expect(presences(.subscribe).isEmpty)
     }
@@ -320,8 +320,8 @@ struct PendingRosterTests {
             self.isRosterIq(iq) && iq.type == .get ? FakeWire.error(to: iq, condition: "forbidden", type: "auth") : FakeWire.result(to: iq)
         }
         session.connectForTesting(wire)
-        #expect(await eventually(timeout: 20) { session.warnings.current.contains { $0.key == "roster" } })
-        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(await eventually { session.warnings.current.contains { $0.key == "roster" } })
+        #expect(await eventually { queued.isEmpty })
         #expect(rosterSets.count == 1)
     }
 
@@ -334,7 +334,7 @@ struct PendingRosterTests {
         wire.answer { FakeWire.result(to: $0) }
         later.connectForTesting(wire)
         later.sendPendingRosterChanges()
-        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(await eventually { queued.isEmpty })
         #expect(rosterSets.count == 2)
     }
 
@@ -366,7 +366,7 @@ struct PendingRosterTests {
         }
         session.connectForTesting(wire)
         await session.befriendForNewChat(stranger)
-        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(await eventually { queued.isEmpty })
         #expect(rosterSets.count == 1)
         #expect(presences(.subscribe).count == 1)
     }

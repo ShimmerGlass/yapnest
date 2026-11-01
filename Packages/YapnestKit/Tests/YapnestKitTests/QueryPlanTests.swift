@@ -159,7 +159,7 @@ struct QueryPlanTests {
             let seen = Seen()
             let queue = DispatchQueue(label: "badge")
             let cancellable = db.observeUnreadBadge().start(in: db.writer, scheduling: .async(onQueue: queue), onError: { _ in }, onChange: { _ in seen.set() })
-            let deadline = Date().addingTimeInterval(5)
+            let deadline = Date().addingTimeInterval(defaultWait)
             while !seen.value, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
             cancellable.cancel()
         }

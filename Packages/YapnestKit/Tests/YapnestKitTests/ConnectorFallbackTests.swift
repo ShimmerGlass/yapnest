@@ -114,7 +114,7 @@ struct ConnectorFallbackTests {
 
         defer { withExtendedLifetime(client) {} }
         connector.start(endpoint: nil)
-        await eventually("the second record to connect", timeout: 30) { log.last == .connected }
+        await eventually("the second record to connect") { log.last == .connected }
         #expect(blackHole.accepted == 1)
         #expect(working.accepted == 1)
         #expect(resolver.invalidPorts == [Int(blackHole.port)])
@@ -131,7 +131,7 @@ struct ConnectorFallbackTests {
 
         defer { withExtendedLifetime(client) {} }
         connector.start(endpoint: nil)
-        await eventually("the second record to connect", timeout: 30) { log.last == .connected }
+        await eventually("the second record to connect") { log.last == .connected }
         #expect(resolver.invalidPorts == [Int(closed)])
         #expect(log.disconnections == 1, "states: \(log.states)")
         connector.stop(force: true) {}
@@ -151,7 +151,7 @@ struct ConnectorFallbackTests {
 
         defer { withExtendedLifetime(client) {} }
         connector.start(endpoint: nil)
-        await eventually("the attempt to end", timeout: 30) { log.disconnections == 2 }
+        await eventually("the attempt to end") { log.disconnections == 2 }
         let seen = events.withLock { $0 }
         guard seen.count == 1, case .resolveTimedOut(let duration) = seen[0] else {
             Issue.record("events: \(seen)")
@@ -172,7 +172,7 @@ struct ConnectorFallbackTests {
 
         defer { withExtendedLifetime(client) {} }
         connector.start(endpoint: nil)
-        await eventually("the second record to connect", timeout: 30) { log.last == .connected }
+        await eventually("the second record to connect") { log.last == .connected }
         let seen = events.withLock { $0 }
         guard seen.count == 5 else {
             Issue.record("events: \(seen)")
@@ -213,7 +213,7 @@ struct ConnectorFallbackTests {
 
         defer { withExtendedLifetime(client) {} }
         connector.start(endpoint: nil)
-        await eventually("the third record to connect", timeout: 30) { log.last == .connected }
+        await eventually("the third record to connect") { log.last == .connected }
         #expect(resolver.invalidPorts == [Int(first.port), Int(second.port)])
         connector.stop(force: true) {}
     }
@@ -227,7 +227,7 @@ struct ConnectorFallbackTests {
 
         defer { withExtendedLifetime(client) {} }
         connector.start(endpoint: nil)
-        await eventually("the attempt to end", timeout: 30) { log.disconnections == 2 }
+        await eventually("the attempt to end") { log.disconnections == 2 }
         try await Task.sleep(for: .milliseconds(1200))
         guard case .disconnected(.timeout) = log.last else {
             Issue.record("ended with \(String(describing: log.last))")
@@ -247,7 +247,7 @@ struct ConnectorFallbackTests {
 
         defer { withExtendedLifetime(client) {} }
         connector.start(endpoint: nil)
-        await eventually("the attempt to end", timeout: 30) { log.disconnections == 2 }
+        await eventually("the attempt to end") { log.disconnections == 2 }
         guard case .disconnected(.xmlError(let message)) = log.last else {
             Issue.record("ended with \(String(describing: log.last))")
             return
@@ -266,7 +266,7 @@ struct ConnectorFallbackTests {
 
         defer { withExtendedLifetime(client) {} }
         connector.start(endpoint: SocketConnectorNetwork.Endpoint(proto: .XMPP, host: "127.0.0.1", port: Int(closed)))
-        await eventually("the attempt to end", timeout: 30) { log.disconnections == 2 }
+        await eventually("the attempt to end") { log.disconnections == 2 }
         #expect(working.accepted == 0)
         guard case .disconnected(.noRouteToServer) = log.last else {
             Issue.record("ended with \(String(describing: log.last))")

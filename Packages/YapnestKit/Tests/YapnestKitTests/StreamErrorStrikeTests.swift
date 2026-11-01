@@ -60,14 +60,6 @@ struct StreamErrorStrikeTests {
     }
 
     /// The release of held stanzas runs off Martin's queues.
-    private func eventually(_ condition: () -> Bool) async -> Bool {
-        for _ in 0..<600 {
-            if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        return condition()
-    }
-
     private func close(with reason: XMPPClient.State.DisconnectionReason) {
         session.client.update(state: .disconnected(reason))
     }

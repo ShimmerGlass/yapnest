@@ -99,7 +99,7 @@ struct ContactRequestTests {
         wire.answer { FakeWire.result(to: $0) }
         try session.recordContactRequest(from: stranger, nickname: nil)
         try await session.acceptContactRequest(from: stranger)
-        #expect(await eventually(timeout: 20) { avatarRequests(wire, to: stranger).count == 1 })
+        #expect(await eventually { avatarRequests(wire, to: stranger).count == 1 })
     }
 
     @Test func addingAndWaitingFailsWhenTheRosterRefuses() async throws {

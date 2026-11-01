@@ -278,11 +278,6 @@ extension DiagnosticsInstrumentationTests {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    private func wait(_ condition: () -> Bool, seconds: TimeInterval = 5) async {
-        let deadline = Date().addingTimeInterval(seconds)
-        while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
-    }
-
     private func omemoClient(_ encryption: OMEMOEncryption, account: YapnestKit.JID, wire: FakeWire) -> XMPPClient {
         let client = XMPPClient()
         client.connectionConfiguration.userJid = BareJID(account.description)
@@ -320,7 +315,7 @@ extension DiagnosticsInstrumentationTests {
         }
         let text = try await withStore {
             omemo.module.isPepAvailable = true
-            await wait { omemo.module.isReady }
+            await eventually("the OMEMO module to be ready") { omemo.module.isReady }
         }
         #expect(text.contains("Own device list read devices=0 includesThisDevice=false source=fetch"))
         #expect(text.contains("Own bundle published signedPreKey=1 rotated=true flushed=true preKeys=100"))
@@ -355,14 +350,14 @@ extension DiagnosticsInstrumentationTests {
         omemo.module.listPublishInterval = 0
         let text = try await withStore {
             omemo.module.isPepAvailable = true
-            await wait { omemo.module.isReady }
+            await eventually("the OMEMO module to be ready") { omemo.module.isReady }
             // Another of our clients removed this device: it is listed again.
             listed.withLock { $0 = others }
             omemo.module.publishDeviceIdIfNeeded()
-            await wait { listed.withLock { $0.contains(own) } }
+            await eventually("our device to be listed") { listed.withLock { $0.contains(own) } }
             let removed = OSAllocatedUnfairLock(initialState: false)
             omemo.module.removeDevices(withIds: [1111]) { _ in removed.withLock { $0 = true } }
-            await wait { removed.withLock { $0 } }
+            await eventually("the device to be removed") { removed.withLock { $0 } }
         }
         #expect(text.contains("Own device list read devices=2 includesThisDevice=false source=fetch"))
         #expect(text.contains("Own device list published devices=3 includesThisDevice=true reason=registration"))
@@ -391,9 +386,9 @@ extension DiagnosticsInstrumentationTests {
         defer { withExtendedLifetime([listClient, bundleClient]) {} }
         let text = try await withStore {
             listRefused.module.isPepAvailable = true
-            await wait { listWire.written.contains { self.publishedNode($0 as? Iq ?? Iq()) == OMEMOModule.DEVICES_LIST_NODE } }
+            await eventually("the device list to be published") { listWire.written.contains { self.publishedNode($0 as? Iq ?? Iq()) == OMEMOModule.DEVICES_LIST_NODE } }
             bundleRefused.module.isPepAvailable = true
-            await wait { bundleWire.written.contains { ($0 as? Iq).flatMap(self.publishedNode)?.contains(".bundles:") == true } }
+            await eventually("the bundle to be published") { bundleWire.written.contains { ($0 as? Iq).flatMap(self.publishedNode)?.contains(".bundles:") == true } }
             try await Task.sleep(for: .milliseconds(100))
         }
         #expect(text.contains("Own device list publish failed error="))
@@ -457,7 +452,7 @@ extension DiagnosticsInstrumentationTests {
             return FakeWire.error(to: iq)
         }
         theirs.module.isPepAvailable = true
-        await wait { bundle.withLock { $0 } != nil }
+        await eventually("the bundle to be fetched") { bundle.withLock { $0 } != nil }
         let aliceDevice = Int32(bitPattern: theirs.deviceId)
         let second: Int32 = 77
 

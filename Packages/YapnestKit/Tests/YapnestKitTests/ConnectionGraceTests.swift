@@ -1,4 +1,5 @@
 import Foundation
+import os
 @preconcurrency import Martin
 import Testing
 @testable import YapnestKit
@@ -35,6 +36,40 @@ struct ConnectionGraceTests {
         wire.written.compactMap { $0 as? Iq }.filter { $0.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#items") != nil || $0.firstChild(name: "query", xmlns: NS.mucAdmin) != nil }
     }
 
+    /// Runs `body` with a grace period far past `defaultWait`, and expects it to throw `error` before
+    /// that: a request that waited the grace out would still be running when the wait ends. This
+    /// holds under any load, where a bound on the elapsed time would not.
+    private func failsWithoutWaitingOutTheGrace<E: Error & Equatable>(_ error: E, sourceLocation: SourceLocation = #_sourceLocation, _ body: @escaping @Sendable () async throws -> Void) async {
+        await failsWithoutWaitingOutTheGrace(sourceLocation: sourceLocation, body) { thrown in
+            #expect(thrown as? E == error, sourceLocation: sourceLocation)
+        }
+    }
+
+    private func failsWithoutWaitingOutTheGrace<E: Error>(_ type: E.Type, sourceLocation: SourceLocation = #_sourceLocation, _ body: @escaping @Sendable () async throws -> Void) async {
+        await failsWithoutWaitingOutTheGrace(sourceLocation: sourceLocation, body) { thrown in
+            #expect(thrown is E, sourceLocation: sourceLocation)
+        }
+    }
+
+    private func failsWithoutWaitingOutTheGrace(
+        sourceLocation: SourceLocation, _ body: @escaping @Sendable () async throws -> Void, check: (any Error) -> Void,
+    ) async {
+        setGrace(defaultWait * 10)
+        let outcome = OSAllocatedUnfairLock<(any Error)?>(initialState: nil)
+        let finished = OSAllocatedUnfairLock(initialState: false)
+        let task = Task {
+            do { try await body() } catch { outcome.withLock { $0 = error } }
+            finished.withLock { $0 = true }
+        }
+        let done = await eventually("the request to fail without waiting out the grace", sourceLocation: sourceLocation) { finished.withLock { $0 } }
+        guard done else { task.cancel(); return }
+        guard let thrown = outcome.withLock({ $0 }) else {
+            Issue.record("The request did not fail", sourceLocation: sourceLocation)
+            return
+        }
+        check(thrown)
+    }
+
     @Test func aRequestWaitsForTheConnectionAndThenGoesOut() async throws {
         wantConnection()
         answerCommandList()
@@ -50,10 +85,7 @@ struct ConnectionGraceTests {
     @Test func aRefusedAccountFailsAtOnce() async throws {
         wantConnection()
         session.state.send(.failed("Wrong password."))
-        setGrace(30)
-        let start = Date()
-        await #expect(throws: AdHocError.offline) { try await session.adHocCommands(at: "example.org") }
-        #expect(Date().timeIntervalSince(start) < 10)
+        await failsWithoutWaitingOutTheGrace(AdHocError.offline) { _ = try await session.adHocCommands(at: "example.org") }
     }
 
     @Test func aConnectionThatNeverComesFailsAsOfflineAfterTheGrace() async throws {
@@ -66,10 +98,7 @@ struct ConnectionGraceTests {
     }
 
     @Test func aSessionThatIsntWantedFailsAtOnce() async throws {
-        setGrace(30)
-        let start = Date()
-        await #expect(throws: AdHocError.offline) { try await session.adHocCommands(at: "example.org") }
-        #expect(Date().timeIntervalSince(start) < 10)
+        await failsWithoutWaitingOutTheGrace(AdHocError.offline) { _ = try await session.adHocCommands(at: "example.org") }
     }
 
     @Test func aPendingLivenessCheckHoldsTheRequestUntilItIsAnswered() async throws {
@@ -127,14 +156,11 @@ struct ConnectionGraceTests {
         session.connectForTesting(wire)
         _ = try session.database.joinGroupChat(room, nickname: "me")
         try session.database.updateGroupChat(room) { $0.hasLeft = true }
-        setGrace(30)
-        let start = Date()
-        await #expect(throws: GroupError.self) { try await session.refreshBanList(of: room) }
 
         let other = JID("other@muc.example.org")!
         _ = try session.database.joinGroupChat(other, nickname: "me")
         session.updateRoom(other) { $0 = RoomStatus(phase: .failed("Banned."), nickname: "me") }
-        await #expect(throws: GroupError.self) { try await session.refreshBanList(of: other) }
-        #expect(Date().timeIntervalSince(start) < 10)
+        await failsWithoutWaitingOutTheGrace(GroupError.self) { _ = try await session.refreshBanList(of: room) }
+        await failsWithoutWaitingOutTheGrace(GroupError.self) { _ = try await session.refreshBanList(of: other) }
     }
 }

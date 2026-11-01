@@ -113,15 +113,6 @@ final class FakeCallMediaFactory: CallMediaFactory, @unchecked Sendable {
     var last: FakeCallMedia? { lock.withLock { made.last } }
 }
 
-/// Polls until `condition` holds, for what the session does in the background.
-func eventually(_ what: String, timeout: TimeInterval = 30, _ condition: () -> Bool) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    while !condition() {
-        if Date() > deadline { Issue.record("Timed out waiting for \(what)"); return }
-        try? await Task.sleep(for: .milliseconds(10))
-    }
-}
-
 /// One session of ours, on a stand-in connection, with a roster of alice.
 struct CallSessionHarness {
     let database: AppDatabase

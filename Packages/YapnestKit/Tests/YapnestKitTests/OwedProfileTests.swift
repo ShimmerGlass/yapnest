@@ -344,7 +344,7 @@ struct OwedProfileTests {
         connect()
         await send()
 
-        #expect(await eventually(timeout: 20) { server.nicks == ["current": "B"] && !session.nicknamePending })
+        #expect(await eventually { server.nicks == ["current": "B"] && !session.nicknamePending })
         #expect(session.nickname == "B")
         #expect(session.warnings.current.isEmpty)
     }
@@ -559,7 +559,7 @@ struct OwedProfileTests {
 
         session.client.update(state: .connected(resumed: true))
 
-        #expect(await eventually(timeout: 20) { server.nicks == ["current": "Ada"] })
+        #expect(await eventually { server.nicks == ["current": "Ada"] })
     }
 
     @Test func anExtensionLeavesItToTheApp() async throws {

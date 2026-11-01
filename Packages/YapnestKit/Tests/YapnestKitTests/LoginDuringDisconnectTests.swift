@@ -71,7 +71,7 @@ struct LoginDuringDisconnectTests {
         let loggedIn = DispatchSemaphore(value: 0)
         let thread = Thread {
             // As the app's reconnect does, once the state allows it.
-            let deadline = Date().addingTimeInterval(5)
+            let deadline = Date().addingTimeInterval(defaultWait)
             while client.state != .disconnected(), Date() < deadline { Thread.sleep(forTimeInterval: 0.001) }
             client.login()
             loggedIn.signal()

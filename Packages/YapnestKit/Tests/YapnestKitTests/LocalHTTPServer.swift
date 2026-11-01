@@ -160,13 +160,3 @@ final class LocalHTTPServer: @unchecked Sendable {
         }
     }
 }
-
-/// Polls until `condition` holds, for things that settle on another queue.
-func eventually(timeout: TimeInterval = 30, _ condition: () -> Bool) async -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    while Date() < deadline {
-        if condition() { return true }
-        try? await Task.sleep(for: .milliseconds(10))
-    }
-    return condition()
-}

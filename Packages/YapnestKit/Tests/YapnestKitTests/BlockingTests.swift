@@ -289,7 +289,7 @@ struct QueuedBlockTests {
         }
         connect()
         session.sendPendingBlocks()
-        #expect(await eventually(timeout: 20) { sent.count == 2 && queued.isEmpty })
+        #expect(await eventually { sent.count == 2 && queued.isEmpty })
         #expect(sent.first?.firstChild(name: "block") != nil)
         #expect(sent.last?.firstChild(name: "unblock") != nil)
         #expect(try !db.isBlocked(spammer))

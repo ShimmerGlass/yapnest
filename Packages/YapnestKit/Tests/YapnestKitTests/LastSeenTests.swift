@@ -144,11 +144,8 @@ struct LastSeenTests {
 
     /// The write is made off the calling thread.
     private func waitForLastSeen(_ session: XMPPSession) async throws -> Date? {
-        for _ in 0..<200 {
-            if let seen = try lastSeen(session) { return seen }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        return nil
+        await eventually("the last seen to be written") { (try? lastSeen(session)) != nil }
+        return try lastSeen(session)
     }
 
     private func sessionWatching(sharing: Bool) throws -> XMPPSession {

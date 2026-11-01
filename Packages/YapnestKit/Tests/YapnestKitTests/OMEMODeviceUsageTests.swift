@@ -285,8 +285,9 @@ struct OMEMODeviceUsageTests {
         client.writer = server
         let own = Int32(bitPattern: encryption.deviceId)
         server.storedList = ListServer.list([own, 11, 12, 13])
+        server.ownDevice = own
         encryption.module.isPepAvailable = true
-        await server.waitUntil { encryption.module.isReady }
+        await eventually("the OMEMO module to be ready") { encryption.module.isReady }
 
         let result = await remove([11, 13], with: encryption)
         guard case .success = result else { Issue.record("removal failed: \(result)"); return }
@@ -301,8 +302,9 @@ struct OMEMODeviceUsageTests {
         client.writer = server
         let own = Int32(bitPattern: encryption.deviceId)
         server.storedList = ListServer.list([own, 11])
+        server.ownDevice = own
         encryption.module.isPepAvailable = true
-        await server.waitUntil { encryption.module.isReady }
+        await eventually("the OMEMO module to be ready") { encryption.module.isReady }
 
         let result = await remove([own, 11], with: encryption)
         guard case .success = result else { Issue.record("removal failed: \(result)"); return }
@@ -315,9 +317,11 @@ struct OMEMODeviceUsageTests {
         defer { withExtendedLifetime(client) {} }
         let server = ListServer()
         client.writer = server
-        server.storedList = ListServer.list([Int32(bitPattern: encryption.deviceId), 11])
+        let own = Int32(bitPattern: encryption.deviceId)
+        server.storedList = ListServer.list([own, 11])
+        server.ownDevice = own
         encryption.module.isPepAvailable = true
-        await server.waitUntil { encryption.module.isReady }
+        await eventually("the OMEMO module to be ready") { encryption.module.isReady }
 
         server.refuseListPublishes = true
         let result = await remove([11], with: encryption)
@@ -329,9 +333,11 @@ struct OMEMODeviceUsageTests {
         defer { withExtendedLifetime(client) {} }
         let server = ListServer()
         client.writer = server
-        server.storedList = ListServer.list([Int32(bitPattern: encryption.deviceId), 11])
+        let own = Int32(bitPattern: encryption.deviceId)
+        server.storedList = ListServer.list([own, 11])
+        server.ownDevice = own
         encryption.module.isPepAvailable = true
-        await server.waitUntil { encryption.module.isReady }
+        await eventually("the OMEMO module to be ready") { encryption.module.isReady }
 
         server.refuseListReads = true
         let result = await remove([11], with: encryption)
@@ -356,7 +362,7 @@ struct OMEMODeviceUsageTests {
         // Registration reads our list, which the module announces from its
         // devices queue, where the removal must not start.
         encryption.module.isPepAvailable = true
-        await server.waitUntil { encryption.store.replacedDeviceIds().isEmpty }
+        await eventually("the replaced devices to be cleared") { encryption.store.replacedDeviceIds().isEmpty }
         #expect(Set(server.publishedList) == [own, 12])
         #expect(server.deletedBundles == [21])
         #expect(encryption.store.replacedDeviceIds().isEmpty)
@@ -369,7 +375,7 @@ struct OMEMODeviceUsageTests {
         defer { withExtendedLifetime(client) {} }
         let (server, own) = listServer(for: encryption, on: client, listing: [12])
         encryption.module.isPepAvailable = true
-        await server.waitUntil { encryption.store.replacedDeviceIds().isEmpty }
+        await eventually("the replaced devices to be cleared") { encryption.store.replacedDeviceIds().isEmpty }
         #expect(encryption.store.replacedDeviceIds().isEmpty)
         #expect(server.deletedBundles.isEmpty)
         #expect(Set(server.publishedList) == [own, 12])
@@ -390,7 +396,7 @@ struct OMEMODeviceUsageTests {
         server.storedList = ListServer.list([oldId, 12])
 
         encryption.module.isPepAvailable = true
-        await server.waitUntil { encryption.store.replacedDeviceIds().isEmpty }
+        await eventually("the replaced devices to be cleared") { encryption.store.replacedDeviceIds().isEmpty }
         #expect(Set(server.publishedList) == [own, 12])
         #expect(server.deletedBundles == [oldId])
     }
@@ -450,11 +456,6 @@ private final class ListServer: PacketWriter, @unchecked Sendable {
         let list = Element(name: "list", xmlns: OMEMOModule.XMLNS)
         for id in ids { list.addChild(Element(name: "device", attributes: ["id": String(id)])) }
         return list
-    }
-
-    func waitUntil(_ condition: () -> Bool) async {
-        let deadline = Date().addingTimeInterval(20)
-        while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
     }
 
     private func errorIq(_ condition: String) -> Iq {

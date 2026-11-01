@@ -104,11 +104,6 @@ struct OMEMOOwnDeviceFightTests {
         return (encryption, server, client)
     }
 
-    private func wait(_ condition: () -> Bool, seconds: TimeInterval = 5) async {
-        let deadline = Date().addingTimeInterval(seconds)
-        while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
-    }
-
     @Test func aDeviceWithoutABundleThatReAddsItselfIsDroppedOnceAndLeftBe() async throws {
         let (encryption, server, client) = try setUp(interval: 0.01)
         defer { withExtendedLifetime(client) {} }
@@ -123,7 +118,7 @@ struct OMEMOOwnDeviceFightTests {
             if rounds.next() { module.publishDeviceIdIfNeeded() }
         }
         module.isPepAvailable = true
-        await wait { module.isReady }
+        await eventually("the OMEMO module to be ready") { module.isReady }
         for _ in 0..<10 { module.publishDeviceIdIfNeeded(); try await Task.sleep(for: .milliseconds(60)) }
         try await Task.sleep(for: .milliseconds(300))
 
@@ -147,7 +142,7 @@ struct OMEMOOwnDeviceFightTests {
             }
         }
         module.isPepAvailable = true
-        await wait({ server.listPublishes >= 2 }, seconds: 10)
+        await eventually("the device list to be published twice") { server.listPublishes >= 2 }
         #expect(server.listPublishes == 2, "the drop was never made: \(server.events)")
         #expect(!server.ids.contains(rival))
         #expect(server.deletions.isEmpty)
@@ -159,7 +154,7 @@ struct OMEMOOwnDeviceFightTests {
         defer { withExtendedLifetime(peerClient) {} }
         peerServer.setList([])
         peer.module.isPepAvailable = true
-        await wait { peerServer.publishedBundle != nil }
+        await eventually("the peer's bundle to be published") { peerServer.publishedBundle != nil }
         let bundle = try #require(peerServer.publishedBundle)
 
         let (encryption, server, client) = try setUp(interval: 0.6)
@@ -175,7 +170,7 @@ struct OMEMOOwnDeviceFightTests {
         }
         module.isPepAvailable = true
         // The rival is found without a bundle and its drop is held back.
-        await wait { server.listPublishes >= 1 }
+        await eventually("the device list to be published") { server.listPublishes >= 1 }
         try await Task.sleep(for: .milliseconds(150))
         server.publishRivalBundle(bundle)
         // Past the interval: the drop would have been made by now.
@@ -191,7 +186,7 @@ struct OMEMOOwnDeviceFightTests {
         defer { withExtendedLifetime(peerClient) {} }
         peerServer.setList([])
         peer.module.isPepAvailable = true
-        await wait { peerServer.publishedBundle != nil }
+        await eventually("the peer's bundle to be published") { peerServer.publishedBundle != nil }
         let bundle = try #require(peerServer.publishedBundle)
 
         let (encryption, server, client) = try setUp(interval: 0.6)
@@ -206,7 +201,7 @@ struct OMEMOOwnDeviceFightTests {
             }
         }
         module.isPepAvailable = true
-        await wait { server.listPublishes >= 1 }
+        await eventually("the device list to be published") { server.listPublishes >= 1 }
         try await Task.sleep(for: .milliseconds(150))
         // The device's bundle is readable, but a session exists already, as
         // from its first message to us: building another would replace it
@@ -229,7 +224,7 @@ struct OMEMOOwnDeviceFightTests {
         let module = encryption.module
         server.setList([own, rival])
         module.isPepAvailable = true
-        await wait { module.isReady }
+        await eventually("the OMEMO module to be ready") { module.isReady }
 
         let result: Result<Void, PubSubError> = await withCheckedContinuation { continuation in
             module.removeDevices(withIds: [rival]) { continuation.resume(returning: $0) }
@@ -254,7 +249,7 @@ struct OMEMOOwnDeviceFightTests {
         let module = encryption.module
         server.setList([own])
         module.isPepAvailable = true
-        await wait { module.isReady }
+        await eventually("the OMEMO module to be ready") { module.isReady }
         try await Task.sleep(for: .milliseconds(100))
 
         // Another client dropped us and deleted our bundle. The server here
@@ -262,7 +257,7 @@ struct OMEMOOwnDeviceFightTests {
         server.setList([rival])
         let before = server.events.count
         module.publishDeviceIdIfNeeded()
-        await wait { server.events.count >= before + 2 }
+        await eventually("two more events at the server") { server.events.count >= before + 2 }
         let after = Array(server.events.dropFirst(before))
         #expect(after.first == "bundle \(encryption.deviceId)", "the bundle must be there first: \(after)")
         #expect(after.dropFirst().first == "list")
@@ -283,7 +278,7 @@ struct OMEMOOwnDeviceFightTests {
         module.isPepAvailable = true
         // Waits for the count rather than sleeping a fixed time: under a
         // loaded test run the deferred publishes come late, not early.
-        await wait({ server.listPublishes >= 4 }, seconds: 10)
+        await eventually("the device list to be published four times") { server.listPublishes >= 4 }
         let elapsed = Date().timeIntervalSince(start)
         let publishes = server.listPublishes
         #expect(publishes >= 4, "it keeps trying, just slowly: \(server.events)")

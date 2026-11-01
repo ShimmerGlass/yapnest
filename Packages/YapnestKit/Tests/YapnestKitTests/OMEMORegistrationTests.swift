@@ -85,16 +85,11 @@ struct OMEMORegistrationTests {
         return (encryption, server, client)
     }
 
-    private func wait(_ condition: () -> Bool, seconds: TimeInterval = 30) async {
-        let deadline = Date().addingTimeInterval(seconds)
-        while !condition() && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
-    }
-
     @Test func aRefusedBundlePublishIsRetried() async throws {
         let (encryption, server, client) = try setUp(failingBundlePublishes: 1)
         defer { withExtendedLifetime(client) {} }
         encryption.module.isPepAvailable = true
-        await wait { encryption.module.isReady }
+        await eventually("the OMEMO module to be ready") { encryption.module.isReady }
         #expect(encryption.module.isReady)
         #expect(server.bundlePublishes >= 2, "refused once, then published")
         #expect(server.listPublishes == 1, "the device id goes out once the bundle is there")
@@ -104,7 +99,7 @@ struct OMEMORegistrationTests {
         let (encryption, server, client) = try setUp(failingBundlePublishes: 3)
         defer { withExtendedLifetime(client) {} }
         encryption.module.isPepAvailable = true
-        await wait { encryption.module.isReady }
+        await eventually("the OMEMO module to be ready") { encryption.module.isReady }
         #expect(encryption.module.isReady)
         #expect(server.bundlePublishes >= 4)
         #expect(server.listPublishes == 1, "waiting registrations don't pile up")
@@ -114,7 +109,7 @@ struct OMEMORegistrationTests {
         let (encryption, server, client) = try setUp(failingBundlePublishes: 100, retryDelays: [3600])
         defer { withExtendedLifetime(client) {} }
         encryption.module.isPepAvailable = true
-        await wait { server.bundlePublishes >= 1 }
+        await eventually("the bundle to be published") { server.bundlePublishes >= 1 }
         try await Task.sleep(for: .milliseconds(100))
         #expect(!encryption.module.isReady)
         #expect(server.listPublishes == 0)
@@ -124,13 +119,13 @@ struct OMEMORegistrationTests {
         let (encryption, server, client) = try setUp(failingBundlePublishes: 1, retryDelays: [3600])
         defer { withExtendedLifetime(client) {} }
         encryption.module.isPepAvailable = true
-        await wait { server.bundlePublishes >= 1 }
+        await eventually("the bundle to be published") { server.bundlePublishes >= 1 }
         try await Task.sleep(for: .milliseconds(100))
         #expect(!encryption.module.isReady)
 
         encryption.module.reset(scopes: [.stream])
         encryption.module.resumeRegistrationIfNeeded()
-        await wait { encryption.module.isReady }
+        await eventually("the OMEMO module to be ready") { encryption.module.isReady }
         #expect(encryption.module.isReady)
         #expect(server.bundlePublishes >= 2)
     }
@@ -139,7 +134,7 @@ struct OMEMORegistrationTests {
         let (encryption, server, client) = try setUp(failingBundlePublishes: 0)
         defer { withExtendedLifetime(client) {} }
         encryption.module.isPepAvailable = true
-        await wait { encryption.module.isReady }
+        await eventually("the OMEMO module to be ready") { encryption.module.isReady }
         // The device list step republishes the bundle, which this server
         // doesn't remember; let that settle before counting.
         try await Task.sleep(for: .milliseconds(100))
@@ -153,7 +148,7 @@ struct OMEMORegistrationTests {
         let (encryption, server, client) = try setUp(failingBundlePublishes: 100)
         defer { withExtendedLifetime(client) {} }
         encryption.module.isPepAvailable = true
-        await wait { server.bundlePublishes >= 3 }
+        await eventually("the bundle to be published three times") { server.bundlePublishes >= 3 }
         encryption.module.reset(scopes: [.session])
         encryption.module.isPepAvailable = false
         try await Task.sleep(for: .milliseconds(100))

@@ -124,20 +124,12 @@ private final class Harness {
         // them: when it saw the sign-in already under way it set the session up at once, and sent a
         // `<resume>` before the server had answered.
         connector.events.send(.stanza(Stanza.from(element: featuresElement)))
-        let deadline = Date().addingTimeInterval(3)
+        let deadline = Date().addingTimeInterval(defaultWait)
         while client.module(.auth).state != .inProgress, Date() < deadline { Thread.sleep(forTimeInterval: 0.001) }
     }
 
     func receive(_ element: Element) {
         connector.events.send(.stanza(Stanza.from(element: element)))
-    }
-
-    func waitUntil(_ what: String, _ condition: () -> Bool) async {
-        let deadline = Date().addingTimeInterval(3)
-        while !condition() {
-            if Date() > deadline { Issue.record("Timed out waiting for \(what)"); return }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
     }
 
     func iqResult(_ id: String) -> Element {
@@ -164,7 +156,7 @@ struct Sasl2SessionTests {
         for id in ["r1", "r2", "r3"] { h.receive(h.iqResult(id)) }
         h.receive(element("r", "urn:xmpp:sm:3"))
 
-        await h.waitUntil("connected") {
+        await eventually("connected") {
             // State's == ignores whether it resumed.
             h.states.contains { if case .connected(let resumed) = $0 { resumed } else { false } }
         }
@@ -172,11 +164,11 @@ struct Sasl2SessionTests {
         #expect(h.sm.ackEnabled)
 
         // What the server hadn't handled went out again, once.
-        await h.waitUntil("the resend") { h.writer.written.filter { $0.name == "message" }.count == 2 }
+        await eventually("the resend") { h.writer.written.filter { $0.name == "message" }.count == 2 }
         #expect(h.writer.written.filter { $0.name == "message" }.compactMap { $0.getAttribute("id") } == ["B", "C"])
 
         // The three results were counted, and the request was answered.
-        await h.waitUntil("the answer") { h.writer.written.contains { $0.name == "a" } }
+        await eventually("the answer") { h.writer.written.contains { $0.name == "a" } }
         #expect(h.writer.written.last { $0.name == "a" }?.getAttribute("h") == "3")
     }
 
@@ -187,7 +179,7 @@ struct Sasl2SessionTests {
         h.receive(element("success", "urn:xmpp:sasl:2", [:], [
             element("resumed", "urn:xmpp:sm:3", ["h": "1", "previd": "prev"]),
         ]))
-        await h.waitUntil("connected") { h.connectedCount == 1 }
+        await eventually("connected") { h.connectedCount == 1 }
         h.receive(element("features", "http://etherx.jabber.org/streams"))
         try await Task.sleep(for: .milliseconds(200))
         #expect(h.connectedCount == 1)
@@ -207,7 +199,7 @@ struct Sasl2SessionTests {
             ]),
         ]))
         h.receive(element("features", "http://etherx.jabber.org/streams"))
-        await h.waitUntil("connected") { h.connectedCount >= 1 }
+        await eventually("connected") { h.connectedCount >= 1 }
         try await Task.sleep(for: .milliseconds(200))
         #expect(h.states.contains(.connected(resumed: false)))
         #expect(h.connectedCount == 1)
@@ -243,10 +235,10 @@ struct Sasl2SessionTests {
         h.receive(element("r", "urn:xmpp:sm:3"))
         h.blocker.gate.signal()
 
-        await h.waitUntil("the answer") { h.writer.written.contains { $0.name == "a" } }
+        await eventually("the answer") { h.writer.written.contains { $0.name == "a" } }
         #expect(h.writer.written.last { $0.name == "a" }?.getAttribute("h") == "1")
         #expect(h.recorder.ids == ["m1"])
-        await h.waitUntil("connected") { h.connectedCount >= 1 }
+        await eventually("connected") { h.connectedCount >= 1 }
         try await Task.sleep(for: .milliseconds(200))
         #expect(h.connectedCount == 1)
         #expect(h.client.context.boundJid == JID("alice@localhost/phone"))
@@ -274,10 +266,10 @@ struct Sasl2SessionTests {
         h.receive(element("r", "urn:xmpp:sm:3"))
         h.blocker.gate.signal()
 
-        await h.waitUntil("the answer") { h.writer.written.contains { $0.name == "a" } }
+        await eventually("the answer") { h.writer.written.contains { $0.name == "a" } }
         #expect(h.writer.written.last { $0.name == "a" }?.getAttribute("h") == "1")
         #expect(h.recorder.ids == ["m1"])
-        await h.waitUntil("connected") { h.connectedCount >= 1 }
+        await eventually("connected") { h.connectedCount >= 1 }
         try await Task.sleep(for: .milliseconds(200))
         #expect(h.connectedCount == 1)
         #expect(h.sm.ackEnabled)

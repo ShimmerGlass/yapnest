@@ -47,12 +47,9 @@ struct ChatListRegionTests {
             .handleEvents(willTrackRegion: { region in box.lock.withLock { box.region = region } })
             .start(in: db.writer, scheduling: .async(onQueue: .global()), onError: { _ in }, onChange: { _ in })
         defer { observation.cancel() }
-        let deadline = ContinuousClock.now + .seconds(60)
-        while ContinuousClock.now < deadline {
-            if let region = box.lock.withLock({ box.region }) { return region }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        throw CancellationError()
+        await eventually("the observation to track its region") { box.lock.withLock { box.region } != nil }
+        guard let region = box.lock.withLock({ box.region }) else { throw CancellationError() }
+        return region
     }
 
     /// Tables whose change the fetch's own reads would notice but `watched` wouldn't.
@@ -127,12 +124,12 @@ struct ConstantRegionObservationTests {
             count.lock.withLock { count.value += 1 }
         })
         defer { running.cancel() }
-        guard await eventually(timeout: 30, { count.lock.withLock { count.value } >= 1 }) else { return false }
+        guard await eventually({ count.lock.withLock { count.value } >= 1 }) else { return false }
         // Whatever the first fetch after the start repeats is let settle.
         _ = await eventually(timeout: 0.3) { false }
         let before = count.lock.withLock { count.value }
         try write(db)
-        return await eventually(timeout: 5) { count.lock.withLock { count.value } > before }
+        return await eventually { count.lock.withLock { count.value } > before }
     }
 
     @Test func aContactIsWatchedForItsRow() async throws {
