@@ -104,9 +104,11 @@ final class OMEMOEncryption: @unchecked Sendable {
     var deviceId: UInt32 { store.localRegistrationId() }
 
     /// Makes the install a new device: see `OMEMOStore.replaceIdentity`. The
-    /// module stays registered as the old one, so this instance refuses to
-    /// encrypt or decrypt from then on, and only the next `OMEMOEncryption`
-    /// over the database may be used.
+    /// module reads its device id and keys from the store each time, so it
+    /// answers as the new device from here on, though that device is not yet
+    /// on our list or published, and its state was built for the old one. This
+    /// instance therefore refuses to encrypt or decrypt from then on, and only
+    /// the next `OMEMOEncryption` over the database may be used.
     func replaceDevice() throws {
         // A send or decode still under way would store its session after
         // they're all deleted, built on the old key. So would a session
