@@ -81,15 +81,15 @@ extension XMPPSession {
             logger.error("Failed to look up the read states owed: \(error)")
             return
         }
-        // What to send is decided from the database first, so the publishes
-        // can go side by side: they are one per chat, and nothing orders one
-        // chat's state against another's.
-        var toPublish: [(stanzaId: String, conversationId: Int64, route: Route)] = []
+        // Which chats have something to send is decided from the database
+        // first, so the publishes can go side by side: they are one per chat,
+        // and nothing orders one chat's state against another's.
+        var toPublish: [(conversationId: Int64, route: Route)] = []
         for conversation in owed {
             guard isConnected, let id = conversation.id else { return }
             do {
-                if let stanzaId = try readStateToPublish(conversation) {
-                    toPublish.append((stanzaId, id, route(for: conversation)))
+                if try readStateToPublish(conversation) != nil {
+                    toPublish.append((id, route(for: conversation)))
                 }
             } catch {
                 logger.error("Failed to publish an owed read state: \(error)")
@@ -103,7 +103,7 @@ extension XMPPSession {
             func startNext() {
                 guard let item = next.next() else { return }
                 group.addTask { [self] in
-                    await publish(stanzaId: item.stanzaId, conversationId: item.conversationId, route: item.route)
+                    await publish(conversationId: item.conversationId, route: item.route)
                 }
             }
             for _ in 0..<Self.concurrentReadStatePublishes { startNext() }
@@ -150,10 +150,11 @@ extension XMPPSession {
         if awaited { publishOwedReadStates() }
     }
 
-    private func publish(stanzaId decided: String, conversationId: Int64, route: Route) async {
+    private func publish(conversationId: Int64, route: Route) async {
         let peer = route.peer
-        // Decided before the publishes ahead of this one were answered, so
-        // another device may have read further since: ask again.
+        // The chats to publish were chosen before the publishes ahead of this
+        // one were answered, so another device may have read further since:
+        // decide what to send now.
         let stanzaId: String
         do {
             guard isConnected, let conversation = try database.conversation(id: conversationId), conversation.readStateOwed,
