@@ -402,14 +402,11 @@ public final class XMPPSession: @unchecked Sendable {
         var awaitsRoster = false
         /// The run sending the bookmarks we owe, and the task doing it.
         var bookmarkRun = CoalescedRun()
-        /// Groups whose bookmark the server refused for good, until the
-        /// user's Retry asks about them.
-        var bookmarkRefusals: [JID: Error] = [:]
         /// The run sending our avatar and name changes, and the task doing it.
         var profileRun = CoalescedRun()
-        /// The profile warning keys whose change the server refused for good,
-        /// until the user's Retry asks about it.
-        var profileRefusals: [String: Error] = [:]
+        /// By warning key, what the server refused for good, until the user's
+        /// Retry asks about it (bookmarks, profile, roster changes, blocks).
+        var refusals: [String: Error] = [:]
         /// The run publishing the read states owed, and the task doing it.
         var readStateRun = CoalescedRun()
         /// Fetches of the read states under way. While one is, what the server

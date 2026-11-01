@@ -2032,14 +2032,13 @@ extension XMPPSession {
                     current.isBookmarked = !group.hasLeft
                     if current.hasLeft == group.hasLeft, Bookmark(current) == Bookmark(group) { current.bookmarkOwed = false }
                 }
-                lock.withLock { _ = $0.bookmarkRefusals.removeValue(forKey: group.jid) }
-                warnings.clear("bookmark/\(group.jid)")
+                settleWarning("bookmark/\(group.jid)")
             } catch {
                 logger.info("Couldn't send the bookmark for \(group.jid, privacy: .private): \(error.localizedDescription, privacy: .private)")
                 // Whatever passes by itself stays owed for the next connect.
                 guard ServerError.isFinalRefusal(error) else { continue }
                 try? database.updateGroupChat(group.jid) { $0.bookmarkOwed = false }
-                lock.withLock { $0.bookmarkRefusals[group.jid] = error }
+                recordRefusal("bookmark/\(group.jid)", error)
                 postBookmarkWarning(group, error: error)
             }
         }
@@ -2050,11 +2049,12 @@ extension XMPPSession {
         let retraction = group.hasLeft
         let title = retraction ? String(localized: "Couldn't remove the group's bookmark") : String(localized: "Couldn't save the group's bookmark")
         let friendly = retraction ? String(localized: "The server wouldn't remove the bookmark") : String(localized: "The server wouldn't save the bookmark")
-        warnings.post("bookmark/\(jid)", title: title, friendly: friendly, error: error) { [weak self] in
+        let key = "bookmark/\(jid)"
+        warnings.post(key, title: title, friendly: friendly, error: error) { [weak self] in
             guard let self else { return }
-            try database.updateGroupChat(jid) { $0.bookmarkOwed = true }
-            await sendOwedBookmarks()?.value
-            if let refusal = lock.withLock({ $0.bookmarkRefusals.removeValue(forKey: jid) }) { throw refusal }
+            try await retryOwed(key) {
+                try database.updateGroupChat(jid) { $0.bookmarkOwed = true }
+            } run: { sendOwedBookmarks() }
         }
     }
 

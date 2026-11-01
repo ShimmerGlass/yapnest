@@ -2,6 +2,7 @@ import Foundation
 import GRDB
 import os
 @preconcurrency import Martin
+@testable import Martin
 import Testing
 @testable import YapnestKit
 
@@ -201,6 +202,46 @@ struct PendingRosterTests {
         #expect(await session.warnings.retry(warning.key))
         #expect(await eventually(timeout: 20) { (try? contact(stranger).hasContactRequest) == false })
         #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func aRetryWaitsForTheServerAndThrowsItsRefusal() async throws {
+        try await session.acceptContactRequest(from: stranger)
+        connect { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        let retry = try #require(session.warnings.current.first?.retry)
+
+        // Still refused: the Retry itself reports it, not a new warning later.
+        let error = await #expect(throws: (any Error).self) { try await retry() }
+        #expect(ServerError.userMessage(for: try #require(error), friendly: "").contains("forbidden"))
+        #expect(queued.isEmpty)
+        #expect(try contact(stranger).hasContactRequest)
+
+        wire.answer { FakeWire.result(to: $0) }
+        try await retry()
+        // Done when it returns, not some time after.
+        #expect(queued.isEmpty)
+        #expect(try !contact(stranger).hasContactRequest)
+        #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func aRetryOfflineReturnsAndKeepsTheChangeQueuedUntilConnected() async throws {
+        try await session.acceptContactRequest(from: stranger)
+        connect { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { session.warnings.current.count == 1 && queued.isEmpty })
+        let retry = try #require(session.warnings.current.first?.retry)
+
+        // Never refused for being offline: the change waits, stored, for a connection.
+        session.client.update(state: .disconnected())
+        try await retry()
+        #expect(queued.map(\.kind) == [.accept])
+        #expect(try contact(stranger).pendingRoster == .accept)
+
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually(timeout: 20) { queued.isEmpty && session.warnings.current.isEmpty })
+        #expect(try !contact(stranger).hasContactRequest)
     }
 
     @Test func aRefusedRenameShowsTheOldNameAgain() async throws {

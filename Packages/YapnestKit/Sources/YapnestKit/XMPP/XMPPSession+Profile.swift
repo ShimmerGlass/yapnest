@@ -211,8 +211,7 @@ extension XMPPSession {
                 try await publish(owed)
             }
             try database.settleAvatarChange(owed, serverNow: owed.image?.hash)
-            lock.withLock { _ = $0.profileRefusals.removeValue(forKey: Self.avatarWarning) }
-            warnings.clear(Self.avatarWarning)
+            settleWarning(Self.avatarWarning)
         } catch {
             logger.info("Couldn't send the avatar: \(error.localizedDescription, privacy: .private)")
             guard isFinalProfileRefusal(error) else { return }
@@ -231,12 +230,12 @@ extension XMPPSession {
             if !(error is ProfileError) {
                 retry = { [weak self] in
                     guard let self else { return }
-                    try database.queueAvatarChange(image, for: account, base: base)
-                    await sendOwedProfile()?.value
-                    if let refusal = lock.withLock({ $0.profileRefusals.removeValue(forKey: Self.avatarWarning) }) { throw refusal }
+                    try await retryOwed(Self.avatarWarning) {
+                        try database.queueAvatarChange(image, for: account, base: base)
+                    } run: { sendOwedProfile() }
                 }
             }
-            lock.withLock { $0.profileRefusals[Self.avatarWarning] = error }
+            recordRefusal(Self.avatarWarning, error)
             warnings.post(
                 Self.avatarWarning, title: String(localized: "Photo not updated"),
                 friendly: String(localized: "The server wouldn't change your photo"), error: error, retry: retry,
@@ -259,8 +258,7 @@ extension XMPPSession {
                 }
             }
             try database.settleNicknameChange(owed, serverNow: owed.value)
-            lock.withLock { _ = $0.profileRefusals.removeValue(forKey: Self.nicknameWarning) }
-            warnings.clear(Self.nicknameWarning)
+            settleWarning(Self.nicknameWarning)
         } catch {
             logger.info("Couldn't send the nickname: \(error.localizedDescription, privacy: .private)")
             guard isFinalProfileRefusal(error) else { return }
@@ -271,15 +269,15 @@ extension XMPPSession {
             }
             let value = owed.value
             let base = AppDatabase.OwedBase(value: owed.base, known: owed.baseKnown)
-            lock.withLock { $0.profileRefusals[Self.nicknameWarning] = error }
+            recordRefusal(Self.nicknameWarning, error)
             warnings.post(
                 Self.nicknameWarning, title: String(localized: "Name not updated"),
                 friendly: String(localized: "The server wouldn't change your name"), error: error,
             ) { [weak self] in
                 guard let self else { return }
-                try database.queueNicknameChange(value, base: base)
-                await sendOwedProfile()?.value
-                if let refusal = lock.withLock({ $0.profileRefusals.removeValue(forKey: Self.nicknameWarning) }) { throw refusal }
+                try await retryOwed(Self.nicknameWarning) {
+                    try database.queueNicknameChange(value, base: base)
+                } run: { sendOwedProfile() }
             }
         }
     }

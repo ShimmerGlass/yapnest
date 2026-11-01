@@ -126,6 +126,27 @@ struct QueuedBlockTests {
         #expect(sent.count == 1)
     }
 
+    @Test func aRetryWaitsForTheServerAndThrowsItsRefusal() async throws {
+        try await session.block(spammer)
+        connect { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
+        session.sendPendingBlocks()
+        #expect(await eventually { session.warnings.current.count == 1 && queued.isEmpty })
+        let retry = try #require(session.warnings.current.first?.retry)
+
+        // Still refused: the Retry itself reports it, not a new warning later.
+        let error = await #expect(throws: (any Error).self) { try await retry() }
+        #expect(ServerError.userMessage(for: try #require(error), friendly: "").contains("forbidden"))
+        #expect(queued.isEmpty)
+        #expect(try !db.isBlocked(spammer))
+
+        wire.answer { FakeWire.result(to: $0) }
+        try await retry()
+        // Done when it returns, not some time after.
+        #expect(queued.isEmpty)
+        #expect(try db.isBlocked(spammer))
+        #expect(session.warnings.current.isEmpty)
+    }
+
     @Test func aRefusedUnblockKeepsThemBlocked() async throws {
         try db.setBlocklist([spammer])
         try await session.unblock(spammer)

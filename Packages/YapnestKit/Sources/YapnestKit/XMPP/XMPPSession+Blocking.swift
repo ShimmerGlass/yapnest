@@ -74,9 +74,10 @@ extension XMPPSession {
     /// connected. A passing error leaves the rest for the next connect, and a
     /// refusal for good puts the person back and tells the user. Only the
     /// app sends.
-    func sendPendingBlocks() {
-        guard policy.resendsPending else { return }
-        coalesced(\.blockRun) { await $0.sendQueuedBlocks() }
+    @discardableResult
+    func sendPendingBlocks() -> Task<Void, Never>? {
+        guard policy.resendsPending else { return nil }
+        return coalesced(\.blockRun) { await $0.sendQueuedBlocks() }
     }
 
     private func sendQueuedBlocks() async {
@@ -102,7 +103,7 @@ extension XMPPSession {
                         logger.error("Failed to clear the declined contact request: \(error)")
                     }
                 }
-                warnings.clear("blocking/\(change.jid)")
+                settleWarning("blocking/\(change.jid)")
             },
             isRefusal: { $0 is BlockingError || ServerError.isFinalRefusal($0) },
             refuse: { change in
@@ -144,15 +145,18 @@ extension XMPPSession {
         let reason = change.reason
         let title = blocked ? String(localized: "Couldn't block") : String(localized: "Couldn't unblock")
         let friendly = blocked ? String(localized: "The server wouldn't block them") : String(localized: "The server wouldn't unblock them")
+        let key = "blocking/\(jid)"
         var retry: (@Sendable () async throws -> Void)?
         if !(error is BlockingError) {
             retry = { [weak self] in
                 guard let self else { return }
-                if blocked { try await block(jid, reporting: reason) } else { try await unblock(jid) }
-                warnings.clear("blocking/\(jid)")
+                try await retryOwed(key) {
+                    if blocked { try await block(jid, reporting: reason) } else { try await unblock(jid) }
+                } run: { sendPendingBlocks() }
             }
         }
-        warnings.post("blocking/\(jid)", title: title, friendly: friendly, error: error, retry: retry)
+        recordRefusal(key, error)
+        warnings.post(key, title: title, friendly: friendly, error: error, retry: retry)
     }
 
     /// The server's ids for what `jid` last sent us, so its operators can

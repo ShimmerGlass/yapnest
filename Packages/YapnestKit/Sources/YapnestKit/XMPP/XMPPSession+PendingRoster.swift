@@ -18,9 +18,10 @@ extension XMPPSession {
     /// and the roster has been read. A passing error leaves the rest for the
     /// next connect, and a refusal for good drops the change and tells the
     /// user. Only the app sends.
-    func sendPendingRosterChanges() {
-        guard policy.resendsPending else { return }
-        coalesced(\.rosterRun) { await $0.sendQueuedRosterChanges() }
+    @discardableResult
+    func sendPendingRosterChanges() -> Task<Void, Never>? {
+        guard policy.resendsPending else { return nil }
+        return coalesced(\.rosterRun) { await $0.sendQueuedRosterChanges() }
     }
 
     private func sendQueuedRosterChanges() async {
@@ -37,7 +38,7 @@ extension XMPPSession {
                 guard let id = change.id else { return }
                 try await send(change)
                 try database.removePendingRosterChange(id: id)
-                warnings.clear("roster/\(change.jid)")
+                settleWarning("roster/\(change.jid)")
             },
             isRefusal: { $0 is ContactError || ServerError.isFinalRefusal($0) },
             refuse: { change in
@@ -107,19 +108,22 @@ extension XMPPSession {
             title = String(localized: "Couldn't save the nickname")
             friendly = String(localized: "The server wouldn't save the nickname for \(jid.description)")
         }
+        let key = "roster/\(jid)"
         var retry: (@Sendable () async throws -> Void)?
         if !(error is ContactError) {
             retry = { [weak self] in
                 guard let self else { return }
-                switch kind {
-                case .accept: try await acceptContactRequest(from: jid)
-                case .decline: try declineContactRequest(from: jid)
-                case .remove: try await removeContact(jid)
-                case .rename: try await setContactName(jid, name: name)
-                }
-                warnings.clear("roster/\(jid)")
+                try await retryOwed(key) {
+                    switch kind {
+                    case .accept: try await acceptContactRequest(from: jid)
+                    case .decline: try declineContactRequest(from: jid)
+                    case .remove: try await removeContact(jid)
+                    case .rename: try await setContactName(jid, name: name)
+                    }
+                } run: { sendPendingRosterChanges() }
             }
         }
-        warnings.post("roster/\(jid)", title: title, friendly: friendly, error: error, retry: retry)
+        recordRefusal(key, error)
+        warnings.post(key, title: title, friendly: friendly, error: error, retry: retry)
     }
 }

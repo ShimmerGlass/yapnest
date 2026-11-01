@@ -1,8 +1,36 @@
 import Foundation
 
-/// What the sends of the roster change and block queues have in common: the
-/// loop over a stored queue.
+/// What the sends of owed changes (bookmarks, profile, roster changes, blocks)
+/// have in common: how a refusal reaches the Retry that asked, and the loop
+/// over a stored queue.
 extension XMPPSession {
+    /// The server refused what `key`'s warning is about, for good. Kept until
+    /// the user's Retry asks, so it can show the answer in place.
+    func recordRefusal(_ key: String, _ error: Error) {
+        lock.withLock { $0.refusals[key] = error }
+    }
+
+    /// The server took what `key`'s warning was about.
+    func settleWarning(_ key: String) {
+        lock.withLock { _ = $0.refusals.removeValue(forKey: key) }
+        warnings.clear(key)
+    }
+
+    /// A Retry: owes the change again, waits for the run that sends it, and
+    /// throws the server's refusal if there is one, so the Retry spins until
+    /// the server has answered and shows the outcome in place. Offline the
+    /// run sends nothing: the change stays queued and the Retry returns.
+    func retryOwed(
+        _ key: String,
+        owe: () async throws -> Void,
+        run: () -> Task<Void, Never>?,
+    ) async throws {
+        lock.withLock { _ = $0.refusals.removeValue(forKey: key) }
+        try await owe()
+        await run()?.value
+        if let refusal = lock.withLock({ $0.refusals.removeValue(forKey: key) }) { throw refusal }
+    }
+
     /// What to do with a change the server refused for good.
     enum RefusedChange {
         /// It is dropped and the user is told.
