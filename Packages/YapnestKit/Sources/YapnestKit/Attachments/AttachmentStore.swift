@@ -113,7 +113,7 @@ public final class AttachmentStore: Sendable {
         let isVideo = Self.isVideo(name: name)
         // Only MPEG-4 is exported as itself; any other container comes out as
         // QuickTime, so it is named like one rather than under its old extension.
-        let storedName = isVideo && !["mov", "mp4", "m4v"].contains((name as NSString).pathExtension.lowercased())
+        let storedName = isVideo && Self.videoContainer(forExtension: (name as NSString).pathExtension) == nil
             ? (name as NSString).deletingPathExtension + ".mov" : name
         let file = Self.freshName(keeping: storedName)
         let destination = directory.appending(path: file)
@@ -258,12 +258,19 @@ public final class AttachmentStore: Sendable {
         let asset = AVURLAsset(url: source)
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else { throw MetadataError() }
         session.metadataItemFilter = .forSharing()
-        let type: AVFileType = switch destination.pathExtension.lowercased() {
+        try await session.export(to: destination, as: videoContainer(forExtension: destination.pathExtension) ?? .mov)
+    }
+
+    /// The container a video with this extension is exported as itself in, or
+    /// nil if it comes out as QuickTime. One list for both the name stored
+    /// and the export, so they can't disagree.
+    private static func videoContainer(forExtension ext: String) -> AVFileType? {
+        switch ext.lowercased() {
         case "mp4": .mp4
         case "m4v": .m4v
-        default: .mov
+        case "mov": .mov
+        default: nil
         }
-        try await session.export(to: destination, as: type)
     }
 
     /// Displayed size of an image file, after its EXIF orientation.
