@@ -37,7 +37,7 @@ struct EditGroupView: View {
     @State private var options = RoomConfiguration()
     @State private var isSaving = false
     @State private var confirmsEncryptionOff = false
-    @State private var failures: String?
+    @State private var failures = SaveFailures()
     /// What the room has now, kept as parts of the save go through so a
     /// retry sends only what is left.
     @State private var savedName: String
@@ -133,7 +133,16 @@ struct EditGroupView: View {
                     SheetConfirmButton("Save", isBusy: isSaving, action: save).disabled(!canSave)
                 }
             }
-            .errorAlert("Couldn't save everything", $failures)
+            .alert("Couldn't save everything", isPresented: Binding(isPresent: $failures.message)) {
+                if failures.canRetry {
+                    // The parts that went through are kept as saved, so this
+                    // sends only the ones that failed.
+                    Button("Retry", action: perform)
+                }
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(failures.message ?? "")
+            }
             .actionAlert("Couldn't use that picture", preparingPicture)
             .confirmationDialog("Turn off encryption?", isPresented: $confirmsEncryptionOff, titleVisibility: .visible) {
                 Button("Turn Off Encryption", role: .destructive, action: perform)
@@ -303,7 +312,7 @@ struct EditGroupView: View {
         let configuration = configurationChange
         let newSubject = changesSubject ? trimmedSubject : nil
         Task {
-            var failed: [String] = []
+            var failed = SaveFailures()
             switch pictureChange {
             case .unchanged: break
             case .replaced(let prepared, _):
@@ -334,13 +343,34 @@ struct EditGroupView: View {
             if failed.isEmpty {
                 dismiss()
             } else {
-                failures = failed.joined(separator: "\n")
+                failures = failed
             }
         }
     }
 
-    private func attempt(_ part: LocalizedStringResource, _ failed: inout [String], _ work: @MainActor () async throws -> Void) async {
-        do { try await work() } catch { failed.append("\(String(localized: part)): \(ServerError.userMessage(for: error))") }
+    private func attempt(_ part: LocalizedStringResource, _ failed: inout SaveFailures, _ work: @MainActor () async throws -> Void) async {
+        do { try await work() } catch { failed.add(String(localized: part), error) }
+    }
+
+    /// The parts of a save that failed, for one alert.
+    struct SaveFailures: Equatable {
+        private var lines: [String] = []
+        private(set) var canRetry = false
+
+        var isEmpty: Bool { lines.isEmpty }
+
+        /// The alert's text; setting it to nil clears the failures.
+        var message: String? {
+            get { lines.isEmpty ? nil : lines.joined(separator: "\n") }
+            set { if newValue == nil { self = SaveFailures() } }
+        }
+
+        /// Retry is offered when a failure came from the server or the
+        /// connection, as trying again could then help.
+        mutating func add(_ part: String, _ error: Error) {
+            lines.append("\(part): \(ServerError.userMessage(for: error))")
+            if ServerError.isFromServer(error) { canRetry = true }
+        }
     }
 }
 
