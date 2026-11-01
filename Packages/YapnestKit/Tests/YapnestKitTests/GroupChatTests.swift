@@ -170,6 +170,15 @@ struct GroupChatParsingTests {
         #expect(reactions.first?.occupantId == "occ-bob")
     }
 
+    @Test func reactionFromANewOccupantHoldingAFormerOccupantsNickReplacesIt() throws {
+        try ingest("<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>cake?</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='r1'/></message>")
+        try ingest("<message from='cake@rooms.example.org/bob' type='groupchat' id='x1'><reactions id='r1' xmlns='urn:xmpp:reactions:0'><reaction>👍</reaction></reactions><occupant-id xmlns='urn:xmpp:occupant-id:0' id='occ-bob'/></message>", occupants: [:], trustsOccupantIds: true)
+        try ingest("<message from='cake@rooms.example.org/bob' type='groupchat' id='x2'><reactions id='r1' xmlns='urn:xmpp:reactions:0'><reaction>👍</reaction></reactions><occupant-id xmlns='urn:xmpp:occupant-id:0' id='occ-other'/></message>", occupants: [:], trustsOccupantIds: true)
+        let reactions = try db.reader.read { try Reaction.fetchAll($0) }
+        #expect(reactions.count == 1)
+        #expect(reactions.first?.occupantId == "occ-other")
+    }
+
     @Test func ourEchoedReactionReplacesTheOneWeStored() throws {
         try ingest("<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>cake?</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='r1'/></message>")
         // Stored on sending, before we knew our occupant id.
