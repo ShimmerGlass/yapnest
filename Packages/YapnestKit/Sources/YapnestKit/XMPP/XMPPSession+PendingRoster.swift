@@ -23,46 +23,38 @@ extension XMPPSession {
         coalesced(\.rosterRun) { await $0.sendQueuedRosterChanges() }
     }
 
-    /// The oldest queued change, marked as in flight in the same step so that
-    /// a later change can't replace it after it was chosen.
-    private func claimNextRosterChange() throws -> PendingRosterChange? {
-        try rosterQueueLock.withLock {
-            let change = try database.nextPendingRosterChange()
-            afterRosterChangeChosenForTesting?()
-            lock.withLock { $0.rosterInFlight = change?.id }
-            return change
-        }
-    }
-
     private func sendQueuedRosterChanges() async {
-        while isConnected, !lock.withLock({ $0.awaitsRoster }) {
-            let change: PendingRosterChange?
-            do {
-                change = try claimNextRosterChange()
-            } catch {
-                logger.error("Failed to read the queued roster changes: \(error)")
-                return
-            }
-            defer { lock.withLock { $0.rosterInFlight = nil } }
-            guard let change, let id = change.id else { return }
-            do {
+        await drainQueue(
+            queueLock: rosterQueueLock,
+            ready: { !lock.withLock { $0.awaitsRoster } },
+            // Stored changes always have an id.
+            next: { try database.nextPendingRosterChange().flatMap { $0.id == nil ? nil : $0 } },
+            afterChosen: { afterRosterChangeChosenForTesting?() },
+            // Marked as in flight in the step that chose it, so that a later
+            // change can't replace it after that.
+            markInFlight: { change in lock.withLock { $0.rosterInFlight = change?.id } },
+            deliver: { change in
+                guard let id = change.id else { return }
                 try await send(change)
                 try database.removePendingRosterChange(id: id)
                 warnings.clear("roster/\(change.jid)")
-            } catch {
-                logger.info("Couldn't send a roster change: \(error.localizedDescription, privacy: .private)")
-                let refused = error is ContactError || ServerError.isFinalRefusal(error)
-                // Whatever passes by itself stays queued for the next connect.
-                guard refused else { return }
+            },
+            isRefusal: { $0 is ContactError || ServerError.isFinalRefusal($0) },
+            refuse: { change in
                 do {
+                    guard let id = change.id else { return .stop }
                     try database.removePendingRosterChange(id: id)
+                    return .warn
                 } catch {
                     logger.error("Failed to drop a roster change the server refused: \(error)")
-                    return
+                    return .stop
                 }
-                postRosterWarning(change, error: error)
-            }
-        }
+            },
+            warn: { postRosterWarning($0, error: $1) },
+            logFailure: { _, error in
+                logger.info("Couldn't send a roster change: \(error.localizedDescription, privacy: .private)")
+            },
+        )
     }
 
     private func send(_ change: PendingRosterChange) async throws {

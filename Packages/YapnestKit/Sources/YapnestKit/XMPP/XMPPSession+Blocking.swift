@@ -79,29 +79,18 @@ extension XMPPSession {
         coalesced(\.blockRun) { await $0.sendQueuedBlocks() }
     }
 
-    /// The oldest queued change, marked as in flight in the same step so that
-    /// an undo can't cancel it after it was chosen.
-    private func claimNextBlockChange() throws -> PendingBlockChange? {
-        try blockQueueLock.withLock {
-            let change = try database.nextPendingBlockChange()
-            afterBlockChangeChosenForTesting?()
-            lock.withLock { $0.blockInFlight = change?.jid }
-            return change
-        }
-    }
-
     private func sendQueuedBlocks() async {
-        while isConnected {
-            let change: PendingBlockChange?
-            do {
-                change = try claimNextBlockChange()
-            } catch {
-                logger.error("Failed to read the queued blocks: \(error)")
-                return
-            }
-            defer { lock.withLock { $0.blockInFlight = nil } }
-            guard let change, let id = change.id else { return }
-            do {
+        await drainQueue(
+            queueLock: blockQueueLock,
+            ready: { true },
+            // Stored changes always have an id.
+            next: { try database.nextPendingBlockChange().flatMap { $0.id == nil ? nil : $0 } },
+            afterChosen: { afterBlockChangeChosenForTesting?() },
+            // Marked as in flight in the step that chose it, so that an undo
+            // can't cancel it after that.
+            markInFlight: { change in lock.withLock { $0.blockInFlight = change?.jid } },
+            deliver: { change in
+                guard let id = change.id else { return }
                 if serverBlocks == false { throw BlockingError.unavailable }
                 try await send(change)
                 try database.removePendingBlockChange(id: id)
@@ -114,21 +103,23 @@ extension XMPPSession {
                     }
                 }
                 warnings.clear("blocking/\(change.jid)")
-            } catch {
-                logger.info("Couldn't \(change.blocked ? "block" : "unblock", privacy: .public): \(error.localizedDescription, privacy: .private)")
-                let refused = error is BlockingError || ServerError.isFinalRefusal(error)
-                // Whatever passes by itself stays queued for the next connect.
-                guard refused else { return }
+            },
+            isRefusal: { $0 is BlockingError || ServerError.isFinalRefusal($0) },
+            refuse: { change in
                 do {
                     let dropped = try database.dropPendingBlockChange(change, serverBlocked: client.module(.blockingCommand).blockedJids?.contains(Martin.JID(change.jid.martin)))
                     // A change the user has since replaced isn't theirs to retry.
-                    guard dropped else { continue }
+                    return dropped ? .warn : .skip
                 } catch {
                     logger.error("Failed to put back a block the server refused: \(error)")
+                    return .warn
                 }
-                postBlockWarning(change, error: error)
-            }
-        }
+            },
+            warn: { postBlockWarning($0, error: $1) },
+            logFailure: { change, error in
+                logger.info("Couldn't \(change.blocked ? "block" : "unblock", privacy: .public): \(error.localizedDescription, privacy: .private)")
+            },
+        )
     }
 
     private func send(_ change: PendingBlockChange) async throws {
