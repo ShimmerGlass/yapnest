@@ -471,9 +471,8 @@ final class AppModel {
     @discardableResult
     func replaceEncryptionDevice() async -> String? {
         guard case .signedIn(let session) = phase else { return nil }
-        guard !calls.hasCallActivity else {
-            return String(localized: "End the call first: resetting encryption reconnects your account.")
-        }
+        let endTheCall = String(localized: "End the call first: resetting encryption reconnects your account.")
+        guard !calls.hasCallActivity else { return endTheCall }
         // While an extension holds the lock, it runs as the old device and
         // would have its sessions deleted under it.
         let stillOpening = String(localized: "Your account is still being opened. Try again in a moment.")
@@ -490,9 +489,7 @@ final class AppModel {
         // Signed out, or signed in again, while the keychain was read.
         guard case .signedIn(let current) = phase, current === session else { return nil }
         // A call may have come in while the keychain was read.
-        guard !calls.hasCallActivity else {
-            return String(localized: "End the call first: resetting encryption reconnects your account.")
-        }
+        guard !calls.hasCallActivity else { return endTheCall }
         guard sessionLock.isLocked else { return stillOpening }
         // No session handles the app leaving the screen while this runs, and
         // it holds the lock and the database.
