@@ -252,7 +252,7 @@ final class BookmarksModule: AbstractPEPModule, XmppModule, @unchecked Sendable 
     }
 }
 
-struct Bookmark: Sendable {
+struct Bookmark: Sendable, Equatable {
     var jid: JID
     var name: String?
     var autojoin: Bool
@@ -266,6 +266,13 @@ struct Bookmark: Sendable {
         self.autojoin = autojoin
         self.nick = nick
         self.notify = notify
+    }
+
+    /// What the group's row says to publish. Comparing two of these tells
+    /// whether a change made meanwhile still has to be sent, so a field added
+    /// here is covered without touching that check.
+    init(_ group: GroupChat) {
+        self.init(jid: group.jid, name: group.name, autojoin: true, nick: group.nickname, notify: group.notify)
     }
 
     init?(id: String, payload: Element?) {
@@ -2023,8 +2030,7 @@ extension XMPPSession {
                 // A change made meanwhile has to be sent too.
                 try database.updateGroupChat(group.jid) { current in
                     current.isBookmarked = !group.hasLeft
-                    if current.hasLeft == group.hasLeft, current.notify == group.notify,
-                       current.name == group.name, current.nickname == group.nickname { current.bookmarkOwed = false }
+                    if current.hasLeft == group.hasLeft, Bookmark(current) == Bookmark(group) { current.bookmarkOwed = false }
                 }
                 lock.withLock { _ = $0.bookmarkRefusals.removeValue(forKey: group.jid) }
                 warnings.clear("bookmark/\(group.jid)")
@@ -2055,7 +2061,7 @@ extension XMPPSession {
     /// Publishes the group's bookmark, and the old kind when the server
     /// doesn't keep this one where other clients see it or never answers.
     func publishBookmark(_ group: GroupChat) async throws {
-        let bookmark = Bookmark(jid: group.jid, name: group.name, autojoin: true, nick: group.nickname, notify: group.notify)
+        let bookmark = Bookmark(group)
         if usesLegacyBookmarks {
             try await publishLegacyBookmark(bookmark)
             return

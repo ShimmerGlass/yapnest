@@ -178,6 +178,24 @@ struct OwedBookmarkTests {
         #expect(try group().notify == .never)
     }
 
+    @Test func aRenameMadeWhileOneIsBeingSentStaysOwedAndIsSentNext() async throws {
+        await connect()
+        let database = database
+        let once = Locked(true)
+        server.whenPublishing {
+            if once.value {
+                once.value = false
+                try? database.setRoomInfo(room, name: "Pie", isMembersOnly: false, isNonAnonymous: false)
+            }
+        }
+        try session.setNotify(.onMention, in: room)
+
+        #expect(await eventually { server.published.count == 1 })
+        await session.sendOwedBookmarks()?.value
+        #expect(await eventually { server.published.map(\.name) == ["Cake", "Pie"] })
+        #expect(await eventually { (try? group().bookmarkOwed) == false })
+    }
+
     @Test func aRenameThatIsOwedIsPublishedWithTheNewName() throws {
         try database.setRoomInfo(room, name: "Pie", isMembersOnly: false, isNonAnonymous: false)
         #expect(try group().bookmarkOwed)
