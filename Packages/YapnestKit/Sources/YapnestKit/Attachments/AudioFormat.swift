@@ -5,7 +5,7 @@ import Foundation
 /// Conversations sends Opus in Ogg, Monal AAC in MPEG-4. So the
 /// extension counts when the media type is missing or generic.
 public enum AudioFormat {
-    static let extensions: Set<String> = ["m4a", "aac", "mp3", "ogg", "opus", "oga", "wav", "caf"]
+    static let extensions: Set<String> = ["m4a", "aac", "mp3", "ogg", "opus", "oga", "wav", "caf", "flac", "aif", "aiff"]
     /// What AVAudioPlayer decodes. A list of what plays rather than of what
     /// doesn't: a format missing from a deny-list (WebM, WMA, Matroska) would
     /// get a player that can't play it.

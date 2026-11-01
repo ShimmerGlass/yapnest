@@ -41,6 +41,14 @@ struct AudioDetectionTests {
         #expect(!Attachment(messageId: 1, url: nil, name: "x.png", mimeType: "image/png", state: .remote).isAudio)
     }
 
+    @Test func losslessFilesWithoutATypeAreAudioAndPlayInline() {
+        for ext in ["flac", "aif", "aiff"] {
+            #expect(AudioFormat.isAudio(mimeType: nil, name: "song.\(ext)"), "\(ext)")
+            #expect(AudioFormat.isPlayable(mimeType: nil, name: "song.\(ext)"), "\(ext)")
+            #expect(AudioFormat.isAudio(mimeType: "application/octet-stream", name: "song.\(ext)"), "\(ext)")
+        }
+    }
+
     @Test func audioIsRecognizedByExtensionWhenTheTypeIsMissingOrGeneric() {
         for ext in ["m4a", "aac", "mp3", "ogg", "opus", "oga", "wav", "caf", "M4A"] {
             #expect(Attachment(messageId: 1, url: nil, name: "voice.\(ext)", state: .remote).isAudio, "\(ext)")
