@@ -182,6 +182,22 @@ struct AttachmentTests {
         #expect((video.width, video.height) == (32, 64))
     }
 
+    @Test func aVideoThatIsNotAnMp4IsStoredAsTheQuickTimeItBecomes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "video-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appending(path: "clip.3gp")
+        try await writeVideo(to: source, width: 64, height: 32, transform: .identity)
+
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        let video = try await store.importFile(at: source, name: "clip.3gp", asPhoto: false)
+        // The extension tells viewers and other clients the container.
+        #expect(video.name == "clip.mov" && video.file.hasSuffix(".mov"))
+        #expect(AttachmentStore.mimeType(for: video.name) == "video/quicktime")
+        #expect(FileManager.default.fileExists(atPath: store.directory.appending(path: video.file).path))
+        #expect((video.width, video.height) == (64, 32))
+    }
+
     private func hasLocation(_ url: URL) async throws -> Bool {
         let items = try await AVURLAsset(url: url).load(.metadata)
         return items.contains { $0.identifier == .quickTimeMetadataLocationISO6709 }

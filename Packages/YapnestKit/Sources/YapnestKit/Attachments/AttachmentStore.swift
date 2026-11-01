@@ -110,8 +110,12 @@ public final class AttachmentStore: Sendable {
             }
             try? FileManager.default.removeItem(at: destination)
         }
-        let file = Self.freshName(keeping: name)
         let isVideo = Self.isVideo(name: name)
+        // Only MPEG-4 is exported as itself; any other container comes out as
+        // QuickTime, so it is named like one rather than under its old extension.
+        let storedName = isVideo && !["mov", "mp4", "m4v"].contains((name as NSString).pathExtension.lowercased())
+            ? (name as NSString).deletingPathExtension + ".mov" : name
+        let file = Self.freshName(keeping: storedName)
         let destination = directory.appending(path: file)
         do {
             try FileManager.default.copyItem(at: url, to: destination)
@@ -139,7 +143,7 @@ public final class AttachmentStore: Sendable {
         } else {
             dimensions = Self.imageSize(ofFileAt: destination)
         }
-        return Imported(file: file, name: name, size: destination.fileSize, width: dimensions?.width, height: dimensions?.height, duration: duration)
+        return Imported(file: file, name: storedName, size: destination.fileSize, width: dimensions?.width, height: dimensions?.height, duration: duration)
     }
 
     struct MetadataError: Error {}
