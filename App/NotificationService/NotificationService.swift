@@ -36,7 +36,14 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
 
     private func handle(_ identifier: String) async {
         guard let fetcher = NotificationFetcher.current() else {
-            // Signed out: nothing of ours to show.
+            // Before the first unlock after a restart the keychain can't be
+            // read, which isn't being signed out: the relay's alert is what
+            // the user gets, rather than silence.
+            guard Self.isSignedOut() else {
+                deliver(fallback)
+                return
+            }
+            // Nothing of ours to show.
             return deliver(quiet: fallback, identifier)
         }
         let avatars = AccountDirectory(url: fetcher.directory).avatars
@@ -49,7 +56,10 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
                 // Muted groups, or something without a message (a reaction, a
                 // key exchange). An empty notification would leave the relay's
                 // loud alert, so show the first muted message silently.
-                guard let quiet = notifications.first else { return deliver(quiet: fallback, identifier) }
+                guard let quiet = notifications.first else {
+                    // The claim still worked out the badge, which the relay's content lacks.
+                    return deliver(quiet: fallback.withBadge(badge), identifier)
+                }
                 return deliver(quiet: await quiet.content(badge: badge, avatars: avatars), identifier)
             }
             for other in loud.dropFirst() {
@@ -61,6 +71,15 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             deliver(quiet: fallback, identifier)
         case .busy, .failed:
             deliver(fallback)
+        }
+    }
+
+    /// Whether the keychain has no account, as opposed to not being readable.
+    private static func isSignedOut() -> Bool {
+        do {
+            return try CredentialStore().load() == nil
+        } catch {
+            return false
         }
     }
 
@@ -86,5 +105,13 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         DiagLog.flush()
         handler?(content)
         return handler != nil
+    }
+}
+
+private extension UNNotificationContent {
+    func withBadge(_ badge: Int) -> UNNotificationContent {
+        let copy = (mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+        copy.badge = badge as NSNumber
+        return copy
     }
 }
