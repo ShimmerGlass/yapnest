@@ -143,7 +143,7 @@ extension AppDatabase {
     /// of a refused change, whose value is no longer shown), or is the value
     /// shown now. That is unknown when none is shown and this install
     /// hasn't read ours from the server.
-    private func queueOwed<Change: OwedChange>(_ value: Change.Value, for account: JID?, base given: OwedBase?) throws -> Change {
+    private func queueOwed<Change: OwedChange>(_: Change.Type, _ value: Change.Value, for account: JID?, base given: OwedBase?) throws {
         try writer.write { db in
             let base: OwedBase
             if let previous = try Self.owed(db, as: Change.self) {
@@ -158,16 +158,15 @@ extension AppDatabase {
             let change = Change(value: value, base: base.value, baseKnown: base.known)
             try Self.setOwed(db, change)
             try Change.show(Change.shown(for: value), db, account: account)
-            return change
         }
     }
 
     func queueAvatarChange(_ image: OwedAvatarChange.Image?, for account: JID, base given: OwedBase? = nil) throws {
-        let _: OwedAvatarChange = try queueOwed(image, for: account, base: given)
+        try queueOwed(OwedAvatarChange.self, image, for: account, base: given)
     }
 
     func queueNicknameChange(_ value: String?, base given: OwedBase? = nil) throws {
-        let _: OwedNicknameChange = try queueOwed(value, for: nil, base: given)
+        try queueOwed(OwedNicknameChange.self, value, for: nil, base: given)
     }
 
     /// Records that this install has our own avatar or name as the server
