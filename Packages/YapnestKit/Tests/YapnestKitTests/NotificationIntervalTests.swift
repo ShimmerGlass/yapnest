@@ -236,6 +236,21 @@ struct NotificationIntervalTests {
         #expect(content.threadIdentifier == room.description)
     }
 
+    @Test func aGroupNotifiedLoudlyInTheSameClaimIsNotSummarizedOverAnOlderNotification() throws {
+        let chat = try group(room)
+        _ = try db.claimNotifications()
+        try incoming("one", in: chat)
+        try incoming("two", in: chat)
+        try incoming("three", in: chat)
+        let claimed = try db.claimNotifications()
+        #expect(claimed.first?.heldCount == nil)
+        #expect(claimed.dropFirst().allSatisfy { $0.heldCount != nil })
+        #expect(MessageNotification.summarized(claimed).isEmpty)
+        // A later claim's held message alone summarizes over that notification.
+        try incoming("four", in: chat)
+        #expect(MessageNotification.summarized(try db.claimNotifications())[room]?.body == "four")
+    }
+
     @Test func theSummaryIsDrawnAsTheGroup() throws {
         let chat = try group(room)
         _ = try db.claimNotifications()

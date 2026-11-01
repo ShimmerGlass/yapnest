@@ -156,7 +156,7 @@ extension MessageNotification {
     /// The notification then names the latest message, so a later correction
     /// of that message replaces the summary with its own text.
     public static func replaceHeld(_ held: [MessageNotification], badge: Int?, avatars: AvatarStore) async {
-        let latest = Dictionary(held.filter { $0.heldCount != nil }.map { ($0.peer, $0) }, uniquingKeysWith: { _, new in new })
+        let latest = summarized(held)
         guard !latest.isEmpty else { return }
         let center = UNUserNotificationCenter.current()
         let delivered = await center.deliveredNotifications().map {
@@ -168,6 +168,17 @@ extension MessageNotification {
             let content = await summary.content(badge: badge, avatars: avatars)
             await center.replaceSilently(identifier, with: content, fallback: summary.content(badge: badge))
         }
+    }
+
+    /// For each group, the latest of the claim's held messages, whose summary
+    /// replaces the group's delivered notification. Not for a group the same
+    /// claim notifies loudly: that notification isn't delivered yet, so the
+    /// summary would land on an older one, and the next held message
+    /// summarizes over the new one anyway.
+    static func summarized(_ claimed: [MessageNotification]) -> [JID: MessageNotification] {
+        let notifiedNow = Set(claimed.filter { $0.heldCount == nil && !$0.isQuiet }.map(\.peer))
+        let held = claimed.filter { $0.heldCount != nil && !notifiedNow.contains($0.peer) }
+        return Dictionary(held.map { ($0.peer, $0) }, uniquingKeysWith: { _, new in new })
     }
 
     /// The loud notification of the group still delivered that a summary
