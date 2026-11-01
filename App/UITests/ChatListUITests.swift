@@ -84,7 +84,7 @@ final class ChatListUITests: InteractionsTestCase {
     }
 
     func testTheRowsMenuArchivesAChat() {
-        waitForRow("Blocked").press(forDuration: 1.0)
+        rowClearOfTheBar("Blocked").press(forDuration: 1.0)
         app.buttons["Archive"].firstMatch.tap()
         waitUntilGone(row("Blocked"), "the archived chat's row")
         // The entry ends the list, which the fixture's chats run past the
