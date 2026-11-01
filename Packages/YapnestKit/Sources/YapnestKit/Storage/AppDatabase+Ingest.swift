@@ -36,6 +36,11 @@ extension AppDatabase {
     }
 
     static func ingest(_ db: Database, _ inbound: InboundMessage, allowsInsecureLinks: Bool = false) throws -> IngestResult {
+        // A room nick is the sender's own claim, like any remote name. It is
+        // cleaned once here, so that what is stored and what corrections,
+        // retractions and reactions compare it with are the same string.
+        var inbound = inbound
+        inbound.nick = XMPPSession.normalizedNickname(inbound.nick)
         var result = IngestResult()
         result.chatState = inbound.isOutgoing ? nil : inbound.chatState
 
@@ -145,8 +150,7 @@ extension AppDatabase {
                 conversationId: conversationId,
                 direction: inbound.isOutgoing ? .outgoing : .incoming,
                 sender: inbound.sender,
-                // A room nick is the sender's own claim, like any remote name.
-                nick: XMPPSession.normalizedNickname(inbound.nick),
+                nick: inbound.nick,
                 occupantId: inbound.occupantId,
                 body: body,
                 timestamp: timestamp,

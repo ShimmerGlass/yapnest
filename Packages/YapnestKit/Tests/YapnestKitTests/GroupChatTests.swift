@@ -165,6 +165,20 @@ struct GroupChatParsingTests {
         #expect(try messages().first?.id == sent.id)
     }
 
+    @Test func aCorrectionFromANickWithFormatCharactersStillFits() throws {
+        let nick = "bo\u{200B}b"
+        let sessions: [String: Int64] = [nick: 1]
+        func ingest(_ xml: String) throws {
+            let context = RoomContext(jid: room, nickname: "me", occupants: [:], presenceSessions: sessions)
+            try db.ingest(try #require(InboundMessage(groupchat: stanza(xml), room: context, account: me, source: .live)))
+        }
+        try ingest("<message from='cake@rooms.example.org/\(nick)' type='groupchat' id='m1'><body>typo</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='r1'/></message>")
+        try ingest("<message from='cake@rooms.example.org/\(nick)' type='groupchat' id='m2'><body>fixed</body><replace id='m1' xmlns='urn:xmpp:message-correct:0'/></message>")
+        let stored = try messages()
+        #expect(stored.map(\.body) == ["fixed"])
+        #expect(stored.first?.nick == "bob")
+    }
+
     @Test func reactionsByStanzaIdAndNickname() throws {
         try ingest("<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>cake?</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='r1'/></message>")
         // Two anonymous occupants share the room's address.
