@@ -43,18 +43,18 @@ extension AppDatabase {
 
     public func updateRosterItem(jid: JID, name: String?, subscription: Contact.Subscription, isPending: Bool, groups: [String] = []) throws {
         try writer.write { db in
-            var contact = try Contact.fetchOne(db, key: jid) ?? Contact(jid: jid)
-            contact.name = name
-            contact.rosterGroups = groups
-            contact.subscription = subscription
-            contact.isSubscriptionPending = isPending
-            contact.isInRoster = true
-            // Approved, here or on another device.
-            if subscription == .from || subscription == .both {
-                contact.subscriptionRequestedAt = nil
-                contact.requestedNickname = nil
+            try Self.updateContact(db, jid) { contact in
+                contact.name = name
+                contact.rosterGroups = groups
+                contact.subscription = subscription
+                contact.isSubscriptionPending = isPending
+                contact.isInRoster = true
+                // Approved, here or on another device.
+                if subscription == .from || subscription == .both {
+                    contact.subscriptionRequestedAt = nil
+                    contact.requestedNickname = nil
+                }
             }
-            try contact.save(db)
         }
     }
 
@@ -312,10 +312,10 @@ extension AppDatabase {
     /// requests each time we sign in, so the first time is kept.
     func recordContactRequest(from jid: JID, nickname: String?, at date: Date = Date()) throws {
         try writer.write { db in
-            var contact = try Contact.fetchOne(db, key: jid) ?? Contact(jid: jid)
-            if contact.subscriptionRequestedAt == nil { contact.subscriptionRequestedAt = date }
-            if let nickname, !nickname.isEmpty { contact.requestedNickname = nickname }
-            try contact.save(db)
+            try Self.updateContact(db, jid) { contact in
+                if contact.subscriptionRequestedAt == nil { contact.subscriptionRequestedAt = date }
+                if let nickname, !nickname.isEmpty { contact.requestedNickname = nickname }
+            }
         }
     }
 
