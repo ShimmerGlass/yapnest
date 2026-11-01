@@ -293,6 +293,8 @@ final class ConversationModel {
     @ObservationIgnored private var orderedItems: [ConversationItem] = []
     /// The order the rows were last built for.
     @ObservationIgnored private var builtOrder: [Int64] = []
+    /// The rows built for `builtOrder`, in its order.
+    @ObservationIgnored private var builtRows: [MessageRow] = []
     /// Where each id is in `order`, for the lookups the visible rows ask for.
     @ObservationIgnored private var orderIndex: [Int64: Int] = [:]
     @ObservationIgnored private var rowsByID: [Int64: MessageRow] = [:]
@@ -709,8 +711,12 @@ final class ConversationModel {
                 guard let self else { return }
                 FrameLog.event("observed items=\(items.count)")
                 let environment = self.rowEnvironment()
+                // An item the rows were built from, unchanged, under the same
+                // names and open bodies, has the text its row was built with.
+                let textsHold = self.rowShapeHolds
                 let missing: [(id: Int64, key: TextKey)] = items.compactMap { item in
-                    self.textKey(for: item, in: environment).flatMap { key in self.textCache[item.id]?.key == key ? nil : (item.id, key) }
+                    if textsHold, self.items[item.id]?.stamp == item.stamp, self.rowsByID[item.id] != nil { return nil }
+                    return self.textKey(for: item, in: environment).flatMap { key in self.textCache[item.id]?.key == key ? nil : (item.id, key) }
                 }
                 if !missing.isEmpty {
                     let rendered = await offMain { Self.renderTexts(missing) }
@@ -801,11 +807,32 @@ final class ConversationModel {
         // An item with the stamp it had is the one already held, so only the
         // others are looked at: the rest of the dictionary stays as it is.
         var changedItems: [(before: ConversationItem?, after: ConversationItem)] = []
-        for item in newItems where items[item.id]?.stamp != item.stamp {
-            changedItems.append((items[item.id], item))
+        // Reading the held item out of the dictionary copies all of it, for
+        // every item of a long chat. When the items are those held with some
+        // added at the end, they are compared with the held ones by position.
+        let previousItems = orderedItems
+        var added = newItems.count >= previousItems.count
+        if added {
+            for index in previousItems.indices {
+                guard previousItems[index].id == newItems[index].id else {
+                    added = false
+                    break
+                }
+                if previousItems[index].stamp != newItems[index].stamp {
+                    changedItems.append((previousItems[index], newItems[index]))
+                }
+            }
+        }
+        if added {
+            for index in previousItems.count..<newItems.count { changedItems.append((nil, newItems[index])) }
+        } else {
+            changedItems = []
+            for item in newItems where items[item.id]?.stamp != item.stamp {
+                changedItems.append((items[item.id], item))
+            }
         }
         orderedItems = newItems
-        order = newItems.map(\.id)
+        order = added ? previousOrder + newItems[previousItems.count...].map(\.id) : newItems.map(\.id)
         // Same order, or messages only added at the end: what is held stays,
         // and just the changed and the new are put in.
         if order.count >= previousOrder.count, order.starts(with: previousOrder) {
@@ -889,7 +916,7 @@ final class ConversationModel {
         // Where the anchor row is now is what the recorder measures its move from.
         if prepended { recorder?.update { $0.olderRowsComing() } }
         #endif
-        let built = buildRows(prebuilt: prebuilt)
+        let built = buildRows(prebuilt: prebuilt, changed: Set(changedItems.lazy.map(\.after.id)))
         defer { followsWithRows = false }
         // Rows the user sees changing in place animate, and so do new ones.
         // Not older rows, a trimmed window or a jump, which move rows that
@@ -1264,6 +1291,29 @@ final class ConversationModel {
     /// (which the day headers read).
     @ObservationIgnored private var inputsEpoch = 0
     @ObservationIgnored private var inputsByID: [Int64: RowInputs] = [:]
+
+    /// What every row's inputs read that isn't in its item or its neighbours,
+    /// apart from the one flag that is the last row's. While it is what the
+    /// rows were built under, only changed items and the rows around them can
+    /// need new inputs.
+    private struct RowShape: Equatable {
+        var epoch: Int
+        var dividerId: Int64?
+        var showingWhole: Set<Int64>
+        var newestIsOffered: Bool
+    }
+
+    @ObservationIgnored private var builtShape: RowShape?
+
+    private var currentRowShape: RowShape {
+        RowShape(epoch: inputsEpoch, dividerId: unreadDividerId, showingWhole: showingWhole, newestIsOffered: !isBounded || holdsNewest)
+    }
+
+    /// Whether the rows held were built under the shape of now, with none
+    /// held back from it.
+    private var rowShapeHolds: Bool {
+        hasLoaded && heldIDs.isEmpty && builtShape == currentRowShape
+    }
     /// The time zone and locale the rows were last built in.
     @ObservationIgnored private var builtIn: (calendar: Calendar, locale: Locale)?
 
@@ -1361,11 +1411,20 @@ final class ConversationModel {
     private nonisolated static func rowInputs(
         at index: Int, in items: [ConversationItem], neighbours: [Neighbour], dividerId: Int64?, showingWhole: Set<Int64>, newestIsOffered: Bool, epoch: Int,
     ) -> RowInputs {
+        rowInputs(
+            at: index, in: items, neighbour: { neighbours[$0] }, dividerId: dividerId, showingWhole: showingWhole,
+            newestIsOffered: newestIsOffered, epoch: epoch,
+        )
+    }
+
+    private nonisolated static func rowInputs(
+        at index: Int, in items: [ConversationItem], neighbour: (Int) -> Neighbour, dividerId: Int64?, showingWhole: Set<Int64>, newestIsOffered: Bool, epoch: Int,
+    ) -> RowInputs {
         let item = items[index]
         return RowInputs(
             item: item,
-            previous: index > 0 ? neighbours[index - 1] : nil,
-            next: index + 1 < items.count ? neighbours[index + 1] : nil,
+            previous: index > 0 ? neighbour(index - 1) : nil,
+            next: index + 1 < items.count ? neighbour(index + 1) : nil,
             hasUnreadDivider: item.id == dividerId,
             showsWholeBody: showingWhole.contains(item.id),
             // Held, it was the newest when the user scrolled up; its
@@ -1423,9 +1482,14 @@ final class ConversationModel {
     /// The rest are the rows already held, the very same ones: the caches
     /// are updated in place for the rows that changed, instead of being
     /// built again for every row on every emission.
-    private func buildRows(prebuilt: Prebuilt? = nil) -> (rows: [MessageRow], changes: [RowChange]) {
-        var built: [MessageRow] = []
-        built.reserveCapacity(order.count)
+    ///
+    /// `changed` names the items that differ from those the rows were built
+    /// from. Given it, and with the rows built under the same shape and the
+    /// same time zone and locale, none held, and `order` the old order with
+    /// rows added at the end, only those items, their neighbours and the
+    /// rows added or next to them are looked at. Without it, or whenever
+    /// anything else may have moved, every row is.
+    private func buildRows(prebuilt: Prebuilt? = nil, changed: Set<Int64>? = nil) -> (rows: [MessageRow], changes: [RowChange]) {
         var changes: [RowChange] = []
         // Taken out of the model, so that updating them doesn't copy them.
         var rowsByID = rowsByID
@@ -1434,7 +1498,9 @@ final class ConversationModel {
         self.rowsByID = [:]
         self.inputsByID = [:]
         self.textCache = [:]
-        if builtOrder != order {
+        // Rows added at the end leave every held row and rendering wanted.
+        let extended = order.starts(with: builtOrder)
+        if !extended {
             for id in builtOrder where orderIndex[id] == nil {
                 rowsByID[id] = nil
                 inputsByID[id] = nil
@@ -1450,16 +1516,42 @@ final class ConversationModel {
         let boundary = holds ? visibleIDs.compactMap { orderIndex[$0] }.max() : nil
         var held: Set<Int64> = []
         let ordered = orderedItems
-        let neighbours = ordered.map(Neighbour.init)
-        let dividerId = unreadDividerId, newestIsOffered = !isBounded || holdsNewest
-        for index in order.indices {
+        let shape = currentRowShape
+        var dirty: Set<Int>?
+        if let changed, sameEnvironment, !holds, heldIDs.isEmpty, builtShape == shape, extended, builtRows.count == builtOrder.count {
+            var indices = Set<Int>()
+            for id in changed {
+                guard let index = orderIndex[id] else { continue }
+                indices.formUnion([index - 1, index, index + 1])
+            }
+            // The old newest row has a next one now, and is not the newest.
+            if order.count > builtOrder.count { indices.formUnion(max(builtOrder.count - 1, 0)..<order.count) }
+            dirty = indices
+        }
+        let neighbours = dirty == nil ? ordered.map(Neighbour.init) : []
+        var built: [MessageRow]
+        let visited: [Int]
+        if let dirty {
+            built = builtRows
+            builtRows = []
+            visited = dirty.filter { $0 >= 0 && $0 < order.count }.sorted()
+        } else {
+            built = []
+            built.reserveCapacity(order.count)
+            visited = Array(order.indices)
+        }
+        // Visited in order, so a row is either one held to put in its place or the next to add.
+        func place(_ row: MessageRow, at index: Int) {
+            if index < built.count { built[index] = row } else { built.append(row) }
+        }
+        for index in visited {
             let id = order[index]
             let inputs = Self.rowInputs(
-                at: index, in: ordered, neighbours: neighbours, dividerId: dividerId, showingWhole: showingWhole,
-                newestIsOffered: newestIsOffered, epoch: inputsEpoch,
+                at: index, in: ordered, neighbour: { dirty == nil ? neighbours[$0] : Neighbour(ordered[$0]) }, dividerId: shape.dividerId,
+                showingWhole: shape.showingWhole, newestIsOffered: shape.newestIsOffered, epoch: shape.epoch,
             )
             if sameEnvironment, inputsByID[id] == inputs, let existing = rowsByID[id] {
-                built.append(existing)
+                place(existing, at: index)
                 continue
             }
             inputsByID[id] = inputs
@@ -1469,7 +1561,7 @@ final class ConversationModel {
                 // Without its inputs, so it's built again once it's let go.
                 inputsByID[id] = nil
                 held.insert(id)
-                built.append(existing)
+                place(existing, at: index)
                 continue
             }
             let content: MessageRow.Content
@@ -1491,14 +1583,16 @@ final class ConversationModel {
                 row = MessageRow(content: content, revision: (before?.revision ?? 0) + 1)
                 changes.append(RowChange(before: before, after: row))
             }
-            built.append(row)
+            place(row, at: index)
             rowsByID[id] = row
         }
         // What an emission rendered ahead for an item that never came to be a row. It is not in
         // `builtOrder`, so only this finds it when the window changes; the count alone misses it
         // while rows without text (files, events) keep the count of rows above that of texts.
-        if builtOrder != order || textCache.count > order.count { textCache = textCache.filter { orderIndex[$0.key] != nil } }
+        if !extended || textCache.count > order.count { textCache = textCache.filter { orderIndex[$0.key] != nil } }
         builtOrder = order
+        builtShape = shape
+        builtRows = built
         self.rowsByID = rowsByID
         self.inputsByID = inputsByID
         self.textCache = textCache

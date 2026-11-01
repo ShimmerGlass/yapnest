@@ -167,4 +167,66 @@ struct ConversationIncrementalRowsTests {
         #expect(first.content.layout.dayHeader != nil)
         #expect(!first.content.layout.joinsPrevious)
     }
+
+    @Test func aMessageArrivingBesideAnEditLeavesTheRowsAroundThemAlone() async throws {
+        let (f, messages) = try await open()
+        let before = f.model.rows.map(\.revision)
+        let editedID = try #require(messages[3].id)
+        _ = try f.database.applyEdit("fixed", to: editedID)
+        let newID = try #require(try f.add("both at once", read: true).id)
+        await eventually("the message never showed") { f.model.rows.last?.id == newID }
+        try expectEqualToFullBuild(f)
+        let after = f.model.rows.map(\.revision)
+        let changed = Set(after.indices.filter { $0 >= before.count || after[$0] != before[$0] })
+        #expect(changed == [3, 11, 12])
+    }
+
+    @Test func aNewMessageWhileTheDividerShowsKeepsTheDividerAndTheRowsAboveIt() async throws {
+        let f = try ConversationFixture()
+        try f.addMany(5, read: true)
+        let first = try f.add("unread")
+        try f.add("unread 2")
+        await f.start()
+        let before = f.model.rows.map(\.revision)
+        let arrived = try f.add("arrived later")
+        await eventually("the message never showed") { f.model.rows.last?.id == arrived.id }
+        try expectEqualToFullBuild(f)
+        #expect(f.model.rows.filter(\.content.layout.showsUnreadDivider).map(\.id) == [first.id])
+        #expect(Array(f.model.rows.map(\.revision).prefix(6)) == Array(before.prefix(6)))
+    }
+
+    @Test func aBodyOpenedInFullStaysOpenWhenAMessageArrives() async throws {
+        let f = try ConversationFixture()
+        let long = (1...60).map { "line \($0)" }.joined(separator: "\n")
+        let stored = try f.add(long, read: true).id!
+        try f.add("short", read: true)
+        await f.start()
+        f.model.showWholeBody(of: stored)
+        let arrived = try f.add("later", read: true)
+        await eventually("the message never showed") { f.model.rows.last?.id == arrived.id }
+        try expectEqualToFullBuild(f)
+        #expect(try row(f, stored).content.text?.isCollapsed == false)
+    }
+
+    @Test func aChangeOfDayRebuildsEveryRowAndTheNextMessageStillBuildsRight() async throws {
+        let (f, _) = try await open()
+        let before = f.model.rows.map(\.revision)
+        NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
+        let arrived = try f.add("after midnight", read: true)
+        await eventually("the message never showed") { f.model.rows.last?.id == arrived.id }
+        try expectEqualToFullBuild(f)
+        // Rows of the day before keep their content, so a rebuild finds them equal.
+        #expect(Array(f.model.rows.map(\.revision).prefix(before.count - 1)) == Array(before.dropLast()))
+    }
+
+    @Test func aMessageDeletedAtTheEndAndOneAddedAfterItBuildRight() async throws {
+        let (f, messages) = try await open()
+        _ = try await f.database.writer.write { try Message.deleteOne($0, key: messages.last?.id) }
+        await eventually("the deletion never showed") { f.model.rows.count == 11 }
+        try expectEqualToFullBuild(f)
+        #expect(try !row(f, messages[10].id).content.layout.joinsNext)
+        let arrived = try f.add("again", read: true)
+        await eventually("the message never showed") { f.model.rows.last?.id == arrived.id }
+        try expectEqualToFullBuild(f)
+    }
 }
