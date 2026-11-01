@@ -75,7 +75,7 @@ final class ChatListUITests: InteractionsTestCase {
 
     func testTheRowsMenuPinsAChat() {
         let nest = waitForRow("Nest")
-        nest.press(forDuration: 1.0)
+        driver.openMenu(on: nest, "the Nest row", showing: "Pin")
         app.buttons["Pin"].firstMatch.tap()
         let pinned = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Pinned"), object: row("Nest"))
         XCTAssertEqual(XCTWaiter.wait(for: [pinned], timeout: 10), .completed, "the chat isn't marked pinned: \(row("Nest").label)")
@@ -84,7 +84,7 @@ final class ChatListUITests: InteractionsTestCase {
     }
 
     func testTheRowsMenuArchivesAChat() {
-        rowClearOfTheBar("Blocked").press(forDuration: 1.0)
+        driver.openMenu(on: rowClearOfTheBar("Blocked"), "the Blocked row", showing: "Archive")
         app.buttons["Archive"].firstMatch.tap()
         waitUntilGone(row("Blocked"), "the archived chat's row")
         // The entry ends the list, which the fixture's chats run past the
@@ -97,7 +97,7 @@ final class ChatListUITests: InteractionsTestCase {
     }
 
     func testDeletingAChatAsksFirst() {
-        waitForRow("Unread").press(forDuration: 1.0)
+        driver.openMenu(on: waitForRow("Unread"), "the Unread row", showing: "Delete")
         app.buttons["Delete"].firstMatch.tap()
         let confirm = app.sheets.firstMatch.buttons["Delete"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no confirmation before deleting")

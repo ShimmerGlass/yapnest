@@ -201,10 +201,11 @@ final class ConversationDriver {
     }
 
     /// A long press sometimes isn't taken while the list is still settling, so it's tried again.
-    func openMenu(on target: XCUIElement, _ what: String, file: StaticString = #filePath, line: UInt = #line) {
+    /// `item` is a button the menu always has, to tell that it's open.
+    func openMenu(on target: XCUIElement, _ what: String, showing item: String = "Reply", file: StaticString = #filePath, line: UInt = #line) {
         for _ in 0..<3 {
             target.press(forDuration: 1.0)
-            if app.buttons["Reply"].waitForExistence(timeout: 4) { return }
+            if app.buttons[item].firstMatch.waitForExistence(timeout: 4) { return }
         }
         XCTFail("\(context): the menu didn't come up on \(what)", file: file, line: line)
     }
