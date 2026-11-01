@@ -296,11 +296,14 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         serialized {
             let wanted = Array(Set(addresses))
             var loaded: [SignalAddress: Data] = [:]
-            _ = read { db in
-                let pairs = Array(repeating: "(?, ?)", count: wanted.count).joined(separator: ", ")
-                let arguments = StatementArguments(wanted.flatMap { [$0.name, $0.deviceId] as [(any DatabaseValueConvertible)?] })
-                for row in try Row.fetchAll(db, sql: "SELECT name, deviceId, data FROM omemoSession WHERE (name, deviceId) IN (VALUES \(pairs))", arguments: arguments) {
-                    loaded[SignalAddress(name: row["name"], deviceId: row["deviceId"])] = row["data"]
+            // Nothing to ask for makes no valid query.
+            if !wanted.isEmpty {
+                _ = read { db in
+                    let pairs = Array(repeating: "(?, ?)", count: wanted.count).joined(separator: ", ")
+                    let arguments = StatementArguments(wanted.flatMap { [$0.name, $0.deviceId] as [(any DatabaseValueConvertible)?] })
+                    for row in try Row.fetchAll(db, sql: "SELECT name, deviceId, data FROM omemoSession WHERE (name, deviceId) IN (VALUES \(pairs))", arguments: arguments) {
+                        loaded[SignalAddress(name: row["name"], deviceId: row["deviceId"])] = row["data"]
+                    }
                 }
             }
             lock.withLock { batch = SessionBatch(loaded: loaded) }
@@ -644,6 +647,11 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// isn't listed or encrypted to until a session creates one.
     func noteUsed(name: String, deviceId: Int32, at date: Date) {
         let date = min(date, now())
+        // Most messages add nothing, and a read doesn't take the write lock.
+        let last = read { db in
+            try Date.fetchOne(db, sql: "SELECT lastUsed FROM omemoIdentity WHERE name = ? AND deviceId = ?", arguments: [name, deviceId])
+        } ?? nil
+        if let last, last >= date { return }
         _ = write { db in
             try db.execute(sql: """
                 UPDATE omemoIdentity SET lastUsed = ?

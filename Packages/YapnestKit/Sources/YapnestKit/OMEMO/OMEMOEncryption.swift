@@ -150,13 +150,16 @@ final class OMEMOEncryption: @unchecked Sendable {
         let device = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
             .getAttribute("sid").flatMap { Int32(omemoId: $0) }
         let status = device.flatMap { store.status(forName: sender.description, deviceId: $0) }
+        let fromThisDevice = device.map { isLocalDevice(sender, $0) } ?? false
+        let keys = keysForUs(in: stanza)
+        let prekey = keys.contains(where: Self.isPreKey)
         // Decoding a prekey message for us stores the identity it carries, so
         // a room could otherwise give any member a device of its own, which
         // would then also count among theirs in use and push real ones past
         // the cap. Nothing else from an unknown device can be decoded, and
         // goes on as before: our own messages from before this device
         // existed must still be taken as ours.
-        if claim == .room, let device, status == nil, !isLocalDevice(sender, device), carriesPreKey(for: stanza) {
+        if claim == .room, let device, status == nil, !fromThisDevice, prekey {
             // One with no payload only sets up a session, which would store
             // the key all the same, and has nothing to show once vouched for.
             return Self.isKeyTransport(stanza) ? .ignore : .unvouched(device: device)
@@ -171,15 +174,14 @@ final class OMEMOEncryption: @unchecked Sendable {
         // a session would go on being read. Not decoding also leaves the
         // ratchet alone and starts no session repair.
         if status?.trust == .compromised {
-            logFailure(.compromised, stanza, device: device, isHistory: isHistory)
+            logFailure(.compromised, keys: keys, device: device, isHistory: isHistory)
             return .failed("sent from a device marked compromised")
         }
-        let prekey = carriesPreKey(for: stanza)
         switch module.decode(message: stanza, from: sender.martin, serverMsgId: isHistory ? nil : "") {
         case .successMessage:
             guard let device else { return .decrypted(device: nil, trust: nil) }
             DiagLog.debug(.omemo, "Decrypted", .id("device", Redacted.id(String(device))), .bool("ownAccount", sender == account), .bool("preKey", prekey), .bool("history", isHistory))
-            if claim == .roomUnchecked, status == nil, !isLocalDevice(sender, device) {
+            if claim == .roomUnchecked, status == nil, !fromThisDevice {
                 _ = store.setStatus(.undecidedActive, forIdentity: SignalAddress(name: sender.description, deviceId: device))
                 return .decrypted(device: device, trust: .undecided)
             }
@@ -198,10 +200,10 @@ final class OMEMOEncryption: @unchecked Sendable {
             // nothing to recover. One with a key for us was meant to be read
             // here, so its failure is logged like anyone's.
             if ownCopy {
-                if !keysForUs(in: stanza).isEmpty { logFailure(DecryptFailure(error), stanza, device: device, isHistory: isHistory) }
+                if !keys.isEmpty { logFailure(DecryptFailure(error), keys: keys, device: device, isHistory: isHistory) }
                 return .ownCopy
             }
-            logFailure(DecryptFailure(error), stanza, device: device, isHistory: isHistory)
+            logFailure(DecryptFailure(error), keys: keys, device: device, isHistory: isHistory)
             return .failed("\(error)")
         }
     }
@@ -259,26 +261,26 @@ final class OMEMOEncryption: @unchecked Sendable {
     func keyHolders(in stanza: Martin.Message) -> (forThisDevice: Bool, forOtherOwnDevices: Bool) {
         let ours = Int32(bitPattern: deviceId).omemoId
         let others = Set(store.ownDevicesToEncryptTo().map(\.omemoId)).subtracting([ours])
-        let rids = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
-            .filterChildren(name: "key", xmlns: nil).compactMap { $0.getAttribute("rid") } ?? []
+        let rids = Self.keyRids(in: stanza)
         return (rids.contains(ours), rids.contains { others.contains($0) })
     }
 
     /// The keys in `stanza` for this device. Martin tries each of them.
     private func keysForUs(in stanza: Martin.Message) -> [Element] {
         let ours = String(deviceId)
-        return stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
-            .filterChildren(name: "key", xmlns: nil).filter { $0.getAttribute("rid") == ours } ?? []
+        return Self.keyElements(in: stanza).filter { $0.getAttribute("rid") == ours }
+    }
+
+    private static func keyElements(in stanza: Martin.Message) -> [Element] {
+        stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?.filterChildren(name: "key", xmlns: nil) ?? []
+    }
+
+    private static func keyRids(in stanza: Martin.Message) -> [String] {
+        keyElements(in: stanza).compactMap { $0.getAttribute("rid") }
     }
 
     private static func isPreKey(_ key: Element) -> Bool {
         ["true", "1"].contains(key.getAttribute("prekey"))
-    }
-
-    /// Any of them, not the first: one that isn't would fail and Martin go
-    /// on to the next.
-    private func carriesPreKey(for stanza: Martin.Message) -> Bool {
-        keysForUs(in: stanza).contains(where: Self.isPreKey)
     }
 
     private func isLocalDevice(_ sender: JID, _ device: Int32) -> Bool {
@@ -322,8 +324,8 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// Martin's own reason only reaches the private system log, which the
     /// diagnostics export can't carry. A message with no key for this device
     /// was never readable here; a prekey message points at our published keys.
-    private func logFailure(_ failure: DecryptFailure, _ stanza: Martin.Message, device: Int32?, isHistory: Bool) {
-        let key = keysForUs(in: stanza).first
+    private func logFailure(_ failure: DecryptFailure, keys: [Element], device: Int32?, isHistory: Bool) {
+        let key = keys.first
         let prekey = key.map(Self.isPreKey) ?? false
         var fields: [DiagField] = [.value("error", failure), .bool("keyForUs", key != nil), .bool("preKey", prekey), .bool("history", isHistory)]
         if let device { fields.append(.id("device", Redacted.id(String(device)))) }
@@ -482,8 +484,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         let result = encode(stanza, for: usable + own, verified: allVerified, checking: skippingUnreachable ? [] : reached)
         guard skippingUnreachable else { return result.map { ($0.0, $0.1, Set(reached)) } }
         return result.flatMap { message, trust in
-            let keys = Set(message.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
-                .filterChildren(name: "key", xmlns: nil).compactMap { $0.getAttribute("rid") } ?? [])
+            let keys = Set(Self.keyRids(in: message))
             let got = Set(reached.filter { recipient in devicesOf[recipient]?.contains { keys.contains($0.deviceId.omemoId) } == true })
             guard !got.isEmpty else { return .failure(firstFailure ?? .setupFailed(reached.first ?? account)) }
             return .success((message, trust, got))
@@ -604,8 +605,7 @@ final class OMEMOEncryption: @unchecked Sendable {
 
         // MartinOMEMO drops devices it fails to encrypt for; make sure every
         // recipient can read it at all.
-        let keys = Set(message.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
-            .filterChildren(name: "key", xmlns: nil).compactMap { $0.getAttribute("rid") } ?? [])
+        let keys = Set(Self.keyRids(in: message))
         for recipient in recipients {
             let devices = addresses.filter { $0.name == recipient.description }.map { $0.deviceId.omemoId }
             guard devices.contains(where: keys.contains) else { return .failure(.setupFailed(recipient)) }
