@@ -147,6 +147,24 @@ struct GroupChatParsingTests {
         #expect(stored[0].serverId == "r5")
     }
 
+    @Test func anotherOccupantCopyingOurOriginIdIsNotTakenForUs() throws {
+        let sent = try db.insert(YapnestKit.Message(conversationId: group.conversationId, direction: .outgoing, sender: me, nick: "me", body: "mine", status: .sent, remoteId: "o1", originId: "o1", serverId: "r5"))
+        let result = try ingest("<message from='cake@rooms.example.org/bob' type='groupchat' id='b1'><body>mine</body><origin-id xmlns='urn:xmpp:sid:0' id='o1'/><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='r6'/></message>", occupants: [:])
+        #expect(result.newMessage?.direction == .incoming)
+        let stored = try messages()
+        #expect(stored.count == 2)
+        #expect(stored.filter { $0.direction == .outgoing }.map(\.id) == [sent.id])
+        #expect(stored.first { $0.id == sent.id }?.serverId == "r5")
+    }
+
+    @Test func anotherOccupantCopyingOurOriginIdWithOtherTextIsNotTakenForUs() throws {
+        let sent = try db.insert(YapnestKit.Message(conversationId: group.conversationId, direction: .outgoing, sender: me, nick: "me", body: "mine", status: .sent, remoteId: "o1", originId: "o1"))
+        let result = try ingest("<message from='cake@rooms.example.org/bob' type='groupchat' id='b2'><body>other</body><origin-id xmlns='urn:xmpp:sid:0' id='o1'/></message>", occupants: [:])
+        #expect(result.newMessage?.direction == .incoming)
+        #expect(try messages().count == 2)
+        #expect(try messages().first?.id == sent.id)
+    }
+
     @Test func reactionsByStanzaIdAndNickname() throws {
         try ingest("<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>cake?</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='r1'/></message>")
         // Two anonymous occupants share the room's address.

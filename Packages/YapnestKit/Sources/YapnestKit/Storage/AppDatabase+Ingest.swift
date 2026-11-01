@@ -164,10 +164,13 @@ extension AppDatabase {
             )
             if inbound.isGroupChat, !inbound.isOutgoing, inbound.sender == inbound.peer, let originId = inbound.originId,
                let ours = try Message.filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.outgoing
-                                             && Column("originId") == originId).fetchOne(db) {
+                                             && Column("originId") == originId).fetchOne(db),
+               ours.body == body, ours.serverId == nil || ours.serverId == inbound.serverId {
                 // An archived item with no address is taken as a stranger's, but
                 // one that carries the origin-id of a message we sent is our own
-                // message coming back, and mustn't be stored a second time.
+                // message coming back, and mustn't be stored a second time. The
+                // origin-id is the sender's word, and any occupant can copy it,
+                // so the text and the room's id for it have to agree too.
                 message.direction = .outgoing
                 message.sender = ours.sender
             }
