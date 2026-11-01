@@ -63,7 +63,14 @@ extension AppDatabase {
 
         if inbound.isError {
             if let id = inbound.id {
-                try Self.bounceOutgoing(db, conversationId: conversationId, remoteId: id, to: .failed, error: inbound.errorText)
+                // The session's bounce router handles the errors of what it sent
+                // itself. One it doesn't know (the app was relaunched since) must
+                // still not fail the message for an error that passes by itself.
+                if inbound.bounce?.isPassing == true {
+                    try Self.bounceOutgoing(db, conversationId: conversationId, remoteId: id, to: .pending, error: nil)
+                } else {
+                    try Self.bounceOutgoing(db, conversationId: conversationId, remoteId: id, to: .failed, error: inbound.errorText)
+                }
             }
             return result
         }

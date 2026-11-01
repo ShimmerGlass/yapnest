@@ -50,6 +50,15 @@ struct PeerErrorTests {
         #expect(after.error == "The recipient's server refused the message: No such user here (service-unavailable)")
     }
 
+    @Test func aPassingErrorOnASentMessageIsNotFinal() throws {
+        let message = try sendMessage(status: .sent)
+        let stanza = parseStanza("<message type='error' from='alice@example.org' to='me@example.org/t' id='m1'><error type='wait'><recipient-unavailable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></message>") as Martin.Message
+        try db.ingest(try #require(InboundMessage(stanza, account: me, source: .live, now: Date())))
+        let after = try stored(message)
+        #expect(after.status == .pending)
+        #expect(after.error == nil)
+    }
+
     @Test func aBounceKeepsTheParsedError() throws {
         let stanza = parseStanza("""
         <message type='error' from='alice@example.org' to='me@example.org/t' id='m1'>
