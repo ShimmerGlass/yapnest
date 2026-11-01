@@ -173,12 +173,16 @@ extension AppDatabase {
         try setting(db, .introducedGroups).flatMap { try? JSONDecoder().decode(Introductions.self, from: Data($0.utf8)) }
     }
 
+    private static func keepIntroductions(_ db: Database, _ kept: Introductions) throws {
+        try setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
+    }
+
     /// In one transaction: groups finish joining on queues of their own.
     public func markIntroduced(_ members: Set<JID>, in room: JID, device: UInt32) throws {
         try writer.write { db in
             var kept = try Self.keptIntroductions(db).flatMap { $0.device == device ? $0 : nil } ?? Introductions(device: device, rooms: [:])
             kept.rooms[room.description] = Set(kept.rooms[room.description] ?? []).union(members.map(\.description)).sorted()
-            try Self.setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
+            try Self.keepIntroductions(db, kept)
         }
     }
 
@@ -198,7 +202,7 @@ extension AppDatabase {
             var unsupported = kept.unsupported ?? [:]
             for member in members { unsupported[member.description] = now }
             kept.unsupported = unsupported
-            try Self.setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
+            try Self.keepIntroductions(db, kept)
         }
     }
 
@@ -214,7 +218,7 @@ extension AppDatabase {
         return try writer.write { db in
             guard var kept = try Self.keptIntroductions(db), kept.device == device, kept.unsupported?[member.description] != nil else { return false }
             kept.unsupported?[member.description] = nil
-            try Self.setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
+            try Self.keepIntroductions(db, kept)
             return true
         }
     }
@@ -226,7 +230,7 @@ extension AppDatabase {
             guard var kept = try Self.keptIntroductions(db), kept.device == device,
                   let members = kept.rooms[room.description], members.contains(member.description) else { return }
             kept.rooms[room.description] = members.filter { $0 != member.description }
-            try Self.setSetting(db, .introducedGroups, String(decoding: try JSONEncoder().encode(kept), as: UTF8.self))
+            try Self.keepIntroductions(db, kept)
         }
     }
 
