@@ -11,18 +11,22 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
     private(set) var location: CLLocation?
     private(set) var failed = false
     private(set) var isLocating = false
-    @ObservationIgnored private let manager = CLLocationManager()
+    @ObservationIgnored private let manager: CLLocationManager
 
-    override init() {
+    /// Does nothing until `start()`: a `@State` default is built again at every
+    /// render of the view holding it, and a manager given its delegate asks for
+    /// a fix at once.
+    init(manager: CLLocationManager = CLLocationManager()) {
+        self.manager = manager
         status = manager.authorizationStatus
         super.init()
-        manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyBest
     }
 
     var isDenied: Bool { status == .denied || status == .restricted }
 
     func start() {
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyBest
         if status == .notDetermined {
             manager.requestWhenInUseAuthorization()
         } else {
