@@ -63,15 +63,14 @@ struct BannedMembersView: View {
         // spinner goes.
         loadList.run { [session, room] in
             isLoading = true
+            defer { isLoading = false }
             loadFailure = nil
             do {
                 try await session.refreshBanList(of: room)
             } catch {
                 loadFailure = ServerError.userMessage(for: error)
-                isLoading = false
                 throw error
             }
-            isLoading = false
         }
     }
 
