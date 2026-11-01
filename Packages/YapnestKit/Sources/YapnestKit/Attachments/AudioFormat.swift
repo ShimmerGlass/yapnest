@@ -6,21 +6,36 @@ import Foundation
 /// extension counts when the media type is missing or generic.
 public enum AudioFormat {
     static let extensions: Set<String> = ["m4a", "aac", "mp3", "ogg", "opus", "oga", "wav", "caf"]
-    /// Containers and codecs AVAudioPlayer can't decode.
-    static let unplayableExtensions: Set<String> = ["ogg", "opus", "oga"]
+    /// What AVAudioPlayer decodes. A list of what plays rather than of what
+    /// doesn't: a format missing from a deny-list (WebM, WMA, Matroska) would
+    /// get a player that can't play it.
+    static let playableExtensions: Set<String> = ["m4a", "aac", "mp3", "wav", "caf", "aif", "aiff", "flac", "mp4"]
+    static let playableTypes: Set<String> = [
+        "audio/mpeg", "audio/mp3", "audio/x-mpeg", "audio/mp4", "audio/x-m4a", "audio/m4a", "audio/mp4a-latm", "audio/aac", "audio/x-aac",
+        "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave", "audio/x-caf", "audio/aiff", "audio/x-aiff", "audio/flac", "audio/x-flac",
+    ]
     static let unplayableTypes: Set<String> = ["audio/ogg", "audio/opus", "application/ogg", "audio/x-opus+ogg"]
 
+    /// A media type as a name: without its parameters (`; codecs=opus`),
+    /// lowercased. Nil when it says nothing.
+    static func essence(of mimeType: String?) -> String? {
+        guard let mimeType else { return nil }
+        let type = mimeType.prefix { $0 != ";" }.trimmingCharacters(in: .whitespaces).lowercased()
+        return type.isEmpty || type == "application/octet-stream" ? nil : type
+    }
+
     public static func isAudio(mimeType: String?, name: String) -> Bool {
-        if let type = mimeType?.lowercased(), !type.isEmpty, type != "application/octet-stream" {
+        if let type = essence(of: mimeType) {
             return type.hasPrefix("audio/") || unplayableTypes.contains(type)
         }
         return extensions.contains((name as NSString).pathExtension.lowercased())
     }
 
     public static func isPlayable(mimeType: String?, name: String) -> Bool {
-        if unplayableExtensions.contains((name as NSString).pathExtension.lowercased()) { return false }
-        if let type = mimeType?.lowercased(), unplayableTypes.contains(type) { return false }
-        return true
+        let type = essence(of: mimeType)
+        if let type, unplayableTypes.contains(type) { return false }
+        if let type, playableTypes.contains(type) { return true }
+        return playableExtensions.contains((name as NSString).pathExtension.lowercased())
     }
 
     /// Names that clients give the sound they record for a voice message, as

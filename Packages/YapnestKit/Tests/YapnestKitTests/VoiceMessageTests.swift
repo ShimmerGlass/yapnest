@@ -105,6 +105,28 @@ struct AudioDetectionTests {
         #expect(!AudioFormat.isVoiceClip(mimeType: nil, name: "RECORDING_20260101_101010123.mp4"))
     }
 
+    @Test(arguments: [
+        ("audio/webm", "a.webm"), ("audio/x-ms-wma", "a.wma"), ("audio/ogg; codecs=opus", "a.bin"), ("audio/ogg;codecs=vorbis", "a.ogg"),
+        (nil, "a.wma"), (nil, "a.weba"), ("application/octet-stream", "a.opus"), ("audio/x-matroska", "a.mka"),
+    ] as [(String?, String)])
+    func soundThePlayerCantDecodeStaysAFile(mimeType: String?, name: String) {
+        #expect(!AudioFormat.isPlayable(mimeType: mimeType, name: name))
+    }
+
+    @Test(arguments: [
+        ("audio/mpeg", "a.mp3"), ("audio/mp4", "Voice message.m4a"), ("audio/x-m4a", "a.m4a"), ("audio/mp4; codecs=mp4a.40.2", "a.m4a"),
+        ("AUDIO/WAV", "a.wav"), (nil, "a.caf"), ("application/octet-stream", "a.aac"), ("audio/flac", "a.flac"),
+    ] as [(String?, String)])
+    func soundThePlayerDecodesPlaysInline(mimeType: String?, name: String) {
+        #expect(AudioFormat.isPlayable(mimeType: mimeType, name: name))
+    }
+
+    @Test func aMediaTypeWithParametersIsStillSound() {
+        #expect(AudioFormat.isAudio(mimeType: "audio/ogg; codecs=opus", name: "a.bin"))
+        #expect(AudioFormat.isAudio(mimeType: "Audio/Mp4;codecs=mp4a", name: "a.bin"))
+        #expect(!AudioFormat.isAudio(mimeType: "video/mp4; codecs=avc1", name: "a.m4a"))
+    }
+
     @Test func aVoiceNameOnSomethingThatIsNotSoundIsNotAVoiceClip() {
         #expect(!AudioFormat.isVoiceClip(mimeType: "application/pdf", name: "Voice message.m4a"))
         #expect(!AudioFormat.isVoiceClip(mimeType: "image/png", name: "RECORDING_20260101_101010123.m4a"))
