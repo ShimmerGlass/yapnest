@@ -338,13 +338,20 @@ extension XMPPSession {
     func checkSettingsNode() async -> NodeCheck {
         // The configuration says whether the node can be read at all, so only
         // a node that isn't there is dealt with before it.
-        if case .noNode = await readNode(NS.settings, as: "Settings", limit: .lastItems(1)) {
+        switch await readNode(NS.settings, as: "Settings", limit: .lastItems(1)) {
+        case .noNode:
             do {
                 try await createSettingsNode()
             } catch {
                 logger.error("Couldn't create the settings node, so settings aren't synced: \(error.localizedDescription, privacy: .private)")
                 return NodeCheck(failing: error)
             }
+        // Not known to be there, and the configuration of one that isn't would
+        // answer item-not-found, which would refuse the sync for the session.
+        case .failed(let error) where error.isPassing:
+            return .failed
+        case .items, .unsupported, .failed:
+            break
         }
         do {
             if try await pepNodeAccessModel(NS.settings) == "whitelist" { return .isPrivate }

@@ -71,6 +71,7 @@ private final class SettingsServer: @unchecked Sendable {
                 if let configure = pubsub.firstChild(name: "configure") {
                     if iq.type == .get {
                         log.append("config-get")
+                        if !exists { return FakeWire.error(to: iq, condition: "item-not-found") }
                         let form = XMPPSession.dataForm(type: "form", formType: "http://jabber.org/protocol/pubsub#node_config", fields: ["pubsub#access_model": [access]].merging(reportedMaxItems.map { ["pubsub#max_items": [$0]] } ?? [:]) { a, _ in a })
                         return FakeWire.result(to: iq, Element(name: "pubsub", xmlns: pubsub.xmlns, children: [Element(name: "configure", children: [form])]))
                     }
@@ -237,10 +238,24 @@ struct SettingsSyncSessionTests {
         let (session, _) = try connect(server)
         #expect(await session.runSettingsSync() == .owed)
         #expect(session.lock.withLock { $0.settingsSync.node } == .unchecked)
+        // The first read failed and ended the check there; the second failure is left.
+        server.passingFailures = 0
         #expect(server.publishes.isEmpty)
 
         // The next sync, owed at the next return, looks again.
         #expect(await session.runSettingsSync() == .done)
+        #expect(session.lock.withLock { $0.settingsSync.node } == .verified)
+    }
+
+    @Test func aTimeoutReadingAMissingNodeIsLookedAtAgainAndTheNodeCreated() async throws {
+        let server = SettingsServer(exists: false)
+        server.passingFailures = 1
+        let (session, _) = try connect(server)
+        #expect(await session.runSettingsSync() == .owed)
+        #expect(session.lock.withLock { $0.settingsSync.node } == .unchecked)
+
+        #expect(await session.runSettingsSync() == .done)
+        #expect(server.events.contains("create"))
         #expect(session.lock.withLock { $0.settingsSync.node } == .verified)
     }
 
