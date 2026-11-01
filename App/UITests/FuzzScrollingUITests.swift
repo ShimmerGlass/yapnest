@@ -218,15 +218,18 @@ class FuzzScrollingTestCase: XCTestCase {
         }
         driver.waitForStillness()
         let record = driver.recorder()
-        guard band.isLast else {
-            driver.assertNotBlank("at the end of its share of the way up")
-            return
-        }
         // A person flicking through a long history gets somewhere: the lazy
         // stack's guess of the rows it hasn't drawn must not run away with
         // the distance (it did, with rows of a few thousand points among rows
-        // of a hundred, and 80 flicks left over 400,000 points).
+        // of a hundred, and 80 flicks left over 400,000 points). A share is
+        // held to the whole climb's budget, so a runaway in any stretch of
+        // the chat still fails.
         XCTAssertLessThanOrEqual(flicks, Self.flicksToTheTop, "\(driver.context): took \(flicks) flicks to reach the top: \(driver.recorderSummary())")
+        guard band.isLast else {
+            XCTAssertLessThanOrEqual(record["top"] ?? .infinity, band.end(of: topAtOpen), "\(driver.context): the list didn't reach the end of its share after \(flicks) flicks: \(driver.recorderSummary())")
+            driver.assertNotBlank("at the end of its share of the way up")
+            return
+        }
         XCTAssertLessThanOrEqual(record["top"] ?? .infinity, 1, "\(driver.context): the list didn't reach its top after \(flicks) flicks: \(driver.recorderSummary())")
         if rowsAtOpen >= 500 {
             XCTAssertGreaterThan(record["rows"] ?? 0, rowsAtOpen, "\(driver.context): no older messages came in: \(driver.recorderSummary())")
