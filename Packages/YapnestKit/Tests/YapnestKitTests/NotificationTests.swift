@@ -57,6 +57,15 @@ struct NotificationTests {
         #expect(try db.claimNotificationsAndEdits(now: later).edited.isEmpty)
     }
 
+    @Test func aClockSetBackDoesNotSilenceNotifications() throws {
+        let chat = try db.conversation(with: alice)
+        let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded())
+        _ = try db.claimNotifications(now: now.addingTimeInterval(3600))
+        try incoming("hello", in: chat)
+        #expect(try db.claimNotifications(now: now).map(\.body) == ["hello"])
+        #expect(db.date(.lastNotifiedAt) == now)
+    }
+
     @Test func anEditOfAReadMessageIsntReported() throws {
         let chat = try db.conversation(with: alice)
         _ = try db.claimNotifications()

@@ -67,7 +67,10 @@ extension AppDatabase {
         try writer.write { db in
             let newest = try Int64.fetchOne(db, sql: "SELECT MAX(id) FROM message") ?? 0
             let markId = try Self.setting(db, .lastNotifiedMessageId).flatMap { Int64($0) }
-            let markDate = try Self.date(db, .lastNotifiedAt)
+            // The mark only moves forward, except past the clock's own slack:
+            // a clock set back would otherwise leave it in the future, where
+            // nothing new notifies and offline messages are floored to it.
+            let markDate = try Self.date(db, .lastNotifiedAt).map { $0 > now.addingTimeInterval(Self.notificationClockSlack) ? now : $0 }
             try Self.setSetting(db, .lastNotifiedMessageId, String(max(newest, markId ?? 0)))
             try Self.setDate(db, .lastNotifiedAt, max(now, markDate ?? now))
             guard let markId, let markDate else { return ([], []) }
