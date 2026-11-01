@@ -57,6 +57,11 @@ struct ChatSettingsView: View {
     @State private var saveError: String?
     @State private var saves = SettingsWrites()
 
+    /// The call buttons stay in the sheet and spin while the call waits for
+    /// the connection, so a failure can be shown here: an alert on the screen
+    /// below can't appear over a sheet.
+    private var isStartingCall: Bool { model.calls.startingCall == peer }
+
     /// What the form starts from, read off the main thread.
     private struct Initial: Sendable {
         var isEncrypted: Bool
@@ -128,18 +133,16 @@ struct ChatSettingsView: View {
                 }
                 HStack(spacing: 10) {
                     if canCall {
-                        HeaderAction(title: "Call", systemImage: "phone") {
-                            dismiss()
+                        HeaderAction(title: "Call", systemImage: "phone", isBusy: isStartingCall) {
                             model.calls.startCall(to: peer)
                         }
-                        .disabled(model.calls.isInCall)
+                        .disabled(model.calls.isInCall || isStartingCall)
                     }
                     if canCall, canVideoCall {
-                        HeaderAction(title: "Video", systemImage: "video") {
-                            dismiss()
+                        HeaderAction(title: "Video", systemImage: "video", isBusy: isStartingCall) {
                             model.calls.startCall(to: peer, video: true)
                         }
-                        .disabled(model.calls.isInCall)
+                        .disabled(model.calls.isInCall || isStartingCall)
                     }
                     HeaderAction(title: "Search", systemImage: "magnifyingglass") {
                         onSearch()
@@ -367,6 +370,11 @@ struct ChatSettingsView: View {
             .actionAlert("Couldn't delete group", destroy)
             .actionAlert("Couldn't change notifications", changeNotify)
             .errorAlert("Couldn't save the setting", $saveError)
+            .errorAlert("Couldn't place the call", Bindable(model.calls).error)
+            .onChange(of: model.calls.startingCall) { old, new in
+                // The call is under way, now CallKit or the call screen shows it.
+                if old == peer, new == nil, model.calls.error == nil { dismiss() }
+            }
             .task { await loadInitial() }
             .onAppear { if group == nil { commandEntities = session.commandEntities(of: peer) } }
             .task {
@@ -773,12 +781,14 @@ struct MemberRow: View {
 private struct HeaderAction: View {
     let title: LocalizedStringKey
     let systemImage: String
+    var isBusy = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: 4) {
                 Image(systemName: systemImage).font(.title3)
+                    .busyOverlay(isBusy)
                 Text(title).font(.caption)
             }
             .frame(width: 84, height: 56)

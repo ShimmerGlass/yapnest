@@ -216,6 +216,21 @@ struct CallControllerTests {
         #expect(controller.startingCall == nil)
     }
 
+    @Test func aFailedCallHasItsErrorWhenTheSpinnerStops() async throws {
+        let fixture = try ConversationFixture()
+        let controller = CallController()
+        controller.prepareCall = { _, _, _ in throw CallError.notConnected }
+        controller.attach(fixture.session)
+        defer { controller.detach() }
+
+        controller.startCall(to: fixture.peer)
+
+        // Chat settings keeps its sheet open until the spinner stops, unless
+        // there is an error to show in it, so the error can't come later.
+        try await waitUntil { controller.startingCall == nil }
+        #expect(controller.error != nil)
+    }
+
     @Test func aCallThatCantBePreparedShowsWhyAndStopsSpinning() async throws {
         let fixture = try ConversationFixture()
         let controller = CallController()
