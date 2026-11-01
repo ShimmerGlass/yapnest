@@ -250,6 +250,16 @@ struct IngestTests {
         try db.reader.read { try YapnestKit.Message.order(Column("id")).fetchAll($0) }
     }
 
+    @Test func anOfflineMessageIsNotFlooredToOurOwnNewerOne() throws {
+        let now = ISO8601DateFormatter().date(from: "2025-01-01T00:00:00Z")!
+        let stamp = ISO8601DateFormatter().date(from: "2024-12-31T10:00:00Z")!
+        let chat = try db.conversation(with: JID("alice@example.org")!)
+        try db.insert(YapnestKit.Message(conversationId: chat.id!, direction: .outgoing, sender: JID("me@example.org")!, body: "mine", timestamp: now, status: .pending, remoteId: "o1"))
+        let xml = "<message from='alice@example.org/p' type='chat' id='m1'><body>earlier</body><delay xmlns='urn:xmpp:delay' from='example.org' stamp='2024-12-31T10:00:00Z'/></message>"
+        let result = try db.ingest(#require(parse(xml, now: now)))
+        #expect(result.newMessage?.timestamp == stamp)
+    }
+
     @Test func liveThenArchiveIsStoredOnce() throws {
         let first = try ingest("<message from='alice@example.org/p' type='chat' id='m1'><body>hi</body><origin-id xmlns='urn:xmpp:sid:0' id='m1'/></message>")
         #expect(first.newMessage != nil)

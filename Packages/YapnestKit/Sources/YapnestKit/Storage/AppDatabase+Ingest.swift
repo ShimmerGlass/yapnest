@@ -142,7 +142,9 @@ extension AppDatabase {
                 // messages are stamped after we last looked, so the newest of
                 // what's stored and the last notification claim is a floor
                 // they never fall under.
-                let newest = try Date.fetchOne(db, Message.filter(Column("conversationId") == conversationId).excludingEvents().select(max(Column("timestamp"))))
+                // What we sent doesn't count: a peer's offline message was
+                // written before it, whatever we sent meanwhile.
+                let newest = try Date.fetchOne(db, Message.filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming).excludingEvents().select(max(Column("timestamp"))))
                 let claimed = try Self.date(db, .lastNotifiedAt)
                 if let floor = [newest, claimed].compactMap({ $0 }).max() { timestamp = max(timestamp, floor) }
             }
