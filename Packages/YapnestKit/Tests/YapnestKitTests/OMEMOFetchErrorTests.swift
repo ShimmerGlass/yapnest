@@ -85,7 +85,7 @@ struct OMEMOFetchErrorTests {
         stanza.body = "hi"
         let result = await Task.detached { withExtendedLifetime(client) { encryption.encrypt(stanza, for: []) } }.value
         guard case .failure(.noRecipients) = result else { Issue.record("it was encrypted for no one: \(result)"); return }
-        if case .failure(let failure) = result { #expect(!failure.isPassing && failure.localizedDescription.contains("no one")) }
+        if case .failure(let failure) = result { #expect(!failure.isPassing && failure.localizedDescription.contains("no one") && !failure.localizedDescription.contains("stays unsent") && failure.localizedDescription.contains("try again")) }
     }
 
     @Test func noListAtAllIsStillALackOfOMEMO() async throws {

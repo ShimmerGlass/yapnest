@@ -340,7 +340,8 @@ final class OMEMOEncryption: @unchecked Sendable {
         case listWithheld(JID)
         case noTrustedDevices(JID)
         /// Nobody but our own devices would be able to read it: a room whose
-        /// members aren't known, or has none besides us.
+        /// members aren't known, or has none besides us. The message is marked
+        /// failed, with a way to try again, and not held to be sent by itself.
         case noRecipients
         case setupFailed(JID)
         /// The server answered a request for their device list or bundle with
@@ -364,7 +365,7 @@ final class OMEMOEncryption: @unchecked Sendable {
             case .unsupported(let peer): "\(peer) can't receive encrypted messages. Turn off encryption to send without it."
             case .listWithheld(let peer): "\(peer)'s server doesn't let us read their encryption keys, as we aren't in their contacts. Turn off encryption to send without it."
             case .noTrustedDevices(let peer): "None of \(peer)'s devices are trusted."
-            case .noRecipients: "There is no one to encrypt this message for yet. It stays unsent until the group's members are known."
+            case .noRecipients: "There is no one to encrypt this message for yet. It isn't sent: try again once the group has other members."
             case .setupFailed(let peer): "Couldn't set up encryption with \(peer)."
             case .fetchFailed(let peer, let error): error.describe("Couldn't get \(peer)'s encryption keys. Turn off encryption to send without it")
             }
