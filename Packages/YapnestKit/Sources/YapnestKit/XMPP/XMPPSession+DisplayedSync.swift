@@ -88,25 +88,9 @@ extension XMPPSession {
         for conversation in owed {
             guard isConnected, let id = conversation.id else { return }
             do {
-                // Nothing we read can be named, such as messages without a stanza-id.
-                guard let last = try database.newestReadMessageWithServerId(conversationId: id), let stanzaId = last.serverId else {
-                    try database.clearReadStateOwed(conversationId: id, ifNewest: nil)
-                    continue
+                if let stanzaId = try readStateToPublish(conversation) {
+                    toPublish.append((stanzaId, id, route(for: conversation)))
                 }
-                if let held = lock.withLock({ $0.publishedDisplayed[conversation.peer] }) {
-                    // A state for a message we don't have may be newer than ours. It is
-                    // noted before the lookup so a message stored in between isn't missed;
-                    // storing the message starts another round.
-                    lock.withLock { _ = $0.readStatesAwaitingMessage.insert(conversation.peer) }
-                    if try !database.hasMessage(conversationId: id, serverId: held) { continue }
-                    lock.withLock { _ = $0.readStatesAwaitingMessage.remove(conversation.peer) }
-                    // One that reaches as far as ours, ours included, is not ours to publish over.
-                    if try database.readState(conversationId: id, naming: held) {
-                        try database.clearReadStateOwed(conversationId: id, ifNewest: held)
-                        continue
-                    }
-                }
-                toPublish.append((stanzaId, id, route(for: conversation)))
             } catch {
                 logger.error("Failed to publish an owed read state: \(error)")
             }
@@ -129,6 +113,31 @@ extension XMPPSession {
 
     static let concurrentReadStatePublishes = 4
 
+    /// The message to publish as read in `conversation`, or nil if nothing is
+    /// to be sent: what is owed is dropped, or waits for a message to arrive.
+    private func readStateToPublish(_ conversation: Conversation) throws -> String? {
+        guard let id = conversation.id else { return nil }
+        // Nothing we read can be named, such as messages without a stanza-id.
+        guard let last = try database.newestReadMessageWithServerId(conversationId: id), let stanzaId = last.serverId else {
+            try database.clearReadStateOwed(conversationId: id, ifNewest: nil)
+            return nil
+        }
+        if let held = lock.withLock({ $0.publishedDisplayed[conversation.peer] }) {
+            // A state for a message we don't have may be newer than ours. It is
+            // noted before the lookup so a message stored in between isn't missed;
+            // storing the message starts another round.
+            lock.withLock { _ = $0.readStatesAwaitingMessage.insert(conversation.peer) }
+            if try !database.hasMessage(conversationId: id, serverId: held) { return nil }
+            lock.withLock { _ = $0.readStatesAwaitingMessage.remove(conversation.peer) }
+            // One that reaches as far as ours, ours included, is not ours to publish over.
+            if try database.readState(conversationId: id, naming: held) {
+                try database.clearReadStateOwed(conversationId: id, ifNewest: held)
+                return nil
+            }
+        }
+        return stanzaId
+    }
+
     /// A message stored for a chat whose owed state names a message we lacked
     /// may be that message. Chats owing nothing cost one set lookup.
     func publishReadStateAwaiting(_ result: IngestResult, peer: JID) {
@@ -137,8 +146,19 @@ extension XMPPSession {
         publishOwedReadStates()
     }
 
-    private func publish(stanzaId: String, conversationId: Int64, route: Route) async {
+    private func publish(stanzaId decided: String, conversationId: Int64, route: Route) async {
         let peer = route.peer
+        // Decided before the publishes ahead of this one were answered, so
+        // another device may have read further since: ask again.
+        let stanzaId: String
+        do {
+            guard isConnected, let conversation = try database.conversation(id: conversationId), conversation.readStateOwed,
+                  let current = try readStateToPublish(conversation) else { return }
+            stanzaId = current
+        } catch {
+            logger.error("Failed to publish an owed read state: \(error)")
+            return
+        }
         let state = DisplayedState(peer: peer, stanzaId: stanzaId, by: route.isGroup ? peer : account)
         do {
             // A node another client made with other options refuses the

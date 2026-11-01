@@ -476,6 +476,25 @@ struct OwedReadStateTests {
         #expect(Set(publishedStanzaIds()) == Set(["s3"] + (0..<9).map { "f\($0)" }))
     }
 
+    @Test func aChatAnotherDeviceReadWhileTheEarlierPublishesWereInFlightIsNotPublishedOver() async throws {
+        try readOffline()
+        let chats = try readMoreChatsOffline(4)
+        wire.holdReplies { $0.firstChild(name: "pubsub")?.firstChild(name: "publish") != nil }
+        serve()
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { publishes().count == 4 })
+        // The fifth chat was decided with the rest, and is read through its newest message elsewhere.
+        for (index, chat) in chats.enumerated() {
+            session.displayedChanged(DisplayedState(peer: chat.peer, stanzaId: "f\(index)", by: me))
+        }
+        session.displayedChanged(DisplayedState(peer: alice, stanzaId: "s3", by: me))
+        wire.releasePings()
+        #expect(await eventually { !owed && chats.allSatisfy { !isOwed($0) } })
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(publishes().count == 4)
+    }
+
     @Test func aChatTheServerRefusesDoesNotStopTheOthers() async throws {
         try readOffline()
         let chats = try readMoreChatsOffline(5)
