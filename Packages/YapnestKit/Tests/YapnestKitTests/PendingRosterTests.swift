@@ -244,6 +244,24 @@ struct PendingRosterTests {
         #expect(try !contact(stranger).hasContactRequest)
     }
 
+    @Test func aStaleConnectionsRosterReadDoesNotReleaseTheQueue() async throws {
+        connect()
+        // The session reads the roster itself on connecting; let that finish.
+        #expect(await eventually { !session.lock.withLock { $0.awaitsRoster } })
+        session.lock.withLock { $0.awaitsRoster = true }
+        try await session.removeContact(alice)
+        let current = session.lock.withLock { $0.attempt }
+
+        try await session.requestRoster(attempt: current - 1)
+        _ = await eventually(timeout: 0.3) { false }
+        #expect(session.lock.withLock { $0.awaitsRoster })
+        #expect(rosterSets.isEmpty)
+
+        try await session.requestRoster(attempt: current)
+        #expect(await eventually { queued.isEmpty })
+        #expect(!session.lock.withLock { $0.awaitsRoster })
+    }
+
     @Test func aRefusedRenameShowsTheOldNameAgain() async throws {
         try await session.setContactName(alice, name: "Ally")
         connect { FakeWire.error(to: $0, condition: "not-allowed", type: "cancel") }

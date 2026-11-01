@@ -73,18 +73,23 @@ extension XMPPSession {
                 "roster", title: String(localized: "Contacts not updated"),
                 friendly: String(localized: "Your contacts couldn't be read from the server"),
                 stillWanted: { [weak self] in self?.attemptIsCurrent(attempt) ?? false },
-            ) { [self] in try await requestRoster() }
+            ) { [self] in try await requestRoster(attempt: attempt) }
         }
     }
 
-    private func requestRoster() async throws {
+    func requestRoster(attempt: Int) async throws {
         defer {
             // A roster that can't be read must not hold back what the user
             // queued: it is sent against the contacts as last stored, which
             // each change checks (a removal of someone already gone, or an
             // answer to a request withdrawn meanwhile, sends nothing).
-            lock.withLock { $0.awaitsRoster = false }
-            sendPendingRosterChanges()
+            // Not a stale connection's: the new session's own read is still to
+            // come, and what was queued must wait for it.
+            let current = lock.withLock { state in
+                if state.attempt == attempt { state.awaitsRoster = false }
+                return state.attempt == attempt
+            }
+            if current { sendPendingRosterChanges() }
         }
         try await retryingPassingErrors { try await client.module(.roster).requestRoster() }
     }
