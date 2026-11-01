@@ -48,6 +48,16 @@ struct SafeFileNameTests {
         #expect(SafeFileName.make(String(repeating: "b", count: 300)).count == SafeFileName.maxLength)
     }
 
+    @Test func aLongNameInWideCharactersFitsTheFileSystemsByteLimit() {
+        let result = SafeFileName.make(String(repeating: "\u{3042}", count: 100) + ".txt")
+        #expect(result.utf8.count <= 255)
+        #expect(result.hasSuffix(".txt"))
+        #expect(result.hasPrefix("\u{3042}"))
+        // Four-byte characters, and an extension that is itself long.
+        let emoji = SafeFileName.make(String(repeating: "\u{1F600}", count: 100) + ".markdown")
+        #expect(emoji.utf8.count <= 255 && emoji.hasSuffix(".markdown"))
+    }
+
     @Test func copiesStayInsideTheirFolder() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "safename-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

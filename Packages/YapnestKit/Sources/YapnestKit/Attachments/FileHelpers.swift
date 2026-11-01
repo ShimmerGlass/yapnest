@@ -27,6 +27,9 @@ extension FileManager {
 /// path component.
 public enum SafeFileName {
     public static let maxLength = 120
+    /// File systems cap a name in bytes, not characters: a name of 120
+    /// Japanese characters is 360 bytes and can't be saved.
+    public static let maxBytes = 255
     private static let keptFormatCharacters: Set<Unicode.Scalar> = ["\u{200C}", "\u{200D}"]
 
     /// Removes format characters (category Cf): bidi overrides and isolates,
@@ -36,6 +39,18 @@ public enum SafeFileName {
     /// and they can't reorder what is shown.
     public static func removingFormatCharacters(_ name: String) -> String {
         String(String.UnicodeScalarView(name.unicodeScalars.filter { $0.properties.generalCategory != .format || keptFormatCharacters.contains($0) }))
+    }
+
+    /// The longest start of `text` within both limits, cut between characters.
+    private static func truncated(_ text: String, characters: Int, bytes: Int) -> String {
+        var result = ""
+        var used = 0
+        for character in text.prefix(characters) {
+            used += String(character).utf8.count
+            if used > bytes { break }
+            result.append(character)
+        }
+        return result
     }
 
     /// Keeps the last path component, removes format characters, replaces `:`
@@ -49,12 +64,12 @@ public enum SafeFileName {
         }))
         var result = String(cleaned.drop(while: { $0 == "." || $0.isWhitespace }))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if result.count > maxLength {
+        if result.count > maxLength || result.utf8.count > maxBytes {
             let ext = (result as NSString).pathExtension
-            if !ext.isEmpty, ext.count <= 16 {
-                result = String(result.dropLast(ext.count + 1).prefix(maxLength - ext.count - 1)) + "." + ext
+            if !ext.isEmpty, ext.count <= 16, ext.utf8.count <= 64 {
+                result = truncated(String(result.dropLast(ext.count + 1)), characters: maxLength - ext.count - 1, bytes: maxBytes - ext.utf8.count - 1) + "." + ext
             } else {
-                result = String(result.prefix(maxLength))
+                result = truncated(result, characters: maxLength, bytes: maxBytes)
             }
         }
         return result.isEmpty ? fallback : result
