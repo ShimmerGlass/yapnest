@@ -118,9 +118,16 @@ final class ShareModel {
     }
 
     func dismiss() {
-        Task {
-            await stopLoading()
-            cancel()
+        // The sheet closes at once: a copy of a large or iCloud file can't be
+        // interrupted, and Cancel must not wait for it. The folder goes once
+        // the loader has stopped writing to it, or copies would be left behind.
+        let loading = loading
+        loading?.cancel()
+        cancel()
+        let folder = folder
+        Task.detached {
+            await loading?.value
+            try? FileManager.default.removeItem(at: folder)
         }
     }
 
@@ -131,13 +138,5 @@ final class ShareModel {
     private func done() {
         try? FileManager.default.removeItem(at: folder)
         finish()
-    }
-
-    /// Removes the folder only once the loader has stopped writing to it,
-    /// which would otherwise leave copies behind.
-    private func stopLoading() async {
-        loading?.cancel()
-        await loading?.value
-        try? FileManager.default.removeItem(at: folder)
     }
 }
