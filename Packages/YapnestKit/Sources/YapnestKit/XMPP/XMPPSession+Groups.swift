@@ -1020,22 +1020,27 @@ extension XMPPSession {
     private func didJoinToRead(_ group: GroupChat) {
         let lists = Self.listsToFetch(isNonAnonymous: group.isNonAnonymous, isOwnerOrAdmin: roomStatus(group.jid)?.isOwnerOrAdmin ?? false)
         let room = group.jid
-        let attempt = lock.withLock { $0.attempt }
-        // A private group shows addresses, so it always has lists to fetch.
-        if !lists.isEmpty {
-            updateRoom(room) { $0?.awaitsMemberLists = true }
-            fetchMembers(room, lists: lists) { [weak self] in
-                guard let self, self.isConnected, self.lock.withLock({ $0.attempt }) == attempt else { return }
-                let listed = self.updateRoom(room) {
-                    $0?.membersListed = true
-                    $0?.awaitsMemberLists = false
-                }
-                // The catch-up may have ended first, and left the sending to this.
-                if listed?.isSyncing == false { self.sendAfterCatchUp(room) }
-                self.introduceDevice(to: room)
-            }
-        }
+        if !lists.isEmpty { fetchMembersBeforeSending(room, lists: lists, isNonAnonymous: group.isNonAnonymous) }
         catchUpRoom(group)
+    }
+
+    /// Asks for the member lists at a join. In a room that shows addresses
+    /// (every private group) they are who an encrypted message goes to, so
+    /// nothing is sent until they come; the ban list alone holds nothing up.
+    private func fetchMembersBeforeSending(_ room: JID, lists: [RoomAffiliation], isNonAnonymous: Bool) {
+        let attempt = lock.withLock { $0.attempt }
+        if isNonAnonymous { updateRoom(room) { $0?.awaitsMemberLists = true } }
+        fetchMembers(room, lists: lists) { [weak self] in
+            // A resumed stream asks again (resumeInterruptedRoomCatchUps).
+            guard let self, self.isConnected, self.lock.withLock({ $0.attempt }) == attempt else { return }
+            let listed = self.updateRoom(room) {
+                $0?.membersListed = true
+                $0?.awaitsMemberLists = false
+            }
+            // The catch-up may have ended first, and left the sending to this.
+            if listed?.isSyncing == false { self.sendAfterCatchUp(room) }
+            self.introduceDevice(to: room)
+        }
     }
 
     /// Nothing to read, but the members are who we encrypt for.
@@ -1193,6 +1198,17 @@ extension XMPPSession {
             // Restarts the visit's own work, from the stored cursor, and
             // gives it a new connection to belong to.
             didJoin(room)
+        }
+        // A catch-up that ended before the drop isn't interrupted, but member
+        // lists still on their way were lost with the old stream, and what
+        // waits for them would wait until the next full reconnect.
+        let waiting = lock.withLock { state in
+            state.rooms.filter { $0.value.isJoined && !$0.value.isSyncing && $0.value.awaitsMemberLists }.map(\.key)
+        }
+        for room in waiting.sorted() {
+            guard let group = try? database.groupChat(room) else { continue }
+            let lists = Self.listsToFetch(isNonAnonymous: group.isNonAnonymous, isOwnerOrAdmin: roomStatus(room)?.isOwnerOrAdmin ?? false)
+            fetchMembersBeforeSending(room, lists: lists, isNonAnonymous: group.isNonAnonymous)
         }
     }
 

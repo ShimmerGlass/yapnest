@@ -1,5 +1,5 @@
 import Foundation
-@preconcurrency import Martin
+@preconcurrency @testable import Martin
 import Testing
 @testable import YapnestKit
 
@@ -67,5 +67,60 @@ struct RoomCatchUpResendTests {
             session.drainSendQueue(room)
             return wire.messages.contains { $0.body == "hi" }
         }
+    }
+
+    @Test func listsCutOffByAResumedStreamAreAskedForAgain() async throws {
+        let database = try AppDatabase.inMemory()
+        let session = try makeSession(me, database: database, mode: .app)
+        try database.joinGroupChat(room, nickname: "me")
+        try database.setRoomInfo(room, name: nil, isMembersOnly: true, isNonAnonymous: true)
+        session.reloadKnownRooms()
+        let id = try #require(try database.conversation(with: room).id)
+        _ = try database.insert(YapnestKit.Message(
+            conversationId: id, direction: .outgoing, sender: me, body: "hi", status: .pending, remoteId: "g1",
+        ))
+        let wire = FakeWire()
+        wire.answer { iq in
+            iq.firstChild(name: "query", xmlns: "http://jabber.org/protocol/muc#admin") != nil ? FakeWire.result(to: iq) : FakeWire.error(to: iq)
+        }
+        wire.holdReplies { $0.firstChild(name: "query", xmlns: "http://jabber.org/protocol/muc#admin") != nil }
+        session.connectForTesting(wire)
+        var status = RoomStatus(phase: .joined, nickname: "me")
+        status.isSyncing = true
+        session.updateRoom(room) { $0 = status }
+        session.didJoin(room)
+        await eventually("the catch-up to end") { session.roomStatus(room)?.isSyncing == false }
+        await eventually("the lists to be asked for") { wire.heldPings > 0 }
+        // The stream drops with the lists on their way and resumes; the
+        // answers that come on the old one count for nothing.
+        session.client.update(state: .disconnected())
+        wire.releasePings()
+        #expect(session.roomStatus(room)?.awaitsMemberLists == true)
+        session.client.update(state: .connected(resumed: true))
+        await eventually("the lists to be asked for again") { wire.heldPings > 0 }
+        wire.releasePings()
+        await eventually("the lists") { session.roomStatus(room)?.awaitsMemberLists == false }
+        await eventually("the message to go out once the lists are in") {
+            session.drainSendQueue(room)
+            return wire.messages.contains { $0.body == "hi" }
+        }
+    }
+
+    @Test func theBanListAloneHoldsNothingUp() async throws {
+        let database = try AppDatabase.inMemory()
+        let session = try makeSession(me, database: database, mode: .app)
+        try database.joinGroupChat(room, nickname: "me")
+        try database.setRoomInfo(room, name: nil, isMembersOnly: false, isNonAnonymous: false)
+        session.reloadKnownRooms()
+        let wire = FakeWire()
+        wire.holdReplies { $0.firstChild(name: "query", xmlns: "http://jabber.org/protocol/muc#admin") != nil }
+        session.connectForTesting(wire)
+        var status = RoomStatus(phase: .joined, nickname: "me")
+        status.isSyncing = true
+        status.affiliation = .admin
+        session.updateRoom(room) { $0 = status }
+        session.didJoin(room)
+        await eventually("the catch-up to end") { session.roomStatus(room)?.isSyncing == false }
+        #expect(session.roomStatus(room)?.awaitsMemberLists == false)
     }
 }
