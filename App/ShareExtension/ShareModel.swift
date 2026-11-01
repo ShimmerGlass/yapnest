@@ -55,14 +55,14 @@ final class ShareModel {
             isLoadingItems = false
         }
         Task {
-            let result = await Task.detached { Result { try sender.recipients() } }.value
+            let result = await Task.detached { try sender.recipients() }.result
             switch result {
             case .success(let all):
                 recipients = all
                 avatarURLs = Dictionary(uniqueKeysWithValues: all.compactMap { item in sender.avatarURL(for: item).map { (item.id, $0) } })
                 if let selection, !all.contains(where: { $0.conversation.peer == selection }) { self.selection = nil }
             case .failure(let error):
-                recipientsFailure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                recipientsFailure = ServerError.userMessage(for: error)
             }
             phase = .editing
         }
