@@ -367,13 +367,15 @@ final class CallController {
     @ObservationIgnored var prepareCall: (XMPPSession, JID, Bool) async throws -> Void = { try await $0.prepareCall(to: $1, video: $2) }
 
     /// Who a call is being started to, while it waits for the connection and
-    /// for the contact to be known to take calls. The call buttons spin.
-    private(set) var startingCall: JID?
-    /// Whether that call is a video call, so only the button that was tapped spins.
-    private(set) var startingVideo = false
+    /// for the contact to be known to take calls, and whether it is a video
+    /// call, so only the button that was tapped spins.
+    private(set) var starting: (peer: JID, video: Bool)?
+
+    /// Who a call is being started to; the call buttons spin.
+    var startingCall: JID? { starting?.peer }
 
     func isStarting(_ peer: JID, video: Bool) -> Bool {
-        startingCall == peer && startingVideo == video
+        starting?.peer == peer && starting?.video == video
     }
 
     /// Whether the call buttons work: one call at a time, and a second tap
@@ -393,10 +395,9 @@ final class CallController {
     func startCall(to peer: JID, video: Bool = false) {
         DiagLog.info(.calls, "Call asked for", .bool("video", video), .value("camera", Self.cameraAuthorization()))
         guard startingCall == nil else { return }
-        startingCall = peer
-        startingVideo = video
+        starting = (peer, video)
         Task {
-            defer { startingCall = nil }
+            defer { starting = nil }
             if video, !(await cameraAccess()) {
                 DiagLog.notice(.calls, "Call not started", .value("reason", CallStartExit.noCameraAccess))
                 error = Platform.isMac
