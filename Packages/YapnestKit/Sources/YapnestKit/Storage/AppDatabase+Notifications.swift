@@ -184,8 +184,9 @@ extension AppDatabase {
             }
             let contact = message.sender == conversation.peer ? nil : try Contact.fetchOne(db, key: message.sender)
             let room = try Contact.fetchOne(db, key: conversation.peer)
-            // A contact's own name, where the room tells us who they are.
-            let author = message.sender != conversation.peer ? contact?.name ?? message.nick : message.nick
+            // A contact's own name, where the room tells us who they are: the one
+            // the user gave them, even before the server has it.
+            let author = message.sender != conversation.peer ? contact?.chosenName ?? message.nick : message.nick
             if let action { body = "\(author ?? "") \(action)" }
             return MessageNotification(
                 messageId: id, peer: conversation.peer,

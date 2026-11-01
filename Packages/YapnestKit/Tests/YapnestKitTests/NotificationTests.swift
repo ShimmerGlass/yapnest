@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import Testing
 @testable import YapnestKit
 
@@ -193,6 +194,19 @@ struct NotificationTests {
         #expect(claimed.map(\.title) == ["Cake club", "Cake club"])
         #expect(claimed.map(\.subtitle) == ["Alice Liddell", "stranger"])
         #expect(claimed.first?.content(badge: 2).threadIdentifier == room.description)
+    }
+
+    @Test func aGroupMessagesAuthorShowsAsRenamedBeforeTheServerHasTheName() throws {
+        let room = JID("cake@conference.example.org")!
+        let group = try db.joinGroupChat(room, nickname: "me", name: "Cake club")
+        let chat = try #require(try db.conversation(id: group.conversationId))
+        try db.updateRosterItem(jid: alice, name: "Alice Liddell", subscription: .both, isPending: false)
+        try db.writer.write { db in
+            try Contact.filter(key: alice).updateAll(db, Column("pendingRename").set(to: true), Column("pendingName").set(to: "Ali"))
+        }
+        _ = try db.claimNotifications()
+        try incoming("chocolate", from: alice, in: chat, nick: "ally")
+        #expect(try db.claimNotifications().map(\.subtitle) == ["Ali"])
     }
 
     @Test func quietContentMakesNoSoundAndIsMarked() {
