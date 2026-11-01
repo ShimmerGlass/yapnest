@@ -249,11 +249,11 @@ extension AppDatabase {
             .filter(Column("pendingId") != nil && Column("pendingId") != echoOf).isEmpty(db) == false {
             return true
         }
-        try Reaction.filter(Column("messageId") == messageId).filter(previous).deleteAll(db)
         // A new occupant can take the nickname a former one reacted under; the
         // key allows one row per address, nickname and emoji, so those rows
         // are theirs now. Left in place they would fail the whole write.
-        try Reaction.filter(Column("messageId") == messageId && Column("sender") == author.jid && Column("nick") == (author.nick ?? "")).deleteAll(db)
+        let sameKey = Column("sender") == author.jid && Column("nick") == (author.nick ?? "")
+        try Reaction.filter(Column("messageId") == messageId).filter(previous || sameKey).deleteAll(db)
         for emoji in emojis {
             try Reaction(messageId: messageId, sender: author.jid, nick: author.nick ?? "", emoji: emoji, occupantId: author.occupantId, pendingId: pendingId).insert(db)
         }
