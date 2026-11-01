@@ -52,7 +52,7 @@ struct BackupPolicyTests {
         #expect(!FileManager.default.fileExists(atPath: missing.path))
     }
 
-    @Test func accountFoldersAndLogsFollowTheChoiceWhenItChanges() throws {
+    @Test func accountFoldersAndLogsFollowTheChoiceWhenItChanges() async throws {
         let container = try folder()
         let account = container.appending(path: "accounts/me@example.org")
         try FileManager.default.createDirectory(at: account, withIntermediateDirectories: true)
@@ -60,14 +60,14 @@ struct BackupPolicyTests {
         let logs = SharedContainer.logs(in: container)
 
         BackupPolicy.setIncludesMessages(false, defaults: defaults, container: container)
-        #expect(try isExcluded(account))
-        #expect(try isExcluded(logs))
+        #expect(try await isExcluded(account, eventually: true))
+        #expect(try await isExcluded(logs, eventually: true))
         BackupPolicy.setIncludesMessages(true, defaults: defaults, container: container)
-        #expect(try !isExcluded(account))
-        #expect(try !isExcluded(logs))
+        #expect(try await isExcluded(account, eventually: false))
+        #expect(try await isExcluded(logs, eventually: false))
     }
 
-    @Test func aFolderMadeLaterPicksTheChoiceUpAtTheNextSweep() throws {
+    @Test func aFolderMadeLaterPicksTheChoiceUpAtTheNextSweep() async throws {
         let container = try folder()
         let defaults = defaults()
         BackupPolicy.setIncludesMessages(false, defaults: defaults, container: container)
@@ -75,7 +75,7 @@ struct BackupPolicyTests {
         try FileManager.default.createDirectory(at: later, withIntermediateDirectories: true)
         #expect(try !isExcluded(later))
         BackupPolicy.apply(defaults: defaults, container: container)
-        #expect(try isExcluded(later))
+        #expect(try await isExcluded(later, eventually: true))
     }
 
     @Test func openingAnAccountFolderAppliesTheChoice() throws {
