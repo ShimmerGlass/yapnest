@@ -254,6 +254,29 @@ struct OMEMOStoreTests {
         #expect(!OMEMOStore.verifies(signature, over: Data(), with: key))
     }
 
+    /// Device ids are 32-bit unsigned, and the store keeps them as signed.
+    @Test func ourOtherDevicesWithBigIdsAreRecognisedAsKeyHolders() throws {
+        let omemo = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
+        let big = Int32(bitPattern: 3_000_000_000)
+        let address = SignalAddress(name: me.description, deviceId: big)
+        #expect(omemo.store.save(identity: address, publicKeyData: Data([0x05] + Array(repeating: 1, count: 32))))
+        #expect(omemo.store.storeSessionRecord(Data([1]), forAddress: address))
+        let header = Element(name: "header")
+        for rid in ["3000000000", String(omemo.deviceId)] {
+            let key = Element(name: "key", cdata: "AA==")
+            key.attribute("rid", newValue: rid)
+            header.addChild(key)
+        }
+        let encrypted = Element(name: "encrypted", xmlns: OMEMOModule.XMLNS)
+        encrypted.addChild(header)
+        let stanza = Martin.Message()
+        stanza.addChild(encrypted)
+
+        let holders = omemo.keyHolders(in: stanza)
+        #expect(holders.forThisDevice)
+        #expect(holders.forOtherOwnDevices)
+    }
+
     /// A move cut short after the keychain took the key, with the key still
     /// in the database, is finished, not taken for another device.
     @Test func aMoveCutShortIsFinished() throws {

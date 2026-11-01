@@ -255,8 +255,8 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// Which of the devices `stanza` holds keys for are ours: this one, and
     /// the other devices of the account.
     func keyHolders(in stanza: Martin.Message) -> (forThisDevice: Bool, forOtherOwnDevices: Bool) {
-        let ours = String(deviceId)
-        let others = Set(store.ownDevicesToEncryptTo().map { String($0) }).subtracting([ours])
+        let ours = Int32(bitPattern: deviceId).omemoId
+        let others = Set(store.ownDevicesToEncryptTo().map(\.omemoId)).subtracting([ours])
         let rids = stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy)?.firstChild(name: "header")?
             .filterChildren(name: "key", xmlns: nil).compactMap { $0.getAttribute("rid") } ?? []
         return (rids.contains(ours), rids.contains { others.contains($0) })
