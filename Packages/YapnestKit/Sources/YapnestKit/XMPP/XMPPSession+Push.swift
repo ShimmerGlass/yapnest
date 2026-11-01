@@ -205,6 +205,10 @@ extension XMPPSession {
                 case .success, .failure(.item_not_found):
                     self.updateStalePushNodes { $0.removeAll { $0 == stale } }
                 case .failure(let error):
+                    // Not shown, even for a refusal that is final: the node is one
+                    // we replaced, so nothing the user can act on, and the relay stops pushing to it by
+                    // itself once the pushes start failing. The node stays
+                    // listed, so the next connect asks again.
                     self.logger.error("Couldn't disable the old push node, will retry: \(error)")
                 }
             })
