@@ -112,8 +112,9 @@ extension XMPPSession {
                     // A change the user has since replaced isn't theirs to retry.
                     return dropped ? .warn : .skip
                 } catch {
+                    // Still queued, so going on would choose it again at once.
                     logger.error("Failed to put back a block the server refused: \(error)")
-                    return .warn
+                    return .stop
                 }
             },
             warn: { postBlockWarning($0, error: $1) },

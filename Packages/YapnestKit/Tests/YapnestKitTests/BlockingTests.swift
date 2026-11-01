@@ -147,6 +147,19 @@ struct QueuedBlockTests {
         #expect(session.warnings.current.isEmpty)
     }
 
+    @Test func aRefusedChangeThatCantBeDroppedIsNotSentOverAndOver() async throws {
+        try await session.block(spammer)
+        try await db.writer.write {
+            try $0.execute(sql: "CREATE TRIGGER failDelete BEFORE DELETE ON pendingBlockChange BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+        }
+        connect { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
+        session.sendPendingBlocks()
+        #expect(await eventually { sent.count >= 1 })
+        _ = await eventually(timeout: 1) { false }
+        #expect(sent.count == 1)
+        #expect(queued.count == 1)
+    }
+
     @Test func aRefusedUnblockKeepsThemBlocked() async throws {
         try db.setBlocklist([spammer])
         try await session.unblock(spammer)
