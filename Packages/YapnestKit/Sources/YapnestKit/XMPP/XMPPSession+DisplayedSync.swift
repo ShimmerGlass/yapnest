@@ -94,9 +94,12 @@ extension XMPPSession {
                     continue
                 }
                 if let held = lock.withLock({ $0.publishedDisplayed[conversation.peer] }) {
-                    // A state for a message we don't have may be newer than ours; a room's
-                    // catch-up stores it, and the next connect decides again.
+                    // A state for a message we don't have may be newer than ours. It is
+                    // noted before the lookup so a message stored in between isn't missed;
+                    // storing the message starts another round.
+                    lock.withLock { _ = $0.readStatesAwaitingMessage.insert(conversation.peer) }
                     if try !database.hasMessage(conversationId: id, serverId: held) { continue }
+                    lock.withLock { _ = $0.readStatesAwaitingMessage.remove(conversation.peer) }
                     // One that reaches as far as ours, ours included, is not ours to publish over.
                     if try database.readState(conversationId: id, naming: held) {
                         try database.clearReadStateOwed(conversationId: id, ifNewest: held)
@@ -125,6 +128,14 @@ extension XMPPSession {
     }
 
     static let concurrentReadStatePublishes = 4
+
+    /// A message stored for a chat whose owed state names a message we lacked
+    /// may be that message. Chats owing nothing cost one set lookup.
+    func publishReadStateAwaiting(_ result: IngestResult, peer: JID) {
+        guard result.newMessage != nil,
+              lock.withLock({ $0.readStatesAwaitingMessage.remove(peer) != nil }) else { return }
+        publishOwedReadStates()
+    }
 
     private func publish(stanzaId: String, conversationId: Int64, route: Route) async {
         let peer = route.peer

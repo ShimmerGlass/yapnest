@@ -356,6 +356,19 @@ struct OwedReadStateTests {
         #expect(owed)
     }
 
+    @Test func aStateForAMessageThatArrivesLaterIsDecidedWithoutAnotherConnect() async throws {
+        try readOffline()
+        serve(holding: [DisplayedState(peer: alice, stanzaId: "unknown", by: me)])
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(publishes().isEmpty)
+        let newer: Martin.Message = parseStanza("<message from='alice@example.org/phone' type='chat' id='new'><body>new</body><stanza-id xmlns='urn:xmpp:sid:0' by='me@example.org' id='unknown'/></message>")
+        session.handle(newer, source: .live)
+        #expect(await eventually { !owed })
+        #expect(publishes().isEmpty)
+    }
+
     @Test func aNewerMessageOfOursNamedByAnotherDeviceIsNotPublishedOver() async throws {
         try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "reply",
                               timestamp: Date(timeIntervalSince1970: 10), serverId: "mine"))

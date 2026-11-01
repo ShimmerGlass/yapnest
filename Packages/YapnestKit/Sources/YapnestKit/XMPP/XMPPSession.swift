@@ -415,6 +415,9 @@ public final class XMPPSession: @unchecked Sendable {
         /// The last read message the server holds for each chat, as far as we
         /// know (XEP-0490): from our publishes, the fetch and notifications.
         var publishedDisplayed: [JID: String] = [:]
+        /// Chats owing a read state while the state the server holds names a
+        /// message we haven't stored. Storing a message for one starts a round.
+        var readStatesAwaitingMessage: Set<JID> = []
         /// Where our settings node stands this session: see `SettingsSyncState`.
         var settingsSync = SettingsSyncState()
         /// Contact requests the server sent on this session.
@@ -1508,6 +1511,7 @@ public final class XMPPSession: @unchecked Sendable {
                     $0.uploadService = nil
                     $0.mucService = nil
                     $0.publishedDisplayed = [:]
+                    $0.readStatesAwaitingMessage = []
                     $0.displayedFetches = 0
                     $0.settingsSync.startSession()
                     $0.repeatedContactRequests = []
@@ -1828,6 +1832,7 @@ public final class XMPPSession: @unchecked Sendable {
         noteChatStates(of: inbound, source: source)
         if case .archive = source {
             bufferArchived(inbound, query: query) { [weak self, inbound] result in
+                self?.publishReadStateAwaiting(result, peer: inbound.peer)
                 guard !isHistory else {
                     // Old, read and long answered: only a retraction still
                     // has something to clean up.
@@ -1847,6 +1852,7 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// What follows storing a 1:1 stanza.
     private func stored(_ inbound: InboundMessage, _ result: IngestResult, source: InboundMessage.Source) {
+        publishReadStateAwaiting(result, peer: inbound.peer)
         if let message = result.editedMessage { events.send(.editedMessage(message)) }
         if let message = result.newMessage {
             events.send(.newMessage(message))

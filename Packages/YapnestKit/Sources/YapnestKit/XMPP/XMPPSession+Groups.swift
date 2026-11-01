@@ -1623,6 +1623,7 @@ extension XMPPSession {
     }
 
     func storedRoomMessage(_ inbound: InboundMessage, _ result: IngestResult, isPrivate: Bool) {
+        publishReadStateAwaiting(result, peer: inbound.peer)
         if let attachment = result.retractedAttachment { attachments.remove(attachment) }
         if let message = result.editedMessage { events.send(.editedMessage(message)) }
         if let message = result.newMessage {
