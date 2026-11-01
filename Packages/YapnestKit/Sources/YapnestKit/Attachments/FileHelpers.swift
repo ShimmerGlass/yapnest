@@ -7,6 +7,11 @@ extension URL {
     public var fileSize: Int64 {
         Int64((try? resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
     }
+
+    /// Whether this is a folder or a package, false if it can't be read.
+    public var isDirectory: Bool {
+        (try? resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
 }
 
 extension FileManager {

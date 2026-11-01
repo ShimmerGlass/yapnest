@@ -116,7 +116,7 @@ struct SharedItemLoader: Sendable {
         } catch let tooLarge as ProviderCopy.TooLarge {
             return .unsupported(name: tooLarge.name, reason: String(localized: "Too large to send"))
         } catch let folder as ProviderCopy.IsFolder {
-            return .unsupported(name: folder.name, reason: String(localized: "Folders can't be sent"))
+            return .unsupported(name: folder.name, reason: ProviderCopy.foldersReason)
         } catch {
             return .unsupported(name: provider.suggestedName ?? "", reason: String(localized: "Couldn't be read"))
         }
@@ -142,8 +142,8 @@ struct SharedItemLoader: Sendable {
 
     private static func copy(_ url: URL, into folder: URL, isPhoto: Bool) -> SharedItem.Content {
         // A folder's size is its entry's, near nothing, and it would be copied whole.
-        guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true else {
-            return .unsupported(name: url.lastPathComponent, reason: String(localized: "Folders can't be sent"))
+        guard !url.isDirectory else {
+            return .unsupported(name: url.lastPathComponent, reason: ProviderCopy.foldersReason)
         }
         let size = url.fileSize
         guard size <= maxFileSize else {

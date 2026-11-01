@@ -18,6 +18,9 @@ enum ProviderCopy {
         let name: String
     }
 
+    /// Why a folder is turned away, as the share sheet words it.
+    nonisolated static var foldersReason: String { String(localized: "Folders can't be sent") }
+
     /// The name to give the copy: the one the sender suggests, with the
     /// file's extension unless it already ends in it.
     nonisolated static func copyName(suggested: String?, file: URL) -> String {
@@ -37,7 +40,7 @@ enum ProviderCopy {
                     return
                 }
                 let name = copyName(suggested: provider.suggestedName, file: url)
-                if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                if url.isDirectory {
                     continuation.resume(throwing: IsFolder(name: name))
                     return
                 }
