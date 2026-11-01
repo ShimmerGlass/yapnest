@@ -332,6 +332,8 @@ final class FakeTransport: FetchTransport, @unchecked Sendable {
     /// What each host answers, one entry per connection to it, in order.
     var scripts: [String: [[Data]]] = [:]
     var hangs = false
+    /// How long a lookup takes to answer.
+    var resolveDelay: TimeInterval = 0
     var remote: ((IPAddress) -> IPAddress)?
     /// What connecting to an address fails with.
     var startErrors: [IPAddress: FetchError] = [:]
@@ -342,6 +344,7 @@ final class FakeTransport: FetchTransport, @unchecked Sendable {
 
     func resolve(_ host: String, timeout: TimeInterval) async throws -> [IPAddress] {
         lock.withLock { lookups.append(host) }
+        if resolveDelay > 0 { try await Task.sleep(for: .seconds(resolveDelay)) }
         guard let answer = dns[host] else { throw FetchError.unreachable("NXDOMAIN") }
         return answer
     }
@@ -636,6 +639,22 @@ struct SafeFetcherTests {
         transport.hangs = true
         let fetcher = SafeFetcher(transport: transport, requestTimeout: 0.2, totalTimeout: 1)
         await #expect(throws: FetchError.timedOut) { try await fetcher.fetch(URL(string: "https://site.example/")!, limits: Self.limits) }
+    }
+
+    @Test func aHopsTimeoutIncludesTheLookup() async {
+        transport.dns["site.example"] = [ip("93.184.216.34")]
+        transport.resolveDelay = 0.5
+        transport.hangs = true
+        let fetcher = SafeFetcher(transport: transport, requestTimeout: 0.6, totalTimeout: 30)
+        // Without the fix the hop takes about 1.1 s. A busy machine can make
+        // any one run late, so the best of three counts.
+        var fastest = Duration.seconds(100)
+        for _ in 0..<3 {
+            let start = ContinuousClock.now
+            await #expect(throws: FetchError.timedOut) { try await fetcher.fetch(URL(string: "https://site.example/")!, limits: Self.limits) }
+            fastest = min(fastest, ContinuousClock.now - start)
+        }
+        #expect(fastest < .seconds(0.9))
     }
 
     @Test func totalTimeoutSpansRedirects() async {

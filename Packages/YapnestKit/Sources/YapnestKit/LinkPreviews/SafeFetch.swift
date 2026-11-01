@@ -186,6 +186,9 @@ final class SafeFetcher: LinkFetching {
     }
 
     private func fetchOnce(_ url: URL, limits: FetchLimits, timeout: TimeInterval) async throws -> FetchedResource {
+        // The lookup counts against the hop's timeout, or a slow resolver
+        // and a slow server would take twice the budget between them.
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
         let target = try FetchTarget(url)
 
         let addresses = try await AddressVetting.addresses(for: target.host, transport: transport, timeout: timeout)
@@ -196,7 +199,6 @@ final class SafeFetcher: LinkFetching {
         // swallows packets would use up the whole timeout before the next
         // was tried; a connection that failed or didn't answer in time goes
         // on to the next, and a request that timed out doesn't.
-        let deadline = ProcessInfo.processInfo.systemUptime + timeout
         var failure = FetchError.unreachable("no address")
         for (index, address) in addresses.enumerated() {
             let remaining = deadline - ProcessInfo.processInfo.systemUptime
