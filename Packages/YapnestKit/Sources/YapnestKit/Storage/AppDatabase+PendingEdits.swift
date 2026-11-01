@@ -108,9 +108,10 @@ extension AppDatabase {
         // One held for its device's check is the exception: deleting it would
         // delete the hold, and the correction with it. Once the device is
         // vouched for, the decrypted correction applies to the original.
-        if message.encryption != .none {
-            let held = Set(try HeldGroupMessage.filter(corrections.compactMap(\.0.standInId).contains(Column("messageId"))).fetchAll(db).map(\.messageId))
-            applied += corrections.map(\.0).filter { $0.encryption == .omemoUndecryptable && !held.contains($0.standInId ?? -1) }
+        let undecryptable = corrections.map(\.0).filter { $0.encryption == .omemoUndecryptable }
+        if message.encryption != .none, !undecryptable.isEmpty {
+            let held = Set(try HeldGroupMessage.filter(undecryptable.compactMap(\.standInId).contains(Column("messageId"))).fetchAll(db).map(\.messageId))
+            applied += undecryptable.filter { !held.contains($0.standInId ?? -1) }
         }
         // A stand-in that wasn't applied stays a message of its own.
         try deleteStandIns(db, applied)
