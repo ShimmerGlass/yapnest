@@ -93,4 +93,61 @@ struct SharedItemLoaderTests {
         #expect(text == "https://example.com/page")
         #expect(isLink)
     }
+
+    @Test func aFolderSharedByItsAddressIsLeftOut() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("inside".utf8).write(to: folder.appending(path: "a.txt"))
+        let provider = NSItemProvider()
+        provider.registerItem(forTypeIdentifier: UTType.fileURL.identifier) { completion, _, _ in completion?(folder as NSURL, nil) }
+        let loader = try loader()
+
+        let loaded = await loader.load([item(provider)])
+
+        guard case .unsupported(let name, _) = try #require(loaded.first).content else { Issue.record("not left out"); return }
+        #expect(name == folder.lastPathComponent)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: loader.folder.path).isEmpty)
+    }
+
+    @Test func aFileAddressSharedAsALinkIsCopiedAsAFile() async throws {
+        let source = try makeTemporaryFile("notes.txt")
+        let loader = try loader()
+
+        let loaded = await loader.load([item(provider(source as NSURL, as: .url))])
+
+        guard case .file(let file, _) = try #require(loaded.first).content else { Issue.record("sent as a link"); return }
+        #expect(file.name == "notes.txt")
+        #expect(file.url.path.hasPrefix(loader.folder.path))
+    }
+
+    @Test func textHandedOverAsDataIsText() async throws {
+        let loaded = try await loader().load([item(provider(Data("bytes of text".utf8) as NSData, as: .plainText))])
+
+        guard case .text(let text, _) = try #require(loaded.first).content else { Issue.record("not text"); return }
+        #expect(text == "bytes of text")
+    }
+
+    @Test func textThatCantBeReadStillShowsATile() async throws {
+        let loaded = try await loader().load([item(provider(Data([0xFF, 0xFE, 0xFD]) as NSData, as: .plainText))])
+
+        guard case .unsupported = try #require(loaded.first).content else { Issue.record("dropped without a tile"); return }
+    }
+
+    @Test func aCancelledLoadCopiesNothing() async throws {
+        let source = try makeTemporaryFile("late.txt")
+        let late = NSItemProvider()
+        late.registerItem(forTypeIdentifier: UTType.fileURL.identifier) { completion, _, _ in completion?(source as NSURL, nil) }
+        let loader = try loader()
+        let extensionItem = item(late)
+        nonisolated(unsafe) let items = [extensionItem]
+        let task = Task {
+            while !Task.isCancelled { await Task.yield() }
+            return await loader.load(items)
+        }
+
+        task.cancel()
+
+        #expect(await task.value.isEmpty)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: loader.folder.path).isEmpty)
+    }
 }

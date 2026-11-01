@@ -66,4 +66,35 @@ struct ProviderCopyTests {
         #expect(AttachmentIntake.kind(of: picture) == .image)
         #expect(AttachmentIntake.kind(of: text) == .file)
     }
+
+    @Test func aSuggestedNameThatHasTheExtensionDoesNotGetItTwice() async throws {
+        let provider = try #require(NSItemProvider(contentsOf: try makeTemporaryFile("tmp-1234.txt")))
+        provider.suggestedName = "Quarterly report.txt"
+        let copy = try await ProviderCopy.copyOut(provider, kind: .file, under: try folder())
+        #expect(copy.lastPathComponent == "Quarterly report.txt")
+    }
+
+    @Test func theCopysNameKeepsTheSuggestionAndAddsAMissingExtension() {
+        let file = URL(filePath: "/tmp/PDF document.pdf")
+        #expect(ProviderCopy.copyName(suggested: "Report", file: file) == "Report.pdf")
+        #expect(ProviderCopy.copyName(suggested: "Report.PDF", file: file) == "Report.PDF")
+        #expect(ProviderCopy.copyName(suggested: "Version 1.2", file: file) == "Version 1.2.pdf")
+        #expect(ProviderCopy.copyName(suggested: nil, file: file) == "PDF document.pdf")
+        #expect(ProviderCopy.copyName(suggested: "Report", file: URL(filePath: "/tmp/data")) == "Report")
+    }
+
+    @Test func aFolderIsRefused() async throws {
+        let folder = try folder()
+        try Data("inside".utf8).write(to: folder.appending(path: "a.txt"))
+        let provider = NSItemProvider()
+        provider.registerFileRepresentation(forTypeIdentifier: UTType.folder.identifier, fileOptions: [], visibility: .all) { completion in
+            completion(folder, false, nil)
+            return nil
+        }
+        let destination = try self.folder()
+        await #expect(throws: ProviderCopy.IsFolder.self) {
+            try await ProviderCopy.copyOut(provider, kind: .file, under: destination)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: destination.path).isEmpty)
+    }
 }

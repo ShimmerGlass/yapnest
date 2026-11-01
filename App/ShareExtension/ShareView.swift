@@ -55,15 +55,26 @@ struct ShareView: View {
             } description: {
                 Text("\(reason) The message is in Yapnest, where you can try again.")
             } actions: {
-                Button("Done") { model.acknowledgeFailure() }
+                Button("Done") { model.acknowledge() }
                     .buttonStyle(.borderedProminent)
             }
-        case .done(.queued):
+        case .done(.queued(let reason)):
+            ContentUnavailableView {
+                Label("Saved", systemImage: "clock.badge.checkmark")
+            } description: {
+                Text("\(reason) Yapnest will try again the next time it opens.")
+            } actions: {
+                Button("Done") { model.acknowledge() }
+                    .buttonStyle(.borderedProminent)
+            }
+        case .done(.handedToApp):
+            // The server hasn't been reached yet; Yapnest, which holds the
+            // connection, sends it now.
             ContentUnavailableView(
-                "Saved", systemImage: "clock.badge.checkmark",
-                description: Text("Yapnest will send it the next time it opens."),
+                "Yapnest will send it", systemImage: "paperplane.circle.fill",
+                description: Text("It's in Yapnest, which is sending it now."),
             )
-        case .done:
+        case .done(.sent):
             ContentUnavailableView("Sent", systemImage: "checkmark.circle.fill")
         }
     }
@@ -73,7 +84,7 @@ struct ShareView: View {
             let visible = model.visibleRecipients
             List {
                 Section {
-                    SharedItemsPreview(items: model.items)
+                    SharedItemsPreview(items: model.items, isLoading: model.isLoadingItems)
                     TextField("Add a message…", text: $model.comment, axis: .vertical)
                         .lineLimit(1...4)
                 }
@@ -87,7 +98,10 @@ struct ShareView: View {
                         .buttonStyle(.plain)
                         .id(item.conversation.peer)
                     }
-                    if visible.isEmpty {
+                    if let failure = model.recipientsFailure {
+                        Text("Couldn't load your chats. \(failure)")
+                            .foregroundStyle(.secondary)
+                    } else if visible.isEmpty {
                         Text(model.query.isEmpty ? "No chats yet." : "No matches.")
                             .foregroundStyle(.secondary)
                     }
@@ -96,7 +110,8 @@ struct ShareView: View {
             .searchable(text: $model.query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
             .disabled(isSending)
             .overlay { if case .sending(let sent, let total) = model.phase { SendingOverlay(sent: sent, total: total) } }
-            .onChange(of: model.recipients.count) {
+            // Also on appearing: the chats are read before the form shows.
+            .onChange(of: model.recipients.count, initial: true) {
                 if let selection = model.selection { proxy.scrollTo(selection, anchor: .center) }
             }
         }
@@ -144,6 +159,7 @@ private struct SendingOverlay: View {
 /// Thumbnails of what's being shared, and its text or link.
 private struct SharedItemsPreview: View {
     let items: [SharedItem]
+    let isLoading: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -172,7 +188,9 @@ private struct SharedItemsPreview: View {
                     .font(.subheadline)
                 }
             }
-            if items.isEmpty {
+            if isLoading {
+                ProgressView()
+            } else if items.isEmpty {
                 Text("Nothing here can be sent.")
                     .foregroundStyle(.secondary)
             }

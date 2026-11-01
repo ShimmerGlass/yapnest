@@ -13,6 +13,20 @@ enum ProviderCopy {
         let name: String
     }
 
+    /// The provider offered a folder or a package, which can't be sent.
+    struct IsFolder: Error {
+        let name: String
+    }
+
+    /// The name to give the copy: the one the sender suggests, with the
+    /// file's extension unless it already ends in it.
+    nonisolated static func copyName(suggested: String?, file: URL) -> String {
+        guard let suggested else { return file.lastPathComponent }
+        let ext = file.pathExtension
+        if ext.isEmpty || suggested.lowercased().hasSuffix("." + ext.lowercased()) { return suggested }
+        return suggested + "." + ext
+    }
+
     /// Copies the provider's file of `type` into a folder of its own under
     /// `folder`, named as the sender suggests when it does.
     nonisolated(nonsending) static func copy(from provider: NSItemProvider, type: UTType, under folder: URL, maxSize: Int64? = nil) async throws -> URL {
@@ -22,7 +36,11 @@ enum ProviderCopy {
                     continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown))
                     return
                 }
-                let name = provider.suggestedName.map { url.pathExtension.isEmpty ? $0 : $0 + "." + url.pathExtension } ?? url.lastPathComponent
+                let name = copyName(suggested: provider.suggestedName, file: url)
+                if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                    continuation.resume(throwing: IsFolder(name: name))
+                    return
+                }
                 if let maxSize, url.fileSize > maxSize {
                     continuation.resume(throwing: TooLarge(name: name))
                     return
@@ -50,7 +68,7 @@ enum ProviderCopy {
         if let type {
             do {
                 return try await copy(from: provider, type: type, under: folder, maxSize: maxSize)
-            } catch where kind != .image || error is TooLarge {
+            } catch where kind != .image || error is TooLarge || error is IsFolder {
                 throw error
             } catch {}
         }

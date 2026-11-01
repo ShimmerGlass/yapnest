@@ -13,24 +13,14 @@ final class ShareModel {
         case editing
         /// With how many messages the server has, of how many.
         case sending(sent: Int, total: Int)
-        /// Ended without the user needing to do anything more.
-        case done(Done)
-    }
-
-    enum Done: Equatable {
-        case sent
-        /// Written, and Yapnest, which is running and holds the session, has
-        /// been told to send it now.
-        case handedToApp
-        /// Written, to be sent by Yapnest when it next opens.
-        case queued
-        /// Written, but a message failed. It waits in Yapnest, where it can
-        /// be retried.
-        case failed(String)
+        /// Ended: the messages are written, and the user reads how it went.
+        case done(ShareEnding)
     }
 
     private(set) var phase = Phase.loading
     private(set) var items: [SharedItem] = []
+    /// The files are still being copied.
+    private(set) var isLoadingItems = true
     private(set) var recipients: [ChatListItem] = []
     private(set) var avatarURLs: [Int64: URL] = [:]
     var comment = ""
@@ -38,6 +28,8 @@ final class ShareModel {
     var selection: JID?
     /// Why the last attempt failed, to show in an alert.
     var failure: String?
+    /// Why the chats couldn't be listed, so an empty list isn't mistaken for no chats.
+    private(set) var recipientsFailure: String?
 
     /// Ends the extension's request.
     var finish: () -> Void = {}
@@ -45,6 +37,7 @@ final class ShareModel {
 
     private let sender: ShareSender?
     private let folder = SharedItemLoader.makeFolder()
+    private var loading: Task<Void, Never>?
 
     init(items extensionItems: [NSExtensionItem], suggested: JID?) {
         sender = ShareSender.current()
@@ -55,14 +48,22 @@ final class ShareModel {
         }
         nonisolated(unsafe) let extensionItems = extensionItems
         let folder = folder
+        // The chats show as soon as they are read: copying a big file takes
+        // longer, and the user can pick who to send to meanwhile.
+        loading = Task {
+            items = await SharedItemLoader(folder: folder).load(extensionItems)
+            isLoadingItems = false
+        }
         Task {
-            async let loaded = SharedItemLoader(folder: folder).load(extensionItems)
-            async let chats = Task.detached { try? sender.recipients() }.value
-            items = await loaded
-            let all = await chats ?? []
-            recipients = all
-            avatarURLs = Dictionary(uniqueKeysWithValues: all.compactMap { item in sender.avatarURL(for: item).map { (item.id, $0) } })
-            if let selection, !all.contains(where: { $0.conversation.peer == selection }) { self.selection = nil }
+            let result = await Task.detached { Result { try sender.recipients() } }.value
+            switch result {
+            case .success(let all):
+                recipients = all
+                avatarURLs = Dictionary(uniqueKeysWithValues: all.compactMap { item in sender.avatarURL(for: item).map { (item.id, $0) } })
+                if let selection, !all.contains(where: { $0.conversation.peer == selection }) { self.selection = nil }
+            case .failure(let error):
+                recipientsFailure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
             phase = .editing
         }
     }
@@ -86,7 +87,7 @@ final class ShareModel {
     }
 
     var canSend: Bool {
-        selection != nil && phase == .editing && !content.items().isEmpty
+        selection != nil && phase == .editing && !isLoadingItems && !content.items().isEmpty
     }
 
     func send() {
@@ -97,26 +98,17 @@ final class ShareModel {
             let outcome = await sender.send(content, to: peer) { sent, total in
                 Task { @MainActor in self.progressed(sent, of: total) }
             }
-            switch outcome {
-            case .sent:
-                phase = .done(.sent)
-            case .handedToApp:
-                phase = .done(.handedToApp)
-            case .queued:
-                phase = .done(.queued)
-            case .failed(let reason):
+            guard let ending = ShareEnding(outcome) else {
                 // Nothing was written, so trying again is safe.
-                failure = reason
+                if case .failed(let reason) = outcome { failure = reason }
                 phase = .editing
                 return
-            case .failedInApp(let reason):
-                // Sending again would write everything anew, so the sheet
-                // stays up until the user has read this.
-                phase = .done(.failed(reason))
-                return
             }
-            // The preview stays up a moment, so the user sees it went.
-            try? await Task.sleep(for: .milliseconds(phase == .done(.queued) ? 2200 : 700))
+            phase = .done(ending)
+            // The preview stays up a moment, so the user sees it went. Where
+            // there is a reason to read, it waits for Done.
+            guard let linger = ending.linger else { return }
+            try? await Task.sleep(for: linger)
             done()
         }
     }
@@ -126,16 +118,26 @@ final class ShareModel {
     }
 
     func dismiss() {
-        try? FileManager.default.removeItem(at: folder)
-        cancel()
+        Task {
+            await stopLoading()
+            cancel()
+        }
     }
 
-    /// For "Not Sent": the messages are already in Yapnest, so the request is
-    /// complete rather than cancelled.
-    func acknowledgeFailure() { done() }
+    /// For the endings that wait for a tap: the messages are already in
+    /// Yapnest, so the request is complete rather than cancelled.
+    func acknowledge() { done() }
 
     private func done() {
         try? FileManager.default.removeItem(at: folder)
         finish()
+    }
+
+    /// Removes the folder only once the loader has stopped writing to it,
+    /// which would otherwise leave copies behind.
+    private func stopLoading() async {
+        loading?.cancel()
+        await loading?.value
+        try? FileManager.default.removeItem(at: folder)
     }
 }

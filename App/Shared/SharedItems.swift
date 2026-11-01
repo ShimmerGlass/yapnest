@@ -47,6 +47,8 @@ struct SharedItemLoader: Sendable {
         var loaded: [SharedItem] = []
         for item in items {
             for provider in item.attachments ?? [] {
+                // The sheet was closed: nothing more is copied into a folder that is about to go.
+                if Task.isCancelled { return [] }
                 if let content = await load(provider) { loaded.append(SharedItem(content: content)) }
             }
         }
@@ -75,16 +77,19 @@ struct SharedItemLoader: Sendable {
         }
         if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
             if let url = try? await provider.loadItem(forTypeIdentifier: UTType.url.identifier) as? URL {
-                return .text(url.absoluteString, isLink: true)
+                // A file's address means nothing to whoever gets it.
+                return url.isFileURL ? copyFile(at: url) : .text(url.absoluteString, isLink: true)
             }
         }
         // A text file from the Files app may offer only its text type; it is a
         // file to send, which the fallback below does.
         if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier), !AttachmentIntake.isFileBacked(provider) {
-            if let text = try? await provider.loadItem(forTypeIdentifier: UTType.plainText.identifier) as? String {
+            // Some apps hand the text over as its UTF-8 bytes.
+            let loaded = try? await provider.loadItem(forTypeIdentifier: UTType.plainText.identifier)
+            if let text = (loaded as? String) ?? (loaded as? Data).flatMap({ String(data: $0, encoding: .utf8) }) {
                 return .text(text, isLink: false)
             }
-            return nil
+            return .unsupported(name: provider.suggestedName ?? "", reason: String(localized: "Couldn't be read"))
         }
         if types.contains(where: { $0.conforms(to: .data) }) {
             return await fileOut(of: provider, kind: .file)
@@ -110,6 +115,8 @@ struct SharedItemLoader: Sendable {
             return .file(.init(url: url, name: url.lastPathComponent, isPhoto: isPhoto), size: url.fileSize)
         } catch let tooLarge as ProviderCopy.TooLarge {
             return .unsupported(name: tooLarge.name, reason: String(localized: "Too large to send"))
+        } catch let folder as ProviderCopy.IsFolder {
+            return .unsupported(name: folder.name, reason: String(localized: "Folders can't be sent"))
         } catch {
             return .unsupported(name: provider.suggestedName ?? "", reason: String(localized: "Couldn't be read"))
         }
@@ -118,6 +125,10 @@ struct SharedItemLoader: Sendable {
     /// A file shared by its address, from the Files app or the Finder.
     private func fileFromURL(of provider: NSItemProvider) async -> SharedItem.Content? {
         guard let url = try? await provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) as? URL, url.isFileURL else { return nil }
+        return copyFile(at: url)
+    }
+
+    private func copyFile(at url: URL) -> SharedItem.Content {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let type = UTType(filenameExtension: url.pathExtension)
@@ -130,6 +141,10 @@ struct SharedItemLoader: Sendable {
     }
 
     private static func copy(_ url: URL, into folder: URL, isPhoto: Bool) -> SharedItem.Content {
+        // A folder's size is its entry's, near nothing, and it would be copied whole.
+        guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true else {
+            return .unsupported(name: url.lastPathComponent, reason: String(localized: "Folders can't be sent"))
+        }
         let size = url.fileSize
         guard size <= maxFileSize else {
             return .unsupported(name: url.lastPathComponent, reason: String(localized: "Too large to send"))
