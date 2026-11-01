@@ -188,7 +188,8 @@ extension AppDatabase {
     /// Moves our message `remoteId` to the status an error naming it leads to.
     /// Only while it is pending or sent: once the recipient's side confirmed
     /// it, an error naming it is not to be believed.
-    static func bounceOutgoing(_ db: Database, conversationId: Int64, remoteId: String, to status: Message.Status, error: String?) throws {
+    @discardableResult
+    static func bounceOutgoing(_ db: Database, conversationId: Int64, remoteId: String, to status: Message.Status, error: String?) throws -> Bool {
         try updateOutgoing(db, conversationId: conversationId, remoteId: remoteId) { message in
             guard message.status == .pending || message.status == .sent else { return false }
             message.status = status
@@ -198,9 +199,11 @@ extension AppDatabase {
     }
 
     /// Saves our message `remoteId` as `change` leaves it, if it returns true.
-    static func updateOutgoing(_ db: Database, conversationId: Int64, remoteId: String, _ change: (inout Message) -> Bool) throws {
-        guard var message = try outgoingMessage(db, conversationId: conversationId, remoteId: remoteId), change(&message) else { return }
+    @discardableResult
+    static func updateOutgoing(_ db: Database, conversationId: Int64, remoteId: String, _ change: (inout Message) -> Bool) throws -> Bool {
+        guard var message = try outgoingMessage(db, conversationId: conversationId, remoteId: remoteId), change(&message) else { return false }
         try message.update(db)
+        return true
     }
 
     /// Replaces `author`'s reactions on the referenced message, as XEP-0444

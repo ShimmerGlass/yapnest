@@ -210,6 +210,14 @@ struct ServerBounceTests {
         #expect(after.error == nil)
     }
 
+    @Test func aPassingBounceOfAMessageThisSessionNeverSentIsSentThen() throws {
+        bounce("m1", type: "wait", condition: "recipient-unavailable")
+        session.drainSendQueue(alice)
+
+        #expect(wire.messages.filter { $0.id == "m1" }.count == 1)
+        #expect(try stored().error == nil)
+    }
+
     @Test func aFinalBounceOfAMessageFailsItWithTheServersWords() throws {
         let sent = try session.send("hi", to: alice)
         session.drainSendQueue(alice)

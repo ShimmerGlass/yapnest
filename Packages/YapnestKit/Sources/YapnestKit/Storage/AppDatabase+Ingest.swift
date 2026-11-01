@@ -16,6 +16,9 @@ public struct IngestResult: Sendable, Equatable {
     public var chatState: InboundMessage.ChatState?
     /// The file of a message that was just retracted, to delete.
     public var retractedAttachment: Attachment?
+    /// Our message that an error which may pass just made pending again, and
+    /// that nothing else is going to send this session.
+    public var repended: Bool = false
 
     public static let ignored = IngestResult()
 }
@@ -72,7 +75,7 @@ extension AppDatabase {
                 // itself. One it doesn't know (the app was relaunched since) must
                 // still not fail the message for an error that passes by itself.
                 if inbound.bounce?.isPassing == true {
-                    try Self.bounceOutgoing(db, conversationId: conversationId, remoteId: id, to: .pending, error: nil)
+                    result.repended = try Self.bounceOutgoing(db, conversationId: conversationId, remoteId: id, to: .pending, error: nil)
                 } else {
                     try Self.bounceOutgoing(db, conversationId: conversationId, remoteId: id, to: .failed, error: inbound.errorText)
                 }

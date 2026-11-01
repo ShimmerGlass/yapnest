@@ -1856,6 +1856,11 @@ public final class XMPPSession: @unchecked Sendable {
     private func stored(_ inbound: InboundMessage, _ result: IngestResult, source: InboundMessage.Source) {
         publishReadStateAwaiting(inbound)
         if let message = result.editedMessage { events.send(.editedMessage(message)) }
+        // Connecting sent what was pending already, so this one waits for no one else.
+        if result.repended, let id = inbound.id {
+            lock.withLock { $0.sends.release(id) }
+            resendAfterBounce(passes: 1)
+        }
         if let message = result.newMessage {
             events.send(.newMessage(message))
             if !inbound.isOutgoing { askAvatarIfFirstContact(inbound.peer) }
