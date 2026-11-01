@@ -20,11 +20,9 @@ extension AppDatabase {
         try reader.read { db in try GroupInvitation.fetchOne(db, key: room) }
     }
 
-    static let groupInvitationTables: [any DatabaseRegionConvertible] = [Table(GroupInvitation.databaseTableName)]
-
     /// Invitations waiting for an answer, newest first.
     public func observeGroupInvitations() -> ValueObservation<ValueReducers.Fetch<[GroupInvitation]>> {
-        ValueObservation.tracking(regions: Self.groupInvitationTables, fetch: Self.groupInvitations)
+        ValueObservation.trackingConstantRegion(Self.groupInvitations)
     }
 
     static func groupInvitations(_ db: Database) throws -> [GroupInvitation] {

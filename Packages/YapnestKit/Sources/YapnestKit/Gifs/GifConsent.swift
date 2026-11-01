@@ -4,7 +4,7 @@ import GRDB
 extension AppDatabase {
     /// Whether the GIF picker is offered. On unless turned off.
     public func observeGifsEnabled() -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<Bool>>> {
-        ValueObservation.tracking(regions: Self.settingTables) { db in try Self.flag(db, .gifs, default: true) }
+        ValueObservation.trackingConstantRegion { db in try Self.flag(db, .gifs, default: true) }
         .removeDuplicates()
     }
 }

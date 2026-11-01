@@ -97,13 +97,11 @@ extension AppDatabase {
         try reader.read { db in try Conversation.fetchOne(db, key: id) }
     }
 
-    static let archivedCountTables: [any DatabaseRegionConvertible] = [Table(Conversation.databaseTableName)]
-
     static func archivedCount(_ db: Database) throws -> Int {
         try Conversation.filter(Column("isArchived") == true).fetchCount(db)
     }
 
     public func observeArchivedCount() -> ValueObservation<ValueReducers.Fetch<Int>> {
-        ValueObservation.tracking(regions: Self.archivedCountTables, fetch: Self.archivedCount)
+        ValueObservation.trackingConstantRegion(Self.archivedCount)
     }
 }

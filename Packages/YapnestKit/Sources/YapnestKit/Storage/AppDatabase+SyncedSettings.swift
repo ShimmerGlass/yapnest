@@ -208,13 +208,17 @@ extension AppDatabase {
         try markDirty(db, item)
     }
 
-    /// Every table the publisher's query for the items to publish reads.
-    /// Listed rather than worked out by GRDB, which would fetch on the writer after each commit.
-    static let dirtySettingsTables: [any DatabaseRegionConvertible] = [Table("syncedItemDirty"), Table("syncedEntry")]
-
-    /// The items marked for publishing.
+    /// The items marked for publishing. It also reads `syncedEntry`, though
+    /// the answer doesn't depend on it: an item changed again while it is
+    /// still marked (one the server refused) leaves its mark as it was, so
+    /// only the entry's write tells the publisher to go again.
     static func dirtySettings(_ db: Database) throws -> [String] {
-        try String.fetchAll(db, sql: "SELECT item FROM syncedItemDirty")
+        _ = try Int.fetchOne(db, sql: "SELECT 1 FROM syncedEntry LIMIT 1")
+        return try String.fetchAll(db, sql: "SELECT item FROM syncedItemDirty")
+    }
+
+    static func observeDirtySettings() -> ValueObservation<ValueReducers.Fetch<[String]>> {
+        ValueObservation.trackingConstantRegion(dirtySettings)
     }
 
     static func markDirty(_ db: Database, _ item: String) throws {

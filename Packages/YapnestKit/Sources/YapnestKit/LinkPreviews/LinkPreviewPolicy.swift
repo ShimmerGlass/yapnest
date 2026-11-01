@@ -39,7 +39,7 @@ extension AppDatabase {
     }
 
     public func observeLinkPreviewSetting() -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<LinkPreviewSetting>>> {
-        ValueObservation.tracking(regions: Self.settingTables) { db in
+        ValueObservation.trackingConstantRegion { db in
             LinkPreviewSetting(stored: try Self.setting(db, .linkPreviews))
         }
         .removeDuplicates()

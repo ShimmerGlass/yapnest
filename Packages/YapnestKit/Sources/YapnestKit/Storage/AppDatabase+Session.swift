@@ -343,7 +343,7 @@ extension AppDatabase {
 
     /// People waiting for an answer to their contact request, newest first.
     public func observeContactRequests() -> ValueObservation<ValueReducers.Fetch<[Contact]>> {
-        ValueObservation.tracking(regions: Self.contactTables, fetch: Self.contactRequests)
+        ValueObservation.trackingConstantRegion(Self.contactRequests)
     }
 
     static func contactRequests(_ db: Database) throws -> [Contact] {

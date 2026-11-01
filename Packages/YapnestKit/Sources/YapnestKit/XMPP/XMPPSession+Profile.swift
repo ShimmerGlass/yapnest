@@ -655,7 +655,7 @@ extension XMPPSession {
     /// What we show contacts as it changes, here or through the settings
     /// another device syncs.
     public func observeOwnStatus() -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<OwnStatus>>> {
-        ValueObservation.tracking(regions: AppDatabase.settingTables) { db in
+        ValueObservation.trackingConstantRegion { db in
             OwnStatus(
                 availability: try AppDatabase.setting(db, .availability).flatMap(Availability.init(rawValue:)) ?? .available,
                 message: Self.normalizedStatus(try AppDatabase.setting(db, .statusMessage)) ?? "",

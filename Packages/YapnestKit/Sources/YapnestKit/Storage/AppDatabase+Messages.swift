@@ -277,7 +277,7 @@ extension AppDatabase {
     /// How far one of our messages has got, and why it failed; nil if it's gone.
     /// Watched by its row, so other messages' writes don't refetch it.
     func observeDeliveryState(id: Int64) -> ValueObservation<ValueReducers.Fetch<(status: Message.Status, error: String?)?>> {
-        ValueObservation.tracking(regions: [Message.filter(key: id)]) { db in
+        ValueObservation.trackingConstantRegion { db in
             try Message.fetchOne(db, key: id).map { ($0.status, $0.error) }
         }
     }

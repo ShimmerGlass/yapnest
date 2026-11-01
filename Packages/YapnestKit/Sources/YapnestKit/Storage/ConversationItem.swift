@@ -397,12 +397,12 @@ extension AppDatabase {
     }
 
     public func observeContact(_ jid: JID) -> ValueObservation<ValueReducers.Fetch<Contact?>> {
-        ValueObservation.tracking(regions: [Contact.filter(key: jid)]) { db in try Contact.fetchOne(db, key: jid) }
+        ValueObservation.trackingConstantRegion { db in try Contact.fetchOne(db, key: jid) }
     }
 
     /// The conversation's link preview choice; nil until the user decides.
     public func observeLinkPreviews(peer: JID) -> ValueObservation<ValueReducers.Fetch<Bool?>> {
-        ValueObservation.tracking(regions: [Conversation.filter(Column("peer") == peer)]) { db in
+        ValueObservation.trackingConstantRegion { db in
             try Self.existingConversation(db, peer: peer)?.linkPreviews
         }
     }
@@ -461,10 +461,8 @@ extension AppDatabase {
 
     static let unreadCountTables: [any DatabaseRegionConvertible] = [Table(Conversation.databaseTableName), Table(Message.databaseTableName)]
 
-    static let contactTables: [any DatabaseRegionConvertible] = [Table(Contact.databaseTableName)]
-
     public func observeContactNames() -> ValueObservation<ValueReducers.Fetch<[JID: String]>> {
-        ValueObservation.tracking(regions: Self.contactTables) { db in try Self.contactNames(db) }
+        ValueObservation.trackingConstantRegion { db in try Self.contactNames(db) }
     }
 
     static func contactNames(_ db: Database) throws -> [JID: String] {
