@@ -217,15 +217,23 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     private static func hasSignedPreKey(of identity: StoredIdentity, in db: Database) throws -> Bool {
         guard let publicKey = SignalIdentityKeyPair(fromKeyPairData: identity.keyPair)?.publicKey,
               let key = SignalIdentityKey.publicKey(from: publicKey) else { return false }
+        // The decoded key is ours to release.
+        defer { signal_type_unref(key) }
         return try Data.fetchAll(db, sql: "SELECT data FROM omemoSignedPreKey").contains { data in
             guard let signed = SignalSignedPreKey(fromSerializedData: data), let message = signed.publicKeyData else { return false }
-            let signature = signed.signature
-            return message.withUnsafeBytes { m in
-                signature.withUnsafeBytes { s in
-                    curve_verify_signature(key, m.baseAddress!.assumingMemoryBound(to: UInt8.self), message.count, s.baseAddress!.assumingMemoryBound(to: UInt8.self), signature.count)
-                }
-            } == 1
+            return verifies(signed.signature, over: message, with: key)
         }
+    }
+
+    /// Whether `signature` is a valid signature of `message` by `key`. An empty
+    /// buffer has no base address to hand to libsignal, and can't verify.
+    static func verifies(_ signature: Data, over message: Data, with key: OpaquePointer) -> Bool {
+        guard !message.isEmpty, !signature.isEmpty else { return false }
+        return message.withUnsafeBytes { m in
+            signature.withUnsafeBytes { s in
+                curve_verify_signature(key, m.baseAddress!.assumingMemoryBound(to: UInt8.self), message.count, s.baseAddress!.assumingMemoryBound(to: UInt8.self), signature.count)
+            }
+        } == 1
     }
 
     private static func replacedDeviceIds(in db: Database) throws -> [Int32] {

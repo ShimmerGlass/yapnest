@@ -238,6 +238,22 @@ struct OMEMOStoreTests {
         } == 1
     }
 
+    /// A stored signed prekey with nothing in it to check must read as not
+    /// signed by the key, not crash the launch that looks for it.
+    @Test func aSignatureCheckOnEmptyDataFailsInsteadOfCrashing() throws {
+        let omemo = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
+        let pair = try #require(omemo.store.keyPair())
+        let signed = try #require(SignalSignedPreKey(fromSerializedData: try Self.signedPreKey(1, by: omemo)))
+        let message = try #require(signed.publicKeyData), signature = signed.signature
+        let publicKey = try #require(pair.publicKey)
+        let key = try #require(SignalIdentityKey.publicKey(from: publicKey))
+        defer { signal_type_unref(key) }
+
+        #expect(OMEMOStore.verifies(signature, over: message, with: key))
+        #expect(!OMEMOStore.verifies(Data(), over: message, with: key))
+        #expect(!OMEMOStore.verifies(signature, over: Data(), with: key))
+    }
+
     /// A move cut short after the keychain took the key, with the key still
     /// in the database, is finished, not taken for another device.
     @Test func aMoveCutShortIsFinished() throws {
