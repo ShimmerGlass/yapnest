@@ -202,4 +202,13 @@ struct PendingReactionTests {
         try echo(id: second, emojis: ["👍", "❤️"])
         #expect(try rows().allSatisfy { $0.pendingId == nil })
     }
+
+    @Test func reactingInARoomWeLeftThrowsAndLeavesNothingPending() throws {
+        let message = try joinedRoomMessage()
+        try database.setReactions(["👍"], from: Author(jid: me, nick: "me"), conversationId: message.conversationId, messageRef: "s1")
+        session.leaveRoom(room)
+        #expect(throws: XMPPSession.MessageActionError.leftGroup) { try session.toggleReaction("❤️", on: message, peer: room) }
+        #expect(Set(try rows().map(\.emoji)) == ["👍"])
+        #expect(!(try isPending(in: room)))
+    }
 }

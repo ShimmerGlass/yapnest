@@ -3146,20 +3146,21 @@ public final class XMPPSession: @unchecked Sendable {
     /// Sends our reactions on `message` again, after the other side never got
     /// them (see `ReactionGroup.error`).
     public func retryReactions(on message: Message, peer: JID) throws {
-        guard (try database.groupChat(peer))?.hasLeft != true else { throw MessageActionError.leftGroup }
         try setMyReactions(database.reactions(on: message, from: account), on: message, peer: peer)
     }
 
     /// Takes our reactions on `message` back, after the other side never got
     /// them: it may have the earlier ones, so the empty set goes out.
     public func removeReactions(on message: Message, peer: JID) throws {
-        guard (try database.groupChat(peer))?.hasLeft != true else { throw MessageActionError.leftGroup }
         try setMyReactions([], on: message, peer: peer)
     }
 
     /// Makes `mine` our reactions on `message`, here and for the others.
     /// Offline, they stay pending and go out once a session is back.
     private func setMyReactions(_ mine: Set<String>, on message: Message, peer: JID) throws {
+        // A room we left never becomes ready, so the reactions would stay
+        // pending until a session drops them without a word.
+        guard (try database.groupChat(peer))?.hasLeft != true else { throw MessageActionError.leftGroup }
         guard let messageId = message.id, let target = reference(to: message) else {
             throw try reactionBlocker(for: message, peer: peer)
         }
