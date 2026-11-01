@@ -1609,18 +1609,8 @@ public final class XMPPSession: @unchecked Sendable {
         // Nothing runs a catch-up on a resumed stream, so what was
         // written to the dead connection, or never written, is sent
         // here; what the server may still hold is claimed and left.
-        // An extension sends nothing it didn't write itself.
-        if policy.resendsPending {
-            sendUnclaimedPending()
-            sendPendingBlocks()
-            sendPendingRosterChanges()
-            sendOwedBookmarks()
-            sendOwedProfile()
-        }
+        flushOutboxes()
         resumeInterruptedCatchUps()
-        // Chats read while the stream was down owe their state; another device
-        // may have read further meanwhile, so the states are read first.
-        if policy.resendsPending, (try? database.owesReadStates()) == true { fetchDisplayed() }
         if owed.contains(.push) { enablePush() }
         if owed.contains(.profileAccess) {
             Task.detached(priority: .utility) { [weak self] in await self?.reconcileProfileAccess() }
@@ -2462,11 +2452,35 @@ public final class XMPPSession: @unchecked Sendable {
         // failed), or the share extension left it so, possibly for days when
         // the app isn't opened. Resending with the same id is safe: recipients
         // dedupe on it.
-        sendUnclaimedPending()
-        sendPendingBlocks()
-        sendPendingRosterChanges()
-        sendOwedProfile()
+        flushOutboxes(except: [.bookmarks, .readStates])
         restoreChatsIfPending()
+    }
+
+    /// What the app keeps to send once connected. Every new session and every
+    /// resumed stream sends all of them, so one that is left out of
+    /// `flushOutboxes` would wait for the next new session.
+    enum Outbox: CaseIterable {
+        case messages, blocks, rosterChanges, bookmarks, profile, readStates
+    }
+
+    /// Sends every outbox, except those the caller says must wait. A new
+    /// session reads the bookmarks and the read states from the server first
+    /// (another device may have changed them), so its catch-up sends those
+    /// itself; a resumed stream has no such read for the bookmarks, and
+    /// reads the states only when chats were read while it was down.
+    /// An extension sends nothing it didn't write itself.
+    func flushOutboxes(except skipped: Set<Outbox> = []) {
+        guard policy.resendsPending else { return }
+        for outbox in Outbox.allCases where !skipped.contains(outbox) {
+            switch outbox {
+            case .messages: sendUnclaimedPending()
+            case .blocks: sendPendingBlocks()
+            case .rosterChanges: sendPendingRosterChanges()
+            case .bookmarks: sendOwedBookmarks()
+            case .profile: sendOwedProfile()
+            case .readStates: if (try? database.owesReadStates()) == true { fetchDisplayed() }
+            }
+        }
     }
 
     /// Sends every pending message the send queue hasn't taken up this
