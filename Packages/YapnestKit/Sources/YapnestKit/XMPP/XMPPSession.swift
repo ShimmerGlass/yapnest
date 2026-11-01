@@ -398,7 +398,7 @@ public final class XMPPSession: @unchecked Sendable {
         var rosterInFlight: Int64?
         /// A new session's roster hasn't arrived yet. The queued changes wait
         /// for it, as removing and renaming need the item and accepting
-        /// checks the request against it.
+        /// checks the request against it. A read that fails ends the wait.
         var awaitsRoster = false
         /// The run sending the bookmarks we owe, and the task doing it.
         var bookmarkRun = CoalescedRun()

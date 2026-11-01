@@ -301,20 +301,26 @@ struct PendingRosterTests {
 
     // MARK: Sessions
 
-    @Test func nothingIsSentBeforeANewSessionsRosterArrives() async throws {
+    @Test func nothingIsSentWhileANewSessionsRosterIsStillBeingRead() async throws {
+        try await session.setContactName(alice, name: "Ally")
+        wire.answer { iq in
+            self.isRosterIq(iq) && iq.type == .get ? FakeWire.error(to: iq, condition: "resource-constraint", type: "wait") : FakeWire.result(to: iq)
+        }
+        session.lock.withLock { $0.retryBackoff = 0.2 }
+        session.connectForTesting(wire)
+        session.sendPendingRosterChanges()
+        _ = await eventually(timeout: 0.1) { false }
+        #expect(rosterSets.isEmpty)
+        #expect(queued.count == 1)
+    }
+
+    @Test func aRosterThatCantBeReadForGoodDoesntHoldBackTheQueue() async throws {
         try await session.setContactName(alice, name: "Ally")
         wire.answer { iq in
             self.isRosterIq(iq) && iq.type == .get ? FakeWire.error(to: iq, condition: "forbidden", type: "auth") : FakeWire.result(to: iq)
         }
         session.connectForTesting(wire)
         #expect(await eventually(timeout: 20) { session.warnings.current.contains { $0.key == "roster" } })
-        session.sendPendingRosterChanges()
-        _ = await eventually(timeout: 0.3) { false }
-        #expect(rosterSets.isEmpty)
-        #expect(queued.count == 1)
-
-        wire.answer { FakeWire.result(to: $0) }
-        session.fetchRoster(attempt: session.lock.withLock { $0.attempt })
         #expect(await eventually(timeout: 20) { queued.isEmpty })
         #expect(rosterSets.count == 1)
     }
@@ -354,14 +360,15 @@ struct PendingRosterTests {
 
     @Test func befriendingLeavesAnAcceptTheUserQueuedToTheQueue() async throws {
         try await session.acceptContactRequest(from: stranger)
-        // The roster never arrives, so the queued accept is still there when befriending looks.
+        // The roster can't be read, so the queue sends the accept; befriending must leave it be.
         wire.answer { iq in
             self.isRosterIq(iq) && iq.type == .get ? FakeWire.error(to: iq, condition: "forbidden", type: "auth") : FakeWire.result(to: iq)
         }
         session.connectForTesting(wire)
         await session.befriendForNewChat(stranger)
-        #expect(rosterSets.isEmpty)
-        #expect(queued.map(\.kind) == [.accept])
+        #expect(await eventually(timeout: 20) { queued.isEmpty })
+        #expect(rosterSets.count == 1)
+        #expect(presences(.subscribe).count == 1)
     }
 
     // MARK: Storage

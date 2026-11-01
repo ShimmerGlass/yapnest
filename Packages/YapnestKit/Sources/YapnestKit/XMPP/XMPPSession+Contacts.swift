@@ -78,9 +78,15 @@ extension XMPPSession {
     }
 
     private func requestRoster() async throws {
+        defer {
+            // A roster that can't be read must not hold back what the user
+            // queued: it is sent against the contacts as last stored, which
+            // each change checks (a removal of someone already gone, or an
+            // answer to a request withdrawn meanwhile, sends nothing).
+            lock.withLock { $0.awaitsRoster = false }
+            sendPendingRosterChanges()
+        }
         try await retryingPassingErrors { try await client.module(.roster).requestRoster() }
-        lock.withLock { $0.awaitsRoster = false }
-        sendPendingRosterChanges()
     }
 
     /// Takes `jid` off the roster on all our devices: neither of us sees the
