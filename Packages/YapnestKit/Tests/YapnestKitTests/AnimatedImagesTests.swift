@@ -59,6 +59,12 @@ struct AnimatedImagesTests {
         #expect(png.plan == .play)
     }
 
+    @Test func anAnimationThatIsNotAGifIsHeldToTheSameCaps() {
+        #expect(AnimatedImages.Header(width: 6000, height: 6000, frames: 3, isGIF: false).plan == .tooLarge)
+        #expect(AnimatedImages.Header(width: 3000, height: 3000, frames: 3, isGIF: false).plan == .downsample)
+        #expect(AnimatedImages.Header(width: 6000, height: 6000, frames: 1, isGIF: false).plan == .play)
+    }
+
     @Test func aSmallerCopyKeepsFramesDelaysAndLoops() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

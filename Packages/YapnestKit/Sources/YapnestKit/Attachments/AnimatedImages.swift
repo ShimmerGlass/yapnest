@@ -49,7 +49,11 @@ public enum AnimatedImages {
         public var frames: Int
         public var isGIF: Bool
 
-        public var plan: Plan { isGIF ? AnimatedImages.plan(width: width, height: height) : .play }
+        /// Anything with more than one frame is held to the same caps as a
+        /// GIF, whatever its extension says: an animated PNG or WebP is
+        /// composited onto a whole canvas the same way. A single picture is
+        /// left to ImageIO's own subsampling.
+        public var plan: Plan { isGIF || frames > 1 ? AnimatedImages.plan(width: width, height: height) : .play }
         public var canDownsample: Bool { AnimatedImages.canDownsample(width: width, height: height, frames: frames) }
     }
 
