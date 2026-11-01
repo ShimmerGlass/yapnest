@@ -81,13 +81,16 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// Runs `body` in one immediate transaction with deleted pages zeroed,
     /// and goes on as the identity it returns.
     private func writeIdentity(_ body: (Database) throws -> (StoredIdentity, erasedKeys: Bool)) throws {
-        let previous = try? identityKeys.load()
         let identity = try database.writer.writeWithoutTransaction { db -> StoredIdentity in
             try db.execute(sql: "PRAGMA secure_delete = ON")
             defer { try? db.execute(sql: "PRAGMA secure_delete = OFF") }
             var result: (StoredIdentity, erasedKeys: Bool)?
+            // Read holding the lock: another process may have replaced it
+            // while this one waited, and that one is not ours to put back over.
+            var previous: StoredIdentity?
             do {
                 try db.inTransaction(.immediate) {
+                    previous = try? identityKeys.load()
                     result = try body(db)
                     return .commit
                 }

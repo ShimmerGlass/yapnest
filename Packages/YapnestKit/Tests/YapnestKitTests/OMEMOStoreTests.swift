@@ -363,14 +363,49 @@ struct OMEMOStoreTests {
         #expect(again.store.replacedDeviceIds().isEmpty)
     }
 
+    /// Another process replaces the keychain's identity while this one waits
+    /// for the database lock; a commit that then fails must put back the
+    /// identity found once holding the lock, not the one seen before waiting.
+    @Test func aFailedReplacementPutsBackWhatTheKeychainHeldWhenTheLockWasTaken() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let old = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        let before = try #require(try keys.load())
+        let other = StoredIdentity(registrationId: before.registrationId &+ 1, keyPair: before.keyPair)
+        let veto = CommitVeto()
+        try database.writer.write { $0.add(transactionObserver: veto, extent: .databaseLifetime) }
+        let held = DispatchSemaphore(value: 0), waiting = DispatchSemaphore(value: 0), done = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            try? database.writer.write { _ in
+                held.signal()
+                waiting.wait()
+                Thread.sleep(forTimeInterval: 0.3)
+                try keys.save(other)
+                veto.isActive = true
+            }
+        }
+        held.wait()
+        nonisolated(unsafe) var failed = false
+        Thread.detachNewThread {
+            waiting.signal()
+            do { try old.replaceDevice() } catch { failed = true }
+            done.signal()
+        }
+        #expect(done.wait(timeout: .now() + 30) == .success)
+        veto.isActive = false
+
+        #expect(failed)
+        #expect(try keys.load() == other)
+    }
+
     private final class CommitVeto: TransactionObserver, @unchecked Sendable {
         struct Vetoed: Error {}
         var isActive = false
+        private var changed = false
         func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool { true }
-        func databaseDidChange(with event: DatabaseEvent) {}
-        func databaseWillCommit() throws { if isActive { throw Vetoed() } }
-        func databaseDidRollback(_ db: Database) {}
-        func databaseDidCommit(_ db: Database) {}
+        func databaseDidChange(with event: DatabaseEvent) { changed = true }
+        func databaseWillCommit() throws { if isActive, changed { throw Vetoed() } }
+        func databaseDidRollback(_ db: Database) { changed = false }
+        func databaseDidCommit(_ db: Database) { changed = false }
     }
 
     /// A session MartinOMEMO builds from a fetched bundle holds neither of
