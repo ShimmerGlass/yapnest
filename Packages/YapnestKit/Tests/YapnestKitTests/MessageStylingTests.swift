@@ -209,17 +209,22 @@ struct MessageStylingTests {
     @Test(arguments: [" *a", " _a", " `a", " ~a"], [20_000, 85_000])
     func unclosedOpenersTakeLinearTime(unit: String, count: Int) {
         let text = String(repeating: unit, count: count)
-        let clock = ContinuousClock()
-        let time = clock.measure { _ = MessageStyling.spans(in: text) }
+        let time = bestOfThree { _ = MessageStyling.spans(in: text) }
         #expect(time < .milliseconds(500), "\(count) x \(unit.debugDescription) took \(time)")
     }
 
     @Test func manyMarkersWithoutBreaksTakeLinearTime() {
-        let clock = ContinuousClock()
         for text in [String(repeating: "*", count: 256_000), String(repeating: "* ", count: 128_000), String(repeating: " *a*", count: 64_000), String(repeating: " *a\n", count: 64_000)] {
-            let time = clock.measure { _ = MessageStyling.spans(in: text) }
+            let time = bestOfThree { _ = MessageStyling.spans(in: text) }
             #expect(time < .milliseconds(500), "\(time)")
         }
+    }
+
+    /// The fastest of three runs: the full suite's load can stall any one run past the bound, but
+    /// only ever slows a run down, while a quadratic pass is over it every time.
+    private func bestOfThree(_ work: () -> Void) -> Duration {
+        let clock = ContinuousClock()
+        return (0..<3).map { _ in clock.measure(work) }.min()!
     }
 }
 
