@@ -1493,10 +1493,10 @@ extension XMPPSession {
 
     private func sendAfterCatchUp(_ room: JID) {
         sendDeferred(in: room)
-        let reachedEnd = roomStatus(room)?.catchUpReachedEnd ?? false
         // An extension sends nothing it didn't write itself.
         guard policy.resendsPending, let status = roomStatus(room),
               let group = try? database.groupChat(room) else { return }
+        let reachedEnd = status.catchUpReachedEnd
         let unconfirmed = (try? database.unconfirmedOutgoing(
             conversationId: group.conversationId, before: status.joinedAt, since: status.joinedAt.addingTimeInterval(-Self.initialSyncWindow),
         )) ?? []
