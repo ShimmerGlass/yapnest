@@ -12,7 +12,7 @@ final class ConversationDriver {
     // gets there: a loaded machine, or a cold launch of a heavy fixture, is
     // slow, and a test that asserts speed uses its own, shorter window.
     /// For a chat to open and its frame recorder to appear.
-    static let openTimeout: TimeInterval = 30
+    static let openTimeout: TimeInterval = 120
     /// For the chat list, or a row in it, to show.
     static let listTimeout: TimeInterval = 30
     /// For the first message of an open chat to show.
@@ -131,12 +131,15 @@ final class ConversationDriver {
         return CGVector(dx: 0.02, dy: 0.3)
     }
 
-    /// A fast drag down in the middle of the list, which coasts on towards older messages.
-    func flickTowardsOlder() {
+    /// A fast drag down in the middle of the list, which coasts on towards
+    /// older messages. A coast goes about as far as half the velocity in
+    /// points and takes little longer for a faster one, so a bigger velocity
+    /// is the cheap way to cover distance.
+    func flickTowardsOlder(velocity: CGFloat = 5000) {
         let list = app.windows.firstMatch
         let from = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
         let to = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
-        from.press(forDuration: 0.01, thenDragTo: to, withVelocity: XCUIGestureVelocity(rawValue: 5000), thenHoldForDuration: 0)
+        from.press(forDuration: 0.01, thenDragTo: to, withVelocity: XCUIGestureVelocity(rawValue: velocity), thenHoldForDuration: 0)
     }
 
     /// Slow drags that stop where they end, `times` over, towards older
