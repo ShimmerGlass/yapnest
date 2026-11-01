@@ -368,7 +368,14 @@ struct FileTransferFailure: Error, LocalizedError, Equatable {
 final class FileTransfers: @unchecked Sendable {
     private let lock = NSLock()
     private var bySid: [String: FileTransferSession] = [:]
-    private var byIBB: [String: String] = [:]
+    /// An IBB stream is named by the peer that opens it, so two peers can
+    /// choose the same sid: it is the pair that finds the session.
+    private struct StreamKey: Hashable {
+        var peer: Martin.JID
+        var sid: String
+    }
+
+    private var byIBB: [StreamKey: String] = [:]
 
     var timeouts = FileTransferTimeouts()
     /// Where deferred work runs: timers and block pumping.
@@ -376,8 +383,8 @@ final class FileTransfers: @unchecked Sendable {
 
     func session(sid: String) -> FileTransferSession? { lock.withLock { bySid[sid] } }
 
-    func session(ibb: String) -> FileTransferSession? {
-        lock.withLock { byIBB[ibb].flatMap { bySid[$0] } }
+    func session(ibb: String, from peer: Martin.JID) -> FileTransferSession? {
+        lock.withLock { byIBB[StreamKey(peer: peer, sid: ibb)].flatMap { bySid[$0] } }
     }
 
     func session(messageId: Int64) -> FileTransferSession? {
@@ -397,14 +404,15 @@ final class FileTransfers: @unchecked Sendable {
 
     /// Lets the IBB stream's stanzas find `session`.
     func routeIBB(to session: FileTransferSession) {
-        lock.withLock { byIBB[session.ibbSid] = session.sid }
+        lock.withLock { byIBB[StreamKey(peer: session.peer, sid: session.ibbSid)] = session.sid }
     }
 
     func remove(_ session: FileTransferSession) {
         lock.withLock {
             guard bySid[session.sid] === session else { return }
             bySid[session.sid] = nil
-            byIBB[session.ibbSid] = nil
+            let key = StreamKey(peer: session.peer, sid: session.ibbSid)
+            if byIBB[key] == session.sid { byIBB[key] = nil }
         }
     }
 }

@@ -289,6 +289,21 @@ struct FileTransferReceivingTests {
         try h.data(Data(count: 10), seq: 0)
     }
 
+    @Test func twoTransfersThatNameTheirStreamAlikeKeepApart() async throws {
+        let h = try TransferHarness()
+        let tablet = "alice@example.org/tablet"
+        let first = Data(repeating: 1, count: 100), second = Data(repeating: 2, count: 100)
+        try h.harness.receive(iq: h.offer(sid: "ft1", size: 100, hash: sha256Base64(first)))
+        try h.harness.receive(iq: h.offer(sid: "ft2", from: tablet, size: 100, hash: sha256Base64(second)))
+        try h.open()
+        try h.open(from: tablet)
+        try h.data(first, seq: 0)
+        try h.data(second, seq: 0, from: tablet)
+        await eventually("both files to be stored") {
+            ((try? h.database.reader.read { try YapnestKit.Attachment.fetchAll($0) }) ?? []).filter { $0.state == .ready }.count == 2
+        }
+    }
+
     @Test func aStreamOfMessagesIsNotAccepted() throws {
         let h = try TransferHarness()
         try h.harness.receive(iq: h.offer(size: 100))

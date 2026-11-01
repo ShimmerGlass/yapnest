@@ -181,7 +181,7 @@ extension XMPPSession {
     // MARK: In-band bytestream
 
     func ibbEvent(_ event: IBBEvent, from: Martin.JID) throws -> (() -> Void)? {
-        guard let ft = fileTransfers.session(ibb: event.sid), ft.role == .receiver, ft.peer == from else {
+        guard let ft = fileTransfers.session(ibb: event.sid, from: from), ft.role == .receiver else {
             throw XMPPError.item_not_found
         }
         switch event {
