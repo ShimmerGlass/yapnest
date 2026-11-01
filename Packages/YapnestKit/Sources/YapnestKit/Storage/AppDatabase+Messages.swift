@@ -207,7 +207,9 @@ extension AppDatabase {
     /// requires: each reactions element carries the full set. Returns false if
     /// the message isn't stored, or is retracted: a replay would otherwise
     /// put back reactions that retracting removed. `pendingId` marks ours as
-    /// not yet acknowledged by the server.
+    /// not yet acknowledged by the server. `echoOf` is the id of the stanza
+    /// the set came from, so that an echo of one of ours leaves a newer
+    /// pending set alone.
     @discardableResult
     public func setReactions(_ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil) throws -> Bool {
         try writer.write { db in
@@ -221,7 +223,7 @@ extension AppDatabase {
     }
 
     @discardableResult
-    static func setReactions(_ db: Database, _ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil) throws -> Bool {
+    static func setReactions(_ db: Database, _ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil, echoOf: String? = nil) throws -> Bool {
         guard let message = try referencedMessage(db, conversationId: conversationId, id: messageRef), let messageId = message.id, !message.isRetracted else {
             return false
         }
@@ -238,6 +240,14 @@ extension AppDatabase {
             Column("occupantId") == occupantId || (Column("occupantId") == nil && byAddress)
         } else {
             byAddress
+        }
+        // The echo of an earlier stanza of ours (a room reflecting it, or an
+        // archive replaying it) arrives after we toggled again. Its set is
+        // stale, and replacing the rows would drop the newer pending id before
+        // the server has the newer set.
+        if let echoOf, try Reaction.filter(Column("messageId") == messageId).filter(previous)
+            .filter(Column("pendingId") != nil && Column("pendingId") != echoOf).isEmpty(db) == false {
+            return true
         }
         try Reaction.filter(Column("messageId") == messageId).filter(previous).deleteAll(db)
         for emoji in emojis {

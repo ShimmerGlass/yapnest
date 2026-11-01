@@ -220,7 +220,7 @@ extension AppDatabase {
         }
 
         if let reactions = inbound.reactions {
-            try Self.setReactions(db, reactions.emojis, from: inbound.author, conversationId: conversationId, messageRef: reactions.id)
+            try Self.setReactions(db, reactions.emojis, from: inbound.author, conversationId: conversationId, messageRef: reactions.id, echoOf: inbound.id)
         }
 
         if inbound.isOutgoing, let action = inbound.actionSelected {

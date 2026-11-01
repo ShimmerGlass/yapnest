@@ -164,4 +164,42 @@ struct PendingReactionTests {
         #expect(throws: XMPPSession.MessageActionError.cannotReact) { try session.toggleReaction("👍", on: message, peer: room) }
         #expect(try rows().isEmpty)
     }
+
+    private func joinedRoomMessage() throws -> YapnestKit.Message {
+        let message = try roomMessage(.incoming, remoteId: "g1", serverId: "s1")
+        session.updateRoom(room) {
+            var status = RoomStatus(phase: .joined, nickname: "me")
+            status.isSyncing = true
+            $0 = status
+        }
+        return message
+    }
+
+    private func echo(id: String, emojis: [String]) throws {
+        let xml = "<message from='cake@rooms.example.org/me' type='groupchat' id='\(id)'><reactions id='s1' xmlns='urn:xmpp:reactions:0'>"
+            + emojis.map { "<reaction>\($0)</reaction>" }.joined() + "</reactions></message>"
+        let element = try #require(Element.from(string: xml))
+        let stanza = try #require(Stanza.from(element: element) as? Martin.Message)
+        let context = RoomContext(jid: room, nickname: "me")
+        let inbound = try #require(InboundMessage(groupchat: stanza, room: context, account: me, source: .live))
+        try database.ingest(inbound)
+    }
+
+    @Test func theEchoOfAnEarlierReactionStanzaLeavesANewerPendingSetAlone() throws {
+        let message = try joinedRoomMessage()
+        try session.toggleReaction("👍", on: message, peer: room)
+        let first = try #require(try rows().first?.pendingId)
+        try session.toggleReaction("❤️", on: message, peer: room)
+        let second = try #require(try rows().first?.pendingId)
+        #expect(first != second)
+
+        try echo(id: first, emojis: ["👍"])
+
+        #expect(Set(try rows().map(\.emoji)) == ["👍", "❤️"])
+        #expect(try rows().allSatisfy { $0.pendingId == second })
+        #expect(try isPending(in: room))
+
+        try echo(id: second, emojis: ["👍", "❤️"])
+        #expect(try rows().allSatisfy { $0.pendingId == nil })
+    }
 }
