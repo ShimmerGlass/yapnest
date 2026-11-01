@@ -8,6 +8,17 @@ struct JIDTests {
         #expect(jid == JID("alice@example.org"))
     }
 
+    @Test func whitespaceBeforeTheResourceIsNotKeptInTheDomain() {
+        #expect(JID("alice@example.org /phone")?.description == "alice@example.org")
+        #expect(JID(" alice@example.org/phone ")?.description == "alice@example.org")
+        #expect(JID("alice@example.org\n/phone")?.domain == "example.org")
+    }
+
+    @Test(arguments: ["alice @example.org", "alice@ example.org", " /phone"])
+    func aPartPaddedWithWhitespaceIsRefused(_ string: String) {
+        #expect(JID(string) == nil)
+    }
+
     @Test func domainOnly() {
         #expect(JID("conference.example.org")?.localPart == nil)
     }

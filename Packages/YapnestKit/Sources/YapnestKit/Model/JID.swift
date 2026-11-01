@@ -11,10 +11,13 @@ public struct JID: Hashable, Comparable, Sendable, Codable, CustomStringConverti
     public let domain: String
 
     public init?(_ string: String) {
-        var s = Substring(string.trimmingCharacters(in: .whitespacesAndNewlines))
+        // The resource goes first: trimming before would leave whitespace
+        // that sat before the slash on the domain.
+        var s = Substring(string)
         if let slash = s.firstIndex(of: "/") {
             s = s[..<slash]
         }
+        s = Substring(s.trimmingCharacters(in: .whitespacesAndNewlines))
         let local: Substring?
         let domain: Substring
         if let at = s.firstIndex(of: "@") {
@@ -26,6 +29,11 @@ public struct JID: Hashable, Comparable, Sendable, Codable, CustomStringConverti
         }
         guard !domain.isEmpty, !domain.contains("@") else { return nil }
         if let local, local.isEmpty { return nil }
+        // Whitespace inside the address ("a @b.c") isn't trimmed away: the
+        // stored JID would then differ from what was written, and from what
+        // another path normalizing the same text would store.
+        func isPadded(_ part: Substring) -> Bool { part.first?.isWhitespace == true || part.last?.isWhitespace == true }
+        if isPadded(domain) || local.map(isPadded) == true { return nil }
         self.localPart = local.map { $0.lowercased() }
         self.domain = domain.lowercased()
     }
