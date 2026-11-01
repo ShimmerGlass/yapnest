@@ -7,6 +7,8 @@ import Foundation
 /// as a downloaded link makes the device send a request unasked.
 enum AttachmentLink {
     static func parse(body: String?, oob: String?, allowsInsecure: Bool = false) -> (url: URL, name: String)? {
+        // The element's text may be pretty-printed with whitespace around the url.
+        let oob = oob?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let body = body?.trimmingCharacters(in: .whitespacesAndNewlines), !body.contains(where: \.isWhitespace),
               let url = URL(string: body), let scheme = url.scheme?.lowercased() else { return nil }
         switch scheme {

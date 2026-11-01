@@ -55,6 +55,8 @@ struct AttachmentTests {
         #expect(AttachmentLink.parse(body: "https://up.example/a/doc.pdf", oob: "https://up.example/a/doc.pdf")?.name == "doc.pdf")
         // A link someone typed is just a link.
         #expect(AttachmentLink.parse(body: "https://up.example/a/doc.pdf", oob: nil) == nil)
+        // A pretty-printed message puts whitespace around the url in the element.
+        #expect(AttachmentLink.parse(body: "https://up.example/a/doc.pdf", oob: "\n  https://up.example/a/doc.pdf\n")?.name == "doc.pdf")
         // Plain http only for development servers, which send no certificate.
         let plain = "http://up.example/a/doc.pdf"
         #expect(AttachmentLink.parse(body: plain, oob: plain) == nil)
