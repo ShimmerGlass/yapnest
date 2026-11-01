@@ -426,7 +426,8 @@ struct OwedLegacyBookmarkTests {
         session.reloadKnownRooms()
     }
 
-    private func connect(refusingSetsWith refusal: @escaping @Sendable (Iq) -> Iq) async {
+    private func connect(_ session: XMPPSession? = nil, refusingSetsWith refusal: @escaping @Sendable (Iq) -> Iq) async {
+        let session = session ?? self.session
         let sets = sets
         wire.answer { iq in
             if let bind = iq.firstChild(name: "bind"), bind.xmlns == "urn:xmpp:bind:0" || bind.xmlns == "urn:ietf:params:xml:ns:xmpp-bind" {
@@ -464,6 +465,34 @@ struct OwedLegacyBookmarkTests {
         #expect(await eventually(timeout: 40) { session.warnings.current.contains { $0.key == "bookmark/\(room)" } })
         #expect(try !group().bookmarkOwed)
         #expect(session.warnings.current.first?.action == .retry)
+    }
+
+    @Test func aFinalRefusalOfTheOldKindIsNotSentAgainAtTheNextConnect() async throws {
+        await connect { forbidden($0) }
+        try session.setNotify(.never, in: room)
+        #expect(await eventually(timeout: 40) { session.warnings.current.contains { $0.key == "bookmark/\(room)" } })
+        let sent = sets.value
+
+        let later = try makeSession(me, database: database)
+        later.lock.withLock { $0.retryBackoff = 0 }
+        later.reloadKnownRooms()
+        await connect(later) { forbidden($0) }
+        later.sendOwedBookmarks()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(sets.value == sent)
+        #expect(later.warnings.current.isEmpty)
+    }
+
+    @Test func aRetryOfTheOldKindThrowsTheRefusalWhileTheServerStillRefuses() async throws {
+        await connect { forbidden($0) }
+        try session.setNotify(.never, in: room)
+        #expect(await eventually(timeout: 40) { session.warnings.current.contains { $0.key == "bookmark/\(room)" } })
+        let retry = try #require(session.warnings.current.first?.retry)
+
+        let error = await #expect(throws: (any Error).self) { try await retry() }
+        #expect(ServerError.userMessage(for: try #require(error), friendly: "").contains("forbidden"))
+        #expect(try !group().bookmarkOwed)
+        #expect(session.warnings.current.contains { $0.key == "bookmark/\(room)" })
     }
 
     @Test func aPassingErrorOfTheOldKindKeepsItOwedWithoutAWarning() async throws {
