@@ -31,12 +31,13 @@ struct RenderedText: Equatable {
     var isEmojiOnly = false
 
     /// `prefix`, as it is, at the start of the first line; on a line of its own
-    /// when the text begins with a block that can't carry it.
+    /// when the text begins with a block that can't carry it: code, or a quote,
+    /// where the name would read as quoted.
     fileprivate func prefixed(with prefix: String, font: MessageText.BodyFont) -> RenderedText {
         var result = self
         var lead = AttributedString(prefix)
         lead.font = font.swiftUI
-        guard var first = result.segments.first, !first.isPreformatted else {
+        guard var first = result.segments.first, !first.isPreformatted, first.depth == 0 else {
             result.segments.insert(.init(id: -1, depth: 0, text: lead), at: 0)
             return result
         }

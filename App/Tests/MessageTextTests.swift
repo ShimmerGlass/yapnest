@@ -286,6 +286,13 @@ struct MessageTextTests {
         #expect(shown.allSatisfy { $0.font == Font.body.italic() })
     }
 
+    @Test func anActionThatBeginsWithAQuoteKeepsItsNameOutsideTheQuote() {
+        let rendered = MessageText.render("/me > waves", kind: .action(name: "Alice"))
+        #expect(rendered.segments.map(\.depth) == [0, 1])
+        #expect(String(rendered.segments[0].text.characters).hasPrefix("Alice"))
+        #expect(!String(rendered.segments[1].text.characters).contains("Alice"))
+    }
+
     @Test func aLongActionIsCutShortLikeAnyLongMessage() {
         let body = "/me " + String(repeating: "waves ", count: 400)
         let collapsed = MessageText.render(body, kind: .action(name: "Alice"), collapsed: true)
