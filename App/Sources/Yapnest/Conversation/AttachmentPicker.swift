@@ -127,11 +127,14 @@ final class AttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIImageP
                 model.prompt = .notice(title: String(localized: "No camera"), message: String(localized: "This device has no camera available."))
                 return
             }
-            Task {
+            Task { [weak model = self.model] in
                 // Asked first, as for calls, so a refusal is explained here
                 // rather than left to the picker.
                 let allowed = await cameraAccess()
                 DiagLog.info(.send, "Composer camera access", .bool("allowed", allowed))
+                // The prompt can stay up while the chat is closed, which on
+                // the Mac only closes the window; the model is gone by then.
+                guard let model else { return }
                 guard allowed else {
                     model.prompt = .notice(
                         title: String(localized: "No access to the camera"),
@@ -327,15 +330,56 @@ enum MacFileActions {
     static func saveAs(_ file: URL, named name: String) {
         Task {
             guard let copy = await named(file, name) else { return }
-            Presenter.present(UIDocumentPickerViewController(forExporting: [copy], asCopy: true))
+            let picker = UIDocumentPickerViewController(forExporting: [copy], asCopy: true)
+            // The system copies it where the user chooses; ours goes either way.
+            let cleanup = CopyCleanup(copy)
+            picker.delegate = cleanup
+            objc_setAssociatedObject(picker, &cleanupKey, cleanup, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            Presenter.present(picker)
+        }
+    }
+
+    nonisolated(unsafe) private static var cleanupKey = 0
+
+    /// Where the copies of files made for the Mac's actions go, each in a folder of its own.
+    nonisolated static var copiesFolder: URL { FileManager.default.temporaryDirectory.appending(path: "mac-file-copies") }
+
+    /// How long a copy made to open a file stays. The app that opened it may
+    /// still have it up, so it can't go at once.
+    nonisolated static let copyLifetime: TimeInterval = 24 * 3600
+
+    /// Removes the copies that are older than `age`.
+    nonisolated static func removeOldCopies(in folder: URL = copiesFolder, olderThan age: TimeInterval = copyLifetime, now: Date = Date()) {
+        let entries = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.creationDateKey])) ?? []
+        for entry in entries {
+            guard let created = try? entry.resourceValues(forKeys: [.creationDateKey]).creationDate, now.timeIntervalSince(created) > age else { continue }
+            try? FileManager.default.removeItem(at: entry)
         }
     }
 
     /// Off the main thread: a file can be a large video.
     private static func named(_ file: URL, _ name: String) async -> URL? {
         await offMain {
-            try? FileManager.default.copyIntoUniqueFolder(file, named: name, under: FileManager.default.temporaryDirectory)
+            removeOldCopies()
+            return try? FileManager.default.copyIntoUniqueFolder(file, named: name, under: copiesFolder)
         }
+    }
+}
+
+/// Removes the copy made for "Save As" once the panel is done with it.
+private final class CopyCleanup: NSObject, UIDocumentPickerDelegate {
+    private let folder: URL
+
+    init(_ copy: URL) {
+        folder = copy.deletingLastPathComponent()
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        try? FileManager.default.removeItem(at: folder)
     }
 }
 

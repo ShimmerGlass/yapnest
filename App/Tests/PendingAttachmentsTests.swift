@@ -58,6 +58,54 @@ struct PendingAttachmentsTests {
         #expect(title == "No access to the camera")
     }
 
+    // The hint went into the field's placeholder, which a draft hides.
+    @Test func aVoiceMessageThatWasTooShortIsToldWhateverTheFieldHolds() throws {
+        let f = try ConversationFixture()
+        f.model.textChanged("a draft")
+
+        f.model.voiceWasTooShort()
+
+        guard case .notice(let title, _)? = f.model.prompt else {
+            Issue.record("nothing was shown")
+            return
+        }
+        #expect(title == "Voice message too short")
+    }
+
+    // Opening a file on the Mac works on a copy under its own name, and each
+    // one stayed in the temporary directory.
+    @Test func copiesMadeToOpenAFileOnTheMacAreRemovedOnceTheyAreOld() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "copies-\(UUID().uuidString)")
+        let old = folder.appending(path: "old"), recent = folder.appending(path: "recent")
+        for copy in [old, recent] { try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true) }
+        try FileManager.default.setAttributes([.creationDate: Date().addingTimeInterval(-3 * 24 * 3600)], ofItemAtPath: old.path)
+
+        MacFileActions.removeOldCopies(in: folder)
+
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+        #expect(FileManager.default.fileExists(atPath: recent.path))
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    /// On the Mac the chat's window closing leaves the permission prompt up;
+    /// the picker held its model `unowned`, so answering it afterwards crashed.
+    @Test func aChatClosedWhileTheCameraPromptIsUpIsLeftAlone() async throws {
+        var fixture: ConversationFixture? = try ConversationFixture()
+        weak var model = fixture?.model
+        let picker = AttachmentPicker(model: try #require(fixture).model)
+        var answer: CheckedContinuation<Bool, Never>?
+        picker.cameraAvailable = { true }
+        picker.cameraAccess = { await withCheckedContinuation { answer = $0 } }
+        picker.attach(from: .camera)
+        for _ in 0..<100 where answer == nil { try await Task.sleep(for: .milliseconds(10)) }
+
+        fixture = nil
+        for _ in 0..<100 where model != nil { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(model == nil, "the model is still held, so the picker's reference isn't tested")
+        answer?.resume(returning: false)
+        try await Task.sleep(for: .milliseconds(100))
+    }
+
     /// The system's camera picker logs nothing, so a black one has to be
     /// told apart by what was found before it opened.
     @Test func theCameraLeavesWhatItFoundInTheLog() async throws {
