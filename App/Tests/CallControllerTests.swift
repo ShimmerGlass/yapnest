@@ -216,6 +216,61 @@ struct CallControllerTests {
         #expect(controller.startingCall == nil)
     }
 
+    // The wait can outlast another call coming in and being answered; the
+    // session's call would then be cut, or an error blamed on this one.
+    @Test func aCallThatBecameBusyDuringTheWaitIsNotStarted() async throws {
+        let fixture = try ConversationFixture()
+        let controller = CallController()
+        let release = AsyncStream<Void>.makeStream()
+        controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }
+        controller.attach(fixture.session)
+        defer { controller.detach() }
+        controller.startCall(to: fixture.peer)
+
+        let other = JID("carol@example.org")!
+        fixture.session.callState.send(CallState(sid: "live", peer: other, direction: .incoming, phase: .active, isVideo: false, isCameraOn: false))
+        release.continuation.finish()
+
+        try await waitUntil { controller.startingCall == nil }
+        #expect(controller.error == "You're already in a call.")
+        #expect(fixture.session.callState.value?.sid == "live")
+    }
+
+    @Test func theCallButtonsAreOffForEveryChatWhileOneCallIsPrepared() async throws {
+        let fixture = try ConversationFixture()
+        let controller = CallController()
+        let release = AsyncStream<Void>.makeStream()
+        controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }
+        controller.attach(fixture.session)
+        defer { controller.detach() }
+        #expect(controller.canStartCall)
+
+        controller.startCall(to: fixture.peer)
+
+        #expect(!controller.canStartCall)
+        release.continuation.finish()
+        try await waitUntil { controller.startingCall == nil }
+    }
+
+    @Test func onlyTheButtonThatWasTappedSpins() async throws {
+        let fixture = try ConversationFixture()
+        let controller = CallController()
+        let release = AsyncStream<Void>.makeStream()
+        controller.cameraAccess = { true }
+        controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }
+        controller.attach(fixture.session)
+        defer { controller.detach() }
+
+        controller.startCall(to: fixture.peer, video: true)
+        try await waitUntil { controller.isStarting(fixture.peer, video: true) }
+
+        #expect(controller.isStarting(fixture.peer, video: true))
+        #expect(!controller.isStarting(fixture.peer, video: false))
+        #expect(!controller.isStarting(JID("other@example.com")!, video: true))
+        release.continuation.finish()
+        try await waitUntil { controller.startingCall == nil }
+    }
+
     @Test func aFailedCallHasItsErrorWhenTheSpinnerStops() async throws {
         let fixture = try ConversationFixture()
         let controller = CallController()

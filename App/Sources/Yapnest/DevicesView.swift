@@ -31,6 +31,7 @@ struct DevicesList: View {
     @State private var pendingRemoval: [OMEMODevice]?
     @State private var removal = ServerAction()
     @State private var confirmsReset = false
+    @State private var resetRefusal: String?
 
     private struct PendingVerification: Identifiable {
         let device: OMEMODevice
@@ -141,9 +142,11 @@ struct DevicesList: View {
                 : "They will stop receiving your encrypted messages. Any you still use add themselves back the next time they connect.")
         }
         .actionAlert("Couldn't remove", removal)
+        // Here, not at the root: the root's alerts wait under this sheet.
+        .errorAlert("Couldn't reset encryption", $resetRefusal)
         .alert("Reset encryption for this device?", isPresented: $confirmsReset) {
             Button("Reset", role: .destructive) {
-                Task { await model.replaceEncryptionDevice() }
+                Task { resetRefusal = await model.replaceEncryptionDevice() }
             }
             Button("Cancel", role: .cancel) {}
         } message: {

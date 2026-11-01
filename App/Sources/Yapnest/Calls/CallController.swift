@@ -369,6 +369,22 @@ final class CallController {
     /// Who a call is being started to, while it waits for the connection and
     /// for the contact to be known to take calls. The call buttons spin.
     private(set) var startingCall: JID?
+    /// Whether that call is a video call, so only the button that was tapped spins.
+    private(set) var startingVideo = false
+
+    func isStarting(_ peer: JID, video: Bool) -> Bool {
+        startingCall == peer && startingVideo == video
+    }
+
+    /// Whether the call buttons work: one call at a time, and a second tap
+    /// while the first is being prepared does nothing.
+    var canStartCall: Bool { !isInCall && startingCall == nil }
+
+    /// Whether a call is under way, ringing here or in CallKit's own screen, or
+    /// being prepared; what a reconnect of the account would cut.
+    var hasCallActivity: Bool {
+        startingCall != nil || screen.map { !$0.isOver } == true || session?.callState.value.map { !$0.isOver } == true
+    }
 
     /// Asks CallKit to start a call, which comes back to `perform(start:)`,
     /// once the connection and the peer are there: as the session has just
@@ -378,6 +394,7 @@ final class CallController {
         DiagLog.info(.calls, "Call asked for", .bool("video", video), .value("camera", Self.cameraAuthorization()))
         guard startingCall == nil else { return }
         startingCall = peer
+        startingVideo = video
         Task {
             defer { startingCall = nil }
             if video, !(await cameraAccess()) {
@@ -400,6 +417,13 @@ final class CallController {
                     self.error = error.localizedDescription
                     return
                 }
+            }
+            // The wait can be long enough for another call to come in, or to be
+            // answered; starting this one would cut it.
+            if session?.callState.value?.isOver == false {
+                logStartFailure(.sessionStart, CallError.busy)
+                error = CallError.busy.localizedDescription
+                return
             }
             begin(peer, video: video)
         }

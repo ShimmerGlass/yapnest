@@ -48,7 +48,7 @@ struct CallRowView: View {
 
     var body: some View {
         Button {
-            guard isCallable, !app.calls.isInCall, !isStarting else { return }
+            guard isCallable, app.calls.canStartCall else { return }
             app.calls.startCall(to: model.peer, video: call.callsBackWithVideo(peerTakesVideo: app.videoCallablePeers.contains(model.peer)))
         } label: {
             HStack(spacing: 6) {

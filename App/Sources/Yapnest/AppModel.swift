@@ -140,6 +140,13 @@ final class AppModel {
         var verifyPassword: @MainActor (XMPPSession, _ password: String) async throws -> Bool = {
             try await $0.accepts(password: $1)
         }
+        /// Asks iOS for time to finish something after the app leaves the screen;
+        /// the result gives the time back.
+        var beginBackgroundTask: @MainActor (_ name: String) -> @MainActor () -> Void = { name in
+            let task = BackgroundTaskBox()
+            task.id = UIApplication.shared.beginBackgroundTask(withName: name) { task.end() }
+            return { task.end() }
+        }
         /// Drops every client's FAST token: the app's and the extensions'. The
         /// server may have invalidated them with the old password, and none of
         /// them can tell the others that the password changed.
@@ -458,38 +465,39 @@ final class AppModel {
     /// Makes this install a new encryption device (`XMPPSession.replaceEncryptionDevice`).
     /// The session goes on as the old device, so it's closed first, and the
     /// account opened again as at launch, which registers the new one. The
-    /// screens showing the old session close with it, so a failure is told
-    /// through `encryptionDeviceProblem`.
-    func replaceEncryptionDevice() async {
-        guard case .signedIn(let session) = phase else { return }
-        guard calls.screen == nil else {
-            encryptionDeviceProblem = String(localized: "End the call first: resetting encryption reconnects your account.")
-            return
+    /// screens showing the old session close with it, so a failure after that
+    /// is told through `encryptionDeviceProblem`. A refusal before it, with
+    /// everything still open, is returned for the screen that asked to show.
+    @discardableResult
+    func replaceEncryptionDevice() async -> String? {
+        guard case .signedIn(let session) = phase else { return nil }
+        guard !calls.hasCallActivity else {
+            return String(localized: "End the call first: resetting encryption reconnects your account.")
         }
         // While an extension holds the lock, it runs as the old device and
         // would have its sessions deleted under it.
         let stillOpening = String(localized: "Your account is still being opened. Try again in a moment.")
-        guard sessionLock.isLocked else {
-            encryptionDeviceProblem = stillOpening
-            return
-        }
+        guard sessionLock.isLocked else { return stillOpening }
         let saved: XMPPSession.Credentials
         do {
             guard let stored = try await offMain({ [credentials] in try credentials.load() }), stored.jid == session.account else {
-                encryptionDeviceProblem = String(localized: "This account isn't saved on this device, so it couldn't be opened again.")
-                return
+                return String(localized: "This account isn't saved on this device, so it couldn't be opened again.")
             }
             saved = stored
         } catch {
-            encryptionDeviceProblem = error.localizedDescription
-            return
+            return error.localizedDescription
         }
         // Signed out, or signed in again, while the keychain was read.
-        guard case .signedIn(let current) = phase, current === session else { return }
-        guard sessionLock.isLocked else {
-            encryptionDeviceProblem = stillOpening
-            return
+        guard case .signedIn(let current) = phase, current === session else { return nil }
+        // A call may have come in while the keychain was read.
+        guard !calls.hasCallActivity else {
+            return String(localized: "End the call first: resetting encryption reconnects your account.")
         }
+        guard sessionLock.isLocked else { return stillOpening }
+        // No session handles the app leaving the screen while this runs, and
+        // it holds the lock and the database.
+        let endBackgroundTask = environment.beginBackgroundTask("Reset encryption")
+        defer { endBackgroundTask() }
         phase = .loading
         loadingIsSlow = true
         defer { loadingIsSlow = false }
@@ -511,6 +519,7 @@ final class AppModel {
         } else if let reopenError {
             encryptionDeviceProblem = String(localized: "Encryption was reset, but your account couldn't be opened again: \(reopenError.localizedDescription)")
         }
+        return nil
     }
 
     /// A session that held a candidate password has signed in, with the stored
@@ -1195,5 +1204,20 @@ final class BadgeSync: Sendable {
     func externalChangesMayHaveArrived(in database: AppDatabase) {
         forget()
         try? database.notifyExternalChanges()
+    }
+}
+
+/// A background task that can be ended from the system's expiry handler and
+/// by the work it covers, whichever comes first.
+@MainActor
+private final class BackgroundTaskBox {
+    var id = UIBackgroundTaskIdentifier.invalid
+
+    nonisolated func end() {
+        MainActor.assumeIsolated {
+            guard id != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(id)
+            id = .invalid
+        }
     }
 }

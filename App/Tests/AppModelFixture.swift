@@ -71,6 +71,9 @@ final class AppModelFixture {
         set { opening.withLock { $0 = newValue } }
     }
     private let opening = OSAllocatedUnfairLock(initialState: false)
+    /// The names of the background tasks the model asked for, and how many are still open.
+    private(set) var backgroundTasks: [String] = []
+    private(set) var openBackgroundTasks = 0
     private(set) var fastTokenWipes = 0
     private(set) var diagnosticsWipes = 0
 
@@ -99,6 +102,11 @@ final class AppModelFixture {
             lockHeldDuringReplacement.append(lock.isLocked)
             if let replacementError { throw replacementError }
             try await session.replaceEncryptionDevice()
+        }
+        environment.beginBackgroundTask = { [unowned self] name in
+            backgroundTasks.append(name)
+            openBackgroundTasks += 1
+            return { [unowned self] in openBackgroundTasks -= 1 }
         }
         environment.suspendDelay = suspendDelay
         environment.slowStatusDelay = slowStatusDelay

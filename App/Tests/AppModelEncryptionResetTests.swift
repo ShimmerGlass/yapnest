@@ -65,22 +65,77 @@ struct AppModelEncryptionResetTests {
         // Still waiting for an extension to let go.
         fixture.lock.unlock()
 
-        await fixture.model.replaceEncryptionDevice()
+        let refusal = await fixture.model.replaceEncryptionDevice()
 
-        #expect(fixture.model.encryptionDeviceProblem != nil)
+        #expect(refusal != nil)
         #expect(fixture.lockHeldDuringReplacement.isEmpty)
         #expect(fixture.model.session === session)
         #expect(session.ownFingerprint == fingerprint)
+    }
+
+    // The root's alert waits under the Settings sheet the button is in, so a
+    // refusal made while everything is still open goes back to the screen.
+    @Test func aRefusalIsReturnedToTheScreenThatAskedNotRaisedAtTheRoot() async throws {
+        let (fixture, _) = try await signedIn()
+        fixture.lock.unlock()
+
+        let refusal = await fixture.model.replaceEncryptionDevice()
+
+        #expect(refusal != nil)
+        #expect(fixture.model.encryptionDeviceProblem == nil)
     }
 
     @Test func anAccountTheKeychainDoesNotHoldIsNotReset() async throws {
         let (fixture, session) = try await signedIn()
         try fixture.credentials.delete()
 
-        await fixture.model.replaceEncryptionDevice()
+        let refusal = await fixture.model.replaceEncryptionDevice()
 
-        #expect(fixture.model.encryptionDeviceProblem != nil)
+        #expect(refusal != nil)
         #expect(fixture.lockHeldDuringReplacement.isEmpty)
         #expect(fixture.model.session === session)
+    }
+
+    @Test func aRingingCallIsNotHungUpByAReset() async throws {
+        let (fixture, session) = try await signedIn()
+        let peer = JID("bob@example.org")!
+        session.callState.send(CallState(sid: "s", peer: peer, direction: .incoming, phase: .incoming, isVideo: false, isCameraOn: false))
+
+        let refusal = await fixture.model.replaceEncryptionDevice()
+
+        #expect(refusal != nil)
+        #expect(fixture.lockHeldDuringReplacement.isEmpty)
+        #expect(fixture.model.session === session)
+    }
+
+    @Test func aCallBeingPreparedIsNotCutByAReset() async throws {
+        let (fixture, session) = try await signedIn()
+        let release = AsyncStream<Void>.makeStream()
+        fixture.model.calls.prepareCall = { _, _, _ in for await _ in release.stream { return } }
+        fixture.model.calls.startCall(to: JID("bob@example.org")!)
+
+        let refusal = await fixture.model.replaceEncryptionDevice()
+        release.continuation.finish()
+
+        #expect(refusal != nil)
+        #expect(fixture.model.session === session)
+    }
+
+    @Test func theAppAsksForTimeToFinishAResetAfterLeavingTheScreen() async throws {
+        let (fixture, _) = try await signedIn()
+
+        await fixture.model.replaceEncryptionDevice()
+
+        #expect(fixture.backgroundTasks == ["Reset encryption"])
+        #expect(fixture.openBackgroundTasks == 0, "the time is given back when the reset ends")
+    }
+
+    @Test func aRefusedResetDoesNotHoldBackgroundTime() async throws {
+        let (fixture, _) = try await signedIn()
+        fixture.lock.unlock()
+
+        await fixture.model.replaceEncryptionDevice()
+
+        #expect(fixture.backgroundTasks.isEmpty)
     }
 }
