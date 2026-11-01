@@ -289,6 +289,69 @@ struct StreamErrorStrikeTests {
         #expect(strikes(id) == 1)
     }
 
+    private func bounce(_ id: String, type: String, condition: String) {
+        let stanza: Martin.Message = parseStanza("""
+        <message type='error' from='alice@example.org' to='me@example.org/t' id='\(id)'>
+        <error type='\(type)'><\(condition) xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></message>
+        """)
+        session.handle(stanza, source: .live)
+    }
+
+    private func givenUpReaction() throws -> String {
+        let conversation = try #require(try database.conversation(with: alice).id)
+        let incoming = try database.insert(YapnestKit.Message(conversationId: conversation, direction: .incoming, sender: alice, body: "hi", remoteId: "1"))
+        try session.toggleReaction("👍", on: incoming, peer: alice)
+        session.drainSendQueue(alice)
+        let id = try #require(try database.reader.read { try Reaction.fetchOne($0)?.pendingId })
+        for _ in 0..<2 {
+            close(with: streamError("policy-violation"))
+            reconnect()
+        }
+        close(with: streamError("policy-violation"))
+        #expect(try database.reader.read { try Reaction.fetchOne($0)?.pendingId } == nil)
+        return id
+    }
+
+    @Test func aPassingBounceOfGivenUpReactionsDoesNotMakeThemPendingOrSendThemAgain() throws {
+        let id = try givenUpReaction()
+        let error = try database.reader.read { try Reaction.fetchOne($0)?.error }
+        let writes = written(id)
+
+        bounce(id, type: "wait", condition: "resource-constraint")
+        session.sendUnclaimedPending()
+        session.drainSendQueue(alice)
+
+        #expect(try database.reader.read { try Reaction.fetchOne($0)?.pendingId } == nil)
+        #expect(try database.reader.read { try Reaction.fetchOne($0)?.error } == error)
+        #expect(written(id) == writes)
+    }
+
+    @Test func aPassingBounceOfAGivenUpCorrectionDoesNotMakeItPendingOrSendItAgain() throws {
+        let conversation = try #require(try database.conversation(with: alice).id)
+        let original = try database.insert(YapnestKit.Message(
+            conversationId: conversation, direction: .outgoing, sender: me, body: "hello", status: .sent, remoteId: "m1",
+        ))
+        try session.edit(original, to: "hello there")
+        session.drainSendQueue(alice)
+        let actionId = try #require(try stored(original).actionPendingId)
+        for _ in 0..<2 {
+            close(with: streamError("policy-violation"))
+            reconnect()
+        }
+        close(with: streamError("policy-violation"))
+        let error = try stored(original).actionError
+        #expect(error != nil)
+        let writes = written(actionId)
+
+        bounce(actionId, type: "wait", condition: "resource-constraint")
+        session.sendUnclaimedPending()
+        session.drainSendQueue(alice)
+
+        #expect(try stored(original).actionPendingId == nil)
+        #expect(try stored(original).actionError == error)
+        #expect(written(actionId) == writes)
+    }
+
     // MARK: Probation
 
     @Test func aStanzaStruckOnceIsSentAloneAndTheRestWaitsForItsAcknowledgement() async throws {
@@ -386,7 +449,6 @@ struct StreamErrorStrikeTests {
         let end = Int(range?.attribute("end") ?? "") ?? -1
         #expect(String(wired.body!.unicodeScalars.dropFirst(end)) == "ab hello")
     }
-}
 
     @Test(arguments: [XMPPSession.Mode.app, .notificationService, .share])
     func endingProbationSendsPendingMessagesOnlyInTheApp(mode: XMPPSession.Mode) async throws {
@@ -410,3 +472,4 @@ struct StreamErrorStrikeTests {
 
         #expect(wire.messages.count == expected)
     }
+}

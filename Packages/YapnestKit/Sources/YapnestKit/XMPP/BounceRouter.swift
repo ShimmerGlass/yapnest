@@ -78,6 +78,11 @@ struct BounceRouter {
         passes[key] = nil
     }
 
+    /// Stops routing errors of `id`, as its item was given up on and shows why.
+    mutating func remove(_ id: String) {
+        if let entry = entries[id] { drop(id, entry) }
+    }
+
     /// Takes the owner of `id` if `from` may answer for it, and what the error
     /// means for it. Nil if the stanza isn't one we know of.
     mutating func route(_ id: String, from: JID?, account: JID, error: ServerError, now: Date = Date()) -> (owner: Owner, outcome: Outcome)? {

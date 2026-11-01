@@ -75,6 +75,9 @@ extension XMPPSession {
     /// didn't reach the others, with a way to try again.
     func giveUpPending(_ kind: PendingKind, id: String, because reason: String?) {
         endWrite(kind, id: id)
+        // A later error of the stanza would otherwise make the item pending
+        // again and send it, or replace the reason shown.
+        lock.withLock { $0.bounces.remove(id) }
         try? database.clearPending(kind, id: id, error: reason)
     }
 
