@@ -262,6 +262,19 @@ struct PendingRosterTests {
         #expect(!session.lock.withLock { $0.awaitsRoster })
     }
 
+    @Test func anAcceptWhoseAnswerCouldNotBeSentIsNotCountedDone() async throws {
+        try await session.acceptContactRequest(from: stranger)
+        // The connection goes away after the server took the roster item.
+        connect { [wire] iq in
+            wire.failsWrites = true
+            return FakeWire.result(to: iq)
+        }
+        session.sendPendingRosterChanges()
+        #expect(await eventually { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(try contact(stranger).hasContactRequest)
+        #expect(session.warnings.current.first?.title == "Couldn't accept the request")
+    }
+
     @Test func aRefusedRenameShowsTheOldNameAgain() async throws {
         try await session.setContactName(alice, name: "Ally")
         connect { FakeWire.error(to: $0, condition: "not-allowed", type: "cancel") }

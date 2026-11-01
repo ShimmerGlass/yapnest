@@ -272,9 +272,10 @@ struct SubscribeConsentTests {
         #expect(try db.contact(carol)?.hasContactRequest == false)
     }
 
-    @Test func someoneTheUserAddedIsApproved() throws {
+    @Test func someoneTheUserAddedIsApproved() async throws {
         wire.answer { FakeWire.result(to: $0) }
         session.addContact(carol)
+        #expect(await eventually { approvals.count == 1 })
         let sentByAdding = approvals.count
         try db.updateRosterItem(jid: carol, name: nil, subscription: .to, isPending: false)
         try subscribe(from: carol)

@@ -16,15 +16,19 @@ extension XMPPSession {
         }
     }
 
-    /// Adds `jid` to the roster and asks to see their presence. Also
-    /// pre-approves theirs, so adding each other works in one step. Writes to
-    /// the database, so call it off the main thread. A `preauth` token from
-    /// an invitation (XEP-0379) goes with the request.
+    /// `addContactAndWait` for a caller that doesn't show the outcome, so a
+    /// failure is only logged. The JID counts as added, and the subscription
+    /// request goes out, only once the server has taken the roster item. Writes
+    /// to the database, so call it off the main thread.
     public func addContact(_ jid: JID, name: String? = nil, preauth: String? = nil) {
         guard isConnected, jid != account else { return }
-        markAddedBeforeAsking(jid)
-        client.module(.roster).addItem(jid: Martin.JID(jid.martin), name: name, groups: [], completionHandler: nil)
-        askToSubscribe(to: jid, preauth: preauth)
+        Task {
+            do {
+                try await addContactNow(jid, name: name, preauth: preauth)
+            } catch {
+                logger.error("Failed to add a contact: \(error)")
+            }
+        }
     }
 
     /// `addContact` for a button that shows the outcome: it waits for the
@@ -43,7 +47,7 @@ extension XMPPSession {
         // Only once the server took the item: a refused or unanswered add
         // must not leave a stranger's later request auto-approved.
         markAddedBeforeAsking(jid)
-        askToSubscribe(to: jid, preauth: preauth)
+        try await askToSubscribe(to: jid, preauth: preauth)
     }
 
     /// Before the subscription request is sent, so their request, which may
@@ -56,10 +60,12 @@ extension XMPPSession {
         }
     }
 
-    private func askToSubscribe(to jid: JID, preauth: String?) {
+    /// Throws if the connection doesn't take them, so that what asked isn't
+    /// counted done and, queued, is sent again on the next connect.
+    private func askToSubscribe(to jid: JID, preauth: String?) async throws {
         // Tells them who is asking (XEP-0172), as they only have an address.
-        write(OutboundStanza.subscriptionRequest(to: jid, nickname: nickname, preauth: preauth))
-        client.module(.presence).subscribed(by: Martin.JID(jid.martin))
+        try await client.context.writer.write(stanza: OutboundStanza.subscriptionRequest(to: jid, nickname: nickname, preauth: preauth))
+        try await client.module(.presence).subscribed(by: Martin.JID(jid.martin))
     }
 
     /// Reads the roster of a new session. What passes is retried; a final
