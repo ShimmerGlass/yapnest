@@ -30,6 +30,26 @@ struct RenderedText: Equatable {
     /// The body is nothing but a few emoji, drawn large (see `emojiOnlyCount`).
     var isEmojiOnly = false
 
+    /// `prefix`, as it is, at the start of the first line; on a line of its own
+    /// when the text begins with a block that can't carry it.
+    fileprivate func prefixed(with prefix: String, font: MessageText.BodyFont) -> RenderedText {
+        var result = self
+        var lead = AttributedString(prefix)
+        lead.font = font.swiftUI
+        guard var first = result.segments.first, !first.isPreformatted else {
+            result.segments.insert(.init(id: -1, depth: 0, text: lead), at: 0)
+            return result
+        }
+        first.text = lead + first.text
+        if let native = first.native {
+            let combined = NSMutableAttributedString(string: prefix, attributes: [.font: font.uiFont])
+            combined.append(native)
+            first.native = combined
+        }
+        result.segments[0] = first
+        return result
+    }
+
     fileprivate static func plain(_ string: String, font: MessageText.BodyFont) -> RenderedText {
         var text = AttributedString(string)
         text.font = font.swiftUI
@@ -141,7 +161,7 @@ enum MessageText {
         case .notForThisDevice:
             .plain(String(localized: "Not encrypted for this device"), font: .italicBody)
         case .action(let name):
-            render("\(name) \(Message.meAction(in: body) ?? "")", font: .italicBody)
+            renderAction(body, name: name, collapsed: collapsed)
         case .normal:
             if collapsed, let start = collapse(body) {
                 with(render(start, font: .body)) { $0.isCollapsed = true }
@@ -149,6 +169,16 @@ enum MessageText {
                 renderWhole(body)
             }
         }
+    }
+
+    /// The nick is not the sender's text: the name is shown as it is, and
+    /// only what follows is read for links and styles.
+    private static func renderAction(_ body: String, name: String, collapsed: Bool) -> RenderedText {
+        let action = Message.meAction(in: body) ?? ""
+        let start = collapsed ? collapse(action) : nil
+        var rendered = render(start ?? action, font: .italicBody).prefixed(with: "\(name) ", font: .italicBody)
+        rendered.isCollapsed = start != nil
+        return rendered
     }
 
     private static func with(_ text: RenderedText, _ change: (inout RenderedText) -> Void) -> RenderedText {

@@ -280,6 +280,23 @@ struct MessageTextTests {
         #expect(shown.allSatisfy { $0.font == Font.body.italic() })
     }
 
+    @Test func anActionsNameIsNotReadAsStyledText() {
+        let shown = runs("/me waves", kind: .action(name: "*Alice*")).flatMap { $0 }
+        #expect(shown.map(\.text).joined() == "*Alice* waves")
+        #expect(shown.allSatisfy { $0.font == Font.body.italic() })
+    }
+
+    @Test func aLongActionIsCutShortLikeAnyLongMessage() {
+        let body = "/me " + String(repeating: "waves ", count: 400)
+        let collapsed = MessageText.render(body, kind: .action(name: "Alice"), collapsed: true)
+        let whole = MessageText.render(body, kind: .action(name: "Alice"))
+        #expect(collapsed.isCollapsed)
+        #expect(!whole.isCollapsed)
+        let shown = collapsed.segments.map { String($0.text.characters) }.joined()
+        #expect(shown.hasPrefix("Alice waves"))
+        #expect(shown.count < 800)
+    }
+
     @Test func rightToLeftTextKeepsItsLinksAndStyles() {
         let body = "مرحبا *عالم* https://example.com/ar ثم _نص_"
         #expect(links(body) == ["https://example.com/ar"])
