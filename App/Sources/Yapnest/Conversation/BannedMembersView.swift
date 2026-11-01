@@ -12,6 +12,7 @@ struct BannedMembersView: View {
     @State private var loadList = ServerAction()
     @State private var lifting = ServerAction()
     @State private var isLoading = true
+    @State private var loadFailure: String?
     @State private var names: [JID: String] = [:]
 
     private var banned: [JID] {
@@ -29,6 +30,15 @@ struct BannedMembersView: View {
             if banned.isEmpty {
                 if isLoading {
                     ProgressView()
+                } else if let loadFailure {
+                    // Not "No one is banned": the list was never read.
+                    ContentUnavailableView {
+                        Label("Couldn't Load the List", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(loadFailure)
+                    } actions: {
+                        Button("Try Again") { load() }
+                    }
                 } else {
                     ContentUnavailableView("No one is banned", systemImage: "nosign")
                 }
@@ -39,19 +49,29 @@ struct BannedMembersView: View {
         .sheetDoneButton()
         .actionAlert("Couldn't load the banned list", loadList)
         .actionAlert("Couldn't unban", lifting)
-        .task {
-            // The room's list replaces what we have, so it is read before the
-            // spinner goes.
-            loadList.run { [session, room] in
-                defer { isLoading = false }
-                try await session.refreshBanList(of: room)
-            }
-        }
+        .task { load() }
         .task(id: banned) {
             let session = session, jids = banned
             names = await offMain {
                 (try? session.database.contactNames(of: jids)) ?? [:]
             }
+        }
+    }
+
+    private func load() {
+        // The room's list replaces what we have, so it is read before the
+        // spinner goes.
+        loadList.run { [session, room] in
+            isLoading = true
+            loadFailure = nil
+            do {
+                try await session.refreshBanList(of: room)
+            } catch {
+                loadFailure = ServerError.userMessage(for: error)
+                isLoading = false
+                throw error
+            }
+            isLoading = false
         }
     }
 
