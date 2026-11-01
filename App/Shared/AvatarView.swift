@@ -144,11 +144,25 @@ extension ContactPresence {
 /// Decoded avatars, keyed by file and size; the files are named by content
 /// hash, so an entry never goes stale.
 enum AvatarImageCache {
+    /// What a decode costs: its size in pixels and the bytes the cache of them
+    /// may hold. The share sheet shows 40 pt pictures in a process with about
+    /// 120 MB, so it keeps far fewer and decodes them smaller.
+    struct Budget: Equatable {
+        var smallPixels: Int
+        var smallBytes: Int
+    }
+
+    static func budget(isExtension: Bool) -> Budget {
+        isExtension ? Budget(smallPixels: 128, smallBytes: 3_000_000) : Budget(smallPixels: 256, smallBytes: 28_000_000)
+    }
+
+    private static let current = budget(isExtension: Bundle.main.bundleURL.pathExtension == "appex")
+
     // NSCache is thread-safe; lookups come from `body`, decoding from a task.
     // The larger ones have a cache of their own, so a lookup from `body` needs
-    // no key built for it. Bytes of decoded pixels, about 32 MB in all; the
-    // large ones are only on the call screen.
-    nonisolated(unsafe) private static let small = cache(limit: 28_000_000)
+    // no key built for it. Bytes of decoded pixels, about 32 MB in all in the
+    // app; the large ones are only on the call screen.
+    nonisolated(unsafe) private static let small = cache(limit: current.smallBytes)
     nonisolated(unsafe) private static let large = cache(limit: 4_000_000)
 
     private static func cache(limit: Int) -> NSCache<NSURL, UIImage> {
@@ -165,13 +179,13 @@ enum AvatarImageCache {
         cache(large: large).object(forKey: url as NSURL)
     }
 
-    /// Decodes at 256 px, which covers an avatar up to 80 pt at 3x, or at
+    /// Decodes at 256 px (see `budget`), which covers an avatar up to 80 pt at 3x, or at
     /// 512 px for the larger ones (140 pt on the call screen), as the file
     /// comes from other people and may be far larger than an avatar.
     static func load(at url: URL, large: Bool) async -> UIImage? {
         await decodeOffMain {
             if let image = cached(at: url, large: large) { return image }
-            guard let cgImage = AvatarStore.thumbnail(at: url, pixels: large ? 512 : 256) else { return nil }
+            guard let cgImage = AvatarStore.thumbnail(at: url, pixels: large ? 512 : current.smallPixels) else { return nil }
             let image = UIImage(cgImage: cgImage)
             cache(large: large).setObject(image, forKey: url as NSURL, cost: cgImage.bytesPerRow * cgImage.height)
             return image
