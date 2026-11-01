@@ -1,4 +1,5 @@
 import Foundation
+import enum Network.NWError
 import Testing
 @testable import YapnestKit
 
@@ -497,7 +498,8 @@ struct SafeFetcherTests {
                 _ = try await fetch("https://\(host)/")
                 Issue.record("\(host) was fetched")
             } catch let error as FetchError {
-                guard case .refused = error else { Issue.record("\(host): \(error)"); continue }
+                // A resolver's answer can pass (a captive portal's), so it is retried later.
+                guard error == .unreachable("address is local") else { Issue.record("\(host): \(error)"); continue }
             }
         }
         await #expect(throws: FetchError.self) { try await fetch("https://empty.example/") }
@@ -575,7 +577,7 @@ struct SafeFetcherTests {
     @Test func aFailureAfterTheRequestWasSentIsNotRetriedOnAnotherAddress() async {
         transport.dns["site.example"] = [ip("93.184.216.34"), ip("93.184.216.35")]
         transport.scripts["site.example"] = [[Data("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc".utf8)]]
-        await #expect(throws: FetchError.badResponse) { try await fetch("https://site.example/") }
+        await #expect(throws: FetchError.unreachable("response cut short")) { try await fetch("https://site.example/") }
         #expect(transport.connects.count == 1)
     }
 
@@ -613,6 +615,12 @@ struct SafeFetcherTests {
     @Test func redirectWithoutLocationIsReturnedAsIs() async throws {
         transport.scripts["site.example"] = [Self.response(302)]
         #expect(try await fetch("https://site.example/").status == 302)
+    }
+
+    @Test func aTLSConnectionThatWasOnlyCutIsRetryableButACertificateFailureIsNot() {
+        #expect(NWFetchConnection.map(.tls(-9806)).isRetryable)
+        #expect(NWFetchConnection.map(.tls(-9816)).isRetryable)
+        #expect(!NWFetchConnection.map(.tls(-9807)).isRetryable)
     }
 
     @Test func badResponsesMapToErrors() async {

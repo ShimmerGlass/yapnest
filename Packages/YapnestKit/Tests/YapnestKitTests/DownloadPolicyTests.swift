@@ -49,8 +49,12 @@ struct DownloadPolicyTests {
         transport.dns = ["rebind.example.com": [IPAddress(literal: "192.168.1.1")!]]
         let components = URLComponents(string: "https://user@up.example.com/")!
         #expect(throws: FetchError.refused("credentials in URL")) { _ = try AddressVetting.hostKind(of: components) { _ in true } }
-        await #expect(throws: FetchError.refused("address is local")) {
+        // A name's local answer may be a resolver's, so it is tried again later; a literal is final.
+        await #expect(throws: FetchError.unreachable("address is local")) {
             try await AddressVetting.addresses(for: .name("rebind.example.com"), transport: transport, timeout: 1)
+        }
+        await #expect(throws: FetchError.refused("address is local")) {
+            try await AddressVetting.addresses(for: .literal(IPAddress(literal: "192.168.1.1")!), transport: transport, timeout: 1)
         }
     }
 

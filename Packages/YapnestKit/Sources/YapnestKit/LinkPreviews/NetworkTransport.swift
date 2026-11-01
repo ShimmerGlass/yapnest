@@ -167,8 +167,14 @@ final class NWFetchConnection: FetchConnection, @unchecked Sendable {
         connection.cancel()
     }
 
-    private static func map(_ error: NWError) -> FetchError {
-        if case .tls = error { return .refused("TLS: \(error)") }
+    /// SecureTransport's errSSLClosedGraceful, errSSLClosedAbort and
+    /// errSSLClosedNoNotify: the peer or the network ended the handshake.
+    private static let closedTLSStatuses: Set<OSStatus> = [-9805, -9806, -9816]
+
+    /// A TLS failure is final (a certificate that doesn't fit) unless the
+    /// connection was only cut.
+    static func map(_ error: NWError) -> FetchError {
+        if case .tls(let status) = error, !closedTLSStatuses.contains(status) { return .refused("TLS: \(error)") }
         return .unreachable("\(error)")
     }
 }

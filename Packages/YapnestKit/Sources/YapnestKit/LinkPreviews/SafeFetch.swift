@@ -141,7 +141,12 @@ enum AddressVetting {
         case .name(let name): candidates = try await transport.resolve(name, timeout: timeout)
         }
         switch try AddressPolicy.vet(candidates, transport: transport) {
-        case .blocked: throw FetchError.refused("address is local")
+        case .blocked:
+            // A name that resolves to a local address is often a captive
+            // portal's or a flaky resolver's answer, which passes; only a
+            // literal address is final.
+            if case .literal = host { throw FetchError.refused("address is local") }
+            throw FetchError.unreachable("address is local")
         case .allowed(let allowed): return allowed
         }
     }
@@ -261,7 +266,9 @@ final class SafeFetcher: LinkFetching {
                 var parser = HTTP1ResponseParser(limits: limits)
                 while !parser.isComplete {
                     guard let chunk = try await connection.receive() else {
-                        try parser.receiveEnd()
+                        // A connection that closed early (a reset, a dropped
+                        // network) says nothing about the page.
+                        do { try parser.receiveEnd() } catch { throw FetchError.unreachable("response cut short") }
                         break
                     }
                     try parser.receive(chunk)

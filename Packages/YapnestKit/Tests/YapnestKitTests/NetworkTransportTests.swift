@@ -251,18 +251,18 @@ struct SafeFetcherOverSocketsTests {
         #expect(await eventually { server.closedByClient == 1 })
     }
 
-    @Test func aServerThatClosesBeforeAnsweringIsABadResponse() async throws {
+    @Test func aServerThatClosesBeforeAnsweringIsRetryable() async throws {
         let server = try await LocalHTTPServer(replies: [.closeWithoutAnswer])
         defer { server.stop() }
-        await #expect(throws: FetchError.badResponse) { try await fetch(server, "https://site.example/") }
+        await #expect(throws: FetchError.unreachable("response cut short")) { try await fetch(server, "https://site.example/") }
     }
 
-    @Test func aBodyCutShortByTheServerIsABadResponse() async throws {
+    @Test func aBodyCutShortByTheServerIsRetryable() async throws {
         let server = try await LocalHTTPServer(replies: [.send([
             LocalHTTPServer.response(200, ["Content-Type": "image/png", "Content-Length": "100"], length: false), Data("abc".utf8),
         ])])
         defer { server.stop() }
-        await #expect(throws: FetchError.badResponse) { try await fetch(server, "https://site.example/") }
+        await #expect(throws: FetchError.unreachable("response cut short")) { try await fetch(server, "https://site.example/") }
     }
 
     @Test func cancellationHangsUp() async throws {
