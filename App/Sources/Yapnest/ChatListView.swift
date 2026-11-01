@@ -484,6 +484,8 @@ private struct ChatListContent: View {
     @State private var search = ""
     @State private var pendingDelete: ChatListItem?
     @State private var leaving = ServerAction()
+    @State private var writes = SettingsWrites()
+    @State private var actionFailure: String?
     @State private var requests: [Contact]?
     @State private var invitations: [GroupInvitation]?
     @State private var messageResults: [MessageSearchResult] = []
@@ -660,6 +662,7 @@ private struct ChatListContent: View {
             }
         }
         .actionAlert("Couldn't leave group", leaving)
+        .errorAlert("Couldn't change the chat", $actionFailure)
         .overlay {
             if leaving.isBusy {
                 ProgressView()
@@ -767,17 +770,19 @@ private struct ChatListContent: View {
     }
 
     private func delete(_ item: ChatListItem) {
-        // Removing the attachment files is disk work.
-        perform { [session] in try session.deleteConversation(id: item.id) }
-        onDelete(item.conversation.peer)
+        // Removing the attachment files is disk work. The open chat closes
+        // only once it is gone.
+        perform({ [session] in try session.deleteConversation(id: item.id) }, then: { onDelete(item.conversation.peer) })
     }
 
     /// Quick local writes, still not for the main thread: the list updates
-    /// when the observation sees them.
-    private func perform(_ action: @escaping @Sendable () throws -> Void) {
-        Task {
-            do { try await offMain(action) } catch { DiagLog.error(.app, "Chat action failed", .error(error)) }
-        }
+    /// when the observation sees them. In the order they were made, and a
+    /// failure is shown rather than left in the log.
+    private func perform(_ action: @escaping @Sendable () throws -> Void, then: @escaping @MainActor () -> Void = {}) {
+        writes.run(action, onSuccess: { _ in then() }, onFailure: { error in
+            DiagLog.error(.app, "Chat action failed", .error(error))
+            actionFailure = error.localizedDescription
+        })
     }
 }
 
