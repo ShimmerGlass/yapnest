@@ -140,7 +140,7 @@ public final class AttachmentStore: Sendable {
         let duration = AudioFormat.isAudio(mimeType: nil, name: name) ? AudioWaveform.duration(of: destination) : nil
         if isVideo {
             dimensions = await Self.videoSize(of: destination)
-        } else {
+        } else if Self.isImage(name: storedName) {
             dimensions = Self.imageSize(ofFileAt: destination)
         }
         return Imported(file: file, name: storedName, size: destination.fileSize, width: dimensions?.width, height: dimensions?.height, duration: duration)

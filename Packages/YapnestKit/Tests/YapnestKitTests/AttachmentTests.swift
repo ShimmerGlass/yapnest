@@ -198,6 +198,14 @@ struct AttachmentTests {
         #expect((video.width, video.height) == (64, 32))
     }
 
+    @Test func aFileThatIsNotNamedLikeAnImageIsNotSniffedForOne() async throws {
+        let png = cameraImageData(.png, withLocation: false)
+        let named = try await withImportedFile(png, name: "doc.pdf") { _ in }
+        #expect(named.width == nil && named.height == nil)
+        let image = try await withImportedFile(png, name: "pic.png") { _ in }
+        #expect(image.width != nil)
+    }
+
     private func hasLocation(_ url: URL) async throws -> Bool {
         let items = try await AVURLAsset(url: url).load(.metadata)
         return items.contains { $0.identifier == .quickTimeMetadataLocationISO6709 }
