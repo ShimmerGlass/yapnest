@@ -178,4 +178,11 @@ struct ServerErrorTests {
         #expect(ServerError(CocoaError(.fileNoSuchFile) as Error) == nil)
         #expect(!DiagField.error(URLError(.timedOut)).rendered.contains("condition"))
     }
+
+    @Test func martinsNotConnectedFailureIsAPassingErrorNotARefusal() {
+        let notConnected = XMPPError.not_authorized("You are not connected to the XMPP server")
+        #expect(ServerError.classify(notConnected).isPassing)
+        #expect(!ServerError.isFinalRefusal(notConnected))
+        #expect(ServerError.isFinalRefusal(XMPPError.not_authorized("Not for you")))
+    }
 }

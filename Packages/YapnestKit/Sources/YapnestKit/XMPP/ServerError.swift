@@ -79,8 +79,21 @@ public struct ServerError: Error, Equatable, Sendable {
     /// The server's own type is lost here, and an internal error is what a
     /// restarting service answers with `wait`, so it is taken as passing.
     public init(_ error: XMPPError) {
+        if Self.isLocalNotConnected(error) {
+            self = .timedOut
+            return
+        }
         let condition = error.errorCondition
         self.init(condition: condition.rawValue, type: condition == .internal_server_error ? .wait : nil, text: error.message)
+    }
+
+    /// Martin answers a stanza sent while the stream is down with a
+    /// not-authorized of its own making ("You are not connected to the XMPP
+    /// server"). No server said it, so it is the connection dropping, not a
+    /// refusal for good.
+    static func isLocalNotConnected(_ error: Error) -> Bool {
+        if case XMPPError.not_authorized(let message?) = error { return message.contains("not connected") }
+        return false
     }
 
     public init(_ error: PubSubError) {

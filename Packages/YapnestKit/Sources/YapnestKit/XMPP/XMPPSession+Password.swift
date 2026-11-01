@@ -281,8 +281,6 @@ extension XMPPSession {
     }
 
     static func outcomeIsUnknown(after error: Error) -> Bool {
-        // A connection that went away reads as Martin's not-authorized.
-        if case XMPPError.not_authorized(let message?) = error, message.contains("not connected") { return true }
         return ServerError.classify(error).isPassing && !ServerRetry.isRefusal(error)
     }
 

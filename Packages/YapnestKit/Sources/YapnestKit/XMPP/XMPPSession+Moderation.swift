@@ -24,7 +24,7 @@ extension XMPPSession {
     /// would be taken for the room refusing us.
     static func roomRequestError(_ error: Error, isConnected: Bool) -> Error {
         if !isConnected { return GroupError.notConnected }
-        if case XMPPError.not_authorized(let message?) = error, message.contains("not connected") { return GroupError.notConnected }
+        if ServerError.isLocalNotConnected(error) { return GroupError.notConnected }
         return error
     }
 
