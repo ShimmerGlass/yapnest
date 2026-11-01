@@ -1507,6 +1507,7 @@ public final class XMPPSession: @unchecked Sendable {
                     // What was unacknowledged is sent again, and claims anew.
                     $0.sends.reset()
                     $0.pendingStanzas.reset()
+                    $0.deferredSends = [:]
                     $0.repended = []
                     $0.uploadService = nil
                     $0.mucService = nil
@@ -1802,6 +1803,7 @@ public final class XMPPSession: @unchecked Sendable {
                     // After what came before it in the archive.
                     flushArchive(query: query, endsPage: false)
                     try? database.confirmArchived(inbound)
+                    publishReadStateAwaiting(inbound)
                     // We wrote there, so we'd read what came before, though
                     // a new device can't read what.
                     if case .ownCopy = result { try? database.markRead(before: inbound) }
@@ -1832,7 +1834,7 @@ public final class XMPPSession: @unchecked Sendable {
         noteChatStates(of: inbound, source: source)
         if case .archive = source {
             bufferArchived(inbound, query: query) { [weak self, inbound] result in
-                self?.publishReadStateAwaiting(result, peer: inbound.peer)
+                self?.publishReadStateAwaiting(inbound)
                 guard !isHistory else {
                     // Old, read and long answered: only a retraction still
                     // has something to clean up.
@@ -1852,7 +1854,7 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// What follows storing a 1:1 stanza.
     private func stored(_ inbound: InboundMessage, _ result: IngestResult, source: InboundMessage.Source) {
-        publishReadStateAwaiting(result, peer: inbound.peer)
+        publishReadStateAwaiting(inbound)
         if let message = result.editedMessage { events.send(.editedMessage(message)) }
         if let message = result.newMessage {
             events.send(.newMessage(message))
@@ -2291,6 +2293,11 @@ public final class XMPPSession: @unchecked Sendable {
     /// leaves the catch-up to `resumeInterruptedCatchUps` or the newer connection.
     private struct ArchivePageInterrupted: Error {}
 
+    /// A page came but the database refused it.
+    struct ArchivePageNotStored: LocalizedError {
+        var errorDescription: String? { String(localized: "Couldn't save some of the messages.") }
+    }
+
     /// The sync ended with a page unread, and the cursor stayed before it, so
     /// the next session reads it again. Until then there may be a gap.
     private func archiveReadFailed(_ error: Error) {
@@ -2369,7 +2376,8 @@ public final class XMPPSession: @unchecked Sendable {
             switch result {
             case .success where !stored:
                 // Going on would move the cursor past the page that was lost.
-                done(nil)
+                // The sync ends with the cursor before it, and says so.
+                done(ArchivePageNotStored())
             case .success(let page):
                 // Results for this page were delivered before the query's answer.
                 if let last = page.rsm?.last {

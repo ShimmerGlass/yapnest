@@ -369,6 +369,40 @@ struct OwedReadStateTests {
         #expect(publishes().isEmpty)
     }
 
+    @Test func aMessageThatIsNotTheOneAStateNamesDoesNotStartAnotherRound() async throws {
+        try readOffline()
+        serve(holding: [DisplayedState(peer: alice, stanzaId: "unknown", by: me)])
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(owed)
+        // Stored without ingest, which would start the round that finds it.
+        try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "reply",
+                              timestamp: Date(timeIntervalSince1970: 10), serverId: "unknown"))
+        let other: Martin.Message = parseStanza("<message from='alice@example.org/phone' type='chat' id='other'><body>hi</body><stanza-id xmlns='urn:xmpp:sid:0' by='me@example.org' id='other'/></message>")
+        session.handle(other, source: .live)
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(owed)
+        #expect(publishes().isEmpty)
+    }
+
+    @Test func aMessageThatGainsTheStanzaIdAStateNamesStartsAnotherRound() async throws {
+        try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "reply",
+                              timestamp: Date(timeIntervalSince1970: 10), status: .sent, remoteId: "r1"))
+        try readOffline()
+        serve(holding: [DisplayedState(peer: alice, stanzaId: "unknown", by: me)])
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        _ = await eventually(timeout: 0.5) { false }
+        #expect(owed)
+        // Our own message, as the archive has it, which only gives the stored one its stanza-id.
+        let copy: Martin.Message = parseStanza("<message from='me@example.org/phone' to='alice@example.org' type='chat' id='r1'><body>reply</body></message>")
+        session.handle(copy, source: .archive(serverId: "unknown", timestamp: Date(timeIntervalSince1970: 10)))
+        session.flushArchive()
+        #expect(await eventually { !owed })
+        #expect(publishes().isEmpty)
+    }
+
     @Test func aNewerMessageOfOursNamedByAnotherDeviceIsNotPublishedOver() async throws {
         try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "reply",
                               timestamp: Date(timeIntervalSince1970: 10), serverId: "mine"))
@@ -421,7 +455,7 @@ struct OwedReadStateTests {
         serve { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
         session.connectForTesting(wire)
         session.fetchDisplayed()
-        #expect(await eventually { session.warnings.current.map(\.key) == ["readState"] && !owed })
+        #expect(await eventually { session.warnings.current.map(\.key) == ["readState:\(alice)"] && !owed })
     }
 
     @Test func aPassingErrorKeepsItOwedForTheNextConnect() async throws {

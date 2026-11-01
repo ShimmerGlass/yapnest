@@ -803,6 +803,9 @@ extension XMPPSession {
     /// our bookmark (a kick, a destroy): it is retracted once connected, and
     /// until it is, no catch-up may join the group again from it.
     func markLeft(_ room: JID, owingBookmark: Bool = false) {
+        // Whatever waited for the room was for a visit that is over; sent
+        // after a later join it could replay over newer stanzas.
+        dropDeferred(in: room)
         try? database.updateGroupChat(room) {
             $0.hasLeft = true
             $0.bookmarkOwed = owingBookmark
@@ -1561,6 +1564,7 @@ extension XMPPSession {
                     if let inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: source) {
                         flushArchive(query: query, endsPage: false)
                         try? database.confirmArchived(inbound)
+                        publishReadStateAwaiting(inbound)
                         // We wrote there, so we'd read what came before.
                         if case .ownCopy = result { try? database.markRead(before: inbound) }
                     }
@@ -1643,7 +1647,7 @@ extension XMPPSession {
     }
 
     func storedRoomMessage(_ inbound: InboundMessage, _ result: IngestResult, isPrivate: Bool) {
-        publishReadStateAwaiting(result, peer: inbound.peer)
+        publishReadStateAwaiting(inbound)
         if let attachment = result.retractedAttachment { attachments.remove(attachment) }
         if let message = result.editedMessage { events.send(.editedMessage(message)) }
         if let message = result.newMessage {
@@ -2404,7 +2408,6 @@ extension XMPPSession {
         withdrawJoin(room)
         cancelRejoin(room, resettingBackoff: true)
         updateRoom(room) { $0 = nil }
-        dropDeferred(in: room)
         markLeft(room)
         ShareSuggestions.remove([room])
         warnings.clear(room: room)

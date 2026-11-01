@@ -122,6 +122,27 @@ struct ArchiveCatchUpFailureTests {
         #expect(session.warnings.current.map(\.title) == ["Some messages may be missing"])
     }
 
+    @Test func aPageTheDatabaseRefusesEndsTheSyncWithAWarningAndTheCursorWhereItWas() async throws {
+        let session = session
+        wire.answer { request in
+            guard let query = request.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") else { return nil }
+            session.client.module(.mam).archivedMessagesPublisher.send(.init(
+                messageId: "s-new", source: me.martin, query: .init(id: query.getAttribute("queryid") ?? "", version: .MAM2),
+                timestamp: Date(timeIntervalSince1970: 100),
+                message: parseStanza("<message from='alice@example.org/phone' to='me@example.org' type='chat' id='new'><body>hi</body></message>"),
+            ))
+            let fin = Element(name: "fin", xmlns: "urn:xmpp:mam:2")
+            fin.setAttribute("complete", value: "true")
+            fin.addChild(Element(name: "set", xmlns: "http://jabber.org/protocol/rsm", children: [Element(name: "last", cdata: "s-new")]))
+            return FakeWire.result(to: request, fin)
+        }
+        try failStoringMessages(database)
+        session.catchUp()
+        #expect(await eventually { session.state.value == .connected(isSyncing: false) })
+        #expect(try database.setting(.lastArchiveId) == "cursor")
+        #expect(session.warnings.current.map(\.key) == ["archive"])
+    }
+
     @Test func aFinalErrorEndsTheSyncAtOnceWithAWarning() async throws {
         wire.answer { request in
             isArchiveQuery(request) ? FakeWire.error(to: request, condition: "forbidden", type: "auth") : nil
@@ -186,7 +207,7 @@ struct ReadStatePublishTests {
             iq.firstChild(name: "pubsub")?.firstChild(name: "publish") != nil ? FakeWire.error(to: iq, condition: "forbidden", type: "auth") : nil
         }
         try session.markRead(conversation)
-        #expect(await eventually { session.warnings.current.map(\.key) == ["readState"] })
+        #expect(await eventually { session.warnings.current.map(\.key) == ["readState:\(alice)"] })
         #expect(session.lock.withLock { $0.publishedDisplayed[alice] } == nil)
     }
 }

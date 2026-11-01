@@ -139,11 +139,15 @@ extension XMPPSession {
     }
 
     /// A message stored for a chat whose owed state names a message we lacked
-    /// may be that message. Chats owing nothing cost one set lookup.
-    func publishReadStateAwaiting(_ result: IngestResult, peer: JID) {
-        guard result.newMessage != nil,
-              lock.withLock({ $0.readStatesAwaitingMessage.remove(peer) != nil }) else { return }
-        publishOwedReadStates()
+    /// may be that message, whether it is new or only gained its stanza-id
+    /// from the archive. Any other message leaves the wait as it was, so a
+    /// state naming a message that never comes costs a lookup, not a round.
+    func publishReadStateAwaiting(_ inbound: InboundMessage) {
+        guard let serverId = inbound.serverId else { return }
+        let awaited = lock.withLock { state in
+            state.publishedDisplayed[inbound.peer] == serverId && state.readStatesAwaitingMessage.remove(inbound.peer) != nil
+        }
+        if awaited { publishOwedReadStates() }
     }
 
     private func publish(stanzaId decided: String, conversationId: Int64, route: Route) async {

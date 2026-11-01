@@ -1,11 +1,13 @@
 import Foundation
+@preconcurrency import Martin
+@testable import Martin
 import Testing
 @testable import YapnestKit
 
-private let me = JID("me@example.org")!
-private let alice = JID("alice@example.org")!
-private let bob = JID("bob@example.org")!
-private let room = JID("cake@rooms.example.org")!
+private let me = YapnestKit.JID("me@example.org")!
+private let alice = YapnestKit.JID("alice@example.org")!
+private let bob = YapnestKit.JID("bob@example.org")!
+private let room = YapnestKit.JID("cake@rooms.example.org")!
 
 private final class Box<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -39,6 +41,13 @@ struct RouteTests {
         let unconfirmed = Message(conversationId: 1, direction: .outgoing, sender: me, body: "x", timestamp: Date(), originId: "o")
         #expect(Route.direct(alice).reference(to: unconfirmed) == "o")
         #expect(Route.room(room, status: nil).reference(to: unconfirmed) == nil)
+    }
+
+    @Test func aRoomStillAwaitingItsMemberListsIsSyncing() {
+        var joined = status(.joined, syncing: false)
+        #expect(joined.readiness == .ready)
+        joined.awaitsMemberLists = true
+        #expect(joined.readiness == .syncing)
     }
 
     @Test func recipientsAreTheContactOrTheRoomsMembersWithoutUs() {
@@ -90,6 +99,37 @@ struct RouteTests {
         let sent = Box(0)
         session.whenReady(.room(room, status: nil)) { sent.withLock { $0 += 1 } }
         session.dropDeferred(in: room)
+        session.sendDeferred(in: room)
+        #expect(sent.withLock { $0 } == 0)
+    }
+
+    @Test func whatWaitedForADestroyedOrBannedRoomIsDropped() throws {
+        let session = try makeSession(me)
+        let sent = Box(0)
+        try session.database.joinGroupChat(room, nickname: "me")
+        session.reloadKnownRooms()
+        session.updateRoom(room) { $0 = status(.joined, syncing: true) }
+        session.whenReady(session.route(to: room)) { sent.withLock { $0 += 1 } }
+        session.groupDestroyed(room)
+        session.sendDeferred(in: room)
+        #expect(sent.withLock { $0 } == 0)
+
+        session.whenReady(.room(room, status: nil)) { sent.withLock { $0 += 1 } }
+        session.markLeft(room, owingBookmark: true)
+        session.sendDeferred(in: room)
+        #expect(sent.withLock { $0 } == 0)
+    }
+
+    @Test func whatWaitedForARoomIsDroppedByANewSession() async throws {
+        let session = try makeSession(me)
+        let wire = FakeWire()
+        wire.answer { iq in iq.firstChild(name: "query", xmlns: "storage:bookmarks") != nil ? FakeWire.error(to: iq) : nil }
+        session.client.writer = wire
+        let sent = Box(0)
+        session.whenReady(.room(room, status: nil)) { sent.withLock { $0 += 1 } }
+        session.client.update(state: .connected(resumed: false))
+        // The reset that starts a session also marks it as syncing.
+        await eventually("the new session") { session.lock.withLock { $0.isSyncing } }
         session.sendDeferred(in: room)
         #expect(sent.withLock { $0 } == 0)
     }
