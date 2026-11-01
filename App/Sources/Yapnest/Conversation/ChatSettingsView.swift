@@ -60,7 +60,7 @@ struct ChatSettingsView: View {
     /// The call buttons stay in the sheet and spin while the call waits for
     /// the connection, so a failure can be shown here: an alert on the screen
     /// below can't appear over a sheet.
-    private var isStartingCall: Bool { model.calls.startingCall == peer }
+    private func isStartingCall(video: Bool) -> Bool { model.calls.isStarting(peer, video: video) }
 
     /// What the form starts from, read off the main thread.
     private struct Initial: Sendable {
@@ -133,16 +133,16 @@ struct ChatSettingsView: View {
                 }
                 HStack(spacing: 10) {
                     if canCall {
-                        HeaderAction(title: "Call", systemImage: "phone", isBusy: isStartingCall) {
+                        HeaderAction(title: "Call", systemImage: "phone", isBusy: isStartingCall(video: false)) {
                             model.calls.startCall(to: peer)
                         }
-                        .disabled(model.calls.isInCall || isStartingCall)
+                        .disabled(!model.calls.canStartCall)
                     }
                     if canCall, canVideoCall {
-                        HeaderAction(title: "Video", systemImage: "video", isBusy: isStartingCall) {
+                        HeaderAction(title: "Video", systemImage: "video", isBusy: isStartingCall(video: true)) {
                             model.calls.startCall(to: peer, video: true)
                         }
-                        .disabled(model.calls.isInCall || isStartingCall)
+                        .disabled(!model.calls.canStartCall)
                     }
                     HeaderAction(title: "Search", systemImage: "magnifyingglass") {
                         onSearch()
@@ -690,11 +690,11 @@ struct ChatSettingsView: View {
     /// The toggle moves at once; the write follows off the main thread, and
     /// the toggle goes back if it fails.
     private func setEncrypted(_ encrypted: Bool) {
-        setOptimistically($isEncrypted, to: encrypted) { [session, peer] in try session.setEncrypted(encrypted, with: peer) }
+        setOptimistically($isEncrypted, key: "encrypted", to: encrypted) { [session, peer] in try session.setEncrypted(encrypted, with: peer) }
     }
 
-    private func setOptimistically<Value: Equatable>(_ field: Binding<Value>, to value: Value, _ work: @escaping @Sendable () throws -> Void) {
-        saves.setOptimistically(field, to: value, work) { saveError = $0.localizedDescription }
+    private func setOptimistically<Value: Equatable>(_ field: Binding<Value>, key: String, to value: Value, _ work: @escaping @Sendable () throws -> Void) {
+        saves.setOptimistically(field, key: key, to: value, work) { saveError = $0.localizedDescription }
     }
 
     /// Changing it publishes the group's bookmark, a server action, so it
@@ -713,7 +713,7 @@ struct ChatSettingsView: View {
     }
 
     private func setNotificationSound(_ sound: String?) {
-        setOptimistically($notificationSound, to: sound) { [database = session.database, peer] in try database.setNotificationSound(sound, peer: peer) }
+        setOptimistically($notificationSound, key: "sound", to: sound) { [database = session.database, peer] in try database.setNotificationSound(sound, peer: peer) }
     }
 
     /// "15 minutes", "1 hour", in the user's language.
@@ -722,11 +722,11 @@ struct ChatSettingsView: View {
     }
 
     private func setNotificationInterval(_ minutes: Int?) {
-        setOptimistically($notificationInterval, to: minutes) { [database = session.database, peer] in try database.setNotificationInterval(minutes, peer: peer) }
+        setOptimistically($notificationInterval, key: "interval", to: minutes) { [database = session.database, peer] in try database.setNotificationInterval(minutes, peer: peer) }
     }
 
     private func setLinkPreviews(_ allowed: Bool?) {
-        setOptimistically($linkPreviews, to: allowed) { [database = session.database, peer] in try database.setLinkPreviews(allowed, peer: peer) }
+        setOptimistically($linkPreviews, key: "linkPreviews", to: allowed) { [database = session.database, peer] in try database.setLinkPreviews(allowed, peer: peer) }
     }
 }
 

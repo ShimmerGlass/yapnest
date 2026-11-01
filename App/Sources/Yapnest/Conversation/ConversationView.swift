@@ -53,6 +53,16 @@ struct ConversationView: View {
     /// Either of these covers the composer, and keeps files from being sent.
     private var hasLeftGroup: Bool { group?.hasLeft == true }
     private var hasBlockedContact: Bool { group == nil && contact?.isBlocked == true }
+    /// Not left, but out of the room for now.
+    private var roomFailed: Bool {
+        if group != nil, case .failed(_)? = model.live.room(peer).phase { true } else { false }
+    }
+
+    /// Whether the composer is in the bottom bar. When it isn't, nothing may be
+    /// added to it by a drop or a paste either: it would pile up unseen.
+    static func showsComposer(hasLeftGroup: Bool, hasBlockedContact: Bool, roomFailed: Bool) -> Bool {
+        !hasLeftGroup && !hasBlockedContact && !roomFailed
+    }
 
     private var title: String {
         group?.displayName ?? contact?.displayName ?? peer.shortName
@@ -74,7 +84,7 @@ struct ConversationView: View {
         model.callablePeers.contains(peer) && group == nil && !hasBlockedContact
     }
 
-    private var isStartingCall: Bool { model.calls.startingCall == peer }
+    private func isStartingCall(video: Bool) -> Bool { model.calls.isStarting(peer, video: video) }
 
     private var canVideoCall: Bool {
         canCall && model.videoCallablePeers.contains(peer)
@@ -135,9 +145,9 @@ struct ConversationView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { model.calls.startCall(to: peer) } label: {
                             Label("Call", systemImage: "phone")
-                                .busyOverlay(isStartingCall)
+                                .busyOverlay(isStartingCall(video: false))
                         }
-                        .disabled(model.calls.isInCall || isStartingCall)
+                        .disabled(!model.calls.canStartCall)
                     }
                 }
             }
@@ -231,8 +241,8 @@ struct ConversationView: View {
                     .allowsHitTesting(false)
             }
         }
-        .onChange(of: hasLeftGroup || hasBlockedContact, initial: true) { _, blocked in
-            conversation.canSendAttachments = !blocked
+        .onChange(of: Self.showsComposer(hasLeftGroup: hasLeftGroup, hasBlockedContact: hasBlockedContact, roomFailed: roomFailed), initial: true) { _, shown in
+            conversation.canSendAttachments = shown
         }
         .background { EmojiPickerHost(model: conversation).frame(width: 1, height: 1) }
         .conversationPrompts(conversation)
@@ -408,12 +418,12 @@ struct ConversationView: View {
             HStack(spacing: 16) {
                 macHeaderButton("Search", systemImage: "magnifyingglass") { search.open() }
                 if canVideoCall {
-                    macHeaderButton("Video Call", systemImage: "video", isBusy: isStartingCall) { model.calls.startCall(to: peer, video: true) }
-                        .disabled(model.calls.isInCall)
+                    macHeaderButton("Video Call", systemImage: "video", isBusy: isStartingCall(video: true)) { model.calls.startCall(to: peer, video: true) }
+                        .disabled(!model.calls.canStartCall)
                 }
                 if canCall {
-                    macHeaderButton("Call", systemImage: "phone", isBusy: isStartingCall) { model.calls.startCall(to: peer) }
-                        .disabled(model.calls.isInCall)
+                    macHeaderButton("Call", systemImage: "phone", isBusy: isStartingCall(video: false)) { model.calls.startCall(to: peer) }
+                        .disabled(!model.calls.canStartCall)
                 }
             }
         }

@@ -23,17 +23,24 @@ final class SettingsWrites {
         }
     }
 
+    /// The latest write started for each control, by its key.
+    private var latest: [String: Int] = [:]
+
     /// The control moves at once; the write follows, and the control goes
     /// back if it fails. Not when the user has moved it again since: that
     /// later write follows this one and decides what is stored, so going
-    /// back would show a value the database doesn't hold.
+    /// back would show a value the database doesn't hold. Comparing values
+    /// isn't enough for that, as the control may have been moved away and
+    /// back to the same one; `key` names the control, so its writes are counted.
     func setOptimistically<Value: Equatable>(
-        _ field: Binding<Value>, to value: Value, _ work: @escaping @Sendable () throws -> Void, onFailure: @escaping @MainActor (Error) -> Void,
+        _ field: Binding<Value>, key: String, to value: Value, _ work: @escaping @Sendable () throws -> Void, onFailure: @escaping @MainActor (Error) -> Void,
     ) {
         let previous = field.wrappedValue
         field.wrappedValue = value
-        run(work, onFailure: { error in
-            if field.wrappedValue == value { field.wrappedValue = previous }
+        let mine = (latest[key] ?? 0) + 1
+        latest[key] = mine
+        run(work, onFailure: { [weak self] error in
+            if self?.latest[key] == mine, field.wrappedValue == value { field.wrappedValue = previous }
             onFailure(error)
         })
     }
