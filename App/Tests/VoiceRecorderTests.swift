@@ -302,6 +302,22 @@ struct VoiceRecorderTests {
         #expect(s.engine.discarded == 1)
     }
 
+    @Test func aComposerReplacedWhileRecordingEndsTheRecordingAndItsClock() async {
+        let s = make()
+        let bar = ConversationInputBar()
+        bar.voice = s.recorder
+        s.recorder.onChange = { [weak bar] in bar?.voiceChanged() }
+        s.recorder.press(locked: true)
+        await started(s.recorder)
+        #expect(bar.isTickingRecording)
+
+        bar.composerRemoved()
+
+        #expect(s.recorder.phase == .idle)
+        #expect(s.engine.discarded == 1)
+        #expect(!bar.isTickingRecording)
+    }
+
     @Test func aFailedClipExplainsInsteadOfPlaying() {
         #expect(VoiceMessageView.playsOnTap(canPlay: true, isFailed: false))
         #expect(!VoiceMessageView.playsOnTap(canPlay: true, isFailed: true))

@@ -314,9 +314,12 @@ private struct OlderMessagesRow: View {
                     .foregroundStyle(.secondary)
             case .failed:
                 HStack(spacing: 4) {
-                    Text("Couldn't load older messages")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(spacing: 2) {
+                        Text("Couldn't load older messages")
+                        if let reason = model.olderFailure { Text(reason).lineLimit(2) }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     Button("Retry") { model.retryOlder() }
                         .font(.caption)
                         .buttonStyle(.borderless)

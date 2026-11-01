@@ -50,6 +50,60 @@ struct ConversationWindowTests {
         #expect(await stays { f.model.olderState == .idle })
     }
 
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        var count: Int { lock.withLock { value } }
+        func next() -> Int { lock.withLock { value += 1; return value } }
+    }
+
+    @Test func aRefusedOlderPageSaysWhyTheServerRefused() async throws {
+        let f = try ConversationFixture()
+        try f.addMany(20)
+        f.model.loadOlderPage = { _, _ in throw ServerError(condition: "forbidden", type: .auth, text: "Not allowed here") }
+        await f.start()
+
+        f.model.nearTopChanged(true)
+
+        await eventually("the failure was never reported") { f.model.olderState == .failed }
+        #expect(f.model.olderFailure?.contains("Not allowed here") == true)
+    }
+
+    @Test func aTimeoutOnAnOlderPageIsAskedAgainWithoutWaitingForRetry() async throws {
+        let f = try ConversationFixture()
+        try f.addMany(20)
+        let calls = Counter()
+        f.model.olderRetryBackoff = .milliseconds(10)
+        f.model.loadOlderPage = { _, _ in
+            if calls.next() == 1 { throw ServerError(condition: "remote-server-timeout") }
+            throw ServerError(condition: "forbidden", type: .auth)
+        }
+        await f.start()
+
+        f.model.nearTopChanged(true)
+
+        await eventually("the second request never came") { f.model.olderState == .failed }
+        #expect(calls.count == 2, "the timeout waited for a tap on Retry")
+    }
+
+    @Test func aFailureOfAnArchiveRequestThatAJumpLeftBehindDoesNotMarkTheNewWindow() async throws {
+        let f = try ConversationFixture()
+        let all = try f.addMany(20)
+        let gate = Gate()
+        f.model.loadOlderPage = { _, _ in
+            await gate.pass()
+            throw ServerError(condition: "forbidden", type: .auth, text: "Late refusal")
+        }
+        await f.start()
+        f.model.nearTopChanged(true)
+        await eventually("the request never started") { gate.entered }
+
+        f.model.reveal(all[10].id!)
+        gate.open()
+
+        #expect(await stays(for: .milliseconds(500)) { f.model.olderState != .failed })
+    }
+
     @Test(arguments: [false, true]) func aFarJumpOpensABoundedWindowAndTheButtonBringsTheNewestBack(flipped: Bool) async throws {
         let f = try ConversationFixture(isFlipped: flipped)
         let all = try f.addMany(1700)

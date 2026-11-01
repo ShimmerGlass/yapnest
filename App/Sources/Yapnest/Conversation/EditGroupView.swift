@@ -285,7 +285,7 @@ struct EditGroupView: View {
             }
             loading = .loaded(configuration)
         } catch {
-            loading = .failed(error.localizedDescription)
+            loading = .failed(ServerError.userMessage(for: error))
         }
     }
 

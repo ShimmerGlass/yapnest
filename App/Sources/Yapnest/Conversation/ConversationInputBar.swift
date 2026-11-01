@@ -78,7 +78,6 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     /// The column of the field that holds the text, hidden while recording.
     private var fieldColumn: UIView?
     private var recordingClock: Timer?
-    private var hintTimer: Timer?
     /// Where the finger went down on the microphone button.
     private var micStartX: CGFloat = 0
     private let suggestions = UIStackView()
@@ -753,8 +752,10 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         })
         updateControls(animated: true)
         if recording, recordingClock == nil {
-            let clock = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.tickRecording() }
+            let clock = Timer(timeInterval: 0.05, repeats: true) { [weak self] timer in
+                // The bar can go while a recording runs; the run loop would fire this forever.
+                guard let self else { return timer.invalidate() }
+                MainActor.assumeIsolated { self.tickRecording() }
             }
             RunLoop.main.add(clock, forMode: .common)
             recordingClock = clock
@@ -789,24 +790,25 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         return row
     }
 
+    /// The composer is being replaced, by an action bar or by the chat closing.
+    /// A recording in it would go on unseen, with nothing to send or cancel it.
+    func composerRemoved() {
+        voice?.cancel()
+        recordingClock?.invalidate()
+        recordingClock = nil
+    }
+
     #if DEBUG
     /// Whether a recording has built its row yet.
     var hasRecordingRow: Bool { recordingRow != nil }
+    /// Whether the recording's clock is running.
+    var isTickingRecording: Bool { recordingClock != nil }
     #endif
 
     private func tickRecording() {
         guard let voice else { return }
         recordingRow?.update(elapsed: voice.elapsed, level: voice.level)
         voice.tick()
-    }
-
-    /// Says something in place of the field's placeholder for a moment.
-    func showHint(_ text: String) {
-        placeholder.text = text
-        hintTimer?.invalidate()
-        hintTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.placeholder.text = String(localized: "Message") }
-        }
     }
 
     private func send() {

@@ -94,6 +94,8 @@ final class ConversationModel {
     /// estimates when it's first asked. The list stays hidden until then.
     private(set) var isPositioned = true
     private(set) var olderState = OlderMessages.idle
+    /// Why the last request for older messages failed, while `olderState` is `failed`.
+    private(set) var olderFailure: String?
     /// Whether messages may still be on their way from the server: while
     /// connecting, catching up on the archive, or joining the group.
     private(set) var isFetchingHistory = false
@@ -2452,22 +2454,50 @@ final class ConversationModel {
         case failed
     }
 
+    /// Asks the server's archive for a page older than what is stored. Tests
+    /// replace it, as the session they have never connects.
+    @ObservationIgnored var loadOlderPage: @Sendable (XMPPSession, JID) async throws -> Bool = { try await $0.loadOlderHistory(for: $1) }
+    /// The wait before the first retry of a request that failed in passing;
+    /// each one waits twice as long.
+    @ObservationIgnored var olderRetryBackoff: Duration = .seconds(3)
+    /// How many times a page is asked for in all, as for any server request.
+    private static let olderAttempts = 3
+
     private func askServerForOlder(peer: JID) async {
-        let session = session
-        do {
-            _ = try await Task.detached(priority: .userInitiated) { try await session.loadOlderHistory(for: peer) }.value
-        } catch HistoryError.notReady {
-            // Offline, or catching up: the connection changing asks again.
-            olderWaitsForConnection = true
-            olderState = .idle
-        } catch HistoryError.busy {
-            // An earlier look at this chat is still on its way.
-            olderState = .idle
-            try? await Task.sleep(for: .seconds(1))
-        } catch HistoryError.noArchive {
-            olderState = .complete
-        } catch {
-            olderState = .failed
+        let session = session, load = loadOlderPage
+        olderFailure = nil
+        var failures = 0
+        while true {
+            let result = await Task.detached(priority: .userInitiated) { try await load(session, peer) }.result
+            // A jump cancelled this step while the request was out: its
+            // answer is for a window that is gone, and a failure of it must
+            // not mark the new one.
+            guard !Task.isCancelled else { return }
+            guard case .failure(let error) = result else { return }
+            switch error {
+            case HistoryError.notReady:
+                // Offline, or catching up: the connection changing asks again.
+                olderWaitsForConnection = true
+                olderState = .idle
+            case HistoryError.busy:
+                // An earlier look at this chat is still on its way.
+                olderState = .idle
+                try? await Task.sleep(for: .seconds(1))
+            case HistoryError.noArchive:
+                olderState = .complete
+            default:
+                // A timeout or a dropped connection may pass by itself, so it
+                // is asked again; anything else is shown with the server's reason.
+                if ServerError.isFromServer(error), ServerError.classify(error).isPassing, failures + 1 < Self.olderAttempts {
+                    try? await Task.sleep(for: olderRetryBackoff * (1 << failures))
+                    failures += 1
+                    guard !Task.isCancelled else { return }
+                    continue
+                }
+                olderFailure = ServerError.userMessage(for: error)
+                olderState = .failed
+            }
+            return
         }
     }
 
@@ -2616,7 +2646,7 @@ final class ConversationModel {
             if let found {
                 self.reveal(found)
             } else if let failure {
-                self.prompt = .error(failure.localizedDescription)
+                self.prompt = .error(ServerError.userMessage(for: failure))
             } else {
                 self.prompt = .quoteNotFound
             }
@@ -2736,7 +2766,7 @@ final class ConversationModel {
         engine.onInterrupted = { [weak recorder] in recorder?.cancel() }
         recorder.onChange = { [weak self] in self?.composer.bar?.voiceChanged() }
         recorder.onFinished = { [weak self] file in self?.sendVoice(file) }
-        recorder.onTooShort = { [weak self] in self?.composer.bar?.showHint(String(localized: "Voice message too short")) }
+        recorder.onTooShort = { [weak self] in self?.voiceWasTooShort() }
         recorder.onRefused = { [weak self] in self?.voiceRefused($0) }
         voiceRecorder = recorder
         composer.bar?.voice = recorder
@@ -2748,6 +2778,11 @@ final class ConversationModel {
         // One audio session: it is a recording or a playback, not both.
         VoicePlayback.shared.stop()
         (voiceRecorder ?? makeVoiceRecorder()).press(locked: locked)
+    }
+
+    /// An alert rather than a hint in the field, which a draft hides.
+    func voiceWasTooShort() {
+        prompt = .notice(title: String(localized: "Voice message too short"), message: String(localized: "Keep the microphone button pressed while you speak, then let go to send."))
     }
 
     private func voiceRefused(_ refusal: VoiceRecorder.Refusal) {
@@ -3156,7 +3191,7 @@ final class ConversationModel {
             do {
                 try await session.retractForEveryone(message)
             } catch {
-                prompt = .error(error.localizedDescription)
+                prompt = .error(ServerError.userMessage(for: error))
             }
             isRemovingForEveryone = false
         }

@@ -32,6 +32,10 @@ struct ComposerBar: UIViewRepresentable {
         return host
     }
 
+    static func dismantleUIView(_ host: ComposerHost, coordinator: ()) {
+        host.bar.composerRemoved()
+    }
+
     func updateUIView(_ host: ComposerHost, context: Context) {
         host.onHeight = { height in
             self.height = height
