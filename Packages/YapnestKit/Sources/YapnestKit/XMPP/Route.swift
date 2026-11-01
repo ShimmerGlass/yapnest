@@ -73,7 +73,7 @@ enum Route: Sendable {
 
 extension RoomStatus {
     var readiness: Route.Readiness {
-        if !isJoined { .notJoined } else if isSyncing { .syncing } else { .ready }
+        if !isJoined { .notJoined } else if isSyncing || awaitsMemberLists { .syncing } else { .ready }
     }
 
     /// Who an encrypted group message goes to, besides our own devices.

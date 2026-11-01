@@ -97,6 +97,10 @@ public struct RoomStatus: Hashable, Sendable {
     /// Whether the member lists have been asked for in this visit, whether or
     /// not they came, so the members we encrypt for are as known as they get.
     var membersListed = false
+    /// The member lists asked for at this join haven't come yet. The room
+    /// isn't ready to send into until they have, or an encrypted message
+    /// would leave out the members who are offline.
+    var awaitsMemberLists = false
     /// Our join created the room, which stays locked until configured.
     var wasCreated = false
     var triedOtherNickname = false
@@ -729,6 +733,7 @@ extension XMPPSession {
                 status?.canRetry = false
                 status?.joinedAt = Date()
                 status?.isSyncing = true
+                status?.awaitsMemberLists = false
             }
         }
         if statuses.contains(210) || nick != status.nickname {
@@ -912,6 +917,7 @@ extension XMPPSession {
                 $0?.canRetry = false
                 $0?.isSyncing = false
                 $0?.membersListed = false
+                $0?.awaitsMemberLists = false
                 $0?.catchUpReachedEnd = false
                 $0?.joinedAt = Date()
             }
@@ -1014,9 +1020,15 @@ extension XMPPSession {
         let attempt = lock.withLock { $0.attempt }
         // A private group shows addresses, so it always has lists to fetch.
         if !lists.isEmpty {
+            updateRoom(room) { $0?.awaitsMemberLists = true }
             fetchMembers(room, lists: lists) { [weak self] in
                 guard let self, self.isConnected, self.lock.withLock({ $0.attempt }) == attempt else { return }
-                self.updateRoom(room) { $0?.membersListed = true }
+                let listed = self.updateRoom(room) {
+                    $0?.membersListed = true
+                    $0?.awaitsMemberLists = false
+                }
+                // The catch-up may have ended first, and left the sending to this.
+                if listed?.isSyncing == false { self.sendAfterCatchUp(room) }
                 self.introduceDevice(to: room)
             }
         }
@@ -1469,10 +1481,18 @@ extension XMPPSession {
             $0?.isSyncing = false
             $0?.catchUpReachedEnd = reachedEnd
         }
-        sendDeferred(in: room)
+        // Encrypting before the lists are in would leave out the members who
+        // are offline; their arrival sends what waited.
+        guard synced?.awaitsMemberLists != true else { return }
+        sendAfterCatchUp(room)
         introduceDevice(to: room)
+    }
+
+    private func sendAfterCatchUp(_ room: JID) {
+        sendDeferred(in: room)
+        let reachedEnd = roomStatus(room)?.catchUpReachedEnd ?? false
         // An extension sends nothing it didn't write itself.
-        guard policy.resendsPending, let status = synced,
+        guard policy.resendsPending, let status = roomStatus(room),
               let group = try? database.groupChat(room) else { return }
         let unconfirmed = (try? database.unconfirmedOutgoing(
             conversationId: group.conversationId, before: status.joinedAt, since: status.joinedAt.addingTimeInterval(-Self.initialSyncWindow),

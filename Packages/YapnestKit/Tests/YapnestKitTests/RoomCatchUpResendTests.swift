@@ -34,4 +34,38 @@ struct RoomCatchUpResendTests {
     @Test func theAppResendsWhatIsPendingAfterARoomCatchUp() throws {
         #expect(try catchUp(mode: .app).map(\.id) == ["g1"])
     }
+
+    @Test func aRoomIsNotWrittenIntoBeforeItsMemberListsCame() async throws {
+        let database = try AppDatabase.inMemory()
+        let session = try makeSession(me, database: database, mode: .app)
+        try database.joinGroupChat(room, nickname: "me")
+        try database.setRoomInfo(room, name: nil, isMembersOnly: true, isNonAnonymous: true)
+        session.reloadKnownRooms()
+        let id = try #require(try database.conversation(with: room).id)
+        _ = try database.insert(YapnestKit.Message(
+            conversationId: id, direction: .outgoing, sender: me, body: "hi", status: .pending, remoteId: "g1",
+        ))
+        let wire = FakeWire()
+        wire.answer { iq in
+            iq.firstChild(name: "query", xmlns: "http://jabber.org/protocol/muc#admin") != nil ? FakeWire.result(to: iq) : FakeWire.error(to: iq)
+        }
+        wire.holdReplies { $0.firstChild(name: "query", xmlns: "http://jabber.org/protocol/muc#admin") != nil }
+        session.connectForTesting(wire)
+        var status = RoomStatus(phase: .joined, nickname: "me")
+        status.isSyncing = true
+        session.updateRoom(room) { $0 = status }
+        // The room keeps no archive, so the catch-up ends at once.
+        session.didJoin(room)
+        await eventually("the catch-up to end") { session.roomStatus(room)?.isSyncing == false }
+        session.drainSendQueue(room)
+        #expect(wire.messages.filter { $0.body == "hi" }.isEmpty)
+        await eventually("the lists to be asked for") { wire.heldPings > 0 }
+        wire.releasePings()
+        await eventually("the lists") { session.roomStatus(room)?.membersListed == true }
+        #expect(session.roomStatus(room)?.awaitsMemberLists == false)
+        await eventually("the message to go out once the lists are in") {
+            session.drainSendQueue(room)
+            return wire.messages.contains { $0.body == "hi" }
+        }
+    }
 }
