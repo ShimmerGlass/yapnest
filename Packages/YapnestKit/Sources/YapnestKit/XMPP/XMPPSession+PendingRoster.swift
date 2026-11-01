@@ -28,8 +28,7 @@ extension XMPPSession {
         await drainQueue(
             queueLock: rosterQueueLock,
             ready: { !lock.withLock { $0.awaitsRoster } },
-            // Stored changes always have an id.
-            next: { try database.nextPendingRosterChange().flatMap { $0.id == nil ? nil : $0 } },
+            next: { try database.nextPendingRosterChange() },
             afterChosen: { afterRosterChangeChosenForTesting?() },
             // Marked as in flight in the step that chose it, so that a later
             // change can't replace it after that.
