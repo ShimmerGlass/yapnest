@@ -1447,7 +1447,7 @@ extension XMPPSession {
 
     /// Sends what never reached the room: it echoes every message it gets,
     /// so anything sent before this visit that didn't come back was lost.
-    private func finishRoomCatchUp(_ room: JID, _ visit: RoomCatchUp, reachedEnd: Bool) {
+    func finishRoomCatchUp(_ room: JID, _ visit: RoomCatchUp, reachedEnd: Bool) {
         // Not while the stream is down: the room stays syncing, and what
         // waited for it stays queued, until a catch-up on a live one ends.
         guard roomCatchUpMayProceed(room, visit) else { return }
@@ -1464,7 +1464,8 @@ extension XMPPSession {
         }
         sendDeferred(in: room)
         introduceDevice(to: room)
-        guard let status = synced,
+        // An extension sends nothing it didn't write itself.
+        guard policy.resendsPending, let status = synced,
               let group = try? database.groupChat(room) else { return }
         let unconfirmed = (try? database.unconfirmedOutgoing(
             conversationId: group.conversationId, before: status.joinedAt, since: status.joinedAt.addingTimeInterval(-Self.initialSyncWindow),
