@@ -191,6 +191,28 @@ struct LastSeenTests {
         #expect(try lastSeen(session) == nil)
     }
 
+    // MARK: Asking
+
+    /// Asks about alice, whose server answers with `condition`, and whether she is asked about later.
+    private func askedAgainLater(afterAnswering condition: String, type: String) async throws -> Bool {
+        let session = try sessionWatching(sharing: true)
+        let wire = FakeWire()
+        wire.answer { iq in iq.firstChild(name: "query", xmlns: NS.last) != nil ? FakeWire.error(to: iq, condition: condition, type: type) : nil }
+        session.connectForTesting(wire)
+        await session.refreshLastSeen(of: alice)
+        #expect(wire.written.compactMap { $0 as? Iq }.contains { $0.firstChild(name: "query", xmlns: NS.last) != nil })
+        let later = Date().addingTimeInterval(10 * LastSeenSchedule.refreshInterval)
+        return session.lock.withLock { $0.lastSeenSchedule.claim(alice, now: later) }
+    }
+
+    @Test func aPassingErrorIsAskedAgainLater() async throws {
+        #expect(try await askedAgainLater(afterAnswering: "resource-constraint", type: "wait"))
+    }
+
+    @Test func aRefusalForGoodIsNotAskedAgain() async throws {
+        #expect(try await !askedAgainLater(afterAnswering: "service-unavailable", type: "cancel"))
+    }
+
     // MARK: Storage
 
     @Test func stoppingSharingForgetsWhatWeKnew() throws {

@@ -75,8 +75,8 @@ extension XMPPSession {
             // The user may have stopped sharing while we waited.
             guard sharesLastSeen else { return }
             try database.setLastSeen(Date().addingTimeInterval(-TimeInterval(seconds)), for: peer)
-        } catch XMPPError.remote_server_timeout {
-            // Worth asking again later.
+        } catch where ServerRetry.isPassing(error) {
+            // A timeout, a dropped connection or a `wait` answer: worth asking again later.
         } catch {
             logger.info("No last seen from \(peer.description, privacy: .private): \(error.localizedDescription, privacy: .private)")
             lock.withLock { $0.lastSeenSchedule.refuse(peer) }
