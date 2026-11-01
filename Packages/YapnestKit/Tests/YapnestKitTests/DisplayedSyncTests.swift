@@ -495,6 +495,24 @@ struct OwedReadStateTests {
         #expect(publishes().count == 4)
     }
 
+    @Test func oneChatsSuccessKeepsAnotherChatsRefusalShown() async throws {
+        try readOffline()
+        _ = try readMoreChatsOffline(1)
+        @Sendable func stanzaId(_ iq: Iq) -> String? {
+            iq.firstChild(name: "pubsub")?.firstChild(name: "publish")?.firstChild(name: "item")?.firstChild(name: "displayed")?.firstChild(name: "stanza-id")?.attribute("id")
+        }
+        // The success comes after the refusal.
+        wire.holdReplies { stanzaId($0) == "f0" }
+        serve { iq in stanzaId(iq) == "s3" ? FakeWire.error(to: iq, condition: "forbidden", type: "auth") : FakeWire.result(to: iq) }
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { session.warnings.current.map(\.key) == ["readState:\(alice)"] })
+        #expect(await eventually { wire.heldPings == 1 })
+        wire.releasePings()
+        #expect(await eventually { !isOwed(try! db.conversation(with: YapnestKit.JID("friend0@example.org")!)) })
+        #expect(session.warnings.current.map(\.key) == ["readState:\(alice)"])
+    }
+
     @Test func aChatTheServerRefusesDoesNotStopTheOthers() async throws {
         try readOffline()
         let chats = try readMoreChatsOffline(5)

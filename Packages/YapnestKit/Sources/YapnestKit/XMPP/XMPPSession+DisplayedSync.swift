@@ -160,6 +160,8 @@ extension XMPPSession {
             return
         }
         let state = DisplayedState(peer: peer, stanzaId: stanzaId, by: route.isGroup ? peer : account)
+        // Per chat, so one chat's success doesn't take away another's refusal.
+        let warningKey = "readState:\(peer)"
         do {
             // A node another client made with other options refuses the
             // publish; this one reconfigures it and goes again.
@@ -168,7 +170,7 @@ extension XMPPSession {
                 config: Self.settingsNodeFields(maxItems: "max"),
             )
             lock.withLock { $0.publishedDisplayed[peer] = stanzaId }
-            warnings.clear("readState")
+            warnings.clear(warningKey)
             do {
                 try database.clearReadStateOwed(conversationId: conversationId, ifNewest: stanzaId)
             } catch {
@@ -179,7 +181,7 @@ extension XMPPSession {
             // The chat stays owed, so the next connect tries again; only a refusal for good is shown.
             if ServerError.isFinalRefusal(error) {
                 try? database.clearReadStateOwed(conversationId: conversationId, ifNewest: nil)
-                warnings.post("readState", title: String(localized: "Read state not synced"), friendly: String(localized: "The server wouldn't take the read state"), error: error)
+                warnings.post(warningKey, title: String(localized: "Read state not synced"), friendly: String(localized: "The server wouldn't take the read state"), error: error)
             }
         }
     }
