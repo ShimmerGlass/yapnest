@@ -117,20 +117,19 @@ public final class AttachmentStore: Sendable {
             ? (name as NSString).deletingPathExtension + ".mov" : name
         let file = Self.freshName(keeping: storedName)
         let destination = directory.appending(path: file)
-        do {
-            try FileManager.default.copyItem(at: url, to: destination)
-        } catch {
-            throw XMPPSession.AttachmentError.unreadable
-        }
         // Better to refuse a file than to send one that still says where it
         // was made.
         do {
             if isVideo {
-                try await Self.stripVideoMetadata(at: destination)
-            } else if Self.isImage(name: name) {
-                // Only images go to ImageIO, so a PDF or an archive isn't parsed by it.
-                // It does nothing to an image it can't read.
-                try Self.stripMetadata(fromImageAt: destination)
+                // Exported straight from the user's file, rather than copied whole first.
+                try await Self.exportVideoWithoutMetadata(from: url, to: destination)
+            } else {
+                try FileManager.default.copyItem(at: url, to: destination)
+                if Self.isImage(name: name) {
+                    // Only images go to ImageIO, so a PDF or an archive isn't parsed by it.
+                    // It does nothing to an image it can't read.
+                    try Self.stripMetadata(fromImageAt: destination)
+                }
             }
         } catch {
             try? FileManager.default.removeItem(at: destination)
@@ -252,21 +251,19 @@ public final class AttachmentStore: Sendable {
         }
     }
 
-    /// Re-exports the video at `url` without copying the streams, dropping
-    /// the metadata that isn't fit for sharing, such as its location.
-    static func stripVideoMetadata(at url: URL) async throws {
-        let asset = AVURLAsset(url: url)
+    /// Writes the video at `source` to `destination` without re-encoding the
+    /// streams, dropping the metadata that isn't fit for sharing, such as its
+    /// location. The container is the one `destination`'s extension names.
+    static func exportVideoWithoutMetadata(from source: URL, to destination: URL) async throws {
+        let asset = AVURLAsset(url: source)
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else { throw MetadataError() }
         session.metadataItemFilter = .forSharing()
-        let type: AVFileType = switch url.pathExtension.lowercased() {
+        let type: AVFileType = switch destination.pathExtension.lowercased() {
         case "mp4": .mp4
         case "m4v": .m4v
         default: .mov
         }
-        let temporary = siblingTemporary(of: url)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        try await session.export(to: temporary, as: type)
-        _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
+        try await session.export(to: destination, as: type)
     }
 
     /// Displayed size of an image file, after its EXIF orientation.
