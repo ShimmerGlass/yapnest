@@ -1414,6 +1414,9 @@ public final class XMPPSession: @unchecked Sendable {
         }
         guard ended else { return }
         DiagLog.info(.send, "Probation ends", .bool("acknowledged", id != nil))
+        // A room's catch-up can put a stanza on probation in an extension too,
+        // which sends nothing it didn't write itself.
+        guard policy.resendsPending else { return }
         DispatchQueue.global().async { [weak self] in self?.sendUnclaimedPending() }
     }
 

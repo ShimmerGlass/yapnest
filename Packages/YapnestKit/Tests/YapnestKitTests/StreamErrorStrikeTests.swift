@@ -387,3 +387,26 @@ struct StreamErrorStrikeTests {
         #expect(String(wired.body!.unicodeScalars.dropFirst(end)) == "ab hello")
     }
 }
+
+    @Test(arguments: [XMPPSession.Mode.app, .notificationService, .share])
+    func endingProbationSendsPendingMessagesOnlyInTheApp(mode: XMPPSession.Mode) async throws {
+        let database = try AppDatabase.inMemory()
+        let session = try makeSession(me, database: database, mode: mode)
+        let wire = FakeWire()
+        session.connectForTesting(wire)
+        try session.setEncrypted(false, with: alice)
+        let conversation = try #require(try database.conversation(with: alice).id)
+        _ = try database.insert(YapnestKit.Message(
+            conversationId: conversation, direction: .outgoing, sender: me, body: "left pending", status: .pending, remoteId: "p1",
+        ))
+        session.lock.withLock { $0.probation = XMPPSession.Probation(id: "other", token: 1) }
+
+        session.endProbation()
+        let expected = mode == .app ? 1 : 0
+        for _ in 0..<100 where wire.messages.count < expected { try await Task.sleep(for: .milliseconds(50)) }
+        session.drainSendQueue(alice)
+        try await Task.sleep(for: .milliseconds(300))
+        session.drainSendQueue(alice)
+
+        #expect(wire.messages.count == expected)
+    }
