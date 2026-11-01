@@ -24,6 +24,7 @@ struct GifPicker: View {
     @State private var page = 0
     @State private var hasNext = false
     @State private var isLoading = false
+    @State private var reloadGeneration = 0
     @State private var error: String?
     /// The query `gifs` are the results of, so coming back from Favorites keeps them.
     @State private var loadedQuery: String?
@@ -312,12 +313,20 @@ struct GifPicker: View {
     private func reload(debounce: Bool = true) async {
         moreTask?.cancel()
         moreTask = nil
-        guard let service = gate, consent == true, !showsFavorites else { return }
+        // A reload that was cancelled for this one finishes later, and must
+        // not take down the spinner this one has put up.
+        reloadGeneration += 1
+        let mine = reloadGeneration
+        guard let service = gate, consent == true, !showsFavorites else {
+            isLoading = false
+            return
+        }
         let text = trimmedQuery
         // Back from Favorites, the pages already loaded are still right. A
         // failed load, and so Retry, has no loaded query and goes on.
         if loadedQuery == text, error == nil {
             isLoadingMore = false
+            isLoading = false
             return
         }
         if debounce, !text.isEmpty {
@@ -327,7 +336,7 @@ struct GifPicker: View {
         isLoading = true
         isLoadingMore = false
         nextPageError = false
-        defer { isLoading = false }
+        defer { if reloadGeneration == mine { isLoading = false } }
         do {
             let result = try await fetch(service, text, page: 1)
             if Task.isCancelled { return }
