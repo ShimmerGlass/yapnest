@@ -54,6 +54,10 @@ public enum AnimatedImages {
         /// composited onto a whole canvas the same way. A single picture is
         /// left to ImageIO's own subsampling.
         public var plan: Plan { isGIF || frames > 1 ? AnimatedImages.plan(width: width, height: height) : .play }
+        /// What the frame player may do with it. It draws every frame on a
+        /// whole canvas, a single one included, so a still saved under a
+        /// `.gif` name is held to the caps as well.
+        public var playback: Plan { AnimatedImages.plan(width: width, height: height) }
         public var canDownsample: Bool { AnimatedImages.canDownsample(width: width, height: height, frames: frames) }
     }
 

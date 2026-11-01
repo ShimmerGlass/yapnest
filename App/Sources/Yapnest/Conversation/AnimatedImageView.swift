@@ -196,7 +196,7 @@ final class AnimatedUIImageView: UIView {
         case .data(let data): AnimatedImages.header(of: data)
         case .file(let url): AnimatedImages.header(of: url)
         }
-        return header?.plan == .play
+        return header?.playback == .play
     }
 
     private func restart() {

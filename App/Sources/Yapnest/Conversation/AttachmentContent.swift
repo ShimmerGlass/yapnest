@@ -239,7 +239,7 @@ private struct MediaThumbnail: View {
             gif = (url, .still)
             return
         }
-        switch header.plan {
+        switch header.playback {
         case .play:
             gif = (url, .play(file: url))
         case .tooLarge:
