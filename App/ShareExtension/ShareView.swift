@@ -50,23 +50,15 @@ struct ShareView: View {
         case .editing, .sending:
             form
         case .done(.failed(let reason)):
-            ContentUnavailableView {
-                Label("Not Sent", systemImage: "exclamationmark.circle.fill")
-            } description: {
-                Text("\(reason) The message is in Yapnest, where you can try again.")
-            } actions: {
-                Button("Done") { model.acknowledge() }
-                    .buttonStyle(.borderedProminent)
-            }
+            outcome(
+                title: "Not Sent", symbol: "exclamationmark.circle.fill",
+                text: Text("\(reason) The message is in Yapnest, where you can try again."),
+            )
         case .done(.queued(let reason)):
-            ContentUnavailableView {
-                Label("Saved", systemImage: "clock.badge.checkmark")
-            } description: {
-                Text("\(reason) Yapnest will try again the next time it opens.")
-            } actions: {
-                Button("Done") { model.acknowledge() }
-                    .buttonStyle(.borderedProminent)
-            }
+            outcome(
+                title: "Saved", symbol: "clock.badge.checkmark",
+                text: Text("\(reason) Yapnest will try again the next time it opens."),
+            )
         case .done(.handedToApp):
             // The server hasn't been reached yet; Yapnest, which holds the
             // connection, sends it now.
@@ -76,6 +68,17 @@ struct ShareView: View {
             )
         case .done(.sent):
             ContentUnavailableView("Sent", systemImage: "checkmark.circle.fill")
+        }
+    }
+
+    private func outcome(title: LocalizedStringKey, symbol: String, text: Text) -> some View {
+        ContentUnavailableView {
+            Label(title, systemImage: symbol)
+        } description: {
+            text
+        } actions: {
+            Button("Done") { model.acknowledge() }
+                .buttonStyle(.borderedProminent)
         }
     }
 
