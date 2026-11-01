@@ -208,17 +208,17 @@ extension AppDatabase {
         try markDirty(db, item)
     }
 
-    /// The items marked for publishing. It also reads `syncedEntry`, though
-    /// the answer doesn't depend on it: an item changed again while it is
-    /// still marked (one the server refused) leaves its mark as it was, so
-    /// only the entry's write tells the publisher to go again.
+    /// The items marked for publishing.
     static func dirtySettings(_ db: Database) throws -> [String] {
-        _ = try Int.fetchOne(db, sql: "SELECT 1 FROM syncedEntry LIMIT 1")
-        return try String.fetchAll(db, sql: "SELECT item FROM syncedItemDirty")
+        try String.fetchAll(db, sql: "SELECT item FROM syncedItemDirty")
     }
 
+    /// Also watches `syncedEntry`, which the fetch doesn't read: an item
+    /// changed again while it is still marked (one the server refused) leaves
+    /// its mark as it was, so only the entry's write tells the publisher to go
+    /// again. Listed, as GRDB can only record the tables a fetch reads.
     static func observeDirtySettings() -> ValueObservation<ValueReducers.Fetch<[String]>> {
-        ValueObservation.trackingConstantRegion(dirtySettings)
+        ValueObservation.tracking(regions: [Table("syncedItemDirty"), Table("syncedEntry")], fetch: dirtySettings)
     }
 
     static func markDirty(_ db: Database, _ item: String) throws {
