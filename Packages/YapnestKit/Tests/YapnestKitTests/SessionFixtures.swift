@@ -200,6 +200,14 @@ extension AppDatabase {
 }
 
 extension XMPPSession {
+    /// `addContactAndWait` for a test that checks the outcome some other way,
+    /// as the app always shows the user a failure.
+    func addContact(_ jid: JID, preauth: String? = nil) {
+        Task {
+            do { try await addContactAndWait(jid, preauth: preauth) } catch { Issue.record("Adding \(jid) failed: \(error)") }
+        }
+    }
+
     /// Waits for the server to have taken every queued roster change, which
     /// the contact calls return before.
     func rosterChangesSent(timeout: TimeInterval = 15) async throws {

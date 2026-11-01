@@ -13,7 +13,7 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
     /// We asked for a subscription and are waiting for an answer.
     public var isSubscriptionPending: Bool
     public var isInRoster: Bool
-    /// The user added this contact on this device (`addContact`). It covers
+    /// The user added this contact on this device (`addContactAndWait`). It covers
     /// the time before the server confirms the subscription, or if it drops
     /// our request.
     public var isAddedByUser: Bool

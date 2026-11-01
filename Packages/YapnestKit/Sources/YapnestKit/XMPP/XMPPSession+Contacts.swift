@@ -16,24 +16,10 @@ extension XMPPSession {
         }
     }
 
-    /// `addContactAndWait` for a caller that doesn't show the outcome, so a
-    /// failure is only logged. The JID counts as added, and the subscription
-    /// request goes out, only once the server has taken the roster item. Writes
-    /// to the database, so call it off the main thread.
-    public func addContact(_ jid: JID, name: String? = nil, preauth: String? = nil) {
-        guard isConnected, jid != account else { return }
-        Task {
-            do {
-                try await addContactNow(jid, name: name, preauth: preauth)
-            } catch {
-                logger.error("Failed to add a contact: \(error)")
-            }
-        }
-    }
-
-    /// `addContact` for a button that shows the outcome: it waits for the
-    /// server to take the roster item, and throws if it refuses or never
-    /// answers. The subscription request is only sent once it has.
+    /// Adds `jid` and asks to subscribe to it, waiting for the server to take
+    /// the roster item and throwing if it refuses or never answers. The
+    /// JID counts as added, and the subscription request goes out, only once
+    /// it has. Writes to the database, so call it off the main thread.
     public func addContactAndWait(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {
         guard await waitForConnection() else { throw ContactError.offline }
         try await addContactNow(jid, name: name, preauth: preauth)
