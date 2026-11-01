@@ -104,8 +104,7 @@ struct DiagnosticsInstrumentationTests {
         // The error domain of a server's error is a Swift type name, `Martin.XMPPError` or
         // `YapnestKit.ServerError`, which looks like a host and names none. The log is the process's, so
         // a line another test writes while this one has the store can be one, such as a failed upload.
-        let domains = try Regex("error=(Martin|YapnestKit)\\.[A-Za-z]+/")
-        for line in lines.map({ $0.replacing(domains, with: "error=type/") }) {
+        for line in lines.map({ Self.strippingTypeDomains(String($0)) }) {
             for pattern in patterns {
                 #expect(line.range(of: pattern, options: .regularExpression) == nil, "\(pattern) in \(line)")
             }
@@ -115,6 +114,18 @@ struct DiagnosticsInstrumentationTests {
             #expect(!text.contains(exact), "\(exact)")
         }
         #expect(text.contains("portKind=custom"))
+    }
+
+    /// A nested type such as `YapnestKit.XMPPSession.AttachmentError` has more than one dot.
+    static func strippingTypeDomains(_ line: String) -> String {
+        line.replacing(try! Regex("error=(Martin|YapnestKit)(\\.[A-Za-z0-9_]+)+/"), with: "error=type/")
+    }
+
+    @Test func aNestedErrorTypeIsNotTakenForAHost() {
+        let line = "error=YapnestKit.XMPPSession.AttachmentError/3 other=1"
+        #expect(Self.strippingTypeDomains(line) == "error=type/3 other=1")
+        #expect(Self.strippingTypeDomains("error=Martin.XMPPError/5") == "error=type/5")
+        #expect(Self.strippingTypeDomains("error=evil.example/5") == "error=evil.example/5")
     }
 
     @Test func aDisconnectionIsLoggedByKindAndNeverByText() throws {
