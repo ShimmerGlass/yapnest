@@ -55,24 +55,81 @@ extension OwedNicknameChange {
     }
 }
 
+/// What the avatar and the name share as a change not sent yet: where it is
+/// kept, and what showing it means.
+protocol OwedChange: Codable, Equatable, Sendable {
+    associatedtype Value
+
+    /// Where the change is kept, and the setting that records this install
+    /// has read the server's value.
+    static var changeKey: AppDatabase.SettingKey { get }
+    static var readKey: AppDatabase.SettingKey { get }
+
+    var base: String? { get set }
+    var baseKnown: Bool { get set }
+
+    init(value: Value, base: String?, baseKnown: Bool)
+
+    /// What is shown for `value`, and what is shown now.
+    static func shown(for value: Value) -> String?
+    static func currentlyShown(_ db: Database, account: JID?) throws -> String?
+    static func show(_ shown: String?, _ db: Database, account: JID?) throws
+}
+
+extension OwedAvatarChange: OwedChange {
+    static var changeKey: AppDatabase.SettingKey { .owedAvatarChange }
+    static var readKey: AppDatabase.SettingKey { .ownAvatarRead }
+
+    init(value: Image?, base: String?, baseKnown: Bool) {
+        self.init(image: value, base: base, baseKnown: baseKnown)
+    }
+
+    static func shown(for value: Image?) -> String? { value?.hash }
+
+    static func currentlyShown(_ db: Database, account: JID?) throws -> String? {
+        guard let account else { return nil }
+        return try Contact.fetchOne(db, key: account)?.avatarHash
+    }
+
+    static func show(_ shown: String?, _ db: Database, account: JID?) throws {
+        guard let account else { return }
+        try AppDatabase.updateContact(db, account) { $0.avatarHash = shown }
+    }
+}
+
+extension OwedNicknameChange: OwedChange {
+    static var changeKey: AppDatabase.SettingKey { .owedNicknameChange }
+    static var readKey: AppDatabase.SettingKey { .ownNicknameRead }
+
+    static func shown(for value: String?) -> String? { value }
+
+    static func currentlyShown(_ db: Database, account _: JID?) throws -> String? {
+        try AppDatabase.setting(db, .nickname)
+    }
+
+    static func show(_ shown: String?, _ db: Database, account _: JID?) throws {
+        try AppDatabase.setSetting(db, .nickname, shown)
+    }
+}
+
 /// What our avatar and name are waiting to send. They are kept as settings
 /// rather than a table: there is at most one of each, and a newer change
 /// replaces the older one while keeping its base.
 extension AppDatabase {
-    private static func owed<Change: Decodable>(_ db: Database, _ key: SettingKey, as _: Change.Type) throws -> Change? {
-        try setting(db, key).flatMap { try? JSONDecoder().decode(Change.self, from: Data($0.utf8)) }
+    private static func owed<Change: OwedChange>(_ db: Database, as _: Change.Type) throws -> Change? {
+        try setting(db, Change.changeKey).flatMap { try? JSONDecoder().decode(Change.self, from: Data($0.utf8)) }
     }
 
-    private static func setOwed(_ db: Database, _ key: SettingKey, _ change: (some Encodable)?) throws {
-        try setSetting(db, key, try change.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) })
+    private static func setOwed<Change: OwedChange>(_ db: Database, _ change: Change?) throws {
+        try setSetting(db, Change.changeKey, try change.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) })
     }
 
     func owedAvatarChange() throws -> OwedAvatarChange? {
-        try reader.read { try Self.owed($0, .owedAvatarChange, as: OwedAvatarChange.self) }
+        try reader.read { try Self.owed($0, as: OwedAvatarChange.self) }
     }
 
     func owedNicknameChange() throws -> OwedNicknameChange? {
-        try reader.read { try Self.owed($0, .owedNicknameChange, as: OwedNicknameChange.self) }
+        try reader.read { try Self.owed($0, as: OwedNicknameChange.self) }
     }
 
     /// The server's value as it was known when a change was made.
@@ -83,41 +140,34 @@ extension AppDatabase {
 
     /// Records the change and shows it at once, in one transaction. The base
     /// is kept from the change it replaces, or is `base` when given (a retry
-    /// of a refused change, whose picture is no longer shown), or is the
-    /// avatar shown now. That is unknown when none is shown and this install
+    /// of a refused change, whose value is no longer shown), or is the value
+    /// shown now. That is unknown when none is shown and this install
     /// hasn't read ours from the server.
-    func queueAvatarChange(_ image: OwedAvatarChange.Image?, for account: JID, base given: OwedBase? = nil) throws {
+    private func queueOwed<Change: OwedChange>(_ value: Change.Value, for account: JID?, base given: OwedBase?) throws -> Change {
         try writer.write { db in
             let base: OwedBase
-            if let previous = try Self.owed(db, .owedAvatarChange, as: OwedAvatarChange.self) {
+            if let previous = try Self.owed(db, as: Change.self) {
                 base = OwedBase(value: previous.base, known: previous.baseKnown)
             } else if let given {
                 base = given
             } else {
-                let shown = try Contact.fetchOne(db, key: account)?.avatarHash
-                let read = try Self.setting(db, .ownAvatarRead) != nil
+                let shown = try Change.currentlyShown(db, account: account)
+                let read = try Self.setting(db, Change.readKey) != nil
                 base = OwedBase(value: shown, known: shown != nil || read)
             }
-            try Self.setOwed(db, .owedAvatarChange, OwedAvatarChange(image: image, base: base.value, baseKnown: base.known))
-            try Self.updateContact(db, account) { $0.avatarHash = image?.hash }
+            let change = Change(value: value, base: base.value, baseKnown: base.known)
+            try Self.setOwed(db, change)
+            try Change.show(Change.shown(for: value), db, account: account)
+            return change
         }
     }
 
+    func queueAvatarChange(_ image: OwedAvatarChange.Image?, for account: JID, base given: OwedBase? = nil) throws {
+        let _: OwedAvatarChange = try queueOwed(image, for: account, base: given)
+    }
+
     func queueNicknameChange(_ value: String?, base given: OwedBase? = nil) throws {
-        try writer.write { db in
-            let base: OwedBase
-            if let previous = try Self.owed(db, .owedNicknameChange, as: OwedNicknameChange.self) {
-                base = OwedBase(value: previous.base, known: previous.baseKnown)
-            } else if let given {
-                base = given
-            } else {
-                let shown = try Self.setting(db, .nickname)
-                let read = try Self.setting(db, .ownNicknameRead) != nil
-                base = OwedBase(value: shown, known: shown != nil || read)
-            }
-            try Self.setOwed(db, .owedNicknameChange, OwedNicknameChange(value: value, base: base.value, baseKnown: base.known))
-            try Self.setSetting(db, .nickname, value)
-        }
+        let _: OwedNicknameChange = try queueOwed(value, for: nil, base: given)
     }
 
     /// Records that this install has our own avatar or name as the server
@@ -128,58 +178,50 @@ extension AppDatabase {
     /// Ends the owing of `sent`, which the server has answered. A change made
     /// meanwhile stays, now based on what the server holds from `sent`.
     /// Returns whether `sent` was still the change owed.
-    @discardableResult
-    func settleAvatarChange(_ sent: OwedAvatarChange, serverNow: String?) throws -> Bool {
+    private func settleOwed<Change: OwedChange>(_ sent: Change, serverNow: String?) throws -> Bool {
         try writer.write { db in
-            guard var current = try Self.owed(db, .owedAvatarChange, as: OwedAvatarChange.self) else { return false }
-            try Self.setSetting(db, .ownAvatarRead, "1")
+            guard var current = try Self.owed(db, as: Change.self) else { return false }
+            try Self.setSetting(db, Change.readKey, "1")
             guard current == sent else {
                 current.base = serverNow
                 current.baseKnown = true
-                try Self.setOwed(db, .owedAvatarChange, current)
+                try Self.setOwed(db, current)
                 return false
             }
-            try Self.setOwed(db, .owedAvatarChange, OwedAvatarChange?.none)
+            try Self.setOwed(db, Change?.none)
             return true
         }
+    }
+
+    @discardableResult
+    func settleAvatarChange(_ sent: OwedAvatarChange, serverNow: String?) throws -> Bool {
+        try settleOwed(sent, serverNow: serverNow)
     }
 
     @discardableResult
     func settleNicknameChange(_ sent: OwedNicknameChange, serverNow: String?) throws -> Bool {
+        try settleOwed(sent, serverNow: serverNow)
+    }
+
+    /// Drops `change` and puts what is shown back to `shown`, unless the
+    /// user has changed it since.
+    private func revertOwed<Change: OwedChange>(_ change: Change, shows shown: String?, for account: JID?) throws -> Bool {
         try writer.write { db in
-            guard var current = try Self.owed(db, .owedNicknameChange, as: OwedNicknameChange.self) else { return false }
-            try Self.setSetting(db, .ownNicknameRead, "1")
-            guard current == sent else {
-                current.base = serverNow
-                current.baseKnown = true
-                try Self.setOwed(db, .owedNicknameChange, current)
-                return false
-            }
-            try Self.setOwed(db, .owedNicknameChange, OwedNicknameChange?.none)
+            guard try Self.owed(db, as: Change.self) == change else { return false }
+            try Self.setOwed(db, Change?.none)
+            try Change.show(shown, db, account: account)
             return true
         }
     }
 
-    /// Drops `change` and puts the avatar shown back to `shown`, unless the
-    /// user has changed it since.
     @discardableResult
     func revertAvatarChange(_ change: OwedAvatarChange, shows shown: String?, for account: JID) throws -> Bool {
-        try writer.write { db in
-            guard try Self.owed(db, .owedAvatarChange, as: OwedAvatarChange.self) == change else { return false }
-            try Self.setOwed(db, .owedAvatarChange, OwedAvatarChange?.none)
-            try Self.updateContact(db, account) { $0.avatarHash = shown }
-            return true
-        }
+        try revertOwed(change, shows: shown, for: account)
     }
 
     @discardableResult
     func revertNicknameChange(_ change: OwedNicknameChange, shows shown: String?) throws -> Bool {
-        try writer.write { db in
-            guard try Self.owed(db, .owedNicknameChange, as: OwedNicknameChange.self) == change else { return false }
-            try Self.setOwed(db, .owedNicknameChange, OwedNicknameChange?.none)
-            try Self.setSetting(db, .nickname, shown)
-            return true
-        }
+        try revertOwed(change, shows: shown, for: nil)
     }
 
     /// Whether our avatar and name are waiting to be sent.
