@@ -284,9 +284,10 @@ struct SystemResolverTests {
     }
 
     @Test func unknownNamesAreUnreachable() async {
-        // The .invalid TLD never resolves.
+        // The .invalid TLD never resolves. The answer is quick alone but can take over ten seconds
+        // under the full suite's load, and a timeout then throws `.timedOut` instead.
         await #expect {
-            try await SystemTransport().resolve("no-such-host.invalid", timeout: 10)
+            try await SystemTransport().resolve("no-such-host.invalid", timeout: defaultWait)
         } throws: { error in
             guard case FetchError.unreachable = error else { return false }
             return true
