@@ -70,7 +70,11 @@ extension XMPPSession {
         case .decline:
             guard contact?.hasContactRequest == true else { return }
             try await client.module(.presence).unsubscribed(by: target)
-            try database.clearContactRequest(from: jid)
+            // An accept queued while this went out still needs the request,
+            // which would otherwise read as answered elsewhere and be dropped.
+            if try !database.hasPendingRosterChange(jid, kind: .accept) {
+                try database.clearContactRequest(from: jid)
+            }
         case .remove:
             // Already off the roster, such as removed on another device.
             guard contact?.isInRoster != false else { return }

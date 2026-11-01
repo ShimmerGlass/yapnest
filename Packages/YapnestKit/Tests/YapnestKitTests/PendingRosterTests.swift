@@ -171,6 +171,22 @@ struct PendingRosterTests {
         #expect(rosterSets.map { $0.attribute("name") } == ["Ally", "Al"])
     }
 
+    @Test func anAcceptQueuedWhileTheDeclineIsBeingSentIsStillSent() async throws {
+        try session.declineContactRequest(from: stranger)
+        let declining = try #require(queued.first?.id)
+        let once = OSAllocatedUnfairLock(initialState: false)
+        // Queued after the decline was chosen and before it is sent, as the queue's lock allows.
+        session.afterRosterChangeChosenForTesting = { [db, stranger] in
+            guard once.withLock({ defer { $0 = true }; return !$0 }) else { return }
+            try? db.queueRosterChange(stranger, kind: .accept, inFlight: declining)
+        }
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually { queued.isEmpty && rosterSets.map { $0.attribute("jid") } == ["stranger@example.net"] })
+        #expect(presences(.unsubscribed).count == 1)
+        #expect(try !contact(stranger).hasContactRequest)
+    }
+
     @Test func aRenameQueuedWhileAnotherIsOnItsWayFollowsIt() async throws {
         try await session.setContactName(alice, name: "Ally")
         let first = try #require(queued.first?.id)
