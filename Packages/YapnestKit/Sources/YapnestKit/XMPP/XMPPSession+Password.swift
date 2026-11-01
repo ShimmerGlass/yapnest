@@ -101,7 +101,11 @@ extension XMPPSession {
                 // It may have been applied: the sign-in after this one has to
                 // be able to find out, with a password, as a token the server
                 // kept would sign in either way and confirm the old one.
-                lock.withLock { $0.candidatePassword = new }
+                lock.withLock {
+                    $0.candidatePassword = new
+                    // A candidate of an earlier change was tried for that one.
+                    $0.triedCandidate = false
+                }
                 fastTokens.save(nil)
                 client.module(.sasl2).fastToken = nil
                 throw PasswordError.outcomeUnknown

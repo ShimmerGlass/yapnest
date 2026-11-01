@@ -259,6 +259,19 @@ struct PasswordChangeTests {
         #expect(session.lock.withLock { $0.candidatePassword } == "new")
     }
 
+    @Test func aSecondChangeOfUnknownOutcomeTriesItsOwnCandidate() async throws {
+        session.lock.withLock { $0.retryBackoff = 0 }
+        serve(fields: plainFields()) { FakeWire.error(to: $0, condition: "remote-server-timeout") }
+
+        await #expect(throws: XMPPSession.PasswordError.outcomeUnknown) { try await session.changePassword(to: "new", current: "old") }
+        #expect(session.switchToCandidatePassword(after: SaslError.not_authorized))
+        #expect(!session.switchToCandidatePassword(after: SaslError.not_authorized))
+
+        await #expect(throws: XMPPSession.PasswordError.outcomeUnknown) { try await session.changePassword(to: "newer", current: "new") }
+        #expect(session.switchToCandidatePassword(after: SaslError.not_authorized))
+        #expect(password(of: session) == "newer")
+    }
+
     // MARK: A candidate password at sign-in
 
     private func sessionWithCandidate() throws -> XMPPSession {
