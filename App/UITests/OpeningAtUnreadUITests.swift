@@ -15,7 +15,7 @@ final class OpeningAtUnreadUITests: XCTestCase {
 
     func testOpensAtTheFirstUnreadMessage() {
         let firstUnread = driver.message(containing: "Unread 0260")
-        XCTAssertTrue(firstUnread.waitForExistence(timeout: ConversationDriver.contentTimeout), "the first unread message never showed")
+        driver.waitForContent(firstUnread, "the first unread message")
         driver.waitForStillness()
 
         let app = driver.app

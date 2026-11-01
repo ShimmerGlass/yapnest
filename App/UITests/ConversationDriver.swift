@@ -177,6 +177,26 @@ final class ConversationDriver {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
     }
 
+    /// Waits for a message of an open chat to show. When it doesn't, the
+    /// failure carries a screenshot, the element tree and the recorder's
+    /// summary, so a blank list can be told from a slow one.
+    func waitForContent(_ element: XCUIElement, _ what: String, file: StaticString = #filePath, line: UInt = #line) {
+        if element.waitForExistence(timeout: Self.contentTimeout) { return }
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "\(what): screenshot"
+        screenshot.lifetime = .keepAlways
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "\(what): element tree"
+        tree.lifetime = .keepAlways
+        let record = XCTAttachment(string: recorderSummary())
+        record.name = "\(what): recorder summary"
+        record.lifetime = .keepAlways
+        XCTContext.runActivity(named: "\(what) never showed") { activity in
+            [screenshot, tree, record].forEach(activity.add)
+        }
+        XCTFail("\(context): \(what) never showed: \(recorderSummary())", file: file, line: line)
+    }
+
     /// A long press sometimes isn't taken while the list is still settling, so it's tried again.
     func openMenu(on target: XCUIElement, _ what: String, file: StaticString = #filePath, line: UInt = #line) {
         for _ in 0..<3 {

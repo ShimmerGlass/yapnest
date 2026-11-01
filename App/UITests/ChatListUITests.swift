@@ -35,7 +35,7 @@ final class ChatListUITests: InteractionsTestCase {
     func testOpeningAChatShowsItAndBackReturnsToTheList() {
         waitForRow("Nest").tap()
         XCTAssertTrue(driver.recorderElement.waitForExistence(timeout: ConversationDriver.openTimeout), "the chat didn't open")
-        XCTAssertTrue(app.staticTexts["React to this one."].waitForExistence(timeout: ConversationDriver.contentTimeout), "the chat's messages aren't shown")
+        driver.waitForContent(app.staticTexts["React to this one."], "the chat's messages")
         back()
         XCTAssertTrue(row("Nest").waitForExistence(timeout: ConversationDriver.listTimeout), "the list isn't back")
     }
@@ -46,7 +46,7 @@ final class ChatListUITests: InteractionsTestCase {
     func testTheHeaderShowsTheNameFromTheStart() {
         waitForRow("Nest").tap()
         XCTAssertTrue(driver.recorderElement.waitForExistence(timeout: ConversationDriver.openTimeout), "the chat didn't open")
-        XCTAssertTrue(app.staticTexts["React to this one."].waitForExistence(timeout: ConversationDriver.contentTimeout), "the chat's messages aren't shown")
+        driver.waitForContent(app.staticTexts["React to this one."], "the chat's messages")
         driver.waitForStillness()
         XCTAssertEqual(driver.recorder()["titleChanges"], 0, "the header's name changed after the push: \(driver.recorderSummary())")
     }
@@ -56,7 +56,7 @@ final class ChatListUITests: InteractionsTestCase {
     func testTheHeaderIsNeverCutShortAsTheChatOpens() {
         waitForRow("Nest").tap()
         XCTAssertTrue(driver.recorderElement.waitForExistence(timeout: ConversationDriver.openTimeout), "the chat didn't open")
-        XCTAssertTrue(app.staticTexts["React to this one."].waitForExistence(timeout: ConversationDriver.contentTimeout), "the chat's messages aren't shown")
+        driver.waitForContent(app.staticTexts["React to this one."], "the chat's messages")
         driver.waitForStillness()
         XCTAssertEqual(driver.recorder()["headerSqueezes"], 0, "the header was cut short: \(driver.recorderSummary())")
     }
@@ -67,7 +67,7 @@ final class ChatListUITests: InteractionsTestCase {
         XCTAssertNil(unreadCount(of: row("Nest")), "a chat with nothing unread has a badge: \(row("Nest").label)")
         unread.tap()
         XCTAssertTrue(driver.recorderElement.waitForExistence(timeout: ConversationDriver.openTimeout), "the chat didn't open")
-        XCTAssertTrue(app.staticTexts["Third unread."].waitForExistence(timeout: ConversationDriver.contentTimeout))
+        driver.waitForContent(app.staticTexts["Third unread."], "the unread chat's messages")
         back()
         let cleared = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label ENDSWITH %@", "unread."), object: row("Unread"))
         XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 15), .completed, "the badge stayed after reading: \(row("Unread").label)")
