@@ -426,6 +426,56 @@ struct OwedReadStateTests {
         #expect(await eventually { !owed })
     }
 
+    /// `count` more chats, each with a message read offline.
+    private func readMoreChatsOffline(_ count: Int) throws -> [Conversation] {
+        try (0..<count).map { index in
+            let peer = YapnestKit.JID("friend\(index)@example.org")!
+            let chat = try db.conversation(with: peer)
+            try db.insert(Message(conversationId: chat.id!, direction: .incoming, sender: peer, body: "m", timestamp: Date(), serverId: "f\(index)"))
+            try session.markRead(chat)
+            return chat
+        }
+    }
+
+    private func isOwed(_ chat: Conversation) -> Bool {
+        (try? db.reader.read { try Conversation.fetchOne($0, key: chat.id!)?.readStateOwed }) ?? false
+    }
+
+    @Test func manyOwedChatsArePublishedTogetherFourAtATime() async throws {
+        try readOffline()
+        let chats = try readMoreChatsOffline(9)
+        wire.holdReplies { $0.firstChild(name: "pubsub")?.firstChild(name: "publish") != nil }
+        serve()
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        // Four in flight while the server holds its answers, and no fifth.
+        #expect(await eventually { publishes().count == 4 })
+        _ = await eventually(timeout: 0.3) { false }
+        #expect(publishes().count == 4)
+        wire.releasePings()
+        // As answers come, the rest follow; none is ever the fifth in flight.
+        for _ in 0..<5 {
+            _ = await eventually(timeout: 0.2) { false }
+            #expect(wire.heldPings <= 4)
+            wire.releasePings()
+        }
+        #expect(await eventually { publishes().count == 10 && !owed && chats.allSatisfy { !isOwed($0) } })
+        #expect(Set(publishedStanzaIds()) == Set(["s3"] + (0..<9).map { "f\($0)" }))
+    }
+
+    @Test func aChatTheServerRefusesDoesNotStopTheOthers() async throws {
+        try readOffline()
+        let chats = try readMoreChatsOffline(5)
+        serve { iq in
+            let id = iq.firstChild(name: "pubsub")?.firstChild(name: "publish")?.firstChild(name: "item")?.firstChild(name: "displayed")?.firstChild(name: "stanza-id")?.attribute("id")
+            return id == "f1" ? FakeWire.error(to: iq, condition: "resource-constraint", type: "wait") : FakeWire.result(to: iq)
+        }
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { publishes().count == 6 && !owed })
+        #expect(await eventually { chats.enumerated().allSatisfy { $0.offset == 1 ? isOwed($0.element) : !isOwed($0.element) } })
+    }
+
     @Test func anExtensionLeavesItToTheApp() async throws {
         let quiet = try makeSession(me, database: db, mode: .notificationService)
         try db.markRead(conversationId: conversation.id!, owingReadState: true)

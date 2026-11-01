@@ -14,6 +14,7 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
     private var failing = false
     private var responder: (@Sendable (Iq) -> Iq?)?
     private var holding = false
+    private var holdsOthers: (@Sendable (Iq) -> Bool)?
     private var later = false
     private var held: [() -> Void] = []
     private var counting: StreamManagementModule?
@@ -58,6 +59,12 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
         set { lock.withLock { holding = newValue } }
     }
 
+    /// Keeps the replies to the requests this picks, with the pings', until
+    /// `releasePings()`: a server that is slow to answer.
+    func holdReplies(to matches: (@Sendable (Iq) -> Bool)?) {
+        lock.withLock { holdsOthers = matches }
+    }
+
     /// How many pings wait for their reply.
     var heldPings: Int { lock.withLock { held.count } }
 
@@ -78,9 +85,9 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
     func write<Failure: Error>(
         _ iq: Iq, timeout: TimeInterval, errorDecoder: @escaping PacketErrorDecoder<Failure>, completionHandler: ((Result<Iq, Failure>) -> Void)?,
     ) {
-        let (responder, holds, later) = lock.withLock {
+        let (responder, holds, later, holdsOthers) = lock.withLock {
             stanzas.append(iq)
-            return (self.responder, holding, self.later)
+            return (self.responder, holding, self.later, self.holdsOthers)
         }
         let isPing = iq.firstChild(name: "ping", xmlns: "urn:xmpp:ping") != nil
         guard let response = responder?(iq) ?? (isPing ? FakeWire.result(to: iq) : nil), let completionHandler else { return }
@@ -91,7 +98,7 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
                 completionHandler(.success(response))
             }
         }
-        if isPing && holds {
+        if (isPing && holds) || holdsOthers?(iq) == true {
             lock.withLock { held.append(reply) }
         } else if later {
             DispatchQueue.global().async(execute: reply)

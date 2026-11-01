@@ -81,6 +81,10 @@ extension XMPPSession {
             logger.error("Failed to look up the read states owed: \(error)")
             return
         }
+        // What to send is decided from the database first, so the publishes
+        // can go side by side: they are one per chat, and nothing orders one
+        // chat's state against another's.
+        var toPublish: [(stanzaId: String, conversationId: Int64, route: Route)] = []
         for conversation in owed {
             guard isConnected, let id = conversation.id else { return }
             do {
@@ -99,12 +103,28 @@ extension XMPPSession {
                         continue
                     }
                 }
-                await publish(stanzaId: stanzaId, conversationId: id, route: route(for: conversation))
+                toPublish.append((stanzaId, id, route(for: conversation)))
             } catch {
                 logger.error("Failed to publish an owed read state: \(error)")
             }
         }
+        // A capped number at a time: a round trip per chat added up for a long
+        // time offline, but a burst of publishes to one node isn't worth more
+        // than a few in flight. A failure is handled by `publish` for its own chat.
+        await withTaskGroup(of: Void.self) { group in
+            var next = toPublish.makeIterator()
+            func startNext() {
+                guard let item = next.next() else { return }
+                group.addTask { [self] in
+                    await publish(stanzaId: item.stanzaId, conversationId: item.conversationId, route: item.route)
+                }
+            }
+            for _ in 0..<Self.concurrentReadStatePublishes { startNext() }
+            while await group.next() != nil { startNext() }
+        }
     }
+
+    static let concurrentReadStatePublishes = 4
 
     private func publish(stanzaId: String, conversationId: Int64, route: Route) async {
         let peer = route.peer

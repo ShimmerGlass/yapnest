@@ -181,9 +181,16 @@ extension XMPPSession {
     private func sendOwedProfileRound() async {
         guard isConnected else { return }
         do {
-            if let owed = try database.owedAvatarChange() { await sendOwed(owed) }
-            guard isConnected else { return }
-            if let owed = try database.owedNicknameChange() { await sendOwed(owed) }
+            // Two nodes with their own warnings and owed state, so neither waits for the other.
+            let avatar = try database.owedAvatarChange()
+            let nickname = try database.owedNicknameChange()
+            async let avatarSent: Void = {
+                if let avatar { await sendOwed(avatar) }
+            }()
+            async let nicknameSent: Void = {
+                if let nickname { await sendOwed(nickname) }
+            }()
+            _ = await (avatarSent, nicknameSent)
         } catch {
             logger.error("Failed to read the profile changes owed: \(error)")
         }
