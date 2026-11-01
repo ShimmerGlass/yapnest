@@ -77,6 +77,20 @@ struct OMEMODeviceLimitTests {
         #expect(encryption.store.limited(ids, of: me.description).contains(own))
     }
 
+    /// The removal of a replaced device works from the cut list, so a cut
+    /// that dropped it would have it forgotten while still on the server.
+    @Test func aReplacedDeviceStillListedIsNeverCutFromOurOwnList() throws {
+        let database = try AppDatabase.inMemory()
+        try database.setSetting(.omemoReplacedDeviceIds, "4000000000,70")
+        let encryption = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        let replaced = [Int32(bitPattern: 4_000_000_000), 70]
+        let ids = Array(1...200).map(Int32.init).filter { $0 != 70 } + replaced
+        let kept = encryption.store.limited(ids, of: me.description)
+        #expect(kept.count == 64)
+        #expect(Set(replaced).isSubset(of: kept))
+        #expect(!encryption.store.limited(ids, of: alice.description).contains(replaced[0]), "only our own list is pinned")
+    }
+
     @Test(.timeLimit(.minutes(1))) func aThousandListedDevicesStartAtMost64Sessions() async throws {
         let wire = FakeWire()
         let ids = Array(1...1000).map(Int32.init)

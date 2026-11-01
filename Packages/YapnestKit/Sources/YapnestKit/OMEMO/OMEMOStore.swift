@@ -658,7 +658,9 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// this order: devices we know that are in use, most recent first; then
     /// ones we have never seen, in the list's order, so a new device takes
     /// the place of a stale one; then known devices gone quiet. This
-    /// install's own device is never cut.
+    /// install's own device is never cut, nor, in our own list, a device it
+    /// replaced that is still listed: it is to be taken off the server's
+    /// list, which a cut would leave it on, forgotten.
     func limited(_ ids: [Int32], of name: String) -> [Int32] {
         guard ids.count > Self.deviceLimit else { return ids }
         let usage = usage(forName: name), now = now()
@@ -666,9 +668,11 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         var seen = Set<Int32>()
         let local = Int32(bitPattern: localRegistrationId())
         let unique = ids.filter { seen.insert($0).inserted }
-        let own = name == account && seen.contains(local) ? [local] : []
+        let replaced = name == account ? Set(replacedDeviceIds()) : []
+        let own = name == account ? unique.filter { $0 == local } + unique.filter { $0 != local && replaced.contains($0) } : []
+        let pinned = Set(own)
         var known: [Int32] = [], unknown: [Int32] = []
-        for id in unique where id != local || own.isEmpty {
+        for id in unique where !pinned.contains(id) {
             if usage[id] != nil { known.append(id) } else { unknown.append(id) }
         }
         var active: [Int32] = [], quiet: [Int32] = []
