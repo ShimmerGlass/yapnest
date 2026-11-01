@@ -200,6 +200,21 @@ struct HistoryTests {
         #expect(try pendingCount() == 0)
     }
 
+    @Test func aHeldCorrectionKeepsItsPlaceholderWhenTheOriginalArrives() throws {
+        try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
+        var lock = try correction("c1", of: "m1", body: "🔒", at: 300)
+        lock.encryption = .omemoUndecryptable
+        let standIn = try #require(try db.ingest(lock).newMessage)
+        try db.hold(messageId: try #require(standIn.id), sender: alice, deviceId: 7, stanza: "<message/>", source: .live, isHistory: false)
+        var original = try archived("m1", body: "typo", at: 100, history: true)
+        original.encryption = .omemo
+        try db.ingest([original])
+
+        // Resolving the device needs the stanza back, or the fix is lost.
+        #expect(try db.heldGroupMessages().count == 1)
+        #expect(try shown().contains { $0.id == standIn.id })
+    }
+
     @Test func anUndecryptableCorrectionOfAnUndecryptableOriginalChangesNothing() throws {
         try db.ingest(try archived("new", body: "newest", at: 1_000, history: false))
         var lock = try correction("c1", of: "m1", body: "🔒 fix", at: 300)
