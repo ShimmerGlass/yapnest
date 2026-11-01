@@ -1,3 +1,4 @@
+import Foundation
 import GRDB
 import Testing
 import YapnestKit
@@ -43,6 +44,29 @@ struct ChatSearchTests {
         search.goNewer()
         #expect(search.current == 0)
         #expect(f.model.scroll.messageID == m[2].id)
+    }
+
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        var isSet: Bool { lock.withLock { value } }
+        func set() { lock.withLock { value = true } }
+    }
+
+    @Test func aSearchLeftOpenWhenTheScreenGoesStopsObservingTheDatabase() async throws {
+        let f = try ConversationFixture()
+        try f.add("apple pie", read: true)
+        await f.start()
+        var search: ChatSearch? = ChatSearch(session: f.session, peer: f.peer, conversation: f.model)
+        let ended = Flag()
+        search?.observationEnded = { ended.set() }
+        search?.open()
+        search?.query = "apple"
+        await eventually("the search never finished") { search?.hasMatches == true }
+
+        search = nil
+
+        await eventually("the observation outlived the search") { ended.isSet }
     }
 
     @Test func aNewQueryStartsOverAtTheNewestMatch() async throws {

@@ -23,6 +23,8 @@ final class ChatSearch {
     @ObservationIgnored private let peer: JID
     @ObservationIgnored private let conversation: ConversationModel
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// Called when the observation of the matches ends, which a test waits for.
+    @ObservationIgnored var observationEnded: (@Sendable () -> Void)?
 
     /// More than any chat needs to step through by hand.
     nonisolated private static let limit = 500
@@ -31,6 +33,12 @@ final class ChatSearch {
         self.session = session
         self.peer = peer
         self.conversation = conversation
+    }
+
+    /// The search can be left open when the screen goes away; its observation
+    /// would then run for as long as the process does.
+    deinit {
+        task?.cancel()
     }
 
     var hasMatches: Bool { !matches.isEmpty }
@@ -70,8 +78,9 @@ final class ChatSearch {
             return
         }
         isSearching = true
-        let database = session.database, peer = peer
+        let database = session.database, peer = peer, ended = observationEnded
         task = Task { [weak self] in
+            defer { ended?() }
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             let conversationId = await offMain {
