@@ -524,8 +524,10 @@ struct BubbleLayout: Layout {
     /// What the row leaves for the bubble's contents: its width less the
     /// margins, then the bubble's own padding.
     private func contentWidth(_ proposal: ProposedViewSize) -> CGFloat {
-        // The row holds 12pt margins and the bubble 12pt of padding.
-        let row = (offeredWidth ?? proposal.width ?? 400) + 48
+        // The row holds 12pt margins and the bubble 12pt of padding. A hosted
+        // bubble is offered the width inside the margins, its padding still
+        // to come; a bare one is proposed what is left after both.
+        let row = offeredWidth.map { $0 + 24 } ?? proposal.width.map { $0 + 48 } ?? 448
         let bubble = min(row * 0.78, row - 60)
         return max(0, (fillsWidth ? min(bubble, MediaLimits.maxBubbleWidth) : bubble) - 24)
     }

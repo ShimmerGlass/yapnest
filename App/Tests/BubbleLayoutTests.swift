@@ -71,4 +71,38 @@ struct BubbleLayoutTests {
         let first = await size(host)
         #expect(await size(host) == first)
     }
+
+    // MARK: The 78% rule
+
+    /// A part wider than any row, so the bubble takes the most the rule allows.
+    private struct Wide: View {
+        var body: some View { Color.clear.frame(width: 2_000, height: 10) }
+    }
+
+    /// The bubble's drawn width (content and its 12pt of padding each side)
+    /// in a list `listWidth` wide, laid out the way the row does: hosted on
+    /// iOS, which is offered the width inside the row's margins and told it,
+    /// or as plain SwiftUI on the Mac, which proposes what is left of that
+    /// after the bubble's padding.
+    private func drawnWidth(listWidth: CGFloat, hosted: Bool, fillsWidth: Bool = false) -> CGFloat {
+        let host = UIHostingController(rootView: BubbleLayout(fillsWidth: fillsWidth, offeredWidth: hosted ? listWidth - 24 : nil) { Wide() })
+        let width = hosted ? listWidth - 24 : listWidth - 48
+        return host.sizeThatFits(in: CGSize(width: width, height: 10_000)).width + 24
+    }
+
+    @Test(arguments: [375.0, 393.0, 402.0, 430.0]) func aBubbleIsAtMostSeventyEightPercentOfTheList(listWidth: CGFloat) {
+        let rule = min(listWidth * 0.78, listWidth - 60)
+        let hosted = drawnWidth(listWidth: listWidth, hosted: true)
+        let plain = drawnWidth(listWidth: listWidth, hosted: false)
+        print("bubble width, list \(listWidth): rule \(rule), hosted (iOS) \(hosted), plain (Mac) \(plain)")
+        #expect(abs(plain - rule) < 0.5)
+        #expect(abs(hosted - rule) < 0.5)
+    }
+
+    @Test(arguments: [375.0, 393.0, 402.0, 430.0]) func aPhotoBubbleFollowsTheSameRule(listWidth: CGFloat) {
+        let rule = min(listWidth * 0.78, listWidth - 60, MediaLimits.maxBubbleWidth)
+        let hosted = drawnWidth(listWidth: listWidth, hosted: true, fillsWidth: true)
+        print("photo bubble width, list \(listWidth): rule \(rule), hosted (iOS) \(hosted)")
+        #expect(abs(hosted - rule) < 0.5)
+    }
 }
