@@ -77,6 +77,17 @@ struct OMEMOFetchErrorTests {
         #expect(failure.localizedDescription.contains("remote-server-not-found"))
     }
 
+    @Test func aMessageWithNoRecipientIsRefusedNotSealedForOurOwnDevicesAlone() async throws {
+        let wire = FakeWire()
+        wire.answer { iq in isListRequest(iq, of: me) ? FakeWire.error(to: iq) : nil }
+        let (encryption, client) = try module(writingTo: wire)
+        let stanza = Martin.Message()
+        stanza.body = "hi"
+        let result = await Task.detached { withExtendedLifetime(client) { encryption.encrypt(stanza, for: []) } }.value
+        guard case .failure(.noRecipients) = result else { Issue.record("it was encrypted for no one: \(result)"); return }
+        if case .failure(let failure) = result { #expect(!failure.isPassing && failure.localizedDescription.contains("no one")) }
+    }
+
     @Test func noListAtAllIsStillALackOfOMEMO() async throws {
         let result = try await encrypt { FakeWire.error(to: $0, condition: "item-not-found") }
         guard case .failure(.unsupported(let peer)) = result else { Issue.record("not unsupported"); return }

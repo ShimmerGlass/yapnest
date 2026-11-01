@@ -335,6 +335,9 @@ final class OMEMOEncryption: @unchecked Sendable {
         /// The server wouldn't give us their device list.
         case listWithheld(JID)
         case noTrustedDevices(JID)
+        /// Nobody but our own devices would be able to read it: a room whose
+        /// members aren't known, or has none besides us.
+        case noRecipients
         case setupFailed(JID)
         /// The server answered a request for their device list or bundle with
         /// an error that isn't "no such thing", or didn't answer in time.
@@ -357,6 +360,7 @@ final class OMEMOEncryption: @unchecked Sendable {
             case .unsupported(let peer): "\(peer) can't receive encrypted messages. Turn off encryption to send without it."
             case .listWithheld(let peer): "\(peer)'s server doesn't let us read their encryption keys, as we aren't in their contacts. Turn off encryption to send without it."
             case .noTrustedDevices(let peer): "None of \(peer)'s devices are trusted."
+            case .noRecipients: "There is no one to encrypt this message for yet. It stays unsent until the group's members are known."
             case .setupFailed(let peer): "Couldn't set up encryption with \(peer)."
             case .fetchFailed(let peer, let error): error.describe("Couldn't get \(peer)'s encryption keys. Turn off encryption to send without it")
             }
@@ -404,6 +408,9 @@ final class OMEMOEncryption: @unchecked Sendable {
 
     private func encrypt(_ stanza: Martin.Message, for recipients: [JID], skippingUnreachable: Bool, unsupported: inout Set<JID>) -> Result<(message: Martin.Message, trust: OMEMODevice.Trust, reached: Set<JID>), EncryptError> {
         dispatchPrecondition(condition: .notOnQueue(.main))
+        // Otherwise the message would be sealed for our own devices alone and
+        // go out looking encrypted for the room, which no member could read.
+        if !skippingUnreachable, recipients.isEmpty { return .failure(.noRecipients) }
         let done = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var fetched: [SignalAddress]?
         // Our own list too, so sessions get built with a device of ours that
