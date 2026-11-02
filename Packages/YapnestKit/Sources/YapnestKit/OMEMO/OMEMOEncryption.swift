@@ -92,7 +92,10 @@ final class OMEMOEncryption: @unchecked Sendable {
         module = OMEMOModule(aesGCMEngine: CryptoKitAESGCM(), signalContext: context, signalStorage: storage)
         if rotatesSignedPreKey { module.signedPreKeyRotationDue = { [store] in store.signedPreKeyRotationDue() } }
         module.limitDevices = { [store] jid, ids in store.limited(ids, of: jid.stringValue) }
-        module.diagnostics = { OMEMOEvent.log($0) }
+        module.diagnostics = { [store] event in
+            if case let .bundlePublished(signedPreKeyId, _, _, _) = event { store.signedPreKeyPublished(id: signedPreKeyId) }
+            OMEMOEvent.log(event)
+        }
         module.defaultBody = "This message is encrypted with OMEMO, which your client doesn't support."
         ownListHeard = module.activeDevicesPublisher.sink { [weak self] change in
             // An extension doesn't publish our keys, so it leaves our list alone.

@@ -520,7 +520,9 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// How long a signed prekey is published before the next one replaces it.
     static let signedPreKeyLifetime: TimeInterval = 7 * 24 * 3600
     /// How long a replaced one stays, for sessions started from the bundle it
-    /// was in. Counted from when it was replaced.
+    /// was in. Counted from when the bundle with its successor was published:
+    /// until then the replaced key is the one on the server, and a successor
+    /// that stays unpublished must not cost the key contacts are using.
     static let signedPreKeyGrace: TimeInterval = 28 * 24 * 3600
 
     /// The id of the newest one, which the module takes as its count to pick
@@ -533,22 +535,36 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         try Int.fetchOne(db, sql: "SELECT MAX(id) FROM omemoSignedPreKey") ?? 0
     }
 
+    /// Notes that our bundle carrying signed prekey `id` has been published.
+    /// Only the first time counts: the same key published again leaves its
+    /// predecessor's grace period running from the first.
+    func signedPreKeyPublished(id: UInt32) {
+        let date = now()
+        _ = write { db in
+            try db.execute(sql: "UPDATE omemoSignedPreKey SET publishedAt = ? WHERE id = ? AND publishedAt IS NULL", arguments: [date, id])
+        }
+    }
+
     /// Whether the newest signed prekey has been published for its lifetime.
     /// Also deletes the replaced ones that have outlived the grace period.
     func signedPreKeyRotationDue() -> Bool {
         let now = now()
-        let dates = read { db in
-            try Row.fetchAll(db, sql: "SELECT id, createdAt FROM omemoSignedPreKey ORDER BY id")
-                .map { ($0["id"] as Int64, ($0["createdAt"] as Date?) ?? now) }
+        let keys = read { db in
+            try Row.fetchAll(db, sql: "SELECT id, createdAt, publishedAt FROM omemoSignedPreKey ORDER BY id")
+                .map { (id: $0["id"] as Int64, created: ($0["createdAt"] as Date?) ?? now, published: $0["publishedAt"] as Date?) }
         } ?? []
-        // A key is replaced when the next one is made.
-        let expired = dates.indices.dropLast().filter { now.timeIntervalSince(dates[$0 + 1].1) >= Self.signedPreKeyGrace }.map { dates[$0].0 }
+        // A key stops being offered when a later one is published, and the
+        // earliest such publish starts the clock. One never published doesn't.
+        let expired = keys.indices.dropLast().filter { index in
+            guard let replaced = keys[(index + 1)...].compactMap(\.published).min() else { return false }
+            return now.timeIntervalSince(replaced) >= Self.signedPreKeyGrace
+        }.map { keys[$0].id }
         if !expired.isEmpty {
             _ = write { db in
                 for id in expired { try db.execute(sql: "DELETE FROM omemoSignedPreKey WHERE id = ?", arguments: [id]) }
             }
         }
-        return dates.last.map { now.timeIntervalSince($0.1) >= Self.signedPreKeyLifetime } ?? false
+        return keys.last.map { now.timeIntervalSince($0.created) >= Self.signedPreKeyLifetime } ?? false
     }
 
     func loadSignedPreKey(withId id: UInt32) -> Data? {

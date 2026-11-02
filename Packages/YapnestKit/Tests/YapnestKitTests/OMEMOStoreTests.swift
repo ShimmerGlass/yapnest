@@ -138,6 +138,31 @@ struct OMEMOStoreTests {
         #expect(store.loadSignedPreKey(withId: 3) == Data([1]))
     }
 
+    /// The key on the server is the one contacts build sessions from; a
+    /// successor nobody has been told about hasn't replaced it.
+    @Test func aSignedPreKeyIsKeptWhileItsSuccessorIsUnpublished() throws {
+        let clock = TestClock()
+        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore(), now: { clock.now })
+        #expect(store.storeSignedPreKey(Data([1]), withId: 1))
+        store.signedPreKeyPublished(id: 1)
+        clock.advance(days: 8)
+        #expect(store.storeSignedPreKey(Data([2]), withId: 2))
+
+        clock.advance(days: 40)
+        _ = store.signedPreKeyRotationDue()
+        #expect(store.loadSignedPreKey(withId: 1) != nil, "the successor was never published")
+
+        store.signedPreKeyPublished(id: 2)
+        clock.advance(days: 27)
+        store.signedPreKeyPublished(id: 2)
+        _ = store.signedPreKeyRotationDue()
+        #expect(store.loadSignedPreKey(withId: 1) != nil, "27 days after the publish")
+        clock.advance(days: 2)
+        _ = store.signedPreKeyRotationDue()
+        #expect(store.loadSignedPreKey(withId: 1) == nil, "29 days after the publish, a second one not counting")
+        #expect(store.loadSignedPreKey(withId: 2) != nil)
+    }
+
     @Test func identityIsCreatedOnceAndPersists() throws {
         let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
         let first = try OMEMOEncryption(database: database, account: me, identityKeys: keys)

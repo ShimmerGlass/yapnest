@@ -925,6 +925,16 @@ public final class AppDatabase: Sendable {
                 """)
         }
 
+        migrator.registerMigration("v57-signed-prekey-published") { db in
+            // When the bundle carrying the key was published, which is when
+            // the key before it stops being offered. The keys kept from before
+            // count from their creation, as the grace period always did.
+            try db.alter(table: "omemoSignedPreKey") { t in
+                t.add(column: "publishedAt", .datetime)
+            }
+            try db.execute(sql: "UPDATE omemoSignedPreKey SET publishedAt = createdAt")
+        }
+
         return migrator
     }
 
