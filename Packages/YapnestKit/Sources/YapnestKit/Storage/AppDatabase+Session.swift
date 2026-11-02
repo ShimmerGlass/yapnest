@@ -181,31 +181,45 @@ extension AppDatabase {
     /// Records the stanza `id` as the newest to carry our reactions on a
     /// message, whatever the set, and clears a failure. The one it replaces
     /// keeps its id, as its echo may still arrive.
-    static func pendOwnReactions(_ db: Database, messageId: Int64, id: String) throws {
-        var record = try OwnReaction.fetchOne(db, key: messageId) ?? OwnReaction(messageId: messageId)
-        if let old = record.pendingId, old != id { record.earlierIds.append(old) }
+    /// `existing` is the message's record as the caller fetched it.
+    static func pendOwnReactions(_ db: Database, messageId: Int64, id: String, record existing: OwnReaction?) throws {
+        var record = existing ?? OwnReaction(messageId: messageId)
+        if let old = record.pendingId, old != id { record.retire(old) }
         record.pendingId = id
         record.error = nil
-        try record.save(db)
+        if existing == nil { try record.insert(db) } else { try record.update(db) }
+    }
+
+    /// Whether a newer set of ours is pending, under an id other than the
+    /// `bouncedId` that bounced: it stands, and the older one's fate is moot.
+    private static func isSuperseded(_ record: OwnReaction?, by bouncedId: String?) -> Bool {
+        guard let bouncedId, let pending = record?.pendingId else { return false }
+        return pending != bouncedId
     }
 
     /// Ends the pending state of our reactions on a message: the server has
     /// them, or, with an `error`, they are given up on and show as failed. The
     /// stanza given up on keeps its id, as its echo may still arrive. Nothing
     /// is done where `bouncedId` isn't the id pending: a newer set stands.
-    private static func settleOwnReactions(_ db: Database, messageId: Int64, error: String?, unlessSupersededBy bouncedId: String? = nil) throws {
-        let stored = try OwnReaction.fetchOne(db, key: messageId)
-        if let bouncedId, let pending = stored?.pendingId, pending != bouncedId { return }
+    private static func settleOwnReactions(_ db: Database, messageId: Int64, record stored: OwnReaction?, error: String?, unlessSupersededBy bouncedId: String? = nil) throws {
+        if isSuperseded(stored, by: bouncedId) { return }
         guard let error else {
-            try OwnReaction.deleteOne(db, key: messageId)
+            try stored?.delete(db)
             return
         }
-        guard try Message.exists(db, key: messageId) else { return }
+        // A record's foreign key cascades, so one that exists has its message.
+        if stored == nil, try !Message.exists(db, key: messageId) { return }
         var record = stored ?? OwnReaction(messageId: messageId)
-        if let old = record.pendingId { record.earlierIds.append(old) }
+        if let old = record.pendingId { record.retire(old) }
         record.pendingId = nil
         record.error = error
-        try record.save(db)
+        if stored == nil { try record.insert(db) } else { try record.update(db) }
+    }
+
+    private static func actionSettled(error: String?) -> [ColumnAssignment] {
+        var assignments = [Column("actionPendingId").set(to: nil)]
+        if let error { assignments.append(Column("actionError").set(to: error)) }
+        return assignments
     }
 
     /// The server has the stanza `id` of a `kind` of change; or, with an
@@ -215,11 +229,9 @@ extension AppDatabase {
             switch kind {
             case .reaction:
                 guard let record = try OwnReaction.filter(Column("pendingId") == id).fetchOne(db) else { return }
-                try Self.settleOwnReactions(db, messageId: record.messageId, error: error)
+                try Self.settleOwnReactions(db, messageId: record.messageId, record: record, error: error)
             case .action:
-                var assignments = [Column("actionPendingId").set(to: nil)]
-                if let error { assignments.append(Column("actionError").set(to: error)) }
-                try Message.filter(Column("actionPendingId") == id).updateAll(db, assignments)
+                try Message.filter(Column("actionPendingId") == id).updateAll(db, Self.actionSettled(error: error))
             }
         }
     }
@@ -234,13 +246,12 @@ extension AppDatabase {
         try writer.write { db in
             switch kind {
             case .reaction:
-                try Self.settleOwnReactions(db, messageId: messageId, error: error, unlessSupersededBy: bouncedId)
+                let record = try OwnReaction.fetchOne(db, key: messageId)
+                try Self.settleOwnReactions(db, messageId: messageId, record: record, error: error, unlessSupersededBy: bouncedId)
             case .action:
-                var assignments = [Column("actionPendingId").set(to: nil)]
-                if let error { assignments.append(Column("actionError").set(to: error)) }
                 var request = Message.filter(key: messageId)
                 if let bouncedId { request = request.filter(Self.notSuperseded("actionPendingId", by: bouncedId)) }
-                try request.updateAll(db, assignments)
+                try request.updateAll(db, Self.actionSettled(error: error))
             }
         }
     }
@@ -276,9 +287,11 @@ extension AppDatabase {
                 try request
                     .updateAll(db, Column("actionPendingId").set(to: id), Column("actionError").set(to: nil))
             case .reactions(let messageId):
-                if let bouncedId, let pending = try OwnReaction.fetchOne(db, key: messageId)?.pendingId, pending != bouncedId { return }
-                guard try Message.exists(db, key: messageId) else { return }
-                try Self.pendOwnReactions(db, messageId: messageId, id: id)
+                let record = try OwnReaction.fetchOne(db, key: messageId)
+                if Self.isSuperseded(record, by: bouncedId) { return }
+                // A record's foreign key cascades, so one that exists has its message.
+                if record == nil, try !Message.exists(db, key: messageId) { return }
+                try Self.pendOwnReactions(db, messageId: messageId, id: id, record: record)
             }
         }
     }

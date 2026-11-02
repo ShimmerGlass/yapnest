@@ -244,20 +244,26 @@ extension AppDatabase {
         } else {
             byAddress
         }
-        if fromUs, isReplay, let pending = try OwnReaction.fetchOne(db, key: messageId)?.pendingId, stanzaId != pending {
-            // The server orders live stanzas the same way for everyone, so a
-            // live set from another of our devices is newer than ours and is
-            // applied below. A replay (an archive result, a room's history)
-            // brings the past back after the fact: it is older than the set
-            // we hold unsent, and applying it would lose that set.
-            return true
-        }
-        if fromUs, let stanzaId, let record = try OwnReaction.fetchOne(db, key: messageId), record.earlierIds.contains(stanzaId) {
-            // The echo of an earlier stanza of ours (a room reflecting it, or an
-            // archive replaying it) arrives after we toggled again. Its set is
-            // stale, and replacing the rows would drop the newer one before the
-            // server has it.
-            return true
+        let record = fromUs || pendingId != nil ? try OwnReaction.fetchOne(db, key: messageId) : nil
+        if fromUs, let record, stanzaId == nil || stanzaId != record.pendingId {
+            // The echo of our newest stanza is applied and ends the record
+            // below. Anything else from us while a record exists is judged
+            // against what we hold.
+            if isReplay, record.pendingId != nil {
+                // The server orders live stanzas the same way for everyone, so a
+                // live set from another of our devices is newer than ours and is
+                // applied below. A replay (an archive result, a room's history)
+                // brings the past back after the fact: it is older than the set
+                // we hold unsent, and applying it would lose that set.
+                return true
+            }
+            if let stanzaId, record.earlierIds.contains(stanzaId) {
+                // The echo of an earlier stanza of ours (a room reflecting it, or an
+                // archive replaying it) arrives after we toggled again. Its set is
+                // stale, and replacing the rows would drop the newer one before the
+                // server has it.
+                return true
+            }
         }
         // A new occupant can take the nickname a former one reacted under; the
         // key allows one row per address, nickname and emoji, so those rows
@@ -268,14 +274,14 @@ extension AppDatabase {
             try Reaction(messageId: messageId, sender: author.jid, nick: author.nick ?? "", emoji: emoji, occupantId: author.occupantId).insert(db)
         }
         if let pendingId {
-            try Self.pendOwnReactions(db, messageId: messageId, id: pendingId)
-        } else if fromUs {
+            try Self.pendOwnReactions(db, messageId: messageId, id: pendingId, record: record)
+        } else if fromUs, let record {
             // The echo of our newest stanza is its acknowledgement. A set from
             // another of our devices is newer than the one we hold unsent, and
             // goes through the same server: if ours was already written, its
             // own echo follows at the server and is applied then, as it is
             // everywhere else. Either way nothing is left for us to send.
-            try OwnReaction.deleteOne(db, key: messageId)
+            try record.delete(db)
         }
         return true
     }

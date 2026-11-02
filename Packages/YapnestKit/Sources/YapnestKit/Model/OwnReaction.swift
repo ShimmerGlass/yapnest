@@ -24,5 +24,16 @@ public struct OwnReaction: Codable, Hashable, Sendable, FetchableRecord, Persist
         self.earlierIds = earlierIds
     }
 
+    /// How many earlier ids are kept. A message toggled or failing again and
+    /// again must not grow its record for ever, and an echo of a stanza older
+    /// than this many is long gone.
+    static let earlierIdsKept = 32
+
+    /// Remembers `id` as the id of a stanza of ours that is no longer the newest.
+    mutating func retire(_ id: String) {
+        earlierIds.append(id)
+        if earlierIds.count > Self.earlierIdsKept { earlierIds.removeFirst(earlierIds.count - Self.earlierIdsKept) }
+    }
+
     public static let databaseTableName = "ownReaction"
 }

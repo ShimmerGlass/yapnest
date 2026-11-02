@@ -316,6 +316,17 @@ struct PendingReactionTests {
         #expect(try record() == nil)
     }
 
+    @Test func aMessageToggledManyTimesKeepsOnlyTheNewestEarlierIds() throws {
+        let offline = try makeSession(me, database: database)
+        var ids: [String] = []
+        for _ in 0..<(OwnReaction.earlierIdsKept + 8) {
+            try offline.toggleReaction("👍", on: message, peer: alice)
+            ids.append(try #require(try pendingId()))
+        }
+        let earlier = try #require(try record()).earlierIds
+        #expect(earlier == Array(ids.dropLast().suffix(OwnReaction.earlierIdsKept)))
+    }
+
     private func archivedFromUs(id: String, emojis: [String]) throws {
         let xml = "<message from='me@example.org' to='alice@example.org' type='chat' id='\(id)'><reactions id='1' xmlns='urn:xmpp:reactions:0'>"
             + emojis.map { "<reaction>\($0)</reaction>" }.joined() + "</reactions></message>"
