@@ -106,7 +106,19 @@ struct ScrollRecordTests {
         #expect(record.maxAway == 0)
         #expect(record.rows == 7)
         #expect(record.visible == 2)
-        #expect(record.summary == "samples=0 maxAway=0.0 prepends=0 measuredPrepends=0 maxPrependShift=0.0 rows=7 visible=2 top=0 latestTaps=0 endNudges=0 titleChanges=0 headerSqueezes=0")
+        #expect(record.summary == "samples=0 maxAway=0.0 prepends=0 measuredPrepends=0 maxPrependShift=0.0 rows=7 visible=2 top=0 latestTaps=0 endNudges=0 titleChanges=0 headerSqueezes=0 takeovers=0")
+    }
+
+    @Test func countsAnAnimatedScrollThatTakesOverACoastButNotOneFromRest() {
+        var record = ScrollRecord()
+        record.geometry(distanceFromBottom: 300, distanceFromTop: 0, followsBottom: false, isPositioned: true, phase: .idle)
+        record.geometry(distanceFromBottom: 200, distanceFromTop: 0, followsBottom: false, isPositioned: true, phase: .animating)
+        #expect(record.takeovers == 0)
+        record.geometry(distanceFromBottom: 100, distanceFromTop: 0, followsBottom: false, isPositioned: true, phase: .decelerating)
+        record.geometry(distanceFromBottom: 90, distanceFromTop: 0, followsBottom: true, isPositioned: true, phase: .animating)
+        #expect(record.takeovers == 1)
+        record.reset()
+        #expect(record.takeovers == 0)
     }
 
     @Test func countsTapsOnTheScrollToLatestButtonUntilReset() {

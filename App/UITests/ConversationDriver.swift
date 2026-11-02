@@ -142,6 +142,15 @@ final class ConversationDriver {
         from.press(forDuration: 0.01, thenDragTo: to, withVelocity: XCUIGestureVelocity(rawValue: velocity), thenHoldForDuration: 0)
     }
 
+    /// A fast drag up in the middle of the list, which coasts on towards the
+    /// newest message: `flickTowardsOlder` the other way.
+    func flickTowardsNewer(velocity: CGFloat = 5000) {
+        let list = app.windows.firstMatch
+        let from = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+        let to = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        from.press(forDuration: 0.01, thenDragTo: to, withVelocity: XCUIGestureVelocity(rawValue: velocity), thenHoldForDuration: 0)
+    }
+
     /// Slow drags that stop where they end, `times` over, towards older
     /// messages or back towards the newest.
     func drag(towardsOlder: Bool, times: Int = 3, hold: TimeInterval = 0.5) {

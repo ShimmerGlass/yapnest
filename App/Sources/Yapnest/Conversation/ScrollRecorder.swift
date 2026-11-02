@@ -46,6 +46,10 @@ struct ScrollRecord: Equatable {
     /// How many times the scroll to latest button's action ran. A test that
     /// tapped it tells a tap that never arrived from one that did nothing.
     private(set) var latestTaps = 0
+    /// How many times an animated scroll took over a coast the user's flick
+    /// had started: the list slows to the animation's start and runs on from
+    /// there. The flick coasts to its end by itself.
+    private(set) var takeovers = 0
     /// How many times the model nudged the list's margin to make the lazy
     /// stack lay out again while the list rested at its end. A list that
     /// shows its newest message there needs none.
@@ -94,6 +98,7 @@ struct ScrollRecord: Equatable {
         self.viewHeight = viewHeight
         offset = contentOffset
         top = distanceFromTop
+        if phase == .animating, self.phase == .decelerating { takeovers += 1 }
         self.phase = phase
         guard followsBottom, isPositioned, phase == .idle else { return }
         if !landed {
@@ -178,6 +183,7 @@ struct ScrollRecord: Equatable {
         latestTaps = 0
         endNudges = 0
         titleChanges = 0
+        takeovers = 0
         headerSqueezes = 0
         anchorBeforePrepend = nil
     }
@@ -185,8 +191,8 @@ struct ScrollRecord: Equatable {
     /// What a test reads, as `key=value` pairs.
     var summary: String {
         String(
-            format: "samples=%d maxAway=%.1f prepends=%d measuredPrepends=%d maxPrependShift=%.1f rows=%d visible=%d top=%.0f latestTaps=%d endNudges=%d titleChanges=%d headerSqueezes=%d",
-            samples, maxAway, prepends, measuredPrepends, maxPrependShift, rows, visible, top, latestTaps, endNudges, titleChanges, headerSqueezes,
+            format: "samples=%d maxAway=%.1f prepends=%d measuredPrepends=%d maxPrependShift=%.1f rows=%d visible=%d top=%.0f latestTaps=%d endNudges=%d titleChanges=%d headerSqueezes=%d takeovers=%d",
+            samples, maxAway, prepends, measuredPrepends, maxPrependShift, rows, visible, top, latestTaps, endNudges, titleChanges, headerSqueezes, takeovers,
         )
     }
 }
