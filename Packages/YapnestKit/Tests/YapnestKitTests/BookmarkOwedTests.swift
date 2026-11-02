@@ -450,6 +450,59 @@ struct OwedBookmarkTests {
         #expect(try !group().bookmarkOwed)
     }
 
+    @Test func leavingWithoutOwingTheRetractionThrowsOfflineAndChangesNothing() async throws {
+        do {
+            try await session.leaveGroup(room, owingRetraction: false)
+            Issue.record("Leaving should have thrown")
+        } catch GroupError.notConnected {
+        }
+
+        #expect(try !group().hasLeft)
+        #expect(try !group().bookmarkOwed)
+    }
+
+    @Test func leavingWithoutOwingTheRetractionThrowsAPassingErrorAndChangesNothing() async throws {
+        await connect()
+        server.refusingRetractions { wait($0) }
+
+        do {
+            try await session.leaveGroup(room, owingRetraction: false)
+            Issue.record("Leaving should have thrown")
+        } catch let error as ServerError {
+            #expect(error.isPassing)
+            #expect(error.condition == "resource-constraint")
+        }
+
+        #expect(try !group().hasLeft)
+        #expect(try !group().bookmarkOwed)
+    }
+
+    @Test func leavingWithoutOwingTheRetractionThrowsAFinalRefusalAndChangesNothing() async throws {
+        await connect()
+        server.refusingRetractions { forbidden($0) }
+
+        do {
+            try await session.leaveGroup(room, owingRetraction: false)
+            Issue.record("Leaving should have thrown")
+        } catch GroupError.leaveRefused(let error) {
+            #expect(error.condition == "forbidden")
+        }
+
+        #expect(try !group().hasLeft)
+        #expect(try !group().bookmarkOwed)
+    }
+
+    @Test func leavingWithoutOwingTheRetractionRetractsOnceConnected() async throws {
+        await connect()
+        server.list = [listedAsBefore]
+
+        try await session.leaveGroup(room, owingRetraction: false)
+
+        #expect(try group().hasLeft)
+        #expect(try !group().bookmarkOwed)
+        #expect(server.list.isEmpty)
+    }
+
     // MARK: Ordering
 
     @Test func leavingWaitsForAPublishThatIsStillOwed() async throws {

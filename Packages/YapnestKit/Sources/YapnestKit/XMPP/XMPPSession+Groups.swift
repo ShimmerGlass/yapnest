@@ -2402,7 +2402,16 @@ extension XMPPSession {
     /// nothing can undo leaving. Throws, having changed nothing, only when the
     /// server refuses for good to take the bookmark away: it would still say
     /// autojoin, and the next connection would join the group again.
-    public func leaveGroup(_ room: JID) async throws {
+    ///
+    /// With `owingRetraction` false, none of that is owed: it needs the
+    /// connection, throws `GroupError.notConnected` offline, and throws the
+    /// server's reason for any failure of the retraction, a passing one too,
+    /// having changed nothing. Deleting the chat after leaving needs this, as
+    /// deleting it removes the record that holds what is owed.
+    public func leaveGroup(_ room: JID, owingRetraction: Bool = true) async throws {
+        if !owingRetraction {
+            guard await waitForConnection() else { throw GroupError.notConnected }
+        }
         if isConnected {
             // A publish still owed, as after joining just now, goes first, or it
             // would reach the server after the retraction and bring the bookmark back.
@@ -2413,7 +2422,8 @@ extension XMPPSession {
                 leaveRoom(room)
                 return
             } catch where !ServerError.isFinalRefusal(error) {
-                logger.info("Couldn't remove bookmark for \(room, privacy: .private) now, so it is owed: \(error.localizedDescription, privacy: .private)")
+                logger.info("Couldn't remove bookmark for \(room, privacy: .private) now: \(error.localizedDescription, privacy: .private)")
+                if !owingRetraction { throw ServerError.classify(error) }
             } catch {
                 logger.warning("The server refused to remove bookmark for \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
                 throw GroupError.leaveRefused(ServerError.classify(error))

@@ -645,9 +645,11 @@ private struct ChatListContent: View {
             Button(item.groupChat?.hasLeft == false ? "Leave and Delete" : "Delete", role: .destructive) {
                 if let group = item.groupChat, !group.hasLeft {
                     // The chat stays until the server has taken us out of the
-                    // group; otherwise the next connection would join it again.
+                    // group; deleting it would remove the record of the
+                    // retraction an offline leave owes, and the next connection
+                    // would join the group again.
                     leaving.run {
-                        try await session.leaveGroup(group.jid)
+                        try await session.leaveGroup(group.jid, owingRetraction: false)
                         delete(item)
                     }
                 } else {
