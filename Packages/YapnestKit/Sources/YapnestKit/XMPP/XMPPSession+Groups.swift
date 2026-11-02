@@ -611,7 +611,7 @@ extension XMPPSession {
         // started showing addresses has nobody listed to encrypt for. One
         // that has just become private begins counting its members afresh
         // (`setRoomInfo`), and this listing is what fills the count.
-        if group.isNonAnonymous, before?.isNonAnonymous != true || before?.isPrivate != group.isPrivate {
+        if group.isNonAnonymous && before?.isNonAnonymous != true || group.isPrivate && before?.isPrivate != true {
             fetchMembers(room, lists: Self.memberLists)
         }
         // Our bookmark carries the name too, and would put the old one back;
@@ -715,6 +715,9 @@ extension XMPPSession {
         // Someone else's arrival waits for the others'; ours ends the join, so it
         // comes after, and applies those first.
         guard isSelf else {
+            // An arrival says what the room made of them: one it made a member
+            // that we haven't counted is news, as if it had said so in a notice.
+            if let jid = occupant.jid, occupant.affiliation.isMember { rosterAffiliated(room, jid: jid, affiliation: occupant.affiliation) }
             updateOccupants(room, arrive)
             return
         }
@@ -1073,17 +1076,34 @@ extension XMPPSession {
     /// whether or not they came: the room is usable meanwhile, and the user
     /// is warned that encrypted messages may miss members.
     func fetchMembers(_ room: JID, lists: [RoomAffiliation], then done: (@Sendable () -> Void)? = nil) {
+        // What was counted after this moment, or a baseline begun after it,
+        // is news to the roster that the listing can't have known of.
+        let since = Date()
         Task { [weak self] in
-            let listed = await self?.fetchMembersWarning(room, lists: lists)
+            let listing = await self?.fetchMembersWarning(room, lists: lists)
             // After the lists, which `listReceived` has told the roster of.
-            if let listed { self?.rosterListingDone(room, members: listed) }
+            switch listing {
+            case .complete(let members): self?.rosterListingDone(room, members: members, since: since)
+            case .refused: self?.rosterListingRefused(room, since: since)
+            case .failed, nil: break
+            }
             done?()
         }
     }
 
-    /// Who the member lists name together, if all of them were asked for and
-    /// came: a fetch of fewer can't tell who is gone.
-    private func fetchMembersWarning(_ room: JID, lists: [RoomAffiliation]) async -> [JID]? {
+    /// What a fetch of member lists came to, for the roster's baseline.
+    enum MemberListing: Equatable {
+        /// All of owner, admin and member came, naming these together.
+        case complete([JID])
+        /// A list was refused for good, as a room does that keeps its members
+        /// from one another: nobody can be judged absent.
+        case refused
+        /// Not all lists were asked for, or one failed for now: nothing is
+        /// known, and a later fetch is to be taken as it comes.
+        case failed
+    }
+
+    private func fetchMembersWarning(_ room: JID, lists: [RoomAffiliation]) async -> MemberListing {
         let attempt = lock.withLock { $0.attempt }
         let key = "room-members:\(room)"
         let members = lists.filter(Self.memberLists.contains)
@@ -1091,8 +1111,9 @@ extension XMPPSession {
         // and shows what goes wrong.
         let others = lists.filter { !Self.memberLists.contains($0) }
         if !others.isEmpty { try? await requestLists(others, of: room) }
-        guard !members.isEmpty else { return nil }
+        guard !members.isEmpty else { return .failed }
         let named = OSAllocatedUnfairLock(initialState: [JID]())
+        let isRefused = OSAllocatedUnfairLock(initialState: false)
         let outcome = await warnings.attempt(
             key, title: String(localized: "Encrypted messages may not reach all members"),
             friendly: String(localized: "A group's members couldn't be listed, so encrypted messages may not reach all of them"),
@@ -1106,15 +1127,21 @@ extension XMPPSession {
                 return reason.condition != "forbidden"
             },
         ) { [self] in
-            let jids = try await requestLists(members, of: room)
-            named.withLock { $0 = jids }
+            do {
+                let jids = try await requestLists(members, of: room)
+                named.withLock { $0 = jids }
+            } catch {
+                isRefused.withLock { $0 = !ServerError.classify(error).isPassing }
+                throw error
+            }
         }
-        if case .succeeded = outcome, Set(members) == Set(Self.memberLists) { return named.withLock { $0 } }
-        return nil
+        if case .succeeded = outcome { return Set(members) == Set(Self.memberLists) ? .complete(named.withLock { $0 }) : .failed }
+        return isRefused.withLock { $0 } ? .refused : .failed
     }
 
     /// Asks for each list, all of them even when one fails, and throws the
-    /// first failure. Otherwise it returns everyone the lists name.
+    /// first failure, a refusal for good before one that may pass. Otherwise
+    /// it returns everyone the lists name.
     @discardableResult
     private func requestLists(_ lists: [RoomAffiliation], of room: JID) async throws -> [JID] {
         let results = await withTaskGroup(of: Result<[JID], Error>.self) { group in
@@ -1137,7 +1164,8 @@ extension XMPPSession {
         for result in results {
             switch result {
             case .success(let jids): named += jids
-            case .failure(let error): first = first ?? error
+            case .failure(let error):
+                if first == nil || (ServerError.classify(first!).isPassing && !ServerError.classify(error).isPassing) { first = error }
             }
         }
         if let first { throw first }

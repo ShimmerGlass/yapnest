@@ -443,8 +443,38 @@ struct RoomManagementSessionTests {
         #expect(try baselineBegun() == true)
     }
 
+    private func rosterEvents() throws -> [(MessageEvent, YapnestKit.JID)] {
+        try database.reader.read { db in
+            try YapnestKit.Message.filter(Column("event") != nil).order(Column("id")).fetchAll(db).map { ($0.event!, $0.sender) }
+        }
+    }
+
     private func baselineBegun() throws -> Bool? {
         try database.reader.read { try Bool.fetchOne($0, sql: "SELECT EXISTS (SELECT 1 FROM groupRosterTaken)") }
+    }
+
+    @Test func aRoomThatStopsBeingPrivateListsNoMembers() async throws {
+        join(as: .owner)
+        info.value = ([], "Cake")
+        session.refreshRoomInfo(room)
+        #expect(await eventually { (try? group().isPrivate) == false })
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(requests(in: adminNS).isEmpty)
+    }
+
+    @Test func ourOwnChangeOfAMembersAffiliationIsToldToTheRosterOnce() async throws {
+        join(as: .owner, others: [anna: .member, ben: .member])
+        session.rosterSelfJoined(room)
+        session.rosterListed(room, members: [anna])
+        session.rosterListingDone(room, members: [anna], since: Date().addingTimeInterval(60))
+        session.settleRoster()
+        try await session.removeMember(anna, from: room)
+        try await session.setAdmin(true, member: ben, in: room)
+        session.affiliationChanged(in: room, parseStanza("<message from='\(room)' type='groupchat'><x xmlns='http://jabber.org/protocol/muc#user'><item jid='anna@example.org' affiliation='none'/><item jid='ben@example.org' affiliation='admin'/></x></message>"))
+        session.settleRoster()
+        let events = try rosterEvents()
+        #expect(events.map(\.0) == [.leftGroup, .joinedGroup])
+        #expect(events.map(\.1) == [anna, ben])
     }
 
     @Test func aConfigurationNoticeFromTheRoomReadsItsInfoAgain() async throws {

@@ -607,6 +607,59 @@ struct MemberListFailureTests {
         session.settleRoster()
     }
 
+    private func isListed() throws -> Bool? {
+        try session.database.reader.read { try Bool.fetchOne($0, sql: "SELECT listed FROM groupRosterTaken", arguments: []) }
+    }
+
+    private func notice(_ jid: String, _ affiliation: String) -> Martin.Message {
+        parseStanza("<message from='\(room)' type='groupchat'><x xmlns='http://jabber.org/protocol/muc#user'><item jid='\(jid)' affiliation='\(affiliation)'/></x></message>")
+    }
+
+    @Test func aRefusedListingSettlesTheBaselineSoALaterAdditionIsSaid() async throws {
+        try session.database.updateGroupChat(room) {
+            $0.isMembersOnly = true
+            $0.isNonAnonymous = true
+        }
+        session.rosterSelfJoined(room)
+        session.settleRoster()
+        serve([:], failing: ["member"])
+        await fetch(lists: XMPPSession.memberLists)
+        session.settleRoster()
+        #expect(try isListed() == true)
+        session.affiliationChanged(in: room, notice("zed@example.org", "member"))
+        session.settleRoster()
+        #expect(try rosterLines() == [.joinedGroup])
+    }
+
+    @Test func aListingThatTimedOutLeavesTheBaselineUnsettled() async throws {
+        try session.database.updateGroupChat(room) {
+            $0.isMembersOnly = true
+            $0.isNonAnonymous = true
+        }
+        session.rosterSelfJoined(room)
+        session.settleRoster()
+        answer { iq, _ in wait(iq) }
+        await fetch(lists: XMPPSession.memberLists)
+        session.settleRoster()
+        #expect(try isListed() == false)
+    }
+
+    @Test func aRefusalAmongTimeoutsStillSettlesTheBaseline() async throws {
+        try session.database.updateGroupChat(room) {
+            $0.isMembersOnly = true
+            $0.isNonAnonymous = true
+        }
+        session.rosterSelfJoined(room)
+        session.settleRoster()
+        answer { iq, _ in
+            let affiliation = iq.firstChild(name: "query")?.firstChild(name: "item")?.getAttribute("affiliation")
+            return affiliation == "admin" ? forbidden(iq) : wait(iq)
+        }
+        await fetch(lists: XMPPSession.memberLists)
+        session.settleRoster()
+        #expect(try isListed() == true)
+    }
+
     @Test func aMemberNamedByAnotherListThanTheirOwnIsNotGone() async throws {
         try await countMembers(of: ["admin": ["bob@example.org"], "member": ["alice@example.org"]])
         serve(["owner": ["bob@example.org"], "member": ["alice@example.org"]])

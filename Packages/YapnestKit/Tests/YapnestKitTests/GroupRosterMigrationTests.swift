@@ -19,11 +19,14 @@ struct GroupRosterMigrationTests {
              try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM groupRoster"),
              try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM groupRosterTaken"))
         }
-        #expect(columns == ["conversationId", "jid"])
+        #expect(columns == ["conversationId", "jid", "countedAt"])
         #expect(members == 0 && baselines == 0)
+        try database.rosterSelfJoined(conversationId: 1, at: Date())
+        let begun = try queue.read { try Date.fetchOne($0, sql: "SELECT begunAt FROM groupRosterTaken") }
+        #expect(begun != nil, "a baseline carries when it began")
         let bob = JID("bob@example.org")!
         let afterDelete = try database.writer.write { db -> Int? in
-            try db.execute(sql: "INSERT INTO groupRoster (conversationId, jid) VALUES (1, ?)", arguments: [bob])
+            try db.execute(sql: "INSERT INTO groupRoster (conversationId, jid, countedAt) VALUES (1, ?, 0)", arguments: [bob])
             try db.execute(sql: "DELETE FROM conversation")
             return try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM groupRoster")
         }
@@ -31,9 +34,9 @@ struct GroupRosterMigrationTests {
         try database.writer.write { db in
             try db.execute(sql: "INSERT INTO conversation (peer, kind, lastActivityAt) VALUES ('x@rooms.example.org', 'group', 0)")
             let id = try Int64.fetchOne(db, sql: "SELECT id FROM conversation")!
-            try db.execute(sql: "INSERT INTO groupRoster (conversationId, jid) VALUES (?, ?)", arguments: [id, bob])
+            try db.execute(sql: "INSERT INTO groupRoster (conversationId, jid, countedAt) VALUES (?, ?, 0)", arguments: [id, bob])
             #expect(throws: DatabaseError.self) {
-                try db.execute(sql: "INSERT INTO groupRoster (conversationId, jid) VALUES (?, ?)", arguments: [id, bob])
+                try db.execute(sql: "INSERT INTO groupRoster (conversationId, jid, countedAt) VALUES (?, ?, 0)", arguments: [id, bob])
             }
         }
     }

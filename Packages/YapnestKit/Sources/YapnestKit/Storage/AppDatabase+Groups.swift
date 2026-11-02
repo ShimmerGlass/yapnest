@@ -113,7 +113,7 @@ extension AppDatabase {
             // listing, quietly, and one that stopped being so counts nothing.
             if wasPrivate != group.isPrivate {
                 try Self.rosterClear(db, group.conversationId)
-                if group.isPrivate { try Self.rosterBeginBaseline(db, group.conversationId) }
+                if group.isPrivate { try Self.rosterBeginBaseline(db, group.conversationId, at: Date()) }
             }
 
             if !group.isPrivate {

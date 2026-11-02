@@ -103,6 +103,7 @@ extension XMPPSession {
             status?.setAffiliation(affiliation, of: member)
             if member == account { status?.affiliation = affiliation }
         }
+        rosterAffiliated(room, jid: member, affiliation: affiliation)
     }
 
     /// The room tells everyone present when it changes the affiliation of

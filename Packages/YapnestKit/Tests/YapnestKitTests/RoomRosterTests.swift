@@ -34,12 +34,12 @@ struct RoomRosterTests {
 
     private let showsAddresses: Bool
 
-    private func presence(_ nick: String, jid: String? = nil, type: String? = nil, show: String? = nil, statuses: [Int] = [], renamedTo: String? = nil) -> Martin.Presence {
+    private func presence(_ nick: String, jid: String? = nil, type: String? = nil, show: String? = nil, statuses: [Int] = [], renamedTo: String? = nil, affiliation: String = "member") -> Martin.Presence {
         let address = showsAddresses ? " jid='\(jid ?? "\(nick.lowercased())@example.org")/phone'" : ""
         let type = type.map { " type='\($0)'" } ?? ""
         let show = show.map { "<show>\($0)</show>" } ?? ""
         let codes = statuses.map { "<status code='\($0)'/>" }.joined()
-        return parseStanza("<presence from='\(room)/\(nick)'\(type)>\(show)<x xmlns='http://jabber.org/protocol/muc#user'><item affiliation='member' role='participant'\(address)\(renamedTo.map { " nick='\($0)'" } ?? "")/>\(codes)</x></presence>")
+        return parseStanza("<presence from='\(room)/\(nick)'\(type)>\(show)<x xmlns='http://jabber.org/protocol/muc#user'><item affiliation='\(affiliation)' role='participant'\(address)\(renamedTo.map { " nick='\($0)'" } ?? "")/>\(codes)</x></presence>")
     }
 
     private func arrive(_ nicks: String...) {
@@ -106,9 +106,16 @@ struct RoomRosterTests {
     private func list(all names: [String]) {
         let members = names.map(address)
         session.rosterListed(room, members: members)
-        session.rosterListingDone(room, members: members)
+        session.rosterListingDone(room, members: members, since: Date().addingTimeInterval(60))
         session.settleRoster()
     }
+
+    private func isListed() throws -> Bool? {
+        try database.reader.read { try Bool.fetchOne($0, sql: "SELECT listed FROM groupRosterTaken WHERE conversationId = ?", arguments: [conversationId]) }
+    }
+
+    /// When a fetch, a baseline or a count is said to have happened, in seconds from now.
+    private func at(_ seconds: Double) -> Date { Date().addingTimeInterval(seconds) }
 
     /// The first complete listing after the first join, which is the baseline.
     private func baseline(_ names: String...) {
@@ -130,12 +137,12 @@ struct RoomRosterTests {
     }
 
     @Test func someoneArrivingOrChangingShowWritesNoLine() throws {
-        baseline("Alice")
+        baseline("Alice", "Carol")
         arrive("Carol")
         session.roomPresence(presence("Carol", show: "away"), room: room)
         session.settleRoster()
         #expect(try lines().isEmpty)
-        #expect(try counted() == ["alice@example.org"])
+        #expect(try counted() == ["alice@example.org", "carol@example.org"])
     }
 
     @Test func aMemberGoingOfflineAndComingBackWritesNothing() throws {
@@ -148,12 +155,12 @@ struct RoomRosterTests {
     }
 
     @Test func ourRejoinWritesNothingEvenWhenPeopleCameAndWentMeanwhile() throws {
-        baseline("Alice", "Bob", "Dave")
+        baseline("Alice", "Bob", "Carol", "Dave")
         rejoin("Alice", "Carol", "Dave")
         #expect(try lines().isEmpty)
-        rejoin("Alice", "Carol", "Dave")
+        rejoin("Alice", "Bob", "Dave")
         #expect(try lines().isEmpty)
-        #expect(try counted() == ["alice@example.org", "bob@example.org", "dave@example.org"])
+        #expect(try counted() == ["alice@example.org", "bob@example.org", "carol@example.org", "dave@example.org"])
     }
 
     @Test func aKickWithoutAnAffiliationChangeWritesNothing() throws {
@@ -205,7 +212,7 @@ struct RoomRosterTests {
 
     @Test func aMemberListBeforeTheFirstJoinCountsNothing() throws {
         session.rosterListed(room, members: [address("erin")])
-        session.rosterListingDone(room, members: [address("erin")])
+        session.rosterListingDone(room, members: [address("erin")], since: Date().addingTimeInterval(60))
         session.settleRoster()
         #expect(try counted().isEmpty)
     }
@@ -224,7 +231,7 @@ struct RoomRosterTests {
     // MARK: Listings
 
     @Test func aMemberAddedWhileWeWereAwayIsAnnouncedByTheNextListing() throws {
-        baseline("Erin")
+        baseline("Alice", "Erin")
         rejoin("Alice")
         session.rosterListed(room, members: [address("erin"), address("zed"), me])
         session.settleRoster()
@@ -337,6 +344,92 @@ struct RoomRosterTests {
         session.affiliationChanged(in: room, affiliation("zed@example.org", "outcast"))
         session.settleRoster()
         #expect(try lines().isEmpty)
+    }
+
+    @Test func aRemovalBeforeTheFirstListingIsQuietToo() throws {
+        join("Alice")
+        session.affiliationChanged(in: room, affiliation("zed@example.org", "member"))
+        session.affiliationChanged(in: room, affiliation("zed@example.org", "none"))
+        session.settleRoster()
+        #expect(try lines().isEmpty)
+        #expect(try counted().isEmpty)
+    }
+
+    // MARK: Presence that carries a membership
+
+    @Test func aMemberArrivingWhoWasNotCountedIsAnnouncedOnce() throws {
+        baseline("Alice")
+        arrive("Carol")
+        #expect(try lines() == [joined("Carol")])
+        leave("Carol")
+        arrive("Carol")
+        #expect(try lines() == [joined("Carol")], "coming back says nothing")
+        #expect(try counted() == ["alice@example.org", "carol@example.org"])
+    }
+
+    @Test func anArrivalWhoIsNotAMemberOrBeforeTheListingWritesNothing() throws {
+        join("Alice")
+        arrive("Carol")
+        #expect(try lines().isEmpty)
+        #expect(try counted() == ["carol@example.org"], "counted, but before the baseline's listing nothing is known to be new")
+        list("Alice")
+        session.roomPresence(presence("Dave", affiliation: "none"), room: room)
+        session.roomPresence(presence("Eve", affiliation: "outcast"), room: room)
+        session.settleRoster()
+        #expect(try lines().isEmpty)
+        #expect(try counted() == ["alice@example.org"])
+    }
+
+    // MARK: A fetch begun before a change
+
+    @Test func aMemberCountedAfterAFetchBeganIsNotJudgedByItsListing() throws {
+        let (begun, started, later) = (at(-300), at(-200), at(-100))
+        try database.rosterSelfJoined(conversationId: conversationId, at: begun)
+        try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice")], since: started, at: started)
+        let fetchBegan = at(-50)
+        try database.rosterAffiliated(conversationId: conversationId, room: room, jid: address("zed"), isMember: true, at: at(-40))
+        try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice")], since: fetchBegan, at: later)
+        #expect(try counted() == ["zed@example.org"])
+        #expect(try lines() == [joined("Zed")])
+    }
+
+    @Test func aMemberCountedBeforeAFetchBeganAndNotNamedHasLeft() throws {
+        try database.rosterSelfJoined(conversationId: conversationId, at: at(-300))
+        try database.rosterListed(conversationId: conversationId, room: room, members: [address("zed")], at: at(-250))
+        try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("zed")], since: at(-200), at: at(-200))
+        try database.rosterListingDone(conversationId: conversationId, room: room, members: [], since: at(-100), at: at(-100))
+        #expect(try lines() == [left("Zed")])
+    }
+
+    @Test func aMemberCountedQuietlyAfterAFetchBeganIsNotDroppedByIt() throws {
+        try database.rosterSelfJoined(conversationId: conversationId, at: at(-300))
+        try database.rosterAffiliated(conversationId: conversationId, room: room, jid: address("zed"), isMember: true, at: at(-100))
+        try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice")], since: at(-200), at: at(-50))
+        #expect(try counted() == ["zed@example.org"])
+        #expect(try lines().isEmpty)
+        #expect(try isListed() == true)
+    }
+
+    @Test func aFetchBegunBeforeTheBaselineWasRestartedSaysNothingOfTheNewOne() throws {
+        try database.rosterSelfJoined(conversationId: conversationId, at: at(-100))
+        try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice")], since: at(-200), at: at(-90))
+        #expect(try isListed() == false)
+        try database.rosterListingRefused(conversationId: conversationId, since: at(-200))
+        #expect(try isListed() == false)
+        try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice")], since: at(-50), at: at(-40))
+        #expect(try isListed() == true)
+        #expect(try counted().isEmpty)
+    }
+
+    @Test func aRefusedListingEndsTheBaselineWithoutJudgingAnyone() throws {
+        try database.rosterSelfJoined(conversationId: conversationId, at: at(-100))
+        try database.rosterListed(conversationId: conversationId, room: room, members: [address("zed")], at: at(-90))
+        try database.rosterListingRefused(conversationId: conversationId, since: at(-50))
+        #expect(try isListed() == true)
+        #expect(try counted() == ["zed@example.org"])
+        session.affiliationChanged(in: room, affiliation("erin@example.org", "member"))
+        session.settleRoster()
+        #expect(try lines() == [joined("Erin")])
     }
 
     // MARK: Which groups say

@@ -16,8 +16,11 @@ extension AppDatabase {
         try Bool.fetchOne(db, sql: "SELECT listed FROM groupRosterTaken WHERE conversationId = ?", arguments: [conversationId])
     }
 
-    static func rosterBeginBaseline(_ db: Database, _ conversationId: Int64) throws {
-        try db.execute(sql: "INSERT OR IGNORE INTO groupRosterTaken (conversationId) VALUES (?)", arguments: [conversationId])
+    /// `date` is when the change that begins it happened: a member fetch begun
+    /// at or after it belongs to this baseline, an earlier one to a baseline
+    /// that has been cleared since.
+    static func rosterBeginBaseline(_ db: Database, _ conversationId: Int64, at date: Date) throws {
+        try db.execute(sql: "INSERT OR IGNORE INTO groupRosterTaken (conversationId, begunAt) VALUES (?, ?)", arguments: [conversationId, date])
     }
 
     static func rosterClear(_ db: Database, _ conversationId: Int64) throws {
@@ -31,7 +34,7 @@ extension AppDatabase {
     }
 
     private static func rosterAdd(_ db: Database, _ member: JID, conversationId: Int64, writesLine: Bool, at date: Date) throws {
-        try db.execute(sql: "INSERT INTO groupRoster (conversationId, jid) VALUES (?, ?)", arguments: [conversationId, member])
+        try db.execute(sql: "INSERT INTO groupRoster (conversationId, jid, countedAt) VALUES (?, ?, ?)", arguments: [conversationId, member, date])
         if writesLine { try rosterLine(db, .joinedGroup, conversationId: conversationId, sender: member, at: date) }
     }
 
@@ -40,10 +43,10 @@ extension AppDatabase {
         if writesLine { try rosterLine(db, .leftGroup, conversationId: conversationId, sender: member, at: date) }
     }
 
-    /// Our own join is over. The first time, the baseline begins, to be filled
-    /// by the first complete listing.
-    func rosterSelfJoined(conversationId: Int64) throws {
-        try writer.write { try Self.rosterBeginBaseline($0, conversationId) }
+    /// Our own join is over, `date` being when it was told. The first time,
+    /// the baseline begins, to be filled by the first complete listing.
+    func rosterSelfJoined(conversationId: Int64, at date: Date) throws {
+        try writer.write { try Self.rosterBeginBaseline($0, conversationId, at: date) }
     }
 
     /// The room lists members. Those listed before the baseline's listing is
@@ -59,15 +62,24 @@ extension AppDatabase {
         }
     }
 
-    /// One fetch of every member list came whole, naming `members` together
-    /// (each list has been through `rosterListed` already). The first such
-    /// listing is the baseline: those it no longer names are dropped without
-    /// a word. After that, whoever was counted and is no longer named has left.
-    func rosterListingDone(conversationId: Int64, room: JID, members: [JID], at date: Date) throws {
+    /// Whether the baseline began before `since`, when the fetch that is
+    /// reporting started. One that began earlier belongs to a baseline that
+    /// was cleared since, and says nothing of this one.
+    private static func rosterBegan(_ db: Database, _ conversationId: Int64, before since: Date) throws -> Bool {
+        try Bool.fetchOne(db, sql: "SELECT begunAt <= ? FROM groupRosterTaken WHERE conversationId = ?", arguments: [since, conversationId]) ?? false
+    }
+
+    /// One fetch of every member list, begun at `since`, came whole, naming
+    /// `members` together (each list has been through `rosterListed` already).
+    /// The first such listing is the baseline: those it no longer names are
+    /// dropped without a word. After that, whoever was counted and is no
+    /// longer named has left. Whoever was counted after `since` is left
+    /// alone, as the listing can't have known of them.
+    func rosterListingDone(conversationId: Int64, room: JID, members: [JID], since: Date, at date: Date) throws {
         try writer.write { db in
-            guard let listed = try Self.rosterListedState(db, conversationId) else { return }
+            guard try Self.rosterBegan(db, conversationId, before: since), let listed = try Self.rosterListedState(db, conversationId) else { return }
             let named = Set(members)
-            let counted = try JID.fetchAll(db, sql: "SELECT jid FROM groupRoster WHERE conversationId = ?", arguments: [conversationId])
+            let counted = try JID.fetchAll(db, sql: "SELECT jid FROM groupRoster WHERE conversationId = ? AND countedAt < ?", arguments: [conversationId, since])
             for jid in counted.sorted() where !named.contains(jid) {
                 try Self.rosterRemove(db, jid, conversationId: conversationId, writesLine: listed, at: date)
             }
@@ -75,9 +87,21 @@ extension AppDatabase {
         }
     }
 
+    /// The room refused to list its members, for good. Nobody can be judged
+    /// absent, but without a listing the baseline would never end, and
+    /// everyone added from then on would go unsaid: it ends here.
+    func rosterListingRefused(conversationId: Int64, since: Date) throws {
+        try writer.write { db in
+            guard try Self.rosterBegan(db, conversationId, before: since) else { return }
+            try db.execute(sql: "UPDATE groupRosterTaken SET listed = 1 WHERE conversationId = ?", arguments: [conversationId])
+        }
+    }
+
     /// The room made `jid` a member, or took their membership, wherever they
-    /// are. Told by an affiliation notice and by a presence that ends
-    /// membership alike, which only the first to arrive writes a line for.
+    /// are. Told by an affiliation notice, by a presence that carries or ends
+    /// membership and by our own change alike, which only the first to arrive
+    /// writes a line for. Before the baseline's listing has come, nobody is
+    /// known to be new or gone, so it is counted quietly.
     func rosterAffiliated(conversationId: Int64, room: JID, jid: JID, isMember: Bool, at date: Date) throws {
         try writer.write { db in
             guard let listed = try Self.rosterListedState(db, conversationId) else { return }
@@ -86,11 +110,10 @@ extension AppDatabase {
                 guard !isCounted else { return }
                 // A notice names the new affiliation only, so before the first
                 // listing has counted everyone a promotion of a long-standing
-                // member looks like an addition: it is counted quietly, as the
-                // listing would.
+                // member looks like an addition.
                 try Self.rosterAdd(db, jid, conversationId: conversationId, writesLine: listed, at: date)
             } else if isCounted {
-                try Self.rosterRemove(db, jid, conversationId: conversationId, writesLine: true, at: date)
+                try Self.rosterRemove(db, jid, conversationId: conversationId, writesLine: listed, at: date)
             }
         }
     }

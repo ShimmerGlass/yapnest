@@ -33,7 +33,10 @@ extension XMPPSession {
     /// Our own join is over: the first time, the baseline begins. A rejoin
     /// compares nothing, as the member lists are what is compared.
     func rosterSelfJoined(_ room: JID) {
-        countingPrivate(room) { [database] in try database.rosterSelfJoined(conversationId: $0.conversationId) }
+        // Dated now, not when the queue gets to it: the member fetch that
+        // follows must count as begun after it.
+        let date = Date()
+        countingPrivate(room) { [database] in try database.rosterSelfJoined(conversationId: $0.conversationId, at: date) }
     }
 
     /// A presence took someone's membership (301, 321, 322), which the
@@ -51,14 +54,20 @@ extension XMPPSession {
         }
     }
 
-    /// The owner, admin and member lists of one fetch have all come, and
-    /// `members` is their union. Only then can absence be judged: a list that
-    /// failed or was forbidden would make its members look gone.
-    func rosterListingDone(_ room: JID, members: [JID]) {
+    /// The owner, admin and member lists of the fetch begun at `since` have
+    /// all come, and `members` is their union. Only then can absence be
+    /// judged: a list that failed or was forbidden would make its members
+    /// look gone.
+    func rosterListingDone(_ room: JID, members: [JID], since: Date) {
         let members = members.filter { $0 != account }
         countingPrivate(room) { [database] in
-            try database.rosterListingDone(conversationId: $0.conversationId, room: room, members: members, at: Date())
+            try database.rosterListingDone(conversationId: $0.conversationId, room: room, members: members, since: since, at: Date())
         }
+    }
+
+    /// The room refused the member lists of the fetch begun at `since`.
+    func rosterListingRefused(_ room: JID, since: Date) {
+        countingPrivate(room) { [database] in try database.rosterListingRefused(conversationId: $0.conversationId, since: since) }
     }
 
     /// The room announced someone's affiliation, live.
