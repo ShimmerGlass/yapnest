@@ -72,7 +72,7 @@ extension XMPPSession {
         while true {
             // Without a cursor: the page that ends where our messages begin.
             let rsm = cursor.map { RSM.Query(before: $0, max: Self.historyPageSize) } ?? RSM.Query(lastItems: Self.historyPageSize)
-            let result = await queryHistory(of: peer, isRoom: isRoom, version: version, end: cursor == nil ? oldest?.timestamp : nil, rsm: rsm)
+            let result = await queryHistory(of: peer, isRoom: isRoom, version: version, end: cursor == nil ? oldest.map { serverTime(of: $0.timestamp) } : nil, rsm: rsm)
             switch result {
             case .success(let page):
                 // Moving the cursor past a page that didn't make it into the

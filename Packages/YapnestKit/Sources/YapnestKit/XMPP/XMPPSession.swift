@@ -1796,7 +1796,7 @@ public final class XMPPSession: @unchecked Sendable {
 
         // Calls are signalled in messages of their own, which carry nothing
         // else and are never encrypted.
-        if let signal = CallSignal(stanza, account: account, source: source) {
+        if let signal = CallSignal(stanza, account: account, source: source, clockOffset: serverClockOffset) {
             callSignalReceived(signal, source: source, isHistory: isHistory, query: query)
             return
         }
@@ -1816,7 +1816,7 @@ public final class XMPPSession: @unchecked Sendable {
             case .ignore, .ownCopy:
                 // Still note the archive id of messages we already have, or
                 // our own encrypted messages would look unsent and be resent.
-                if case .archive = source, let inbound = InboundMessage(stanza, account: account, source: source) {
+                if case .archive = source, let inbound = InboundMessage(stanza, account: account, source: source, clockOffset: serverClockOffset) {
                     // After what came before it in the archive.
                     flushArchive(query: query, endsPage: false)
                     try? database.confirmArchived(inbound)
@@ -1843,7 +1843,7 @@ public final class XMPPSession: @unchecked Sendable {
                 if stanza.body?.isEmpty ?? true { stanza.body = "🔒" }
             }
         }
-        guard var inbound = InboundMessage(stanza, account: account, source: source, encryption: encryption) else { return }
+        guard var inbound = InboundMessage(stanza, account: account, source: source, encryption: encryption, clockOffset: serverClockOffset) else { return }
         inbound.undecryptableReason = undecryptableReason
         inbound.omemoDevice = sender?.device ?? nil
         inbound.omemoTrust = sender?.trust

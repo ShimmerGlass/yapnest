@@ -55,6 +55,15 @@ extension XMPPSession {
         return plain.date(from: utc) ?? fractional.date(from: utc)
     }
 
+    /// How far the server's clock is ahead of ours, as last recorded; zero
+    /// until one is.
+    var serverClockOffset: TimeInterval { (try? database.serverClockOffset()) ?? 0 }
+
+    /// A stored message time as the server's clock reads it, for anything
+    /// that asks the server about a time (an archive query's bounds, a
+    /// room's history). Stored times are this device's clock.
+    func serverTime(of local: Date) -> Date { local.addingTimeInterval(serverClockOffset) }
+
     /// The server's clock less ours, taking the server to have read its clock
     /// halfway through the round trip.
     static func offset(server: Date, sent: Date, received: Date) -> TimeInterval {

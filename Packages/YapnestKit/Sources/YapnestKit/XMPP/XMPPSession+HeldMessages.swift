@@ -173,7 +173,7 @@ extension XMPPSession {
             jid: room, nickname: status?.nickname ?? group.nickname, occupants: [nick: held.sender],
             trustsOccupantIds: group.hasOccupantIds, ownOccupantId: status?.occupantId, isNonAnonymous: group.isNonAnonymous,
         )
-        guard var inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: held.source, encryption: .omemo) else { return nil }
+        guard var inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: held.source, encryption: .omemo, clockOffset: serverClockOffset) else { return nil }
         inbound.omemoDevice = device
         inbound.omemoTrust = trust
         inbound.isHistory = held.isHistory

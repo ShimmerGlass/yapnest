@@ -540,7 +540,7 @@ extension XMPPSession {
             // Rooms with an archive are read through it; the share extension only writes.
             history.setAttribute("maxstanzas", value: "0")
         } else if let last = try? database.lastIncomingMessageDate(in: room) {
-            history.setAttribute("since", value: ISO8601DateFormatter().string(from: last))
+            history.setAttribute("since", value: ISO8601DateFormatter().string(from: serverTime(of: last)))
         } else {
             history.setAttribute("maxstanzas", value: "50")
         }
@@ -1373,7 +1373,7 @@ extension XMPPSession {
             groups.map { group in group.lastArchiveId == nil ? (try? Conversation.fetchOne(db, key: group.conversationId))?.lastActivityAt : nil }
         }) ?? Array(repeating: nil, count: groups.count)
         for (group, lastActivity) in zip(groups, lastActivities) {
-            let since = lastActivity.flatMap { $0 > .distantPast ? $0 : nil }
+            let since = lastActivity.flatMap { $0 > .distantPast ? serverTime(of: $0) : nil }
             pending.enter()
             let deadline = RoomDeadline { pending.leave() }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { deadline.finish() }
@@ -1578,7 +1578,7 @@ extension XMPPSession {
                 case .ignore, .ownCopy:
                     if real == account { confirmIntroduction(stanza, in: room) }
                     // Our own message coming back; note the room's id for it.
-                    if let inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: source) {
+                    if let inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: source, clockOffset: serverClockOffset) {
                         flushArchive(query: query, endsPage: false)
                         try? database.confirmArchived(inbound)
                         publishReadStateAwaiting(inbound)
@@ -1616,7 +1616,7 @@ extension XMPPSession {
             if encryption == .omemoUndecryptable, stanza.body?.isEmpty ?? true { stanza.body = "🔒" }
         }
 
-        guard var inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: source, encryption: encryption) else { return }
+        guard var inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: source, encryption: encryption, clockOffset: serverClockOffset) else { return }
         inbound.undecryptableReason = undecryptableReason
         inbound.heldForCheck = held != nil
         // The server can't block someone's group messages, which come from

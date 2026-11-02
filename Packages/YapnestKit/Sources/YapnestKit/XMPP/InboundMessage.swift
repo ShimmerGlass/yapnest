@@ -189,6 +189,7 @@ extension InboundMessage {
         source: Source,
         encryption: Message.Encryption = .none,
         now: Date = Date(),
+        clockOffset: TimeInterval = 0,
     ) {
         let from = stanza.from.flatMap { JID($0.stringValue) } ?? account
         let to = stanza.to.flatMap { JID($0.stringValue) } ?? account
@@ -203,7 +204,7 @@ extension InboundMessage {
         if stanza.type == .groupchat { return nil }
 
         self.init(stanza, peer: peer, isOutgoing: isOutgoing, sender: from, nick: nil, stampedBy: account, account: account,
-                  source: source, encryption: encryption, now: now)
+                  source: source, encryption: encryption, now: now, clockOffset: clockOffset)
         self.requestsReceipt = stanza.firstChild(name: "request", xmlns: NS.receipts) != nil
         self.receiptFor = stanza.firstChild(name: "received", xmlns: NS.receipts)?.getAttribute("id")
         self.isMarkable = stanza.firstChild(name: "markable", xmlns: NS.markers) != nil
@@ -223,11 +224,12 @@ extension InboundMessage {
         source: Source,
         encryption: Message.Encryption = .none,
         now: Date = Date(),
+        clockOffset: TimeInterval = 0,
     ) {
         guard let from = stanza.from, JID(from.bareJid.stringValue) == room.jid else { return nil }
         if stanza.type == .error {
             self.init(stanza, peer: room.jid, isOutgoing: true, sender: account, nick: room.nickname, stampedBy: room.jid, account: account,
-                      source: source, encryption: encryption, now: now)
+                      source: source, encryption: encryption, now: now, clockOffset: clockOffset)
             self.isGroupChat = true
             return
         }
@@ -246,7 +248,7 @@ extension InboundMessage {
             !isArchived && nick == room.nickname
         }
         self.init(stanza, peer: room.jid, isOutgoing: isOutgoing, sender: isOutgoing ? account : real ?? room.jid, nick: nick,
-                  stampedBy: room.jid, account: account, source: source, encryption: encryption, now: now)
+                  stampedBy: room.jid, account: account, source: source, encryption: encryption, now: now, clockOffset: clockOffset)
         self.occupantId = occupantId
         // Only a live message from the present holder of a nickname can be
         // placed in a stay, and only where nothing else says who it is.
@@ -319,6 +321,7 @@ extension InboundMessage {
         source: Source,
         encryption: Message.Encryption,
         now: Date,
+        clockOffset: TimeInterval,
     ) {
         self.peer = peer
         self.isOutgoing = isOutgoing
@@ -332,13 +335,16 @@ extension InboundMessage {
         switch source {
         case .archive(let serverId, let timestamp):
             self.serverId = serverId
-            // Our server's own time stays as it is, so a clock that runs behind
-            // doesn't flatten history onto now.
-            self.timestamp = timestamp ?? Self.trustedDelay(in: stanza, stamper: stamper, account: account, now: now)
+            // Our server's own time is kept as a time, not flattened onto now,
+            // but in this device's clock like every other stored time, so a
+            // chat archived on a device with a different clock still compares
+            // right with it.
+            self.timestamp = timestamp.map { $0.addingTimeInterval(-clockOffset) }
+                ?? Self.trustedDelay(in: stanza, stamper: stamper, account: account, now: now, clockOffset: clockOffset)
         case .live, .carbon:
             self.serverId = stanza.stanzaId?[stamper.martin]
             let stamp = Self.trustedStamp(in: stanza, stamper: stamper, account: account)
-            self.timestamp = min(stamp ?? now, now)
+            self.timestamp = min(stamp.map { $0.addingTimeInterval(-clockOffset) } ?? now, now)
             self.isDelayed = stamp != nil
         }
 
@@ -427,9 +433,11 @@ extension InboundMessage {
     /// a sender can still write one of those: this only keeps out the plain
     /// claims, and ingest's floor (the newest stored message and the last
     /// notification) is what stops a forged stamp from reaching back past
-    /// what was already seen. Never in the future.
-    static func trustedDelay(in stanza: Martin.Message, stamper: JID, account: JID, now: Date) -> Date {
-        min(trustedStamp(in: stanza, stamper: stamper, account: account) ?? now, now)
+    /// what was already seen. Never in the future. The stamp is in the
+    /// server's clock, and the result in ours: `clockOffset` is how far the
+    /// server's is ahead.
+    static func trustedDelay(in stanza: Martin.Message, stamper: JID, account: JID, now: Date, clockOffset: TimeInterval = 0) -> Date {
+        min(trustedStamp(in: stanza, stamper: stamper, account: account).map { $0.addingTimeInterval(-clockOffset) } ?? now, now)
     }
 
     /// The latest stamp of a trusted `<delay>`, if there is one.

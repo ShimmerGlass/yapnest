@@ -105,7 +105,7 @@ struct CallSignal: Sendable, Equatable {
     }
 
     /// Nil for what isn't a Jingle message, or is one we can't use.
-    init?(_ stanza: Martin.Message, account: JID, source: InboundMessage.Source, now: Date = Date()) {
+    init?(_ stanza: Martin.Message, account: JID, source: InboundMessage.Source, now: Date = Date(), clockOffset: TimeInterval = 0) {
         guard stanza.type != .error, stanza.type != .groupchat,
               let element = stanza.element.children.first(where: { $0.xmlns == Self.namespace }),
               let sid = element.getAttribute("id"), !sid.isEmpty, sid.count <= Self.maxSessionIdLength,
@@ -125,7 +125,8 @@ struct CallSignal: Sendable, Equatable {
         self.isFromAccount = isFromAccount
         isTieBreak = element.name != "propose" && element.firstChild(name: "tie-break") != nil
         if case .proceed = action { omemoDevice = CallFingerprints.device(in: element) }
-        self.timestamp = source.archivedAt ?? InboundMessage.trustedDelay(in: stanza, stamper: account, account: account, now: now)
+        self.timestamp = source.archivedAt.map { $0.addingTimeInterval(-clockOffset) }
+            ?? InboundMessage.trustedDelay(in: stanza, stamper: account, account: account, now: now, clockOffset: clockOffset)
     }
 
     init(sid: String, action: Action, sender: JID, recipient: JID, from: String? = nil, isFromAccount: Bool = false, timestamp: Date = Date()) {

@@ -43,10 +43,16 @@ extension AppDatabase {
     /// A time that crosses between devices is in the server's clock, as a
     /// device's own clock can be minutes off another's and a chat archived
     /// "before" a message on one would be "after" it on the other. The
-    /// database keeps local time, so comparisons against message timestamps,
-    /// which are this device's readings, stay in one clock.
+    /// database keeps local time, and ingest converts the stamps a server puts
+    /// on messages (the archive's, a delay's) to it, so every comparison
+    /// against a message timestamp stays in one clock. What is asked of the
+    /// server from a stored time converts back (`XMPPSession.serverTime(of:)`).
     static func serverClockOffset(_ db: Database) throws -> TimeInterval {
         try setting(db, .serverClockOffset).flatMap(Int64.init).map { TimeInterval($0) / 1000 } ?? 0
+    }
+
+    public func serverClockOffset() throws -> TimeInterval {
+        try reader.read { try Self.serverClockOffset($0) }
     }
 
     /// A time of this device as it goes on the wire.
