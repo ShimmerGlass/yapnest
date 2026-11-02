@@ -179,12 +179,10 @@ extension AppDatabase {
     }
 
     /// Records the stanza `id` as the newest to carry our reactions on a
-    /// message, whatever the set, and clears a failure. The one it replaces
-    /// keeps its id, as its echo may still arrive.
+    /// message, whatever the set, and clears a failure.
     /// `existing` is the message's record as the caller fetched it.
     static func pendOwnReactions(_ db: Database, messageId: Int64, id: String, record existing: OwnReaction?) throws {
         var record = existing ?? OwnReaction(messageId: messageId)
-        if let old = record.pendingId, old != id { record.retire(old) }
         record.pendingId = id
         record.error = nil
         if existing == nil { try record.insert(db) } else { try record.update(db) }
@@ -198,9 +196,8 @@ extension AppDatabase {
     }
 
     /// Ends the pending state of our reactions on a message: the server has
-    /// them, or, with an `error`, they are given up on and show as failed. The
-    /// stanza given up on keeps its id, as its echo may still arrive. Nothing
-    /// is done where `bouncedId` isn't the id pending: a newer set stands.
+    /// them, or, with an `error`, they are given up on and show as failed.
+    /// Nothing is done where `bouncedId` isn't the id pending: a newer set stands.
     private static func settleOwnReactions(_ db: Database, messageId: Int64, record stored: OwnReaction?, error: String?, unlessSupersededBy bouncedId: String? = nil) throws {
         if isSuperseded(stored, by: bouncedId) { return }
         guard let error else {
@@ -210,7 +207,6 @@ extension AppDatabase {
         // A record's foreign key cascades, so one that exists has its message.
         if stored == nil, try !Message.exists(db, key: messageId) { return }
         var record = stored ?? OwnReaction(messageId: messageId)
-        if let old = record.pendingId { record.retire(old) }
         record.pendingId = nil
         record.error = error
         if stored == nil { try record.insert(db) } else { try record.update(db) }

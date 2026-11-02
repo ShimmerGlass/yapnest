@@ -897,8 +897,7 @@ public final class AppDatabase: Sendable {
                 CREATE TABLE ownReaction (
                     messageId INTEGER PRIMARY KEY REFERENCES message(id) ON DELETE CASCADE,
                     pendingId TEXT,
-                    error TEXT,
-                    earlierIds TEXT NOT NULL DEFAULT '[]'
+                    error TEXT
                 )
                 """)
             try db.execute(sql: "CREATE INDEX ownReaction_on_pendingId ON ownReaction(pendingId) WHERE pendingId IS NOT NULL")

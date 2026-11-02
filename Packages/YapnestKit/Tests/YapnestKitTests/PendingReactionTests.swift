@@ -80,7 +80,7 @@ struct PendingReactionTests {
         try session.toggleReaction("👍", on: message, peer: alice)
         #expect(try isPending())
 
-        try carbonFromOtherDevice(id: "other-device", emojis: ["👍", "❤️"])
+        try carbonFromOtherDevice(id: try #require(try pendingId()), emojis: ["👍", "❤️"])
 
         #expect(try rows().count == 2)
         #expect(try record() == nil)
@@ -302,32 +302,61 @@ struct PendingReactionTests {
 
     // MARK: Another of our devices
 
-    @Test func aSetFromAnotherOfOurDevicesIsAppliedAndDropsOursPending() throws {
+    @Test func aCarbonOfAnotherDevicesSetWhileOursIsPendingIsIgnoredAndOursStillGoesOut() throws {
         let offline = try makeSession(me, database: database)
         try offline.toggleReaction("👍", on: message, peer: alice)
-        #expect(try pendingId() != nil)
+        let id = try #require(try pendingId())
+
+        try carbonFromOtherDevice(id: "other-device", emojis: ["❤️"])
+
+        #expect(Set(try rows().map(\.emoji)) == ["👍"])
+        #expect(try pendingId() == id)
+        let wire = FakeWire()
+        offline.connectForTesting(wire)
+        offline.sendUnclaimedPending()
+        let sent = reactionStanzas(in: wire)
+        #expect(sent.map(\.id) == [id])
+
+        offline.enableAcknowledgementsForTesting()
+        offline.acknowledged(try #require(sent.first))
+        #expect(try record() == nil)
+    }
+
+    @Test func theEchoOfOursSettlesItAndALaterCarbonOfAnotherDevicesSetIsApplied() throws {
+        session.enableAcknowledgementsForTesting()
+        try session.toggleReaction("👍", on: message, peer: alice)
+        try carbonFromOtherDevice(id: try #require(try pendingId()), emojis: ["👍"])
+        #expect(try record() == nil)
 
         try carbonFromOtherDevice(id: "other-device", emojis: ["❤️"])
 
         #expect(Set(try rows().map(\.emoji)) == ["❤️"])
+    }
+
+    @Test func aCarbonOfAnotherDevicesSetAfterTheAcknowledgementIsApplied() throws {
+        session.enableAcknowledgementsForTesting()
+        try session.toggleReaction("👍", on: message, peer: alice)
+        session.acknowledged(try #require(reactionStanzas().first))
         #expect(try record() == nil)
-        let wire = FakeWire()
-        offline.connectForTesting(wire)
-        offline.sendUnclaimedPending()
-        #expect(reactionStanzas(in: wire).isEmpty)
+
+        try carbonFromOtherDevice(id: "other-device", emojis: ["❤️"])
+
+        #expect(Set(try rows().map(\.emoji)) == ["❤️"])
     }
 
     private func reactionStanzas(in wire: FakeWire) -> [Martin.Message] {
         wire.messages.filter { $0.firstChild(name: "reactions", xmlns: NS.reactions) != nil }
     }
 
-    @Test func aLateEchoOfAnEarlierStanzaOfOursIsIgnored() throws {
+    @Test func aLateRoomEchoOfAnAcknowledgedEarlierStanzaAfterANewToggleIsIgnored() throws {
         let message = try joinedRoomMessage()
+        session.enableAcknowledgementsForTesting()
         try session.toggleReaction("👍", on: message, peer: room)
         let first = try #require(try pendingId())
+        try database.clearPending(.reaction, id: first)
+        #expect(try record() == nil)
         try session.toggleReaction("👍", on: message, peer: room)
         let second = try #require(try pendingId())
-        #expect(try record()?.earlierIds == [first])
 
         try echo(id: first, emojis: ["👍"])
         #expect(try rows().isEmpty)
@@ -337,20 +366,9 @@ struct PendingReactionTests {
         #expect(try record() == nil)
     }
 
-    @Test func aMessageToggledManyTimesKeepsOnlyTheNewestEarlierIds() throws {
-        let offline = try makeSession(me, database: database)
-        var ids: [String] = []
-        for _ in 0..<(OwnReaction.earlierIdsKept + 8) {
-            try offline.toggleReaction("👍", on: message, peer: alice)
-            ids.append(try #require(try pendingId()))
-        }
-        let earlier = try #require(try record()).earlierIds
-        #expect(earlier == Array(ids.dropLast().suffix(OwnReaction.earlierIdsKept)))
-    }
-
     private func archivedFromUs(id: String, emojis: [String]) throws {
         let inbound = try ingestOneToOne(from: "me@example.org", id: id, emojis: emojis, source: .archive(serverId: "a-\(id)", timestamp: Date(timeIntervalSince1970: 100)))
-        #expect(inbound.isOutgoing && inbound.isReplay)
+        #expect(inbound.isOutgoing)
     }
 
     @Test func anArchivedReplayOfAnOlderSetLeavesOursPendingAlone() throws {

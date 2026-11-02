@@ -211,7 +211,7 @@ extension AppDatabase {
     /// the message isn't stored, or is retracted: a replay would otherwise
     /// put back reactions that retracting removed. `pendingId` records ours as
     /// not yet acknowledged by the server, even when the set is empty.
-    /// `fromUs`, `isReplay` and `stanzaId` say that the set came from one of our devices
+    /// `fromUs` and `stanzaId` say that the set came from one of our devices
     /// (this one's echo, or another's) in the stanza `stanzaId`.
     @discardableResult
     public func setReactions(_ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil) throws -> Bool {
@@ -226,7 +226,7 @@ extension AppDatabase {
     }
 
     @discardableResult
-    static func setReactions(_ db: Database, _ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil, fromUs: Bool = false, isReplay: Bool = false, stanzaId: String? = nil) throws -> Bool {
+    static func setReactions(_ db: Database, _ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil, fromUs: Bool = false, stanzaId: String? = nil) throws -> Bool {
         guard let message = try referencedMessage(db, conversationId: conversationId, id: messageRef), let messageId = message.id, !message.isRetracted else {
             return false
         }
@@ -245,25 +245,18 @@ extension AppDatabase {
             byAddress
         }
         let record = fromUs || pendingId != nil ? try OwnReaction.fetchOne(db, key: messageId) : nil
-        if fromUs, let record, stanzaId == nil || stanzaId != record.pendingId {
-            // The echo of our newest stanza is applied and ends the record
-            // below. Anything else from us while a record exists is judged
-            // against what we hold.
-            if isReplay, record.pendingId != nil {
-                // The server orders live stanzas the same way for everyone, so a
-                // live set from another of our devices is newer than ours and is
-                // applied below. A replay (an archive result, a room's history)
-                // brings the past back after the fact: it is older than the set
-                // we hold unsent, and applying it would lose that set.
-                return true
-            }
-            if let stanzaId, record.earlierIds.contains(stanzaId) {
-                // The echo of an earlier stanza of ours (a room reflecting it, or an
-                // archive replaying it) arrives after we toggled again. Its set is
-                // stale, and replacing the rows would drop the newer one before the
-                // server has it.
-                return true
-            }
+        if fromUs, let record, record.pendingId != nil, stanzaId != record.pendingId {
+            // While a set of ours is unacknowledged, only its own echo counts.
+            // Our reactions stanza asks the server for an acknowledgement right
+            // after it is written, and the server answers in order on our
+            // stream, so a carbon of another device's set that comes before the
+            // acknowledgement was handled before ours, and ours wins at the
+            // server; one still queued here goes out after it and wins too. A
+            // room reflects in the server's order, so our own echo settles it.
+            // A replay (an archive result, a room's history) brings back the
+            // past. Applying any of them would drop the pending set before the
+            // server has it.
+            return true
         }
         // A new occupant can take the nickname a former one reacted under; the
         // key allows one row per address, nickname and emoji, so those rows
@@ -276,11 +269,9 @@ extension AppDatabase {
         if let pendingId {
             try Self.pendOwnReactions(db, messageId: messageId, id: pendingId, record: record)
         } else if fromUs, let record {
-            // The echo of our newest stanza is its acknowledgement. A set from
-            // another of our devices is newer than the one we hold unsent, and
-            // goes through the same server: if ours was already written, its
-            // own echo follows at the server and is applied then, as it is
-            // everywhere else. Either way nothing is left for us to send.
+            // The echo of our pending stanza is its acknowledgement; with
+            // nothing pending, a set from another device leaves nothing to
+            // send or to show as failed.
             try record.delete(db)
         }
         return true
