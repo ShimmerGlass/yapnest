@@ -71,6 +71,10 @@ public struct InboundMessage: Sendable, Equatable {
     /// message's delay is only as good as the server that wrote it, so ingest
     /// keeps such a message from landing before what's already stored.
     public var isDelayed = false
+    /// The stanza brings back the past: an archive result, or a live one that
+    /// carries a trusted delay (a room's history on join). Unlike `isDelayed`
+    /// it is not reset for held messages, and it covers the archive.
+    public var isReplay = false
 
     /// The most a body may take, in UTF-8 bytes: a few characters can be
     /// megabytes of combining marks, so counting characters caps nothing.
@@ -337,6 +341,7 @@ extension InboundMessage {
             self.timestamp = min(stamp ?? now, now)
             self.isDelayed = stamp != nil
         }
+        self.isReplay = source.isArchived || isDelayed
 
         self.id = stanza.id
         self.originId = stanza.originId

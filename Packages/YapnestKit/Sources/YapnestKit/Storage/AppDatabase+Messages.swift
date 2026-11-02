@@ -211,7 +211,7 @@ extension AppDatabase {
     /// the message isn't stored, or is retracted: a replay would otherwise
     /// put back reactions that retracting removed. `pendingId` records ours as
     /// not yet acknowledged by the server, even when the set is empty.
-    /// `fromUs` and `stanzaId` say that the set came from one of our devices
+    /// `fromUs`, `isReplay` and `stanzaId` say that the set came from one of our devices
     /// (this one's echo, or another's) in the stanza `stanzaId`.
     @discardableResult
     public func setReactions(_ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil) throws -> Bool {
@@ -226,7 +226,7 @@ extension AppDatabase {
     }
 
     @discardableResult
-    static func setReactions(_ db: Database, _ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil, fromUs: Bool = false, stanzaId: String? = nil) throws -> Bool {
+    static func setReactions(_ db: Database, _ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil, fromUs: Bool = false, isReplay: Bool = false, stanzaId: String? = nil) throws -> Bool {
         guard let message = try referencedMessage(db, conversationId: conversationId, id: messageRef), let messageId = message.id, !message.isRetracted else {
             return false
         }
@@ -243,6 +243,14 @@ extension AppDatabase {
             Column("occupantId") == occupantId || (Column("occupantId") == nil && byAddress)
         } else {
             byAddress
+        }
+        if fromUs, isReplay, let pending = try OwnReaction.fetchOne(db, key: messageId)?.pendingId, stanzaId != pending {
+            // The server orders live stanzas the same way for everyone, so a
+            // live set from another of our devices is newer than ours and is
+            // applied below. A replay (an archive result, a room's history)
+            // brings the past back after the fact: it is older than the set
+            // we hold unsent, and applying it would lose that set.
+            return true
         }
         if fromUs, let stanzaId, let record = try OwnReaction.fetchOne(db, key: messageId), record.earlierIds.contains(stanzaId) {
             // The echo of an earlier stanza of ours (a room reflecting it, or an

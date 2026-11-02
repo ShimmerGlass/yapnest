@@ -320,4 +320,42 @@ struct PendingReactionTests {
         try echo(id: second, emojis: [])
         #expect(try record() == nil)
     }
+
+    private func archivedFromUs(id: String, emojis: [String]) throws {
+        let xml = "<message from='me@example.org' to='alice@example.org' type='chat' id='\(id)'><reactions id='1' xmlns='urn:xmpp:reactions:0'>"
+            + emojis.map { "<reaction>\($0)</reaction>" }.joined() + "</reactions></message>"
+        let element = try #require(Element.from(string: xml))
+        let stanza = try #require(Stanza.from(element: element) as? Martin.Message)
+        let inbound = try #require(InboundMessage(stanza, account: me, source: .archive(serverId: "a-\(id)", timestamp: Date(timeIntervalSince1970: 100)), now: Date()))
+        #expect(inbound.isOutgoing && inbound.isReplay)
+        try database.ingest(inbound)
+    }
+
+    @Test func anArchivedReplayOfAnOlderSetLeavesOursPendingAlone() throws {
+        session.enableAcknowledgementsForTesting()
+        try session.toggleReaction("👍", on: message, peer: alice)
+        let first = try #require(reactionStanzas().first)
+        session.acknowledged(first)
+        #expect(try record() == nil)
+        try session.toggleReaction("👍", on: message, peer: alice)
+        let second = try #require(try pendingId())
+        #expect(try rows().isEmpty)
+
+        try archivedFromUs(id: try #require(first.id), emojis: ["👍"])
+
+        #expect(try rows().isEmpty)
+        #expect(try pendingId() == second)
+        #expect(try database.pendingReactions().map(\.id) == [second])
+    }
+
+    @Test func aReplayOfTheLatestPendingIdStillCountsAsItsEcho() throws {
+        session.enableAcknowledgementsForTesting()
+        try session.toggleReaction("👍", on: message, peer: alice)
+        let id = try #require(try pendingId())
+
+        try archivedFromUs(id: id, emojis: ["❤️"])
+
+        #expect(Set(try rows().map(\.emoji)) == ["❤️"])
+        #expect(try record() == nil)
+    }
 }
