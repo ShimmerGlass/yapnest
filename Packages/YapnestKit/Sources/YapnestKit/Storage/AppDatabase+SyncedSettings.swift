@@ -34,6 +34,43 @@ extension AppDatabase {
 
     // MARK: Registry
 
+    // MARK: Server clock
+
+    /// How far the server's clock is ahead of this device's, as last
+    /// estimated, in seconds. Zero until one is: values then cross as this
+    /// device's own time, as they did before the estimate existed.
+    ///
+    /// A time that crosses between devices is in the server's clock, as a
+    /// device's own clock can be minutes off another's and a chat archived
+    /// "before" a message on one would be "after" it on the other. The
+    /// database keeps local time, so comparisons against message timestamps,
+    /// which are this device's readings, stay in one clock.
+    static func serverClockOffset(_ db: Database) throws -> TimeInterval {
+        try setting(db, .serverClockOffset).flatMap(Int64.init).map { TimeInterval($0) / 1000 } ?? 0
+    }
+
+    /// A time of this device as it goes on the wire.
+    static func wireTime(_ local: Date, offset: TimeInterval) -> Date { local.addingTimeInterval(offset) }
+
+    /// A time off the wire as this device's clock reads it.
+    static func localTime(_ wire: Date, offset: TimeInterval) -> Date { wire.addingTimeInterval(-offset) }
+
+    /// Records a new estimate, if it moves the old one by at least a second:
+    /// an estimate is only good to about that, and each change is a write.
+    /// Entries already held keep the time they were given, which converts
+    /// with the offset of the moment they are applied.
+    @discardableResult
+    public func noteServerClockOffset(_ offset: TimeInterval) throws -> Bool {
+        let ms = Int64((offset * 1000).rounded())
+        return try writer.write { db in
+            let held = try Self.setting(db, .serverClockOffset).flatMap(Int64.init)
+            if let held, abs(held - ms) < 1000 { return false }
+            if held == nil, abs(ms) < 1000 { return false }
+            try Self.setSetting(db, .serverClockOffset, String(ms))
+            return true
+        }
+    }
+
     /// How one synced key reads its real value (nil at its default, so a
     /// reset is a tombstone and defaults are never published) and takes a
     /// remote one.
@@ -41,7 +78,7 @@ extension AppDatabase {
         var read: @Sendable (Database, JID?) throws -> String?
         var apply: @Sendable (Database, JID?, String?) throws -> Void
         /// For a chat's key, the same read from a conversation already fetched.
-        var ofConversation: (@Sendable (Conversation) -> String?)?
+        var ofConversation: (@Sendable (Conversation, TimeInterval) -> String?)?
     }
 
     private static func globalKey(_ key: SettingKey, default defaultValue: String? = nil) -> SyncedKey {
@@ -58,13 +95,23 @@ extension AppDatabase {
     private static func chatKey(
         read: @escaping @Sendable (Conversation) -> String?, apply: @escaping @Sendable (Database, Conversation, String?) throws -> Void,
     ) -> SyncedKey {
+        chatKey(read: { c, _ in read(c) }, apply: { db, c, value, _ in try apply(db, c, value) })
+    }
+
+    /// For a key that holds a time, which crosses in the server's clock:
+    /// `offset` is how far that is ahead of this device's.
+    private static func chatKey(
+        read: @escaping @Sendable (Conversation, TimeInterval) -> String?,
+        apply: @escaping @Sendable (Database, Conversation, String?, TimeInterval) throws -> Void,
+    ) -> SyncedKey {
         SyncedKey(
             read: { db, peer in
-                try peer.flatMap { try Self.existingConversation(db, peer: $0) }.flatMap(read)
+                guard let conversation = try peer.flatMap({ try Self.existingConversation(db, peer: $0) }) else { return nil }
+                return read(conversation, try serverClockOffset(db))
             },
             apply: { db, peer, value in
                 guard let peer, let conversation = try Self.existingConversation(db, peer: peer) else { return }
-                try apply(db, conversation, value)
+                try apply(db, conversation, value, try serverClockOffset(db))
             },
             ofConversation: read,
         )
@@ -112,9 +159,9 @@ extension AppDatabase {
             apply: { db, c, value in try setColumn(db, c, Column("isPinned").set(to: value == "1")) },
         ),
         "archivedAt": chatKey(
-            read: { $0.archivedAt.map { String($0.settingsMilliseconds) } },
-            apply: { db, c, value in
-                let at = value.flatMap(Int64.init).map(Date.init(settingsMilliseconds:))
+            read: { c, offset in c.archivedAt.map { String(wireTime($0, offset: offset).settingsMilliseconds) } },
+            apply: { db, c, value, offset in
+                let at = value.flatMap(Int64.init).map { localTime(Date(settingsMilliseconds: $0), offset: offset) }
                 // Archived only while nothing newer than the archiving is in
                 // the chat, as a new message brings it back on every device.
                 var archived = at != nil
@@ -485,9 +532,10 @@ extension AppDatabase {
             for (key, synced) in Self.syncedGlobalKeys {
                 if let value = try synced.read(db, nil) { try seed(Self.globalItem, key.rawValue, value) }
             }
+            let offset = try Self.serverClockOffset(db)
             for conversation in try Conversation.fetchAll(db) {
                 for (key, synced) in Self.syncedChatKeys {
-                    if let value = synced.ofConversation?(conversation) { try seed(Self.chatItem(conversation.peer), key, value) }
+                    if let value = synced.ofConversation?(conversation, offset) { try seed(Self.chatItem(conversation.peer), key, value) }
                 }
             }
             if !(try Self.ownRanking(db).entries.isEmpty) { try Self.markDirty(db, Self.usageItem(deviceId)) }

@@ -336,6 +336,80 @@ struct SettingsSyncTests {
         #expect(try #require(try db.reader.read { try Conversation.fetchOne($0, key: conversation.id!) }).isArchived == false)
     }
 
+    // MARK: Server clock
+
+    private func isArchived(_ conversation: Conversation, in target: AppDatabase) throws -> Bool {
+        try #require(try target.reader.read { try Conversation.fetchOne($0, key: conversation.id!) }).isArchived
+    }
+
+    /// Device A's clock is the server's; device B's runs two minutes behind.
+    /// A archives at server time 1000 and a message stamped 1005 arrives.
+    @Test func devicesWhoseClocksDifferAgreeOnAnArchiveAMessageFollows() throws {
+        let skew: TimeInterval = -120
+        let a = db
+        let b = try AppDatabase.inMemory()
+        let unaware = try AppDatabase.inMemory()
+        try b.noteServerClockOffset(-skew)
+        let chat = "chat:alice@example.org"
+
+        let onA = try a.conversation(with: alice)
+        try a.setArchived(true, conversationId: onA.id!, at: Date(timeIntervalSince1970: 1000))
+        let published = try #require(try stored(chat, in: a)["archivedAt"])
+        #expect(published.value == "1000000")
+        try a.insert(message(onA, at: 1005))
+        let archivedOnA = try isArchived(onA, in: a)
+
+        for (device, aware) in [(b, true), (unaware, false)] {
+            let conversation = try device.conversation(with: alice)
+            try device.insert(message(conversation, at: 1005 + skew))
+            _ = try apply(chat, [published], to: device)
+            // Without the offset B takes 1000 for its own reading, which the
+            // message at 885 on its clock falls before.
+            #expect(try isArchived(conversation, in: device) == (aware ? archivedOnA : true))
+        }
+        #expect(!archivedOnA)
+    }
+
+    @Test func aMessageBeforeTheArchivingLeavesTheChatArchivedOnASlowClock() throws {
+        let b = try AppDatabase.inMemory()
+        try b.noteServerClockOffset(120)
+        let conversation = try b.conversation(with: alice)
+        try b.insert(message(conversation, at: 995 - 120))
+        _ = try apply("chat:alice@example.org", [entry("archivedAt", "1000000", 1000)], to: b)
+        #expect(try isArchived(conversation, in: b))
+    }
+
+    @Test func theOffsetConvertsBothWaysAtTheBoundary() throws {
+        let b = try AppDatabase.inMemory()
+        try b.noteServerClockOffset(-90.5)
+        let conversation = try b.conversation(with: alice)
+        try b.setArchived(true, conversationId: conversation.id!, at: Date(timeIntervalSince1970: 2000))
+        let sent = try #require(try stored("chat:alice@example.org", in: b)["archivedAt"])
+        #expect(sent.value == "1909500")
+        // What B published, read by a device with the same offset, is B's own reading again.
+        let c = try AppDatabase.inMemory()
+        try c.noteServerClockOffset(-90.5)
+        let other = try c.conversation(with: alice)
+        _ = try apply("chat:alice@example.org", [sent], to: c)
+        let received = try #require(try c.reader.read { try Conversation.fetchOne($0, key: other.id!) })
+        #expect(received.archivedAt == Date(timeIntervalSince1970: 2000))
+    }
+
+    @Test func withNoOffsetKnownTheTimeCrossesAsItIs() throws {
+        let conversation = try db.conversation(with: alice)
+        try db.setArchived(true, conversationId: conversation.id!, at: Date(timeIntervalSince1970: 1000))
+        #expect(try stored("chat:alice@example.org")["archivedAt"]?.value == "1000000")
+        #expect(try db.noteServerClockOffset(0.4) == false)
+        #expect(try db.setting(.serverClockOffset) == nil)
+    }
+
+    @Test func anOffsetIsRecordedOnlyWhenItMovesByASecond() throws {
+        #expect(try db.noteServerClockOffset(30))
+        #expect(try db.noteServerClockOffset(30.5) == false)
+        #expect(try db.noteServerClockOffset(32))
+        #expect(try db.setting(.serverClockOffset) == "32000")
+    }
+
     @Test func chatEntriesReceivedBeforeTheChatExistsApplyWhenItIsCreated() throws {
         try apply("chat:alice@example.org", [entry("pinned", "1", 100), entry("notificationSound", "chime", 100)])
         #expect(try db.reader.read { try Conversation.fetchCount($0) } == 0)

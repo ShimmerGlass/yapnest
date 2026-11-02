@@ -114,6 +114,12 @@ extension AppDatabase {
         /// between asks again. Unset on an install from before it existed,
         /// which isn't asked. Not synced: each install asks once.
         case welcomeShown
+        /// How far this device's clock is ahead of the server's, in milliseconds
+        /// (negative when behind), as last estimated: see `serverClockOffset`.
+        /// Kept in the database rather than the session because the converting
+        /// code runs inside transactions, and an extension that creates a
+        /// conversation applies stored entries without a session of its own.
+        case serverClockOffset
     }
 
     public func setting(_ key: SettingKey) throws -> String? {

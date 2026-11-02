@@ -388,6 +388,11 @@ public final class XMPPSession: @unchecked Sendable {
         var mucService: String?
         /// A new session waits for account discovery before catching up.
         var awaitsAccountDiscovery = false
+        /// How this device's clock was compared with the server's this session:
+        /// see `XMPPSession+ServerClock`.
+        var clockSource: ClockOffsetSource?
+        var archiveClockOffset: TimeInterval?
+        var clockEstimate: Task<Void, Never>?
         /// What a resumed stream does again, as nothing else would before the
         /// next new session; a new session does all of it itself.
         var owedOnResume: OwedOnResume = []
@@ -785,6 +790,7 @@ public final class XMPPSession: @unchecked Sendable {
                 let serverId = archived.message.stanzaId?[source.martin] ?? archived.messageId
                 let origin = InboundMessage.Source.archive(serverId: serverId, timestamp: archived.timestamp)
                 let isHistory = self.lock.withLock { $0.historyQueries.contains(archived.query.id) }
+                if !isHistory { self.noteArchiveStamp(archived.timestamp, arrivedAt: Date()) }
                 let isAccount = source == self.account
                 guard isAccount || self.isGroup(source) else { return }
                 guard Self.archivedMessage(archived.message, belongsTo: source, isAccount: isAccount) else {
@@ -1537,7 +1543,11 @@ public final class XMPPSession: @unchecked Sendable {
                 // speaks once account discovery returns, which Martin starts
                 // itself. Asking again would make OMEMO publish its bundle
                 // twice at once, and a new device's keys clobber each other.
-                lock.withLock { $0.awaitsAccountDiscovery = true }
+                lock.withLock {
+                    $0.awaitsAccountDiscovery = true
+                    $0.clockSource = nil
+                    $0.archiveClockOffset = nil
+                }
                 runOnceConnected(attempt: attempt) { [self] in
                     accountDiscovered(client.module(.disco).accountDiscoResult)
                 }
@@ -1643,6 +1653,7 @@ public final class XMPPSession: @unchecked Sendable {
         // Read here rather than from the archive module, which learns it
         // from the same result in its own time and forgets it on resets.
         let version = MessageArchiveManagementModule.Version.values.first { result.features.contains($0.rawValue) }
+        estimateServerClock()
         startSync(archiveVersion: version)
     }
 

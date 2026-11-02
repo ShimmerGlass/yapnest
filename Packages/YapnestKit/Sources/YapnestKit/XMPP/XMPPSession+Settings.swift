@@ -218,6 +218,10 @@ extension XMPPSession {
         case .failed: return .owed
         }
 
+        // The times in the node are the server's: they are read with an
+        // estimate of how far this clock is from it.
+        await (lock.withLock { $0.clockEstimate })?.value
+        guard isCurrent() else { return .owed }
         lock.withLock { $0.settingsSync.liveItems = [] }
         let fetched = await fetchSettingsItems()
         guard isCurrent() else { return .owed }

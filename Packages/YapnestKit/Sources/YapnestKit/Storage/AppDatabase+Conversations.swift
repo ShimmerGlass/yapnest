@@ -11,14 +11,15 @@ extension AppDatabase {
     }
 
     /// Archived conversations leave the main list until a new message arrives.
-    /// The time is what other devices are told. A new message unarchives the
+    /// The time is what other devices are told, in the server's clock (see
+    /// `serverClockOffset`). A new message unarchives the
     /// chat without touching it: every device sees that message, so they all
     /// reach the same answer.
-    public func setArchived(_ archived: Bool, conversationId: Int64) throws {
+    public func setArchived(_ archived: Bool, conversationId: Int64, at now: Date = Date()) throws {
         try writer.write { db in
             guard let conversation = try Conversation.fetchOne(db, key: conversationId), conversation.isArchived != archived else { return }
             _ = try Conversation.filter(key: conversationId).updateAll(
-                db, Column("isArchived").set(to: archived), Column("archivedAt").set(to: archived ? Date() : nil),
+                db, Column("isArchived").set(to: archived), Column("archivedAt").set(to: archived ? now : nil),
             )
             try Self.touch(db, item: Self.chatItem(conversation.peer), key: "archivedAt")
         }
