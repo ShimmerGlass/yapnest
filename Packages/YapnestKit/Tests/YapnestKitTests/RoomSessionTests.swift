@@ -282,17 +282,20 @@ struct AccountCatchUpTests {
         }
     }
 
-    @Test func aStoredPageMovesTheCursor() throws {
+    @Test func aStoredPageMovesTheCursor() async throws {
         session.catchUp()
 
-        #expect(try database.setting(.lastArchiveId) == "s9")
+        #expect(await eventually { (try? database.setting(.lastArchiveId)) == "s9" })
         #expect(try messageCount(database) == 1)
     }
 
-    @Test func aPageThatCouldNotBeStoredLeavesTheCursorWhereItWas() throws {
+    @Test func aPageThatCouldNotBeStoredLeavesTheCursorWhereItWas() async throws {
         try failStoringMessages(database)
+        session.state.send(.connected(isSyncing: true))
         session.catchUp()
 
+        // The page is read on a task of its own, so the end of the sync is what to wait for.
+        #expect(await eventually { session.state.value == .connected(isSyncing: false) })
         #expect(try database.setting(.lastArchiveId) == "old")
         #expect(try messageCount(database) == 0)
         // The catch-up ends rather than going on past the lost page.
