@@ -97,6 +97,12 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
         for reply in replies { reply() }
     }
 
+    /// Delivers the oldest reply held back, and only that one.
+    func releaseOldestHeld() {
+        let reply = lock.withLock { held.isEmpty ? nil : held.removeFirst() }
+        reply?()
+    }
+
     /// Pings written so far.
     var pings: [Iq] {
         written.compactMap { $0 as? Iq }.filter { $0.firstChild(name: "ping", xmlns: "urn:xmpp:ping") != nil }

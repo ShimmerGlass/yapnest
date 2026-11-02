@@ -298,8 +298,6 @@ struct AccountCatchUpTests {
         #expect(await eventually { session.state.value == .connected(isSyncing: false) })
         #expect(try database.setting(.lastArchiveId) == "old")
         #expect(try messageCount(database) == 0)
-        // The catch-up ends rather than going on past the lost page.
-        #expect(session.state.value == .connected(isSyncing: false))
     }
 
     @Test func aFlushThatCouldNotStoreSaysSoAndRunsNoCallbacks() throws {

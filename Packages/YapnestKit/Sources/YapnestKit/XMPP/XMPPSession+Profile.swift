@@ -448,12 +448,14 @@ extension XMPPSession {
     func configurePEPNode(_ node: String, fields: [String: [String]]) async throws {
         let key = NodeConfiguration(node: node, fields: fields)
         let task = lock.withLock { state -> Task<Void, Error> in
-            if let running = state.nodeReconfigurations[key] { return running }
+            if let running = state.nodeReconfigurations[key] { return running.task }
+            let id = UUID()
             let started = Task { [self] in
-                defer { lock.withLock { _ = $0.nodeReconfigurations.removeValue(forKey: key) } }
+                // Only its own entry: a new stream may have put another there.
+                defer { lock.withLock { if $0.nodeReconfigurations[key]?.id == id { $0.nodeReconfigurations[key] = nil } } }
                 _ = try await client.context.writer.write(iq: OutboundStanza.configureNode(node, fields: fields), errorDecoder: PubSubError.from(stanza:))
             }
-            state.nodeReconfigurations[key] = started
+            state.nodeReconfigurations[key] = (id, started)
             return started
         }
         try await task.value

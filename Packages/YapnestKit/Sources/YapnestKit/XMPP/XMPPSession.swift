@@ -428,7 +428,7 @@ public final class XMPPSession: @unchecked Sendable {
         var readStatesAwaitingMessage: Set<JID> = []
         /// Reconfigurations of a PEP node under way, so publishes that all
         /// meet the same refusal ask the server once. See `configurePEPNode`.
-        var nodeReconfigurations: [NodeConfiguration: Task<Void, Error>] = [:]
+        var nodeReconfigurations: [NodeConfiguration: (id: UUID, task: Task<Void, Error>)] = [:]
         /// Where our settings node stands this session: see `SettingsSyncState`.
         var settingsSync = SettingsSyncState()
         /// Contact requests the server sent on this session.
