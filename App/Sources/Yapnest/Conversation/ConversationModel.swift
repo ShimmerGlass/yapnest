@@ -781,11 +781,6 @@ final class ConversationModel {
     private func apply(_ newItems: [ConversationItem], generation: Int, prebuilt: Prebuilt? = nil) {
         guard generation == self.generation else { return }
         let wasNearBottom = isNearBottom
-        // A list that scrolls by less than the distance that counts as away
-        // is near its newest message even at its oldest end, so resting there
-        // must not read as a reason to follow the bottom: it took a reader of
-        // the oldest message back down on a release, a reaction or an edit.
-        let restsAtOldestEnd = geometry.map { Self.distanceFromTop($0, flipped: isFlipped) <= 1.5 } ?? false
         let previousOrder = order
         FrameLog.event("apply begin items=\(newItems.count) previous=\(previousOrder.count)")
         defer { FrameLog.event("apply end rows=\(rows.count)") }
@@ -902,7 +897,7 @@ final class ConversationModel {
             // Rows added below would push the ones on screen up, as the list
             // follows its bottom edge.
             keepAnchorInPlace()
-        } else if lastIsMine || (wasNearBottom && !isAtBottomEdge && !restsAtOldestEnd && !bounded) {
+        } else if lastIsMine || (wasNearBottom && !isAtBottomEdge && !bounded) {
             if isFlipped {
                 scrollToBottom(animated: !reshapeOnly && !prepended && !trimming, reason: "rowsChanged.follow")
             } else {
@@ -2069,8 +2064,19 @@ final class ConversationModel {
         observeMessages()
     }
 
+    /// Past 120 points, or past the whole range of a list that scrolls by
+    /// less: its oldest end is as far from the newest message as the list can
+    /// go, and reading there must not count as near the bottom. It did, and a
+    /// release followed the bottom, or a row arriving there pushed what was on
+    /// screen (#229). A list that fits is near wherever it is pulled, as its
+    /// distance from the oldest end is then negative and would count as away;
+    /// one that scrolls, pulled past its oldest end, is away, as it is on the
+    /// way back.
     static func isAway(_ geometry: ScrollGeometry, flipped: Bool) -> Bool {
-        distanceFromBottom(geometry, flipped: flipped) > 120
+        let fromBottom = distanceFromBottom(geometry, flipped: flipped)
+        let fromTop = distanceFromTop(geometry, flipped: flipped)
+        guard fromBottom + fromTop > 1.5 else { return false }
+        return fromBottom > min(120, fromTop)
     }
 
     /// How far the list is from its newest message, as the user sees it:

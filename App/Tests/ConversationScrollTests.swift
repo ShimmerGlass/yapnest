@@ -207,14 +207,42 @@ struct ConversationScrollTests {
     }
 
     /// Content taller than the view by less than the distance that counts as
-    /// away: at its oldest end the list is still near the newest message, and
-    /// followed it back down on any change, leaving the oldest one hidden (#229).
-    @Test func aShortListRestingAtItsOldestEndStaysThereWhenARowChanges() async throws {
+    /// away: at its oldest end the list is as far from the newest message as
+    /// it goes, so an arriving row keeps what's on screen where it is rather
+    /// than pushing it a row towards the bar (#229).
+    @Test func aRowArrivingAtTheOldestEndOfAShortListKeepsWhatIsOnScreenInPlace() async throws {
         let f = try await opened(distance: 3_000, flipped: true)
+        scrolledUp(f)
+        let anchor = f.rowIDs[5]
+        f.model.userStartedScrolling()
         f.model.geometryChanged(geometry(flipped: true, distanceFromBottom: 100, container: 800, content: 900))
         let incoming = try f.add("hello from them")
         await eventually("the message never showed") { f.rowIDs.last == incoming.id }
-        #expect(notScrolled(f))
+        #expect(f.model.scroll.messageID == anchor)
+        #expect(f.model.scroll.edge == nil)
+    }
+
+    @Test(arguments: [false, true]) func aListIsAwayPastTheRangeItScrollsByIfThatIsUnder120(flipped: Bool) {
+        func g(_ distance: CGFloat, content: CGFloat) -> ScrollGeometry {
+            geometry(flipped: flipped, distanceFromBottom: distance, container: 800, content: content)
+        }
+        // Fits: both ends are where it is.
+        #expect(!ConversationModel.isAway(g(0, content: 800), flipped: flipped))
+        // Shorter than the view, at rest and pulled either way.
+        #expect(!ConversationModel.isAway(g(0, content: 300), flipped: flipped))
+        #expect(!ConversationModel.isAway(g(40, content: 300), flipped: flipped))
+        #expect(!ConversationModel.isAway(g(-40, content: 300), flipped: flipped))
+        // 100 points of range: at its oldest end it is away, at its newest it isn't.
+        #expect(ConversationModel.isAway(g(100, content: 900), flipped: flipped))
+        #expect(!ConversationModel.isAway(g(0, content: 900), flipped: flipped))
+        #expect(!ConversationModel.isAway(g(50, content: 900), flipped: flipped))
+        #expect(ConversationModel.isAway(g(60, content: 900), flipped: flipped))
+        // A long list is away only past 120, as before.
+        #expect(!ConversationModel.isAway(g(100, content: 5_000), flipped: flipped))
+        #expect(ConversationModel.isAway(g(130, content: 5_000), flipped: flipped))
+        // Pulled past its oldest end, and past its newest.
+        #expect(ConversationModel.isAway(g(150, content: 900), flipped: flipped))
+        #expect(!ConversationModel.isAway(g(-20, content: 900), flipped: flipped))
     }
 
     /// The Mac's list keeps its place as rows come in below.
