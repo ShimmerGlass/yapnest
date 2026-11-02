@@ -54,7 +54,10 @@ extension AppDatabase {
         try writer.write { db in try Self.insert(db, message).message }
     }
 
-    static func insert(_ db: Database, _ message: Message) throws -> (message: Message, inserted: Bool) {
+    ///
+    /// - Parameter quietly: stores it without it counting as news: the chat
+    ///   keeps its place in the list and its archived state.
+    static func insert(_ db: Database, _ message: Message, quietly: Bool = false) throws -> (message: Message, inserted: Bool) {
         var message = message
         if let existing = try duplicate(of: message, db) {
             return (try confirm(existing, serverId: message.serverId, db), false)
@@ -62,6 +65,7 @@ extension AppDatabase {
         try refreshAddressesMe(db, &message)
         try message.insert(db)
         try refreshReplies(db, toOutgoing: message)
+        if quietly { return (message, true) }
         // Older history leaves a chat where it is in the list, so it only
         // moves one that has no place yet: one restored from the archive.
         // Its newest message is when it last had news, and it mustn't sort

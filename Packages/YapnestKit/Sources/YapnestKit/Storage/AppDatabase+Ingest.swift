@@ -6,6 +6,9 @@ import GRDB
 public struct IngestResult: Sendable, Equatable {
     /// A message stored for the first time.
     public var newMessage: Message?
+    /// The placeholder kept for a correction held for its device's check,
+    /// whose original is stored. It is not news: nothing announces it.
+    public var heldPlaceholder: Message?
     /// The file the new message carries, not downloaded yet.
     public var newAttachment: Attachment?
     /// A message we hold that an incoming correction just changed, so that a
@@ -125,10 +128,13 @@ extension AppDatabase {
         // by applying the correction once the device is vouched for. Not
         // when the original was deleted: the correction could never apply,
         // and its placeholder would sit beside the tombstone.
+        // Only if the correction could apply once decrypted: from the original's
+        // author, and without changing how it was protected.
         let original = try inbound.correctionOf.flatMap { try Self.referencedMessage(db, conversationId: conversationId, id: $0) }
-        if let original, !(inbound.heldForCheck && inbound.encryption == .omemoUndecryptable && !original.isRetracted) {
-            return result
-        }
+        let keepsAsPlaceholder = inbound.heldForCheck && inbound.encryption == .omemoUndecryptable
+            && original.map { Self.mayEdit($0.direction == .outgoing, by: $0.author, from: inbound.author, outgoing: inbound.isOutgoing, room: room)
+                && !$0.isRetracted && $0.encryption == .omemo } == true
+        if original != nil, !keepsAsPlaceholder { return result }
 
         // A second correction of a message we still don't have changes the
         // stand-in of the first, not a message of its own.
@@ -200,9 +206,15 @@ extension AppDatabase {
             message.isMarkable = inbound.isMarkable && !inbound.isOutgoing && !inbound.isGroupChat
             let file = AttachmentLink.parse(body: body, oob: inbound.oobURL, allowsInsecure: allowsInsecureLinks)
             if file != nil { message.link = nil }
-            let (insertedMessage, inserted) = try Self.insert(db, message)
+            // The device that can decrypt the correction sees only an edit, so
+            // its placeholder mustn't move the chat, unarchive it, count as
+            // unread or notify.
+            if keepsAsPlaceholder { message.isRead = true }
+            let (insertedMessage, inserted) = try Self.insert(db, message, quietly: keepsAsPlaceholder)
             var stored = insertedMessage
-            if inserted {
+            if inserted, keepsAsPlaceholder {
+                result.heldPlaceholder = stored
+            } else if inserted {
                 result.newMessage = stored
                 if let file {
                     var attachment = Attachment(

@@ -27,7 +27,7 @@ extension XMPPSession {
     /// device, in the app. The extensions only store: the check is a round
     /// trip to another server, and the app picks it up on connecting.
     private func keep(_ held: HeldStanza, for result: IngestResult) {
-        guard let messageId = result.newMessage?.id else { return }
+        guard let messageId = (result.newMessage ?? result.heldPlaceholder)?.id else { return }
         do {
             try database.hold(
                 messageId: messageId, sender: held.sender, deviceId: held.device, stanza: held.stanza,

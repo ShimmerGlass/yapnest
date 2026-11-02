@@ -462,6 +462,58 @@ struct HeldGroupMessageSessionTests {
         #expect(try stored("g0").editedAt != nil)
     }
 
+    @Test func aHeldCorrectionPlaceholderLeavesAnArchivedChatWhereItWas() async throws {
+        let device = try OtherDevice(account: bob)
+        try storeOriginal("g0", "cake at four")
+        let conversation = try database.conversation(with: room, kind: .groupchat).id!
+        let longAgo = Date(timeIntervalSince1970: 1_000_000)
+        try database.setArchived(true, conversationId: conversation, at: Date().addingTimeInterval(-3600))
+        try await database.writer.write { db in
+            try YapnestKit.Conversation.filter(key: conversation).updateAll(db, Column("lastActivityAt").set(to: longAgo))
+            try YapnestKit.Message.updateAll(db, Column("isRead").set(to: true))
+        }
+        bobsServer(list: .error("remote-server-timeout", "wait"))
+
+        try roomSays("g1", "cake at five", from: device, replacing: "g0")
+
+        let placeholder = try stored("g1")
+        #expect(placeholder.encryption == .omemoUndecryptable)
+        #expect(placeholder.isRead)
+        #expect(held.map(\.messageId) == [placeholder.id])
+        let chat = try #require(try await database.reader.read { try YapnestKit.Conversation.fetchOne($0, key: conversation) })
+        #expect(chat.isArchived)
+        #expect(chat.lastActivityAt == longAgo)
+        let unread = try await database.unreadCount()
+        #expect(unread == 0)
+
+        bobsServer(list: .ids([device.device]), identityKey: device.identityKey)
+        session.resolveHeldGroupMessages()
+        await eventually("the correction to be applied") { (try? stored("g0").body) == "cake at five" }
+
+        let after = try #require(try await database.reader.read { try YapnestKit.Conversation.fetchOne($0, key: conversation) })
+        #expect(after.isArchived)
+        #expect(after.lastActivityAt == longAgo)
+        let unreadAfter = try await database.unreadCount()
+        #expect(unreadAfter == 0)
+        #expect(messageCount == 1)
+    }
+
+    @Test func aHeldCorrectionOfSomeoneElsesMessageStoresNothing() async throws {
+        let device = try OtherDevice(account: bob)
+        let conversation = try database.conversation(with: room, kind: .groupchat).id!
+        _ = try database.insert(YapnestKit.Message(
+            conversationId: conversation, direction: .incoming, sender: YapnestKit.JID("carol@example.org")!, nick: "Carol", body: "cake at four",
+            timestamp: Date().addingTimeInterval(-60), encryption: .omemo, remoteId: "g0",
+        ))
+        bobsServer(list: .error("remote-server-timeout", "wait"))
+
+        try roomSays("g1", "cake at five", from: device, replacing: "g0")
+
+        #expect(held.isEmpty)
+        #expect(copies("g1") == 0)
+        #expect(messageCount == 1)
+    }
+
     @Test func aHeldCorrectionWhoseDeviceIsNotVouchedForLeavesAPlaceholder() async throws {
         let device = try OtherDevice(account: bob)
         try storeOriginal("g0", "cake at four")
