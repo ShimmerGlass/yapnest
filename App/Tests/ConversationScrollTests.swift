@@ -236,7 +236,9 @@ struct ConversationScrollTests {
         #expect(ConversationModel.isAway(g(100, content: 900), flipped: flipped))
         #expect(!ConversationModel.isAway(g(0, content: 900), flipped: flipped))
         #expect(!ConversationModel.isAway(g(50, content: 900), flipped: flipped))
-        #expect(ConversationModel.isAway(g(60, content: 900), flipped: flipped))
+        #expect(!ConversationModel.isAway(g(90, content: 900), flipped: flipped))
+        // 10 points of range, at rest a few points short of the newest message.
+        #expect(!ConversationModel.isAway(g(6, content: 810), flipped: flipped))
         // A long list is away only past 120, as before.
         #expect(!ConversationModel.isAway(g(100, content: 5_000), flipped: flipped))
         #expect(ConversationModel.isAway(g(130, content: 5_000), flipped: flipped))

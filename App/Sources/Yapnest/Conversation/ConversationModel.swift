@@ -2064,19 +2064,19 @@ final class ConversationModel {
         observeMessages()
     }
 
-    /// Past 120 points, or past the whole range of a list that scrolls by
-    /// less: its oldest end is as far from the newest message as the list can
-    /// go, and reading there must not count as near the bottom. It did, and a
-    /// release followed the bottom, or a row arriving there pushed what was on
-    /// screen (#229). A list that fits is near wherever it is pulled, as its
-    /// distance from the oldest end is then negative and would count as away;
-    /// one that scrolls, pulled past its oldest end, is away, as it is on the
-    /// way back.
+    /// Past 120 points, or at the oldest end of a list that scrolls by less:
+    /// that end is as far from the newest message as the list can go, and
+    /// reading there must not count as near the bottom. It did, and a release
+    /// followed the bottom, or a row arriving there pushed what was on screen
+    /// (#229). Anywhere short of that end such a list stays near, as one that
+    /// comes to rest a few points from its newest message must. A list that
+    /// fits is near wherever it is pulled; one that scrolls, pulled past its
+    /// oldest end, is away, as it is on the way back.
     static func isAway(_ geometry: ScrollGeometry, flipped: Bool) -> Bool {
         let fromBottom = distanceFromBottom(geometry, flipped: flipped)
         let fromTop = distanceFromTop(geometry, flipped: flipped)
         guard fromBottom + fromTop > 1.5 else { return false }
-        return fromBottom > min(120, fromTop)
+        return fromBottom > 120 || (fromTop <= 1.5 && fromBottom > 1.5)
     }
 
     /// How far the list is from its newest message, as the user sees it:
