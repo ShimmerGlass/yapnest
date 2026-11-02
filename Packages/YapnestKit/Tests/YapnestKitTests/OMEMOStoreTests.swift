@@ -103,6 +103,41 @@ struct OMEMOStoreTests {
         #expect(reopened.currentPreKeyId() == 2)
     }
 
+    /// The protocol answers a failed read with 0, which the module takes as
+    /// "none used" and numbers its new keys from 1, over live ones.
+    @Test func aFailedReadNeverLetsPreKeyIdsStartOverLiveKeys() throws {
+        let database = try AppDatabase.inMemory()
+        let store = OMEMOStore(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        #expect(store.storePreKey(Data([1]), withId: 1))
+        #expect(store.storePreKey(Data([2]), withId: 5))
+        try database.writer.write { try $0.execute(sql: "ALTER TABLE omemoPreKey RENAME TO omemoPreKeyAside") }
+        #expect(store.currentPreKeyId() == 5, "the highest seen, not 0")
+        try database.writer.write { try $0.execute(sql: "ALTER TABLE omemoPreKeyAside RENAME TO omemoPreKey") }
+        #expect(store.currentPreKeyId() == 5)
+    }
+
+    @Test func withNoIdKnownAFailedReadRefusesNewPreKeysUntilOneSucceeds() throws {
+        let database = try AppDatabase.inMemory()
+        let first = OMEMOStore(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        #expect(first.storePreKey(Data([1]), withId: 7))
+        let store = OMEMOStore(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        try database.writer.write { try $0.execute(sql: "ALTER TABLE omemoPreKey RENAME TO omemoPreKeyAside") }
+        #expect(store.currentPreKeyId() == 0)
+        try database.writer.write { try $0.execute(sql: "ALTER TABLE omemoPreKeyAside RENAME TO omemoPreKey") }
+        #expect(!store.storePreKey(Data([9]), withId: 1), "1 may be in use")
+        #expect(store.loadPreKey(withId: 1) == nil)
+        #expect(store.currentPreKeyId() == 7)
+        #expect(store.storePreKey(Data([9]), withId: 8))
+    }
+
+    @Test func aSignedPreKeyIdIsNeverOverwrittenWithOtherData() throws {
+        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
+        #expect(store.storeSignedPreKey(Data([1]), withId: 3))
+        #expect(store.storeSignedPreKey(Data([1]), withId: 3), "the same key again is a success")
+        #expect(!store.storeSignedPreKey(Data([2]), withId: 3))
+        #expect(store.loadSignedPreKey(withId: 3) == Data([1]))
+    }
+
     @Test func identityIsCreatedOnceAndPersists() throws {
         let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
         let first = try OMEMOEncryption(database: database, account: me, identityKeys: keys)

@@ -34,6 +34,14 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// The addresses whose identity, if first seen now, is saved undecided:
     /// see `admittingUndecided`. Guarded by `lock`.
     private var undecidedAddresses: [SignalAddress: Int] = [:]
+    /// The highest prekey id known to be used, as read or stored. Guarded by
+    /// `lock`. Martin's protocol can't report a failed read, only an id, so
+    /// this is what a read that fails falls back on rather than 0.
+    private var preKeyHighWater: UInt32?
+    /// Set when `currentPreKeyId` could not read and had no mark to answer
+    /// with, so it answered 0 and the ids the caller makes from it may be in
+    /// use. `storePreKey` refuses until a read succeeds. Guarded by `lock`.
+    private var preKeyIdUnknown = false
 
     private struct SessionBatch {
         /// As read when the send began.
@@ -435,12 +443,27 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// flush removes the used ones, and the next batch would reuse an id a
     /// contact may still pick from an older bundle, so their message would
     /// fail on the wrong key rather than as an unknown one.
+    ///
+    /// The protocol has no way to say the read failed, and 0 means none are
+    /// used: the next batch would start at 1 over live keys. So a failed read
+    /// answers with the highest id seen so far, and with no id seen yet it
+    /// answers 0 and makes `storePreKey` refuse until a read succeeds.
     func currentPreKeyId() -> UInt32 {
-        (read { db in
+        let read = read { db in
             let left = try UInt32.fetchOne(db, sql: "SELECT MAX(id) FROM omemoPreKey") ?? 0
             let made = try Self.lastPreKeyId(db)
             return max(left, made)
-        }) ?? 0
+        }
+        return lock.withLock {
+            guard let read else {
+                if preKeyHighWater == nil { preKeyIdUnknown = true }
+                return preKeyHighWater ?? 0
+            }
+            preKeyIdUnknown = false
+            let mark = max(preKeyHighWater ?? 0, read)
+            preKeyHighWater = mark
+            return mark
+        }
     }
 
     /// A prekey libsignal has deleted stays readable until
@@ -464,11 +487,15 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func storePreKey(_ data: Data, withId id: UInt32) -> Bool {
-        write { db in
+        // The id came from a number that was a guess, so it may be one in use.
+        guard !lock.withLock({ preKeyIdUnknown }) else { return false }
+        let stored = write { db in
             try db.execute(sql: "INSERT OR REPLACE INTO omemoPreKey (id, data, isDeleted) VALUES (?, ?, 0)", arguments: [id, data])
             let made = try Self.lastPreKeyId(db)
             if id > made { try AppDatabase.setSetting(db, .omemoLastPreKeyId, String(id)) }
         }
+        if stored { lock.withLock { preKeyHighWater = max(preKeyHighWater ?? 0, id) } }
+        return stored
     }
 
     func containsPreKey(withId id: UInt32) -> Bool {
@@ -532,8 +559,15 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         write { db in try Self.storeSignedPreKey(data, withId: id, at: now(), in: db) }
     }
 
+    /// Never over a different key under the same id: a contact's session may
+    /// be built on the one stored, and the bundle names keys by id. The same
+    /// key again changes nothing, not even its date.
     private static func storeSignedPreKey(_ data: Data, withId id: UInt32, at date: Date, in db: Database) throws {
-        try db.execute(sql: "INSERT OR REPLACE INTO omemoSignedPreKey (id, data, createdAt) VALUES (?, ?, ?)", arguments: [id, data, date])
+        if let stored = try Data.fetchOne(db, sql: "SELECT data FROM omemoSignedPreKey WHERE id = ?", arguments: [id]) {
+            guard stored == data else { throw OMEMOError.signedPreKeyIdInUse }
+            return
+        }
+        try db.execute(sql: "INSERT INTO omemoSignedPreKey (id, data, createdAt) VALUES (?, ?, ?)", arguments: [id, data, date])
     }
 
     func containsSignedPreKey(withId id: UInt32) -> Bool {
@@ -854,6 +888,7 @@ extension AppDatabase {
 enum OMEMOError: Error {
     case keyGenerationFailed
     case identityChanged
+    case signedPreKeyIdInUse
     /// The keychain took the identity but gave back something else.
     case identityNotStored
 }

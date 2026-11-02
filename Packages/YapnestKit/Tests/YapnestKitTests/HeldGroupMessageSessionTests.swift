@@ -1,4 +1,5 @@
 import Foundation
+import os
 import GRDB
 @preconcurrency import Martin
 @preconcurrency @testable import MartinOMEMO
@@ -11,10 +12,15 @@ private let room = YapnestKit.JID("cake@rooms.example.org")!
 /// The device the room says Bob's message came from.
 private let named: Int32 = 777
 
+private let nextFixtureKeyId = OSAllocatedUnfairLock(initialState: UInt32(4242))
+
 /// A session from `builder` to `owner`'s device, started from a bundle of the
-/// keys `owner` would publish. Returns the owner's address.
+/// keys `owner` would publish. Returns the owner's address. Each bundle has
+/// ids of its own by default, as the store refuses a different signed prekey
+/// under an id it holds.
 @discardableResult
-func startSession(from builder: OMEMOEncryption, to owner: OMEMOEncryption, named name: String, keyId: UInt32 = 4242) throws -> SignalAddress {
+func startSession(from builder: OMEMOEncryption, to owner: OMEMOEncryption, named name: String, keyId: UInt32? = nil) throws -> SignalAddress {
+    let keyId = keyId ?? nextFixtureKeyId.withLock { defer { $0 += 1 }; return $0 }
     let context = owner.module.signalContext, storage = owner.module.storage
     let pair = try #require(storage.identityKeyStore.keyPair())
     let signed = try #require(context.generateSignedPreKey(withIdentity: pair, signedPreKeyId: keyId))
