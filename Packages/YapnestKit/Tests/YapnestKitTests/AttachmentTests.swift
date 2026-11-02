@@ -242,6 +242,41 @@ struct AttachmentTests {
         #expect((try? FileManager.default.contentsOfDirectory(atPath: store.directory.path))?.isEmpty ?? true)
     }
 
+    @Test func aCancelledImportIsACancellationNotAFileThatCantBeSent() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "video-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appending(path: "clip.mov")
+        try Data("not a movie".utf8).write(to: source)
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        let task = Task {
+            // Cancelled before it starts, so whatever the export reports is a cancellation.
+            while !Task.isCancelled { await Task.yield() }
+            return try await store.importFile(at: source, name: "clip.mov", asPhoto: false)
+        }
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect((try? FileManager.default.contentsOfDirectory(atPath: store.directory.path))?.isEmpty ?? true)
+    }
+
+    @Test func importFailuresMapToWhatTheUserCanDoSomethingAbout() {
+        let cancelled: [Error] = [
+            CancellationError(), URLError(.cancelled), NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError),
+        ]
+        for error in cancelled {
+            #expect(AttachmentStore.importFailure(error) is CancellationError)
+        }
+        let full: [Error] = [
+            CocoaError(.fileWriteOutOfSpace), POSIXError(.ENOSPC),
+            NSError(domain: AVFoundationErrorDomain, code: -11800, userInfo: [NSUnderlyingErrorKey: POSIXError(.ENOSPC) as NSError]),
+        ]
+        for error in full {
+            #expect(AttachmentStore.importFailure(error) as? XMPPSession.AttachmentError == .unreadable)
+        }
+        #expect(AttachmentStore.importFailure(AttachmentStore.MetadataError()) as? XMPPSession.AttachmentError == .cantBeSent)
+        #expect(AttachmentStore.importFailure(URLError(.badURL)) as? XMPPSession.AttachmentError == .cantBeSent)
+    }
+
     @Test func aFileThatIsGoneIsStillUnreadable() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "video-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }

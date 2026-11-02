@@ -125,13 +125,13 @@ public final class AttachmentStore: Sendable {
             if isVideo {
                 guard FileManager.default.isReadableFile(atPath: url.path) else { throw XMPPSession.AttachmentError.unreadable }
                 // Exported straight from the user's file, rather than copied whole first.
-                do { try await Self.exportVideoWithoutMetadata(from: url, to: destination) } catch { throw XMPPSession.AttachmentError.cantBeSent }
+                do { try await Self.exportVideoWithoutMetadata(from: url, to: destination) } catch { throw Self.importFailure(error) }
             } else {
                 do { try FileManager.default.copyItem(at: url, to: destination) } catch { throw XMPPSession.AttachmentError.unreadable }
                 if Self.isImage(name: name) {
                     // Only images go to ImageIO, so a PDF or an archive isn't parsed by it.
                     // It does nothing to an image it can't read.
-                    do { try Self.stripMetadata(fromImageAt: destination) } catch { throw XMPPSession.AttachmentError.cantBeSent }
+                    do { try Self.stripMetadata(fromImageAt: destination) } catch { throw Self.importFailure(error) }
                 }
             }
         } catch {
@@ -149,6 +149,34 @@ public final class AttachmentStore: Sendable {
     }
 
     struct MetadataError: Error {}
+
+    /// What a failure to export a video or strip an image means to the user.
+    /// A cancellation is not a failure and is passed on as it is. A full disk
+    /// is not the file's fault, so it reads as one that couldn't be written,
+    /// not as a kind that can't be sent.
+    static func importFailure(_ error: Error) -> Error {
+        if Task.isCancelled || isCancellation(error) { return error is CancellationError ? error : CancellationError() }
+        if isOutOfSpace(error) { return XMPPSession.AttachmentError.unreadable }
+        return XMPPSession.AttachmentError.cantBeSent
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let ns = error as NSError
+        switch (ns.domain, ns.code) {
+        case (NSURLErrorDomain, NSURLErrorCancelled), (NSCocoaErrorDomain, NSUserCancelledError): return true
+        default: return false
+        }
+    }
+
+    private static func isOutOfSpace(_ error: Error) -> Bool {
+        let ns = error as NSError
+        switch (ns.domain, ns.code) {
+        case (NSCocoaErrorDomain, NSFileWriteOutOfSpaceError): return true
+        case (NSPOSIXErrorDomain, Int(ENOSPC)): return true
+        default: return (ns.userInfo[NSUnderlyingErrorKey] as? Error).map(isOutOfSpace) ?? false
+        }
+    }
 
     /// A name for the rewritten file beside `url`, so it can replace it in place.
     private static func siblingTemporary(of url: URL) -> URL {
