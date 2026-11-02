@@ -436,7 +436,6 @@ extension XMPPSession {
     func clearRooms() {
         lock.withLock { $0.pendingIntroductions = [:] }
         cancelAllRejoins()
-        rosterReset()
         publish(rooms, under: roomsPublishLock, after: { gone in
             for room in gone { roomUpdates.send(RoomUpdate(room: room, status: nil)) }
         }) { state -> (result: [JID], snapshot: [JID: RoomStatus]?) in
@@ -475,7 +474,6 @@ extension XMPPSession {
             started = true
         }
         guard started else { return }
-        rosterJoinStarted(room)
         cancelRejoin(room)
         guard discover else {
             sendJoin(room, nickname: nickname, hasArchive: false)
@@ -582,7 +580,7 @@ extension XMPPSession {
                     if let participantsMayChangeSubject { $0?.participantsMayChangeSubject = participantsMayChangeSubject }
                 }
                 self.roomAvatarAnnounced(room, form: info.form)
-                if let before, before.isNonAnonymous != features.contains("muc_nonanonymous") {
+                if let before, let after = try? self.database.groupChat(room), before.isPrivate != after.isPrivate {
                     self.rosterKeysChanged(room, isJoined: self.roomStatus(room)?.isJoined == true)
                 }
                 self.roomInfoChanged(room, from: before)
@@ -686,9 +684,7 @@ extension XMPPSession {
                     if isSelf { status?.nickname = newNick }
                 }
             }
-            if !isSelf {
-                rosterDeparted(room, nick: nick, jid: itemJID, statuses: statuses, newNick: newNick, ownNick: status.nickname, isJoined: status.phase == .joined)
-            }
+            if !isSelf { rosterRemoved(room, jid: itemJID, statuses: statuses) }
             // Our own change of nickname is read at once by what follows it.
             if isSelf { updateRoom(room, leave) } else { updateOccupants(room, leave) }
             return
@@ -718,7 +714,6 @@ extension XMPPSession {
         // Someone else's arrival waits for the others'; ours ends the join, so it
         // comes after, and applies those first.
         guard isSelf else {
-            rosterArrived(room, nick: nick, jid: occupant.jid, ownNick: status.nickname, isJoined: status.phase == .joined)
             updateOccupants(room, arrive)
             return
         }
@@ -818,11 +813,7 @@ extension XMPPSession {
     /// The statuses that say an occupant was taken out of the room (XEP-0045 §8).
     static let removalStatuses: Set<Int> = [301, 307, 321, 322, 332, 333]
 
-    /// What takes another occupant out of the room for good or for now, so
-    /// that it counts at once. 332 and 333 are left out: they are temporary.
-    static let departureStatuses = removalStatuses.subtracting([332, 333])
-
-    /// Of those, what also takes their membership: a kick (307) leaves it.
+    /// Of those, what takes membership: a kick (307) leaves it.
     static let membershipEndStatuses: Set<Int> = [301, 321, 322]
 
     /// Only a restart of the room's service (332) or a technical failure
@@ -972,9 +963,6 @@ extension XMPPSession {
         if statuses.contains(301) || statuses.contains(321) || statuses.contains(322) {
             markLeft(room, owingBookmark: true)
             sendOwedBookmarks()
-        } else {
-            // Those who leave while we are out are compared with on the rejoin.
-            rosterJoinStarted(room)
         }
     }
 
@@ -1085,15 +1073,16 @@ extension XMPPSession {
     /// is warned that encrypted messages may miss members.
     func fetchMembers(_ room: JID, lists: [RoomAffiliation], then done: (@Sendable () -> Void)? = nil) {
         Task { [weak self] in
-            let listed = await self?.fetchMembersWarning(room, lists: lists) ?? false
+            let listed = await self?.fetchMembersWarning(room, lists: lists)
             // After the lists, which `listReceived` has told the roster of.
-            if listed { self?.rosterListingDone(room) }
+            // A fetch of fewer than all three can't tell who is gone.
+            if let listed, Set(lists).isSuperset(of: Self.memberLists) { self?.rosterListingDone(room, members: listed) }
             done?()
         }
     }
 
-    /// Whether the member lists all came.
-    private func fetchMembersWarning(_ room: JID, lists: [RoomAffiliation]) async -> Bool {
+    /// Who the member lists name together, if they all came.
+    private func fetchMembersWarning(_ room: JID, lists: [RoomAffiliation]) async -> [JID]? {
         let attempt = lock.withLock { $0.attempt }
         let key = "room-members:\(room)"
         let members = lists.filter(Self.memberLists.contains)
@@ -1101,7 +1090,8 @@ extension XMPPSession {
         // and shows what goes wrong.
         let others = lists.filter { !Self.memberLists.contains($0) }
         if !others.isEmpty { try? await requestLists(others, of: room) }
-        guard !members.isEmpty else { return false }
+        guard !members.isEmpty else { return nil }
+        let named = OSAllocatedUnfairLock(initialState: [JID]())
         let outcome = await warnings.attempt(
             key, title: String(localized: "Encrypted messages may not reach all members"),
             friendly: String(localized: "A group's members couldn't be listed, so encrypted messages may not reach all of them"),
@@ -1114,20 +1104,25 @@ extension XMPPSession {
                 // the room's setting, and the occupants' addresses stand in.
                 return reason.condition != "forbidden"
             },
-        ) { [self] in try await requestLists(members, of: room) }
-        if case .succeeded = outcome { return true }
-        return false
+        ) { [self] in
+            let jids = try await requestLists(members, of: room)
+            named.withLock { $0 = jids }
+        }
+        if case .succeeded = outcome { return named.withLock { $0 } }
+        return nil
     }
 
     /// Asks for each list, all of them even when one fails, and throws the
-    /// first failure.
-    private func requestLists(_ lists: [RoomAffiliation], of room: JID) async throws {
+    /// first failure. Otherwise it returns everyone the lists name.
+    @discardableResult
+    private func requestLists(_ lists: [RoomAffiliation], of room: JID) async throws -> [JID] {
+        let named = OSAllocatedUnfairLock(initialState: [JID]())
         let failure = await withTaskGroup(of: Error?.self) { group in
             for affiliation in lists {
                 group.addTask { [self] in
                     do {
                         let response = try await retryingPassingErrors { try await client.context.writer.write(iq: OutboundStanza.affiliationList(affiliation, of: room)) }
-                        listReceived(affiliation, in: room, response)
+                        named.withLock { $0 += listReceived(affiliation, in: room, response) }
                         return nil
                     } catch {
                         return error
@@ -1139,9 +1134,11 @@ extension XMPPSession {
             return first
         }
         if let failure { throw failure }
+        return named.withLock { $0 }
     }
 
-    func listReceived(_ affiliation: RoomAffiliation, in room: JID, _ response: Iq) {
+    @discardableResult
+    func listReceived(_ affiliation: RoomAffiliation, in room: JID, _ response: Iq) -> [JID] {
         let jids = response.firstChild(name: "query", xmlns: NS.mucAdmin)?.filterChildren(name: "item", xmlns: nil)
             .compactMap { $0.getAttribute("jid").flatMap(JID.init(_:)) } ?? []
         updateRoom(room) { status in
@@ -1150,6 +1147,7 @@ extension XMPPSession {
             for jid in jids { status?.setAffiliation(affiliation, of: jid) }
         }
         if affiliation.isMember { rosterListed(room, members: jids) }
+        return jids
     }
 
     // MARK: Room archive

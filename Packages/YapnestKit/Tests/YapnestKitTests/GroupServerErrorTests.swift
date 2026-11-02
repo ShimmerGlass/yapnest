@@ -576,6 +576,74 @@ struct MemberListFailureTests {
 
         #expect(warningKeys(session).isEmpty)
     }
+
+    private func serve(_ lists: [String: [String]], failing: Set<String> = []) {
+        answer { iq, _ in
+            let affiliation = iq.firstChild(name: "query")?.firstChild(name: "item")?.getAttribute("affiliation") ?? ""
+            if failing.contains(affiliation) { return forbidden(iq) }
+            let query = Element(name: "query", xmlns: "http://jabber.org/protocol/muc#admin")
+            for jid in lists[affiliation] ?? [] {
+                query.addChild(Element(name: "item", attributes: ["jid": jid, "affiliation": affiliation]))
+            }
+            return FakeWire.result(to: iq, query)
+        }
+    }
+
+    private func rosterLines() throws -> [MessageEvent] {
+        try session.database.reader.read { db in
+            try YapnestKit.Message.filter(Column("event") != nil).order(Column("id")).fetchAll(db).map { $0.event! }
+        }
+    }
+
+    private func countMembers(of lists: [String: [String]]) async throws {
+        try session.database.updateGroupChat(room) {
+            $0.isMembersOnly = true
+            $0.isNonAnonymous = true
+        }
+        session.rosterSelfJoined(room)
+        session.settleRoster()
+        serve(lists)
+        await fetch(lists: XMPPSession.memberLists)
+        session.settleRoster()
+    }
+
+    @Test func aCompleteListingThatNoLongerNamesACountedMemberWritesOneLeftLine() async throws {
+        try await countMembers(of: ["owner": ["me@example.org"], "member": ["alice@example.org", "bob@example.org"]])
+        #expect(try rosterLines().isEmpty, "the first complete listing is the baseline")
+
+        serve(["owner": ["me@example.org"], "member": ["alice@example.org"]])
+        await fetch(lists: XMPPSession.memberLists)
+        session.settleRoster()
+        #expect(try rosterLines() == [.leftGroup])
+
+        await fetch(lists: XMPPSession.memberLists)
+        session.settleRoster()
+        #expect(try rosterLines() == [.leftGroup], "and is not told again")
+    }
+
+    @Test func aMemberNamedByAnotherListThanTheirOwnIsNotGone() async throws {
+        try await countMembers(of: ["admin": ["bob@example.org"], "member": ["alice@example.org"]])
+        serve(["owner": ["bob@example.org"], "member": ["alice@example.org"]])
+        await fetch(lists: XMPPSession.memberLists)
+        session.settleRoster()
+        #expect(try rosterLines().isEmpty, "absence is judged on the union of the lists")
+    }
+
+    @Test func aListingWhereOneListFailedJudgesNobodyAbsent() async throws {
+        try await countMembers(of: ["admin": ["bob@example.org"], "member": ["alice@example.org"]])
+        serve(["member": ["alice@example.org"]], failing: ["admin"])
+        await fetch(lists: XMPPSession.memberLists)
+        session.settleRoster()
+        #expect(try rosterLines().isEmpty, "bob may be in the list that failed")
+    }
+
+    @Test func aFetchOfOnlySomeOfTheMemberListsJudgesNobodyAbsent() async throws {
+        try await countMembers(of: ["admin": ["bob@example.org"], "member": ["alice@example.org"]])
+        serve(["member": ["alice@example.org"]])
+        await fetch(lists: [.member])
+        session.settleRoster()
+        #expect(try rosterLines().isEmpty)
+    }
 }
 
 // MARK: Moderation and settings
