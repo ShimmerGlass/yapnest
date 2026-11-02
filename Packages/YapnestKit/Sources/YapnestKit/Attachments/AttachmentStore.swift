@@ -118,22 +118,25 @@ public final class AttachmentStore: Sendable {
         let file = Self.freshName(keeping: storedName)
         let destination = directory.appending(path: file)
         // Better to refuse a file than to send one that still says where it
-        // was made.
+        // was made. A file that can be read but not rewritten is refused as a
+        // kind that can't be sent, so the user isn't told to look for a fault
+        // in a file that is fine.
         do {
             if isVideo {
+                guard FileManager.default.isReadableFile(atPath: url.path) else { throw XMPPSession.AttachmentError.unreadable }
                 // Exported straight from the user's file, rather than copied whole first.
-                try await Self.exportVideoWithoutMetadata(from: url, to: destination)
+                do { try await Self.exportVideoWithoutMetadata(from: url, to: destination) } catch { throw XMPPSession.AttachmentError.cantBeSent }
             } else {
-                try FileManager.default.copyItem(at: url, to: destination)
+                do { try FileManager.default.copyItem(at: url, to: destination) } catch { throw XMPPSession.AttachmentError.unreadable }
                 if Self.isImage(name: name) {
                     // Only images go to ImageIO, so a PDF or an archive isn't parsed by it.
                     // It does nothing to an image it can't read.
-                    try Self.stripMetadata(fromImageAt: destination)
+                    do { try Self.stripMetadata(fromImageAt: destination) } catch { throw XMPPSession.AttachmentError.cantBeSent }
                 }
             }
         } catch {
             try? FileManager.default.removeItem(at: destination)
-            throw XMPPSession.AttachmentError.unreadable
+            throw error
         }
         var dimensions: (width: Int, height: Int)?
         let duration = AudioFormat.isAudio(mimeType: nil, name: name) ? AudioWaveform.duration(of: destination) : nil

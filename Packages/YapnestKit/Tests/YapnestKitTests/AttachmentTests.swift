@@ -228,6 +228,31 @@ struct AttachmentTests {
         #expect(try await hasLocation(source))
     }
 
+    @Test func aVideoThatCantBeExportedIsRefusedAsAKindThatCantBeSent() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "video-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appending(path: "clip.mov")
+        try Data("not a movie".utf8).write(to: source)
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        await #expect(throws: XMPPSession.AttachmentError.cantBeSent) {
+            _ = try await store.importFile(at: source, name: "clip.mov", asPhoto: false)
+        }
+        // Nothing half-written is left in the store.
+        #expect((try? FileManager.default.contentsOfDirectory(atPath: store.directory.path))?.isEmpty ?? true)
+    }
+
+    @Test func aFileThatIsGoneIsStillUnreadable() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "video-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        for name in ["clip.mov", "pic.png"] {
+            await #expect(throws: XMPPSession.AttachmentError.unreadable) {
+                _ = try await store.importFile(at: directory.appending(path: name), name: name, asPhoto: false)
+            }
+        }
+    }
+
     @Test func aPhotoSentAsAFileLosesItsCameraDetailsButKeepsItsOrientation() async throws {
         let data = cameraImageData(.jpeg, withLocation: true)
         let imported = try await withImportedFile(data, name: "IMG_3.jpg") { stored in

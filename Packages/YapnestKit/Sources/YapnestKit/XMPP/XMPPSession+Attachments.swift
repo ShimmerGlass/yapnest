@@ -29,8 +29,11 @@ extension XMPPSession {
     /// link would be fetched again and again.
     static let autoDownloadAttemptLimit = 3
 
-    public enum AttachmentError: Error, LocalizedError {
+    public enum AttachmentError: Error, LocalizedError, Equatable {
         case unreadable
+        /// A video or image whose location and camera details couldn't be
+        /// taken out, such as a RAW photo or a video AVFoundation can't export.
+        case cantBeSent
         case noUploadService
         /// `max` is what the server said it takes, if it did.
         case tooLarge(max: Int?)
@@ -39,6 +42,7 @@ extension XMPPSession {
         public var errorDescription: String? {
             switch self {
             case .unreadable: String(localized: "The file couldn't be read.")
+            case .cantBeSent: String(localized: "This kind of file can't be sent, as its location and camera details can't be taken out of it.")
             case .noUploadService: String(localized: "Your server doesn't support sending files.")
             case .tooLarge(let max?):
                 String(localized: "The file is too large. Your server accepts up to \(ByteCountFormatter.string(fromByteCount: Int64(max), countStyle: .file)).")
