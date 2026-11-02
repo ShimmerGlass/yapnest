@@ -379,9 +379,8 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     /// The devices of `name` we hold a session with. Never this install's own,
-    /// which has none: see `dropRowsOfOwnDevice`.
+    /// which has none: see `storeSessionRecord` and `dropRowsOfOwnDevice`.
     func allDevices(for name: String, activeAndTrusted: Bool) -> [Int32] {
-        let local = Int32(bitPattern: localRegistrationId())
         let devices: [Int32]? = read { db in
             if activeAndTrusted {
                 let usable = [IdentityStatus.trustedActive, .verifiedActive].map(\.rawValue)
@@ -393,10 +392,13 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
             }
             return try Int32.fetchAll(db, sql: "SELECT deviceId FROM omemoSession WHERE name = ?", arguments: [name])
         }
-        return (devices ?? []).filter { name != account || $0 != local }
+        return devices ?? []
     }
 
+    /// A send's batch stores through here too, so refusing our own device
+    /// keeps its session out of the table whichever way it is written.
     func storeSessionRecord(_ data: Data, forAddress address: SignalAddress) -> Bool {
+        guard !isLocalDevice(address) else { return false }
         if batched({ $0.stored[address] = data }) { return true }
         return write { db in try Self.storeSession(data, for: address, in: db) }
     }

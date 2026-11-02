@@ -307,10 +307,20 @@ struct OMEMOStoreTests {
         #expect(try ownRows(of: omemo.deviceId, in: database) == 0)
     }
 
-    @Test func ourOwnDeviceIsNeverOneOfTheDevicesWeEncryptTo() throws {
+    @Test func aSessionForOurOwnDeviceIsNotStored() throws {
         let database = try AppDatabase.inMemory()
         let omemo = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
-        try plantRows(for: omemo.deviceId, in: database)
+        let own = SignalAddress(name: me.description, deviceId: Int32(bitPattern: omemo.deviceId))
+        #expect(!omemo.store.storeSessionRecord(Data([1]), forAddress: own))
+        #expect(!omemo.store.containsSessionRecord(forAddress: own))
+        #expect(try ownRows(of: omemo.deviceId, in: database) == 0)
+    }
+
+    @Test func ourOwnDeviceIsNeverOneOfTheDevicesWeEncryptTo() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let first = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        try plantRows(for: first.deviceId, in: database)
+        let omemo = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
         let other = SignalAddress(name: me.description, deviceId: Int32(bitPattern: omemo.deviceId) &+ 1)
         #expect(omemo.store.save(identity: other, publicKeyData: key(2)))
         #expect(omemo.store.storeSessionRecord(Data([1]), forAddress: other))
