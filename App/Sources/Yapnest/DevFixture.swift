@@ -52,6 +52,9 @@ enum DevFixture: String, CaseIterable {
     case groupEvents = "group-events"
     /// Seeded chats of every kind of content, set with `fuzz:<seed>`; see `FuzzFixture`.
     case fuzz
+    /// One chat of `fit:<count>` one-line messages, to put the height of the list's content around the
+    /// height of the view; see `fillFit`.
+    case fit
     /// Photos not downloaded yet, announced with their shapes and previews; see `PreviewsFixture`.
     case previews
     /// Newest messages that grow once the chat is open: photos that only say
@@ -76,7 +79,18 @@ enum DevFixture: String, CaseIterable {
 
     static var requested: DevFixture? {
         guard let name = ProcessInfo.processInfo.environment["YAPNEST_DEV_FIXTURE"] else { return nil }
-        return FuzzFixture.seed(from: name) != nil ? .fuzz : DevFixture(rawValue: name)
+        if FuzzFixture.seed(from: name) != nil { return .fuzz }
+        return fitCount(from: name) != nil ? .fit : DevFixture(rawValue: name)
+    }
+
+    static let fitPeer = JID("fit@fixture.test")!
+    /// The words the oldest message of a `fit` chat has.
+    static let fitOldest = "Fit message 01."
+
+    /// `fit:<count>`.
+    static func fitCount(from name: String) -> Int? {
+        guard name.hasPrefix("fit:") else { return nil }
+        return Int(name.dropFirst("fit:".count))
     }
 
     /// Whether this launch runs on a fixture, which must stay offline.
@@ -100,6 +114,7 @@ enum DevFixture: String, CaseIterable {
         case .moderation: try Self.fillModeration(database)
         case .groupEvents: try Self.fillGroupEvents(database)
         case .fuzz: try FuzzFixture.requested?.fill(database)
+        case .fit: try Self.fillFit(database)
         case .previews:
             try PreviewsFixture.fill(database)
             PreviewsFixture.holdDownloads(into: database)
@@ -211,6 +226,18 @@ enum DevFixture: String, CaseIterable {
                     timestamp: time.addingTimeInterval(60), status: .displayed, isRead: true, serverId: "owned-me",
                 ))
             }
+        }
+    }
+
+    /// The count is the whole chat: a short one is as tall as the view for
+    /// some count, and the list must still reach its oldest message then.
+    private static func fillFit(_ database: AppDatabase) throws {
+        let count = ProcessInfo.processInfo.environment["YAPNEST_DEV_FIXTURE"].flatMap(fitCount(from:)) ?? 1
+        let conversation = try prepare(database, peer: fitPeer, name: "Fit")
+        var time = start
+        for index in 1...max(count, 1) {
+            time = time.addingTimeInterval(60)
+            try add(database, conversation, peer: fitPeer, body: String(format: "Fit message %02d.", index), outgoing: index % 3 == 0, at: time)
         }
     }
 
