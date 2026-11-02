@@ -416,6 +416,98 @@ struct HeldGroupMessageSessionTests {
         #expect(copies("g1") == 0)
     }
 
+    /// What a device of Bob's, not yet vouched for, writes as a correction of `target`.
+    private func roomCorrects(_ id: String, _ target: String, _ body: String, from device: OtherDevice) throws {
+        let stanza: Martin.Message = parseStanza("""
+            <message from='\(room)/Bob' type='groupchat' id='\(id)'><body>fallback</body>\
+            <replace xmlns='urn:xmpp:message-correct:0' id='\(target)'/></message>
+            """)
+        stanza.addChild(try device.encrypt(body, to: session))
+        session.handleRoomStanza(stanza, source: .live)
+    }
+
+    /// Bob's message `id`, already stored as an encrypted one.
+    @discardableResult
+    private func storeOriginal(_ id: String, _ body: String) throws -> YapnestKit.Message {
+        let conversation = try database.conversation(with: room, kind: .groupchat).id!
+        let message = YapnestKit.Message(
+            conversationId: conversation, direction: .incoming, sender: bob, nick: "Bob", body: body,
+            timestamp: Date().addingTimeInterval(-60), encryption: .omemo, remoteId: id,
+        )
+        return try database.insert(message)
+    }
+
+    private var messageCount: Int {
+        (try? database.reader.read { try YapnestKit.Message.fetchCount($0) }) ?? -1
+    }
+
+    @Test func aHeldCorrectionOfAStoredMessageAppliesOnceItsDeviceIsVouchedFor() async throws {
+        let device = try OtherDevice(account: bob)
+        try storeOriginal("g0", "cake at four")
+        bobsServer(list: .error("remote-server-timeout", "wait"))
+
+        try roomCorrects("g1", "g0", "cake at five", from: device)
+        await eventually("the list to be asked for") { requested(OMEMOModule.DEVICES_LIST_NODE) }
+
+        // Held as a placeholder, which is what its hold attaches to.
+        #expect(try stored("g1").encryption == .omemoUndecryptable)
+        #expect(held.map(\.messageId) == [try stored("g1").id])
+        #expect(try stored("g0").body == "cake at four")
+
+        bobsServer(list: .ids([device.device]), identityKey: device.identityKey)
+        session.resolveHeldGroupMessages()
+        await eventually("the correction to be applied") { (try? stored("g0").body) == "cake at five" }
+
+        #expect(held.isEmpty)
+        #expect(copies("g1") == 0, "the placeholder was left beside the message")
+        #expect(messageCount == 1)
+        #expect(try stored("g0").editedAt != nil)
+    }
+
+    @Test func aHeldCorrectionWhoseDeviceIsNotVouchedForLeavesAPlaceholder() async throws {
+        let device = try OtherDevice(account: bob)
+        try storeOriginal("g0", "cake at four")
+        bobsServer(list: .ids([111]))
+
+        try roomCorrects("g1", "g0", "cake at five", from: device)
+        await eventually("the hold to be dropped") { held.isEmpty && requested(OMEMOModule.DEVICES_LIST_NODE) }
+
+        #expect(try stored("g1").encryption == .omemoUndecryptable)
+        #expect(try stored("g0").body == "cake at four")
+    }
+
+    @Test func aHeldCorrectionOfADeletedMessageStoresNothing() async throws {
+        let device = try OtherDevice(account: bob)
+        let id = try storeOriginal("g0", "cake at four").id!
+        try await database.writer.write { db in
+            var original = try YapnestKit.Message.fetchOne(db, key: id)!
+            _ = try AppDatabase.retract(db, &original)
+        }
+        bobsServer(list: .error("remote-server-timeout", "wait"))
+        // Nothing is stored, so there is no hold and no device check to wait for.
+
+        try roomCorrects("g1", "g0", "cake at five", from: device)
+
+        #expect(held.isEmpty)
+        #expect(copies("g1") == 0)
+        #expect(messageCount == 1)
+    }
+
+    @Test func anUndecryptableCorrectionThatIsNotHeldStoresNothing() throws {
+        try storeOriginal("g0", "cake at four")
+
+        session.handleRoomStanza(parseStanza("""
+            <message from='\(room)/Bob' type='groupchat' id='g1'><encrypted xmlns='eu.siacs.conversations.axolotl'>\
+            <header sid='\(named)'><key rid='\(session.omemo.deviceId &+ 1)' prekey='true'>AAAA</key><iv>AAAAAAAAAAAAAAAA</iv></header>\
+            <payload>AAAA</payload></encrypted><body>fallback</body>\
+            <replace xmlns='urn:xmpp:message-correct:0' id='g0'/></message>
+            """), source: .live)
+
+        #expect(held.isEmpty)
+        #expect(copies("g1") == 0)
+        #expect(try stored("g0").body == "cake at four")
+    }
+
     @Test func onlyARoomsClaimIsHeldBack() throws {
         let stanza: Martin.Message = parseStanza("""
             <message from='bob@example.org/phone' type='chat' id='c1'><encrypted xmlns='eu.siacs.conversations.axolotl'>\

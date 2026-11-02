@@ -1618,6 +1618,7 @@ extension XMPPSession {
 
         guard var inbound = InboundMessage(groupchat: stanza, room: context, account: account, source: source, encryption: encryption) else { return }
         inbound.undecryptableReason = undecryptableReason
+        inbound.heldForCheck = held != nil
         // The server can't block someone's group messages, which come from
         // the room; where it shows who they are, we drop them ourselves.
         if !inbound.isOutgoing, inbound.sender != room, (try? database.isBlocked(inbound.sender)) == true { return }

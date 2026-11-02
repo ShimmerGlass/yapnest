@@ -85,6 +85,10 @@ public struct InboundMessage: Sendable, Equatable {
     public var body: String?
     public var encryption: Message.Encryption
     public var undecryptableReason: Message.UndecryptableReason?
+    /// The stanza is kept until its device is checked, and the hold needs a
+    /// stored message. Only then is an undecryptable correction of a message
+    /// we have stored as a placeholder; otherwise it has nothing to apply.
+    public var heldForCheck = false
     /// For decrypted messages: the sending device and how far it's trusted.
     public var omemoDevice: Int32?
     public var omemoTrust: OMEMODevice.Trust?

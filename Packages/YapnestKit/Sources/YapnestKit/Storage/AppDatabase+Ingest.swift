@@ -120,7 +120,17 @@ extension AppDatabase {
         // a message we hold but can't apply it to (retracted, someone else's,
         // or not decryptable) must not appear as a message of its own: a
         // replay of it would bring back what was deleted.
-        if let target = inbound.correctionOf, try Self.referencedMessage(db, conversationId: conversationId, id: target) != nil {
+        // One held for its device's check is the exception. Its hold needs a
+        // message to attach to, so it is stored as a placeholder, and replaced
+        // by applying the correction once the device is vouched for. Not
+        // when the original was deleted: the correction could never apply,
+        // and its placeholder would sit beside the tombstone.
+        var original: Message?
+        if let target = inbound.correctionOf {
+            original = try Self.referencedMessage(db, conversationId: conversationId, id: target)
+        }
+        let originalStored = original != nil
+        if let original, !(inbound.heldForCheck && inbound.encryption == .omemoUndecryptable && !original.isRetracted) {
             return result
         }
 
@@ -185,7 +195,7 @@ extension AppDatabase {
             }
             message.presenceSession = inbound.presenceSession
             // A correction of something we never got stands in for it.
-            if inbound.correctionOf != nil { message.editedAt = timestamp }
+            if inbound.correctionOf != nil, !originalStored { message.editedAt = timestamp }
             message.mentionsMe = inbound.mentionsMe
             message.quickResponses = inbound.quickResponses
             // Read before the user scrolled back to it, or no marker or
@@ -213,7 +223,7 @@ extension AppDatabase {
                     try attachment.insert(db)
                     result.newAttachment = attachment
                 }
-                if let target = inbound.correctionOf, let id = stored.id {
+                if let target = inbound.correctionOf, let id = stored.id, !originalStored {
                     if try fitting(.retract, target).isEmpty {
                         // A stand-in with a file is never linked: nothing would delete it.
                         if file == nil {
