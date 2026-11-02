@@ -2450,13 +2450,32 @@ extension XMPPSession {
 
     /// Tells the room we're gone, if we're in it or may be: a join that is
     /// still waiting can be accepted after we gave up on it, which would leave
-    /// us in the room as an occupant nothing reads from.
+    /// us in the room as an occupant nothing reads from. With the stream down
+    /// it is told once the stream is back and resumed (`sendWithdrawals`).
     private func withdrawJoin(_ room: JID) {
         guard let status = roomStatus(room), status.isJoined || status.phase == .joining else { return }
+        guard isConnected else {
+            lock.withLock { $0.withdrawnWhileDown[room] = status.nickname }
+            return
+        }
+        writeUnavailable(room, nickname: status.nickname)
+    }
+
+    private func writeUnavailable(_ room: JID, nickname: String) {
         let presence = Presence()
         presence.type = .unavailable
-        presence.to = room.martin.with(resource: status.nickname)
+        presence.to = room.martin.with(resource: nickname)
         write(presence)
+    }
+
+    /// Tells the rooms we left while the stream was down that we're gone. The
+    /// server still holds our presence in them on a resumed stream.
+    func sendWithdrawals() {
+        let withdrawn = lock.withLock { state in
+            defer { state.withdrawnWhileDown = [:] }
+            return state.withdrawnWhileDown
+        }
+        for (room, nickname) in withdrawn { writeUnavailable(room, nickname: nickname) }
     }
 
     /// What a room answered to a subject change.

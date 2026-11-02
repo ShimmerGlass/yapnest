@@ -337,6 +337,10 @@ public final class XMPPSession: @unchecked Sendable {
         var catchUpInterrupted = false
         /// Rooms whose catch-up was cut off the same way.
         var interruptedRooms: Set<JID> = []
+        /// Rooms we left while the stream was down, with the nickname we were in
+        /// them under. A resumed stream still has our presence there, and tells
+        /// them we're gone; a new one has lost it.
+        var withdrawnWhileDown: [JID: String] = [:]
         /// The introduction of this device written to a room and not yet
         /// echoed back, with the members it holds keys for.
         var pendingIntroductions: [JID: PendingIntroduction] = [:]
@@ -1504,6 +1508,7 @@ public final class XMPPSession: @unchecked Sendable {
                     $0.owedOnResume = []
                     $0.catchUpInterrupted = false
                     $0.interruptedRooms = []
+                    $0.withdrawnWhileDown = [:]
                     // What was unacknowledged is sent again, and claims anew.
                     $0.sends.reset()
                     $0.pendingStanzas.reset()
@@ -1601,6 +1606,7 @@ public final class XMPPSession: @unchecked Sendable {
         reportClientState()
         let owed = lock.withLock { $0.owedOnResume }
         if owed.contains(.presence) { sendPresence() }
+        sendWithdrawals()
         // Rooms we were in may have dropped us while we were away.
         selfPingRooms()
         // Rooms whose join was cut off wait for answers that won't come.
