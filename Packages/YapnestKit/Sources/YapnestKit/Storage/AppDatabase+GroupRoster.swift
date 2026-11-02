@@ -110,11 +110,15 @@ extension AppDatabase {
     /// membership alike, which only the first to arrive writes a line for.
     func rosterAffiliated(conversationId: Int64, room: JID, jid: JID, isMember: Bool, at date: Date) throws {
         try writer.write { db in
-            guard try Self.rosterIsTaken(db, conversationId) else { return }
+            guard let listed = try Bool.fetchOne(db, sql: "SELECT listed FROM groupRosterTaken WHERE conversationId = ?", arguments: [conversationId]) else { return }
             let entry = try Self.rosterEntry(db, conversationId, jid.description)
             if isMember {
                 guard entry == nil else { return }
-                try Self.rosterAdd(db, jid, room: room, conversationId: conversationId, writesLine: true, at: date)
+                // A notice names the new affiliation only, so before the first
+                // listing has counted everyone a promotion of a long-standing
+                // member looks like an addition: it is counted quietly, as the
+                // listing would.
+                try Self.rosterAdd(db, jid, room: room, conversationId: conversationId, writesLine: listed, at: date)
             } else if let entry {
                 try Self.rosterRemove(db, entry, room: room, writesLine: !entry.hasLeft, at: date)
             }

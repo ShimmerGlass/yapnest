@@ -287,6 +287,16 @@ struct RoomRosterTests {
         #expect(try lines().count == 1, "a promotion, or someone already counted, is not news")
     }
 
+    @Test func aPromotionBeforeTheFirstListingIsDoneIsCountedQuietly() throws {
+        join("Alice")
+        session.affiliationChanged(in: room, affiliation("bob@example.org", "admin"))
+        session.settleRoster()
+        #expect(try lines().isEmpty, "a member made admin before the listing counted them was there all along")
+        #expect(try counted() == ["bob@example.org"])
+        list("Bob")
+        #expect(try lines().isEmpty)
+    }
+
     @Test func theRoomAddingOurselvesWritesNothing() throws {
         baseline("Alice")
         session.affiliationChanged(in: room, affiliation("me@example.org", "member"))
