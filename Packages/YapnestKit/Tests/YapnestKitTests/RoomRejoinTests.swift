@@ -45,11 +45,14 @@ struct RoomRejoinTests {
         #expect(!session.hasScheduledRejoin(room))
     }
 
-    @Test func leavingOfflineThrowsAndChangesNothing() async throws {
+    @Test func leavingOfflineLeavesAtOnceAndOwesTheBookmark() async throws {
         let session = try makeSession(me)
         try session.database.joinGroupChat(room, nickname: "me")
-        await #expect(throws: GroupError.self) { try await session.leaveGroup(room) }
-        #expect(try session.database.groupChat(room)?.hasLeft == false)
+        session.scheduleRejoin(room)
+        try await session.leaveGroup(room)
+        #expect(!session.hasScheduledRejoin(room))
+        #expect(try session.database.groupChat(room)?.hasLeft == true)
+        #expect(try session.database.groupChat(room)?.bookmarkOwed == true)
     }
 
     @Test func disconnectingCancelsEveryScheduledRejoin() throws {

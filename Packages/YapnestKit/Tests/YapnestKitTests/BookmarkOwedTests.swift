@@ -395,6 +395,61 @@ struct OwedBookmarkTests {
         #expect(session.warnings.current.contains { $0.key == "bookmark/\(room)" })
     }
 
+    // MARK: Leaving
+
+    @Test func leavingOfflineLeavesAtOnceAndRetractsAtTheNextConnect() async throws {
+        server.list = [listedAsBefore]
+        try await session.leaveGroup(room)
+        #expect(try group().hasLeft)
+        #expect(try group().bookmarkOwed)
+
+        await connect()
+        await catchUp()
+
+        #expect(try group().hasLeft)
+        #expect(await eventually { server.retracted == [room.description] && (try? group().bookmarkOwed) == false })
+        #expect(server.list.isEmpty)
+    }
+
+    @Test func aGroupLeftOfflineIsNotJoinedAgainFromItsBookmark() async throws {
+        server.list = [listedAsBefore]
+        try await session.leaveGroup(room)
+        session.reconcileBookmarks([listedAsBefore])
+        #expect(try group().hasLeft)
+        #expect(try group().bookmarkOwed)
+    }
+
+    @Test func aLeaveOwedSurvivesANewSessionOnTheSameDatabase() async throws {
+        try await session.leaveGroup(room)
+        let next = try makeSession(me, database: database)
+        server.list = [listedAsBefore]
+        await connect(next)
+        await catchUp(next)
+
+        #expect(await eventually { server.retracted == [room.description] && (try? group().bookmarkOwed) == false })
+        #expect(try group().hasLeft)
+    }
+
+    @Test func aRetractionThatPassesWhileLeavingIsOwedInsteadOfFailing() async throws {
+        await connect()
+        server.refusingRetractions { wait($0) }
+
+        try await session.leaveGroup(room)
+
+        #expect(try group().hasLeft)
+        #expect(try group().bookmarkOwed)
+    }
+
+    @Test func aRetractionRefusedForGoodWhileLeavingThrowsAndChangesNothing() async throws {
+        await connect()
+        server.refusingRetractions { forbidden($0) }
+
+        await #expect(throws: GroupError.self) { try await session.leaveGroup(room) }
+
+        #expect(try !group().hasLeft)
+        #expect(try !group().bookmarkOwed)
+    }
+
     // MARK: Ordering
 
     @Test func leavingWaitsForAPublishThatIsStillOwed() async throws {

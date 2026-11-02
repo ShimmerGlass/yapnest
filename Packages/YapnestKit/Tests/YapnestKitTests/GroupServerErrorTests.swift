@@ -402,15 +402,21 @@ struct LeaveGroupTests {
         #expect(try session.database.groupChat(room)?.hasLeft == true)
     }
 
-    @Test func aFailureThatIsNotAnAbsenceStillStopsLeaving() async throws {
+    @Test func aRefusalThatIsNotAnAbsenceStillStopsLeavingAndCarriesTheServersReason() async throws {
         let session = try makeSession(me)
         let wire = FakeWire()
         session.connectForTesting(wire)
         try session.database.joinGroupChat(room, nickname: "me", isBookmarked: true)
         wire.answer { forbidden($0) }
 
-        await #expect(throws: GroupError.self) { try await session.leaveGroup(room) }
+        do {
+            try await session.leaveGroup(room)
+            Issue.record("Leaving should have thrown")
+        } catch GroupError.leaveRefused(let error) {
+            #expect(error.condition == "forbidden")
+        }
         #expect(try session.database.groupChat(room)?.hasLeft == false)
+        #expect(try session.database.groupChat(room)?.bookmarkOwed == false)
     }
 }
 

@@ -178,7 +178,8 @@ public enum GroupError: Error, LocalizedError {
     case joinFailed(String)
     case timedOut
     case notPrivate
-    case couldntLeave
+    /// The server wouldn't take our bookmark away, so we're still in the group.
+    case leaveRefused(ServerError)
     case notAllowed
     /// The room or its server doesn't offer what was asked.
     case unsupported
@@ -197,7 +198,7 @@ public enum GroupError: Error, LocalizedError {
         case .noService: String(localized: "Your server doesn't host group chats.")
         case .joinFailed(let reason): reason
         case .timedOut: String(localized: "The group didn't respond.")
-        case .couldntLeave: String(localized: "Couldn't leave the group. Try again when you're online.")
+        case .leaveRefused(let error): error.describe(String(localized: "The server wouldn't let you leave the group"))
         case .notAllowed: String(localized: "You're not allowed to do that in this group.")
         case .unsupported: String(localized: "This group's server doesn't support that.")
         case .refused(let reason): String(localized: "The group refused it: \(reason)")
@@ -2394,23 +2395,31 @@ extension XMPPSession {
     }
 
     /// Leaves the group for good on all our devices. Its history stays.
-    /// Throws, having changed nothing, if we're offline or the server
-    /// doesn't take the bookmark away: our bookmark would still say autojoin,
-    /// and the next connection would join the group again. The bookmark goes
-    /// first for that reason; once it's gone, nothing can undo leaving.
+    /// Offline, or when the server doesn't answer, the group is left here at
+    /// once and the bookmark's retraction is owed: it is sent on the next
+    /// connection, and until then no catch-up joins the group again from our
+    /// old bookmark. Online, the bookmark goes first, so that once it's gone
+    /// nothing can undo leaving. Throws, having changed nothing, only when the
+    /// server refuses for good to take the bookmark away: it would still say
+    /// autojoin, and the next connection would join the group again.
     public func leaveGroup(_ room: JID) async throws {
-        guard await waitForConnection() else { throw GroupError.notConnected }
-        // A publish still owed, as after joining just now, goes first, or it
-        // would reach the server after the retraction and bring the bookmark back.
-        await sendOwedBookmarks()?.value
-        do {
-            try await retractBookmark(room)
-        } catch {
-            logger.warning("Couldn't remove bookmark for \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
-            throw GroupError.couldntLeave
+        if isConnected {
+            // A publish still owed, as after joining just now, goes first, or it
+            // would reach the server after the retraction and bring the bookmark back.
+            await sendOwedBookmarks()?.value
+            do {
+                try await retractBookmark(room)
+                try? database.updateGroupChat(room) { $0.bookmarkOwed = false }
+                leaveRoom(room)
+                return
+            } catch where !ServerError.isFinalRefusal(error) {
+                logger.info("Couldn't remove bookmark for \(room, privacy: .private) now, so it is owed: \(error.localizedDescription, privacy: .private)")
+            } catch {
+                logger.warning("The server refused to remove bookmark for \(room, privacy: .private): \(error.localizedDescription, privacy: .private)")
+                throw GroupError.leaveRefused(ServerError.classify(error))
+            }
         }
-        try? database.updateGroupChat(room) { $0.bookmarkOwed = false }
-        leaveRoom(room)
+        leaveRoom(room, owingBookmark: true)
     }
 
     static func hasNoBookmarkToRemove(_ error: PubSubError) -> Bool {
@@ -2420,11 +2429,11 @@ extension XMPPSession {
         }
     }
 
-    func leaveRoom(_ room: JID) {
+    func leaveRoom(_ room: JID, owingBookmark: Bool = false) {
         withdrawJoin(room)
         cancelRejoin(room, resettingBackoff: true)
         updateRoom(room) { $0 = nil }
-        markLeft(room)
+        markLeft(room, owingBookmark: owingBookmark)
         ShareSuggestions.remove([room])
         warnings.clear(room: room)
     }
