@@ -427,8 +427,8 @@ public final class XMPPSession: @unchecked Sendable {
         /// message we haven't stored. Storing a message for one starts a round.
         var readStatesAwaitingMessage: Set<JID> = []
         /// Reconfigurations of a PEP node under way, so publishes that all
-        /// meet the same refusal ask the server once. See `reconfigurePEPNodeOnce`.
-        var nodeReconfigurations: [String: Task<Void, Error>] = [:]
+        /// meet the same refusal ask the server once. See `configurePEPNode`.
+        var nodeReconfigurations: [NodeConfiguration: Task<Void, Error>] = [:]
         /// Where our settings node stands this session: see `SettingsSyncState`.
         var settingsSync = SettingsSyncState()
         /// Contact requests the server sent on this session.
@@ -1525,6 +1525,8 @@ public final class XMPPSession: @unchecked Sendable {
                     $0.mucService = nil
                     $0.publishedDisplayed = [:]
                     $0.readStatesAwaitingMessage = []
+                    // A configuration sent on the old stream won't be answered on this one.
+                    $0.nodeReconfigurations = [:]
                     $0.displayedFetches = 0
                     $0.settingsSync.startSession()
                     $0.repeatedContactRequests = []
@@ -2384,47 +2386,48 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     /// Reads the archive from `after` to its end, a page at a time, and tells
-    /// `done` how it ended: nil, or the error that stopped it.
+    /// `done` how it ended: nil, or the error that stopped it. The session is
+    /// held only for a page, so one let go of mid-sync stops at the next.
     private func fetchArchivePage(after: String?, start: Date?, attempt: Int, done: @escaping @Sendable (Error?) -> Void) {
         Task { [weak self] in
-            guard let self else { return }
-            done(await self.readArchive(after: after, start: start, attempt: attempt))
+            guard let step = await self?.readArchivePage(after: after, start: start, attempt: attempt) else { return }
+            switch step {
+            case .next(let after, let start): self?.fetchArchivePage(after: after, start: start, attempt: attempt, done: done)
+            case .ended(let error): done(error)
+            }
         }
     }
 
-    private func readArchive(after: String?, start: Date?, attempt: Int) async -> Error? {
-        var (after, start) = (after, start)
-        let backoff = lock.withLock { $0.retryBackoff }
-        while true {
-            var interruptedWhileWaiting = false
-            do {
-                let page = try await ServerRetry.run(
-                    backoff: backoff,
-                    isStillWanted: {
-                        interruptedWhileWaiting = !catchUpMayProceed(attempt: attempt)
-                        return !interruptedWhileWaiting
-                    },
-                    operation: { [after, start] in try await archivePage(after: after, start: start, attempt: attempt) },
-                )
-                // Results for this page were delivered before the query's answer.
-                if let last = page.last {
-                    try? database.setSetting(.lastArchiveId, last)
-                }
-                if page.complete || page.last == nil { return nil }
-                (after, start) = (page.last, nil)
-            } catch {
-                if interruptedWhileWaiting { return ArchivePageInterrupted() }
-                if after != nil, (error as? XMPPError) == .item_not_found {
-                    // Our cursor expired from the archive; fall back to a time window.
-                    try? database.setSetting(.lastArchiveId, nil)
-                    if policy.syncsAccountState { markChatRestorePending() }
-                    (after, start) = (nil, Date().addingTimeInterval(-accountSyncWindow))
-                    continue
-                }
-                // The cursor stays where it was, so the page is read again, now or next session.
-                if !(error is ArchivePageInterrupted) { logger.error("Archive sync failed: \(error)") }
-                return error
+    private enum ArchiveStep {
+        case next(after: String?, start: Date?)
+        case ended(Error?)
+    }
+
+    private func readArchivePage(after: String?, start: Date?, attempt: Int) async -> ArchiveStep {
+        do {
+            let page = try await ServerRetry.run(
+                backoff: lock.withLock { $0.retryBackoff },
+                isStillWanted: { catchUpMayProceed(attempt: attempt) },
+                operation: { try await archivePage(after: after, start: start, attempt: attempt) },
+            )
+            // Results for this page were delivered before the query's answer.
+            if let last = page.last {
+                try? database.setSetting(.lastArchiveId, last)
             }
+            return page.complete || page.last == nil ? .ended(nil) : .next(after: page.last, start: nil)
+        } catch {
+            // A retry given up because the connection changed is as interrupted
+            // as a page it changed under.
+            if error is ArchivePageInterrupted || !catchUpMayProceed(attempt: attempt) { return .ended(ArchivePageInterrupted()) }
+            if after != nil, (error as? XMPPError) == .item_not_found {
+                // Our cursor expired from the archive; fall back to a time window.
+                try? database.setSetting(.lastArchiveId, nil)
+                if policy.syncsAccountState { markChatRestorePending() }
+                return .next(after: nil, start: Date().addingTimeInterval(-accountSyncWindow))
+            }
+            // The cursor stays where it was, so the page is read again, now or next session.
+            if !(error is ArchivePageNotStored) { logger.error("Archive sync failed: \(error)") }
+            return .ended(error)
         }
     }
 
@@ -2435,10 +2438,15 @@ public final class XMPPSession: @unchecked Sendable {
     private func archivePage(after: String?, start: Date?, attempt: Int) async throws -> (last: String?, complete: Bool) {
         let version = lock.withLock { $0.archiveVersion }
         let queryId = UUID().uuidString
-        let result: Result<(last: String?, complete: Bool), XMPPError> = await withCheckedContinuation { continuation in
-            client.module(.mam).queryItems(version: version, start: start, queryId: queryId, rsm: RSM.Query(after: after, max: 100)) { result in continuation.resume(returning: result.map { ($0.rsm?.last, $0.complete) }) }
+        let (result, stored) = await withCheckedContinuation { (continuation: CheckedContinuation<(Result<(last: String?, complete: Bool), XMPPError>, Bool), Never>) in
+            client.module(.mam).queryItems(version: version, start: start, queryId: queryId, rsm: RSM.Query(after: after, max: 100)) { [self] result in
+                // Stored in Martin's callback rather than after resuming: it
+                // is a database write of up to a page, which would hold one of
+                // the few threads every task shares.
+                let stored = flushArchive(query: queryId)
+                continuation.resume(returning: (result.map { ($0.rsm?.last, $0.complete) }, stored))
+            }
         }
-        let stored = flushArchive(query: queryId)
         guard catchUpMayProceed(attempt: attempt) else { throw ArchivePageInterrupted() }
         let page = try result.get()
         guard stored else { throw ArchivePageNotStored() }

@@ -1,6 +1,6 @@
 import Foundation
 import GRDB
-import Martin
+@testable import Martin
 import Testing
 @testable import YapnestKit
 
@@ -536,6 +536,26 @@ struct OwedReadStateTests {
         _ = await eventually(timeout: 0.3) { false }
         let configures = wire.written.compactMap { $0 as? Iq }.filter { $0.firstChild(name: "pubsub")?.firstChild(name: "configure") != nil }
         #expect(configures.count == 1)
+    }
+
+    /// A configuration sent on a stream that ended goes unanswered, so one
+    /// asked for on the next stream is sent again rather than waiting on it.
+    @Test func aNewStreamConfiguresTheNodeAgain() async throws {
+        let configures: @Sendable () -> Int = { [wire] in
+            wire.written.compactMap { $0 as? Iq }.filter { $0.firstChild(name: "pubsub")?.firstChild(name: "configure") != nil }.count
+        }
+        wire.holdReplies { $0.firstChild(name: "pubsub")?.firstChild(name: "configure") != nil }
+        session.connectForTesting(wire)
+        let fields = ["pubsub#access_model": ["whitelist"]]
+        let first = Task { [session] in try await session.configurePEPNode(NS.mds, fields: fields) }
+        #expect(await eventually { configures() == 1 })
+        session.client.update(state: .disconnected())
+        session.client.update(state: .connected(resumed: false))
+        #expect(await eventually("the new session") { session.lock.withLock { $0.isSyncing } })
+        let second = Task { [session] in try await session.configurePEPNode(NS.mds, fields: fields) }
+        #expect(await eventually { configures() == 2 })
+        first.cancel()
+        second.cancel()
     }
 
     @Test func aChatAnotherDeviceReadWhileTheEarlierPublishesWereInFlightIsNotPublishedOver() async throws {

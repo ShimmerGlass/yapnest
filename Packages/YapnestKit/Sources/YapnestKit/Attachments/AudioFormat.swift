@@ -69,9 +69,7 @@ public enum AudioFormat {
 
     /// "3f2504e0-4f89-41d3-9a0c-0305e82c3301.m4a": a UUID and ".m4a".
     private static func isMonalRecordingName(_ lowered: String) -> Bool {
-        guard lowered.hasSuffix(".m4a") else { return false }
-        let groups = lowered.dropLast(4).split(separator: "-", omittingEmptySubsequences: false)
-        return groups.map(\.count) == [8, 4, 4, 4, 12] && groups.allSatisfy { $0.allSatisfy { $0.isASCII && $0.isHexDigit } }
+        lowered.hasSuffix(".m4a") && UUID(uuidString: String(lowered.dropLast(4))) != nil
     }
 
     private static func isASCIIDigit(_ character: Character) -> Bool {

@@ -84,8 +84,6 @@ enum DevFixture: String, CaseIterable {
     }
 
     static let fitPeer = JID("fit@fixture.test")!
-    /// The words the oldest message of a `fit` chat has.
-    static let fitOldest = "Fit message 01."
 
     /// `fit:<count>`.
     static func fitCount(from name: String) -> Int? {
@@ -235,6 +233,7 @@ enum DevFixture: String, CaseIterable {
         let count = ProcessInfo.processInfo.environment["YAPNEST_DEV_FIXTURE"].flatMap(fitCount(from:)) ?? 1
         let conversation = try prepare(database, peer: fitPeer, name: "Fit")
         var time = start
+        // ShortChatReachUITests looks for "Fit message 01.".
         for index in 1...max(count, 1) {
             time = time.addingTimeInterval(60)
             try add(database, conversation, peer: fitPeer, body: String(format: "Fit message %02d.", index), outgoing: index % 3 == 0, at: time)

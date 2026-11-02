@@ -182,7 +182,6 @@ public struct FileMetadata: Sendable, Equatable {
 /// read again.
 final class OutgoingFileMetadata: @unchecked Sendable {
     private struct Key: Hashable {
-        var path: String
         var fileSize: Int?
         var modified: Date?
         var attachment: Attachment
@@ -203,7 +202,7 @@ final class OutgoingFileMetadata: @unchecked Sendable {
     func metadata(for attachment: Attachment, in store: AttachmentStore) -> FileMetadata? {
         guard let file = store.url(for: attachment) else { return compute(attachment, store) }
         let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        let key = Key(path: file.path, fileSize: values?.fileSize, modified: values?.contentModificationDate, attachment: attachment)
+        let key = Key(fileSize: values?.fileSize, modified: values?.contentModificationDate, attachment: attachment)
         if let known = lock.withLock({ found[key] }) { return known }
         // A failed read isn't kept, as the file may only have been unavailable.
         guard let metadata = compute(attachment, store) else { return nil }

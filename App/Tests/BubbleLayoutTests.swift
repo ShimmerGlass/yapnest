@@ -85,8 +85,9 @@ struct BubbleLayoutTests {
     /// or as plain SwiftUI on the Mac, which proposes what is left of that
     /// after the bubble's padding.
     private func drawnWidth(listWidth: CGFloat, hosted: Bool, fillsWidth: Bool = false) -> CGFloat {
-        let host = UIHostingController(rootView: BubbleLayout(fillsWidth: fillsWidth, offeredWidth: hosted ? listWidth - 24 : nil) { Wide() })
-        let width = hosted ? listWidth - 24 : listWidth - 48
+        let inner = listWidth - 24
+        let host = UIHostingController(rootView: BubbleLayout(fillsWidth: fillsWidth, offeredWidth: hosted ? inner : nil) { Wide() })
+        let width = hosted ? inner : inner - 24
         return host.sizeThatFits(in: CGSize(width: width, height: 10_000)).width + 24
     }
 
@@ -94,7 +95,6 @@ struct BubbleLayoutTests {
         let rule = min(listWidth * 0.78, listWidth - 60)
         let hosted = drawnWidth(listWidth: listWidth, hosted: true)
         let plain = drawnWidth(listWidth: listWidth, hosted: false)
-        print("bubble width, list \(listWidth): rule \(rule), hosted (iOS) \(hosted), plain (Mac) \(plain)")
         #expect(abs(plain - rule) < 0.5)
         #expect(abs(hosted - rule) < 0.5)
     }
@@ -102,7 +102,6 @@ struct BubbleLayoutTests {
     @Test(arguments: [375.0, 393.0, 402.0, 430.0]) func aPhotoBubbleFollowsTheSameRule(listWidth: CGFloat) {
         let rule = min(listWidth * 0.78, listWidth - 60, MediaLimits.maxBubbleWidth)
         let hosted = drawnWidth(listWidth: listWidth, hosted: true, fillsWidth: true)
-        print("photo bubble width, list \(listWidth): rule \(rule), hosted (iOS) \(hosted)")
         #expect(abs(hosted - rule) < 0.5)
     }
 }
