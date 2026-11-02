@@ -52,7 +52,7 @@ extension LiveServer {
             #expect(stored.responses == [.init(value: "yes", label: "Sure!"), .init(value: "no", label: nil)])
             #expect(stored.actions == [.init(id: "merge", label: "Merge Now!")])
 
-            try b.chooseAction("merge", on: message)
+            try await b.chooseAction("merge", on: message)
 
             try await LiveServer.waitUntil("alice to get the chosen action") {
                 recorder.stanzas.contains { $0.firstChild(name: "action-selected", xmlns: ns)?.getAttribute("id") == "merge" }

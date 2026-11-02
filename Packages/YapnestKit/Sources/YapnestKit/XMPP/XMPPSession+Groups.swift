@@ -2356,7 +2356,7 @@ extension XMPPSession {
             acknowledged.finish()
             bounced.finish()
         }
-        guard writeAwaitingHandOver(message) else { throw GroupError.notConnected }
+        guard await writeAwaitingHandOver(message) else { throw GroupError.notConnected }
         if client.modulesManager.moduleOrNil(.streamManagement)?.ackEnabled == true {
             requestAcknowledgement()
             // No acknowledgement in time means a slow server, not a refusal.
@@ -2518,7 +2518,7 @@ extension XMPPSession {
             subscription.cancel()
             continuation.finish()
         }
-        guard writeAwaitingHandOver(message) else { throw GroupError.notConnected }
+        guard await writeAwaitingHandOver(message) else { throw GroupError.notConnected }
         do {
             try await withTimeout(Self.subjectTimeout) {
                 for await outcome in outcomes {

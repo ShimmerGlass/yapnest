@@ -3022,7 +3022,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// Chooses the action `actionId` that the incoming `message` offered
     /// (XEP-0439). It goes out as it is even in an encrypted chat, as actions
     /// are only ever honoured on plain messages.
-    public func chooseAction(_ actionId: String, on message: Message) throws {
+    public func chooseAction(_ actionId: String, on message: Message) async throws {
         guard let messageId = message.id, message.direction == .incoming, !message.isRetracted,
               message.quickResponses?.actions.contains(where: { $0.id == actionId }) == true,
               let peer = try database.conversation(id: message.conversationId)?.peer else { return }
@@ -3036,7 +3036,7 @@ public final class XMPPSession: @unchecked Sendable {
         // The connection can go between the check above and the write, and a
         // write after that is dropped. An action marked chosen but never sent
         // would stay greyed out with nothing for the user to retry.
-        guard writeAwaitingHandOver(OutboundStanza.actionSelected(actionId, to: route(to: peer), id: OutboundStanza.newId())) else {
+        guard await writeAwaitingHandOver(OutboundStanza.actionSelected(actionId, to: route(to: peer), id: OutboundStanza.newId())) else {
             try database.forgetChosenAction(actionId, on: messageId)
             throw MessageActionError.offline
         }
@@ -3244,22 +3244,26 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Writes `stanza` and says whether the connection took it. Martin only
     /// tells so in its completion, after its session has looked at its own
-    /// state, so this waits for that; the wait is short, as the session's
-    /// queue only does that. Don't call it from that queue. If no answer
-    /// comes in time the stanza is taken to have gone, as a spurious
+    /// state, so this waits for that, suspended rather than holding a thread:
+    /// callers come from the main actor and the cooperative pool. If no
+    /// answer comes in time the stanza is taken to have gone, as a spurious
     /// "offline" would make the user send an action twice.
-    func writeAwaitingHandOver(_ stanza: Stanza) -> Bool {
+    func writeAwaitingHandOver(_ stanza: Stanza) async -> Bool {
         guard isConnected else { return false }
-        let outcome = OSAllocatedUnfairLock<Bool?>(initialState: nil)
-        let answered = DispatchSemaphore(value: 0)
-        client.context.writer.write(stanza) { result in
-            outcome.withLock {
-                if case .failure = result { $0 = false } else { $0 = true }
+        let waiting = OSAllocatedUnfairLock<CheckedContinuation<Bool, Never>?>(initialState: nil)
+        let finish: @Sendable (Bool) -> Void = { tookIt in
+            waiting.withLock { continuation in
+                continuation?.resume(returning: tookIt)
+                continuation = nil
             }
-            answered.signal()
         }
-        _ = answered.wait(timeout: .now() + 5)
-        return outcome.withLock { $0 } ?? true
+        return await withCheckedContinuation { continuation in
+            waiting.withLock { $0 = continuation }
+            client.context.writer.write(stanza) { result in
+                if case .failure = result { finish(false) } else { finish(true) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { finish(true) }
+        }
     }
 }
 

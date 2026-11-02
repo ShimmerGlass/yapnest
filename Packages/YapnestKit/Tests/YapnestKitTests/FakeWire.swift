@@ -18,6 +18,8 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
     private var later = false
     private var held: [() -> Void] = []
     private var counting: StreamManagementModule?
+    private var holdingHandOvers = false
+    private var handOvers: [() -> Void] = []
 
     /// Everything written so far, requests included.
     var written: [Stanza] { lock.withLock { stanzas } }
@@ -30,6 +32,24 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
     var failsWrites: Bool {
         get { lock.withLock { failing } }
         set { lock.withLock { failing = newValue } }
+    }
+
+    /// Keeps telling the session that a write was taken until
+    /// `releaseHandOvers()`, as Martin's session does while its queue is busy.
+    var holdsHandOvers: Bool {
+        get { lock.withLock { holdingHandOvers } }
+        set { lock.withLock { holdingHandOvers = newValue } }
+    }
+
+    /// How many writes wait to be told they were taken.
+    var heldHandOvers: Int { lock.withLock { handOvers.count } }
+
+    func releaseHandOvers() {
+        let waiting = lock.withLock {
+            defer { handOvers = [] }
+            return handOvers
+        }
+        for handOver in waiting { handOver() }
     }
 
     /// Has `module` count and queue what is written, as Martin's session does for a stream with
@@ -113,7 +133,12 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
             return (failing, counting)
         }
         if !fails { module?.processOutgoing(stanza: stanza) }
-        writeCompleted?(fails ? .failure(.undefined_condition) : .success(()))
+        let handOver: () -> Void = { writeCompleted?(fails ? .failure(.undefined_condition) : .success(())) }
+        if lock.withLock({ holdingHandOvers }) {
+            lock.withLock { handOvers.append(handOver) }
+        } else {
+            handOver()
+        }
     }
 
     /// A result for `request`, carrying `children`.

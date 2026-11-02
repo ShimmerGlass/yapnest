@@ -1,4 +1,5 @@
 import Foundation
+import os
 import GRDB
 import Martin
 import Testing
@@ -255,48 +256,68 @@ struct QuickResponseSendingTests {
         return (session, try session.database.insert(message))
     }
 
-    @Test func choosingWhileOfflineThrowsAndRecordsNothing() throws {
+    @Test func choosingWhileOfflineThrowsAndRecordsNothing() async throws {
         let (session, message) = try setUp()
-        #expect(throws: XMPPSession.MessageActionError.self) { try session.chooseAction("merge", on: message) }
-        #expect(try session.database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!)?.quickResponses?.chosen } == [])
+        await #expect(throws: XMPPSession.MessageActionError.self) { try await session.chooseAction("merge", on: message) }
+        #expect(try await session.database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!)?.quickResponses?.chosen } == [])
     }
 
-    @Test func aWriteTheConnectionRefusesIsTakenBack() throws {
+    @Test func aWriteTheConnectionRefusesIsTakenBack() async throws {
         let (session, message) = try setUp()
         let wire = FakeWire()
         wire.failsWrites = true
         session.connectForTesting(wire)
-        #expect(throws: XMPPSession.MessageActionError.self) { try session.chooseAction("merge", on: message) }
-        #expect(try session.database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!)?.quickResponses?.chosen } == [])
+        await #expect(throws: XMPPSession.MessageActionError.self) { try await session.chooseAction("merge", on: message) }
+        #expect(try await session.database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!)?.quickResponses?.chosen } == [])
 
         // Once it can go out, the same action can be chosen again.
         wire.failsWrites = false
-        try session.chooseAction("merge", on: message)
-        #expect(try session.database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!)?.quickResponses?.chosen } == ["merge"])
+        try await session.chooseAction("merge", on: message)
+        #expect(try await session.database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!)?.quickResponses?.chosen } == ["merge"])
     }
 
-    @Test func choosingSendsTheActionAndRecordsIt() throws {
+    @Test func choosingSendsTheActionAndRecordsIt() async throws {
         let (session, message) = try setUp()
         let wire = FakeWire()
         session.connectForTesting(wire)
-        try session.chooseAction("merge", on: message)
+        try await session.chooseAction("merge", on: message)
         // An id the message never offered is not sent.
-        try session.chooseAction("other", on: message)
+        try await session.chooseAction("other", on: message)
 
         let sent = wire.messages.filter { $0.firstChild(name: "action-selected", xmlns: ns) != nil }
         #expect(sent.count == 1)
         #expect(sent[0].to?.description == "alice@example.org")
-        #expect(try session.database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!)?.quickResponses?.chosen } == ["merge"])
+        #expect(try await session.database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!)?.quickResponses?.chosen } == ["merge"])
     }
 
-    @Test func choosingTheSameActionTwiceSendsOnce() throws {
+    @Test func choosingTheSameActionTwiceSendsOnce() async throws {
         let (session, message) = try setUp()
         let wire = FakeWire()
         session.connectForTesting(wire)
-        try session.chooseAction("merge", on: message)
+        try await session.chooseAction("merge", on: message)
         // The caller still holds the message as it was before the first tap.
-        try session.chooseAction("merge", on: message)
+        try await session.chooseAction("merge", on: message)
 
+        #expect(wire.messages.filter { $0.firstChild(name: "action-selected", xmlns: ns) != nil }.count == 1)
+    }
+
+    @Test func waitingForTheHandOverLeavesTheMainActorFree() async throws {
+        let (session, message) = try setUp()
+        let wire = FakeWire()
+        wire.holdsHandOvers = true
+        session.connectForTesting(wire)
+        let finished = OSAllocatedUnfairLock(initialState: false)
+        let choosing = Task { @MainActor in
+            try await session.chooseAction("merge", on: message)
+            finished.withLock { $0 = true }
+        }
+        await eventually("the action to be written") { wire.heldHandOvers > 0 }
+        // The main actor answers while the hand-over is still awaited: a
+        // choice that blocked it would answer only after giving up on it.
+        await MainActor.run {}
+        #expect(!finished.withLock { $0 })
+        wire.releaseHandOvers()
+        try await choosing.value
         #expect(wire.messages.filter { $0.firstChild(name: "action-selected", xmlns: ns) != nil }.count == 1)
     }
 

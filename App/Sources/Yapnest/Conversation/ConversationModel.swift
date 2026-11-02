@@ -2889,14 +2889,17 @@ final class ConversationModel {
         guard let message = items[id]?.message else { return }
         let key = ActionKey(messageID: id, actionID: actionID)
         guard choosingActions.insert(key).inserted else { return }
-        write({ [session] in
-            try session.chooseAction(actionID, on: message)
-        }, then: { [weak self] in
-            self?.choosingActions.remove(key)
-        }, onFailure: { [weak self] error in
-            self?.choosingActions.remove(key)
-            self?.prompt = .error(error.localizedDescription)
-        })
+        let session = session
+        enqueue { [weak self] in
+            do {
+                // Detached so its database writes stay off the main thread.
+                try await Task.detached(priority: .userInitiated) { try await session.chooseAction(actionID, on: message) }.value
+                self?.choosingActions.remove(key)
+            } catch {
+                self?.choosingActions.remove(key)
+                self?.prompt = .error(error.localizedDescription)
+            }
+        }
     }
 
     func react(_ emoji: String, to id: Int64) {
