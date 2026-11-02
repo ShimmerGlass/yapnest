@@ -167,11 +167,16 @@ final class OMEMOEncryption: @unchecked Sendable {
             // the key all the same, and has nothing to show once vouched for.
             return Self.isKeyTransport(stanza) ? .ignore : .unvouched(device: device)
         }
-        // Whatever becomes of the message, it shows the device exists and is
-        // in use. Recorded on the way out, after decoding, which is where a
-        // new device's identity is first stored.
+        // A message that decrypts shows the device is in use. One that
+        // doesn't counts only from a device we already have a session with:
+        // its repair needs it not to age out, but anyone who can name a
+        // sender could otherwise keep a lost device looking active with
+        // messages it never wrote. Recorded on the way out, after decoding,
+        // which is where a new device's identity is first stored.
+        let hadSession = device.map { store.containsSessionRecord(forAddress: SignalAddress(name: sender.description, deviceId: $0)) } ?? false
+        var decrypted = false
         defer {
-            if let device { store.noteUsed(name: sender.description, deviceId: device, at: sentAt) }
+            if let device, decrypted || hadSession { store.noteUsed(name: sender.description, deviceId: device, at: sentAt) }
         }
         // Signal checks trust only when it builds a session, so a device with
         // a session would go on being read. Not decoding also leaves the
@@ -191,6 +196,7 @@ final class OMEMOEncryption: @unchecked Sendable {
         }
         switch decoded {
         case .successMessage:
+            decrypted = true
             guard let device else { return .decrypted(device: nil, trust: nil) }
             DiagLog.debug(.omemo, "Decrypted", .id("device", Redacted.id(String(device))), .bool("ownAccount", sender == account), .bool("preKey", prekey), .bool("history", isHistory))
             // Decoding is where a first message's identity is saved, so read
@@ -199,6 +205,7 @@ final class OMEMOEncryption: @unchecked Sendable {
             let decoded = store.status(forName: sender.description, deviceId: device)
             return .decrypted(device: device, trust: (decoded ?? status).map(OMEMODevice.Trust.init))
         case .successTransportKey:
+            decrypted = true
             return .ignore
         case .failure(.duplicateMessage):
             return .ignore

@@ -248,6 +248,19 @@ struct OMEMODeviceUsageTests {
         #expect(encryption.store.usage(forName: bob)[7]?.lastUsed == clock.now)
     }
 
+    @Test func aMessageNamingADeviceWeHaveNoSessionWithDoesNotRefreshIt() throws {
+        let (encryption, client) = try setUp()
+        defer { withExtendedLifetime(client) {} }
+        let address = SignalAddress(name: bob, deviceId: 7)
+        #expect(encryption.store.save(identity: address, publicKeyData: key(7)))
+        clock.advance(days: 2)
+        guard case .failed = encryption.decrypt(undecryptable(from: 7, to: encryption), from: JID(bob)!, ownCopy: false, sentAt: clock.now) else {
+            Issue.record("expected the message to fail to decrypt")
+            return
+        }
+        #expect(encryption.store.usage(forName: bob)[7]?.lastUsed == nil)
+    }
+
     @Test func aDeviceMarkedCompromisedIsStillSeenSending() throws {
         let (encryption, client) = try setUp()
         defer { withExtendedLifetime(client) {} }
