@@ -436,6 +436,12 @@ struct ReactionsChip: View {
         reactions.isEmpty ? Text(Image(systemName: "exclamationmark")) : Text(total > 1 ? "\(emojis) \(total)" : emojis)
     }
 
+    /// A failed set can have no reaction left, so the label is built from what there is.
+    static func accessibilityLabel(reactions: [ConversationItem.ReactionGroup], failed: Bool, pending: Bool) -> String {
+        let state: String? = failed ? String(localized: "Not delivered") : pending ? String(localized: "Sending") : nil
+        return (reactions.map { "\($0.emoji) \($0.senders.count)" } + [state].compactMap { $0 }).joined(separator: ", ")
+    }
+
     var body: some View {
         let total = reactions.reduce(0) { $0 + $1.senders.count }
         let emojis = reactions.prefix(3).map(\.emoji).joined()
@@ -469,7 +475,7 @@ struct ReactionsChip: View {
         }
         .buttonStyle(.plain)
         .help(who ?? "")
-        .accessibilityLabel(reactions.map { "\($0.emoji) \($0.senders.count)" }.joined(separator: ", ") + (failed ? ", " + String(localized: "Not delivered") : pending ? ", " + String(localized: "Sending") : ""))
+        .accessibilityLabel(Self.accessibilityLabel(reactions: reactions, failed: failed, pending: pending))
     }
 }
 

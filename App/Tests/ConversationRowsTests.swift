@@ -121,6 +121,11 @@ struct ConversationRowsTests {
         #expect(f.model.reactionFailureText(of: id) == "Nope")
         f.model.showReactions(for: id)
         #expect(f.model.prompt == .reactionFailure(id))
+        let label = try #require(f.model.rows.first { $0.id == id }?.content.accessibilityLabel)
+        #expect(label.contains(String(localized: "Not delivered")))
+        #expect(ReactionsChip.accessibilityLabel(reactions: [], failed: true, pending: false) == String(localized: "Not delivered"))
+        #expect(ReactionsChip.accessibilityLabel(reactions: [], failed: false, pending: true) == String(localized: "Sending"))
+
     }
 
     @Test func aDeletedMessageShowsNoTraceOfItsText() async throws {

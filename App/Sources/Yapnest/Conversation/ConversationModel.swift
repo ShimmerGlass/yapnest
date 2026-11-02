@@ -1738,8 +1738,9 @@ final class ConversationModel {
         let replying: String? = quoteText.map { summary in
             quoteAuthor.map { String(localized: "Replying to \($0): \(summary)") } ?? String(localized: "Replying to: \(summary)")
         }
-        let reactions: String? = item.reactions.isEmpty ? nil
-            : String(localized: "Reactions: \(item.reactions.map { "\($0.emoji) \($0.senders.count)" }.joined(separator: ", "))")
+        // A failed set may have no reaction left, and is announced all the same.
+        let reactionParts = item.reactions.map { "\($0.emoji) \($0.senders.count)" } + (item.reactionFailure == nil ? [] : [String(localized: "Not delivered")])
+        let reactions: String? = reactionParts.isEmpty ? nil : String(localized: "Reactions: \(reactionParts.joined(separator: ", "))")
         let words = [replying, spoken ?? attachmentSpoken, previewTitle, reactions, state, time].compactMap { $0 }.joined(separator: ", ")
         let showsName = environment.isGroup && !isOutgoing && startsRun
         let content = MessageRow.Content(
