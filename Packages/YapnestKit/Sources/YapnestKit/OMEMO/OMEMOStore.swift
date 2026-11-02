@@ -31,6 +31,9 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// The sessions of the send under way: see `batchingSessions`. Guarded
     /// by `lock`, and only ever set by the thread holding the context's lock.
     private var batch: SessionBatch?
+    /// The addresses whose identity, if first seen now, is saved undecided:
+    /// see `admittingUndecided`. Guarded by `lock`.
+    private var undecidedAddresses: [SignalAddress: Int] = [:]
 
     private struct SessionBatch {
         /// As read when the send began.
@@ -541,6 +544,24 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
 
     // MARK: Peer identities
 
+    /// Runs `body`, in which an identity first saved for `address` is saved
+    /// undecided, whoever else has vouched for the device. The status is
+    /// decided at the insert because libsignal saves the identity while it
+    /// decodes, before the payload is checked: setting it afterwards leaves
+    /// the device trusted for a message that fails, and for the moment between.
+    /// Keyed by address, as other threads save the identities of the bundles
+    /// they encrypt to meanwhile.
+    func admittingUndecided<T>(_ address: SignalAddress, _ body: () -> T) -> T {
+        lock.withLock { undecidedAddresses[address, default: 0] += 1 }
+        defer {
+            lock.withLock {
+                let left = (undecidedAddresses[address] ?? 1) - 1
+                undecidedAddresses[address] = left > 0 ? left : nil
+            }
+        }
+        return body()
+    }
+
     func save(identity: SignalAddress, key: SignalIdentityKeyProtocol?) -> Bool {
         save(identity: identity, publicKeyData: key?.serialized())
     }
@@ -561,7 +582,8 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
                        EXISTS (SELECT 1 FROM omemoIdentity WHERE name = ?) AS hadDevices
                 """, arguments: [address.name, IdentityStatus.verifiedActive.rawValue, IdentityStatus.verifiedInactive.rawValue, address.name])
             let hasVerified: Bool = seen?["hasVerified"] ?? false, hadDevices: Bool = seen?["hadDevices"] ?? false
-            let status: IdentityStatus = hasVerified ? .undecidedActive : .trustedActive
+            let admittedUndecided = lock.withLock { undecidedAddresses[address] != nil }
+            let status: IdentityStatus = hasVerified || admittedUndecided ? .undecidedActive : .trustedActive
             let date = now()
             try db.execute(sql: "INSERT INTO omemoIdentity (name, deviceId, key, status, firstSeen) VALUES (?, ?, ?, ?, ?)",
                            arguments: [address.name, address.deviceId, key, status.rawValue, date])

@@ -177,14 +177,19 @@ final class OMEMOEncryption: @unchecked Sendable {
             logFailure(.compromised, keys: keys, device: device, isHistory: isHistory)
             return .failed("sent from a device marked compromised")
         }
-        switch module.decode(message: stanza, from: sender.martin, serverMsgId: isHistory ? nil : "") {
+        // A room's claim doesn't vouch for the device, so a new one is saved
+        // undecided as libsignal stores it, whatever becomes of the payload.
+        let unvouched = claim == .roomUnchecked && status == nil && !fromThisDevice
+        let decode = { self.module.decode(message: stanza, from: sender.martin, serverMsgId: isHistory ? nil : "") }
+        let decoded = if let device, unvouched {
+            store.admittingUndecided(SignalAddress(name: sender.description, deviceId: device), decode)
+        } else {
+            decode()
+        }
+        switch decoded {
         case .successMessage:
             guard let device else { return .decrypted(device: nil, trust: nil) }
             DiagLog.debug(.omemo, "Decrypted", .id("device", Redacted.id(String(device))), .bool("ownAccount", sender == account), .bool("preKey", prekey), .bool("history", isHistory))
-            if claim == .roomUnchecked, status == nil, !fromThisDevice {
-                _ = store.setStatus(.undecidedActive, forIdentity: SignalAddress(name: sender.description, deviceId: device))
-                return .decrypted(device: device, trust: .undecided)
-            }
             // Decoding is where a first message's identity is saved, so read
             // the status again: a new device of a verified contact is
             // undecided only from here on.
