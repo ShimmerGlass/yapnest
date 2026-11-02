@@ -390,8 +390,10 @@ public final class XMPPSession: @unchecked Sendable {
         var awaitsAccountDiscovery = false
         /// How this device's clock was compared with the server's this session:
         /// see `XMPPSession+ServerClock`.
-        var clockSource: ClockOffsetSource?
-        var archiveClockOffset: TimeInterval?
+        var clock: ClockState?
+        /// The offset last written to the database, so an archive stamp that
+        /// moves the estimate by less than a second doesn't open a write.
+        var recordedClockOffset: TimeInterval?
         var clockEstimate: Task<Void, Never>?
         /// What a resumed stream does again, as nothing else would before the
         /// next new session; a new session does all of it itself.
@@ -1545,8 +1547,8 @@ public final class XMPPSession: @unchecked Sendable {
                 // twice at once, and a new device's keys clobber each other.
                 lock.withLock {
                     $0.awaitsAccountDiscovery = true
-                    $0.clockSource = nil
-                    $0.archiveClockOffset = nil
+                    $0.clock = nil
+                    $0.recordedClockOffset = nil
                 }
                 runOnceConnected(attempt: attempt) { [self] in
                     accountDiscovered(client.module(.disco).accountDiscoResult)

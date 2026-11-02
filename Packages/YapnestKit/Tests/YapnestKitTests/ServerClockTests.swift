@@ -68,8 +68,19 @@ struct ServerClockTests {
         session.noteArchiveStamp(arrival.addingTimeInterval(120), arrivedAt: arrival)
         #expect(try db.setting(.serverClockOffset) == "120000")
 
-        session.noteClockOffset(121.5, from: .entityTime)
+        session.noteClockOffset(121.5)
         session.noteArchiveStamp(arrival.addingTimeInterval(500), arrivedAt: arrival)
         #expect(try db.setting(.serverClockOffset) == "121500")
+        #expect(session.lock.withLock { $0.clock } == .entityTime)
+    }
+
+    @Test func aStampThatMovesTheEstimateByLessThanASecondIsNotRecorded() {
+        let arrival = Date(timeIntervalSince1970: 5000)
+        session.noteArchiveStamp(arrival.addingTimeInterval(118), arrivedAt: arrival)
+        session.noteArchiveStamp(arrival.addingTimeInterval(118.5), arrivedAt: arrival)
+        #expect(session.lock.withLock { $0.clock } == .archive(best: 118.5))
+        #expect(session.lock.withLock { $0.recordedClockOffset } == 118)
+        session.noteArchiveStamp(arrival.addingTimeInterval(119.5), arrivedAt: arrival)
+        #expect(session.lock.withLock { $0.recordedClockOffset } == 119.5)
     }
 }

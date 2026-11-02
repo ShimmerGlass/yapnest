@@ -125,11 +125,7 @@ extension AppDatabase {
         // by applying the correction once the device is vouched for. Not
         // when the original was deleted: the correction could never apply,
         // and its placeholder would sit beside the tombstone.
-        var original: Message?
-        if let target = inbound.correctionOf {
-            original = try Self.referencedMessage(db, conversationId: conversationId, id: target)
-        }
-        let originalStored = original != nil
+        let original = try inbound.correctionOf.flatMap { try Self.referencedMessage(db, conversationId: conversationId, id: $0) }
         if let original, !(inbound.heldForCheck && inbound.encryption == .omemoUndecryptable && !original.isRetracted) {
             return result
         }
@@ -195,7 +191,7 @@ extension AppDatabase {
             }
             message.presenceSession = inbound.presenceSession
             // A correction of something we never got stands in for it.
-            if inbound.correctionOf != nil, !originalStored { message.editedAt = timestamp }
+            if inbound.correctionOf != nil, original == nil { message.editedAt = timestamp }
             message.mentionsMe = inbound.mentionsMe
             message.quickResponses = inbound.quickResponses
             // Read before the user scrolled back to it, or no marker or
@@ -223,7 +219,7 @@ extension AppDatabase {
                     try attachment.insert(db)
                     result.newAttachment = attachment
                 }
-                if let target = inbound.correctionOf, let id = stored.id, !originalStored {
+                if let target = inbound.correctionOf, let id = stored.id, original == nil {
                     if try fitting(.retract, target).isEmpty {
                         // A stand-in with a file is never linked: nothing would delete it.
                         if file == nil {

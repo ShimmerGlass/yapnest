@@ -70,8 +70,7 @@ extension AppDatabase {
         let ms = Int64((offset * 1000).rounded())
         return try writer.write { db in
             let held = try Self.setting(db, .serverClockOffset).flatMap(Int64.init)
-            if let held, abs(held - ms) < 1000 { return false }
-            if held == nil, abs(ms) < 1000 { return false }
+            if abs((held ?? 0) - ms) < 1000 { return false }
             try Self.setSetting(db, .serverClockOffset, String(ms))
             return true
         }
@@ -101,7 +100,17 @@ extension AppDatabase {
     private static func chatKey(
         read: @escaping @Sendable (Conversation) -> String?, apply: @escaping @Sendable (Database, Conversation, String?) throws -> Void,
     ) -> SyncedKey {
-        chatKey(read: { c, _ in read(c) }, apply: { db, c, value, _ in try apply(db, c, value) })
+        SyncedKey(
+            read: { db, peer in
+                guard let conversation = try peer.flatMap({ try Self.existingConversation(db, peer: $0) }) else { return nil }
+                return read(conversation)
+            },
+            apply: { db, peer, value in
+                guard let peer, let conversation = try Self.existingConversation(db, peer: peer) else { return }
+                try apply(db, conversation, value)
+            },
+            ofConversation: { c, _ in read(c) },
+        )
     }
 
     /// For a key that holds a time, which crosses in the server's clock:

@@ -68,7 +68,7 @@ enum UploadSlotParser {
         )
     }
 
-    private static func date(from stamp: String) -> Date? {
+    static func date(from stamp: String) -> Date? {
         let plain = ISO8601DateFormatter()
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

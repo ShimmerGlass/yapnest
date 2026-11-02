@@ -1,11 +1,11 @@
 import Foundation
 @preconcurrency import Martin
 
-/// What a session's estimate of the server's clock came from.
-enum ClockOffsetSource: Sendable {
-    /// The newest archive stamp seen: a floor, as a message is archived some
-    /// time before it reaches us.
-    case archive
+/// What a session's estimate of the server's clock rests on.
+enum ClockState: Sendable, Equatable {
+    /// The highest archive stamp less its arrival seen so far: a floor, as a
+    /// message is archived some time before it reaches us.
+    case archive(best: TimeInterval)
     /// The server's own answer to a time request (XEP-0202).
     case entityTime
 }
@@ -33,26 +33,19 @@ extension XMPPSession {
             guard let reply = try? await client.context.writer.write(iq: iq, timeout: Self.entityTimeTimeout) else { return }
             let received = Date()
             guard let server = Self.entityTime(in: reply) else { return }
-            noteClockOffset(Self.offset(server: server, sent: sent, received: received), from: .entityTime)
+            noteClockOffset(Self.offset(server: server, sent: sent, received: received))
         }
         lock.withLock { $0.clockEstimate = task }
     }
 
     static func entityTimeRequest(to domain: String) -> Iq {
-        let iq = Iq()
-        iq.type = .get
-        iq.to = Martin.JID(domain)
-        iq.addChild(Element(name: "time", xmlns: entityTimeNamespace))
-        return iq
+        Iq.make(.get, to: Martin.JID(domain), Element(name: "time", xmlns: entityTimeNamespace))
     }
 
     /// The server's time in an Entity Time answer.
     static func entityTime(in reply: Iq) -> Date? {
         guard let utc = reply.firstChild(name: "time", xmlns: entityTimeNamespace)?.firstChild(name: "utc")?.value else { return nil }
-        let plain = ISO8601DateFormatter()
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return plain.date(from: utc) ?? fractional.date(from: utc)
+        return UploadSlotParser.date(from: utc)
     }
 
     /// How far the server's clock is ahead of ours, as last recorded; zero
@@ -79,17 +72,30 @@ extension XMPPSession {
         guard policy.syncsAccountState else { return }
         let candidate = stamp.timeIntervalSince(arrival)
         guard candidate > -Self.archiveStampMaxAge else { return }
-        let best = lock.withLock { state -> TimeInterval? in
-            guard state.clockSource != .entityTime else { return nil }
-            guard candidate > (state.archiveClockOffset ?? -.infinity) else { return nil }
-            state.archiveClockOffset = candidate
-            return candidate
+        let shouldRecord = lock.withLock { state -> Bool in
+            switch state.clock {
+            case .entityTime: return false
+            case .archive(let best) where candidate <= best: return false
+            case .archive, nil: break
+            }
+            state.clock = .archive(best: candidate)
+            // An estimate is only good to a second, and each record is a write.
+            if let recorded = state.recordedClockOffset, abs(candidate - recorded) < 1 { return false }
+            state.recordedClockOffset = candidate
+            return true
         }
-        if let best { noteClockOffset(best, from: .archive) }
+        if shouldRecord { record(candidate) }
     }
 
-    func noteClockOffset(_ offset: TimeInterval, from source: ClockOffsetSource) {
-        lock.withLock { $0.clockSource = source }
+    func noteClockOffset(_ offset: TimeInterval) {
+        lock.withLock {
+            $0.clock = .entityTime
+            $0.recordedClockOffset = offset
+        }
+        record(offset)
+    }
+
+    private func record(_ offset: TimeInterval) {
         do {
             try database.noteServerClockOffset(offset)
         } catch {
