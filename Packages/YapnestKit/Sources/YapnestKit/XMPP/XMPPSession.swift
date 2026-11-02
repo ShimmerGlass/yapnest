@@ -425,6 +425,9 @@ public final class XMPPSession: @unchecked Sendable {
         /// Chats owing a read state while the state the server holds names a
         /// message we haven't stored. Storing a message for one starts a round.
         var readStatesAwaitingMessage: Set<JID> = []
+        /// Reconfigurations of a PEP node under way, so publishes that all
+        /// meet the same refusal ask the server once. See `reconfigurePEPNodeOnce`.
+        var nodeReconfigurations: [String: Task<Void, Error>] = [:]
         /// Where our settings node stands this session: see `SettingsSyncState`.
         var settingsSync = SettingsSyncState()
         /// Contact requests the server sent on this session.

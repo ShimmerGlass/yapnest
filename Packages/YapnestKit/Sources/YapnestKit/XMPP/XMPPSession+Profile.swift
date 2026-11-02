@@ -411,9 +411,26 @@ extension XMPPSession {
             )
         } catch let error as PubSubError where error.error.errorCondition == .conflict {
             logger.info("Reconfiguring \(node, privacy: .public) to be \(accessModel, privacy: .public)")
-            try await configurePEPNode(node, fields: config ?? ["pubsub#access_model": [accessModel]])
+            try await reconfigurePEPNodeOnce(node, fields: config ?? ["pubsub#access_model": [accessModel]])
             try await publishPEPItem(node: node, itemId: itemId, payload: payload, options: nil, timeout: timeout)
         }
+    }
+
+    /// `configurePEPNode`, shared by the callers that ask for the same fields
+    /// while it is in flight: publishes sent together to a node made with other
+    /// options are all refused, and each need not set it right again.
+    private func reconfigurePEPNodeOnce(_ node: String, fields: [String: [String]]) async throws {
+        let key = "\(node)|\(fields.sorted { $0.key < $1.key })"
+        let task = lock.withLock { state -> Task<Void, Error> in
+            if let running = state.nodeReconfigurations[key] { return running }
+            let started = Task { [self] in
+                defer { lock.withLock { _ = $0.nodeReconfigurations.removeValue(forKey: key) } }
+                try await configurePEPNode(node, fields: fields)
+            }
+            state.nodeReconfigurations[key] = started
+            return started
+        }
+        try await task.value
     }
 
     func publishPEPItem(node: String, itemId: String?, payload: Element, options: Element?, timeout: TimeInterval?) async throws {

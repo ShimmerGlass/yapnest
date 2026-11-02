@@ -510,6 +510,34 @@ struct OwedReadStateTests {
         #expect(Set(publishedStanzaIds()) == Set(["s3"] + (0..<9).map { "f\($0)" }))
     }
 
+    @Test func publishesTheNodeRefusesTogetherReconfigureItOnce() async throws {
+        try readOffline()
+        _ = try readMoreChatsOffline(3)
+        @Sendable func withOptions(_ iq: Iq) -> Bool {
+            iq.firstChild(name: "pubsub")?.firstChild(name: "publish-options") != nil
+        }
+        // All four are in flight before any is refused, as the node was made with other options.
+        wire.holdReplies { iq in
+            iq.firstChild(name: "pubsub")?.firstChild(name: "publish") != nil && withOptions(iq)
+        }
+        wire.answer { iq in
+            guard let pubsub = iq.firstChild(name: "pubsub") else { return nil }
+            if pubsub.firstChild(name: "publish") != nil, withOptions(iq) { return FakeWire.error(to: iq, condition: "conflict") }
+            if pubsub.firstChild(name: "items") != nil {
+                return FakeWire.result(to: iq, Element(name: "pubsub", xmlns: "http://jabber.org/protocol/pubsub", children: [Element(name: "items", attributes: ["node": NS.mds])]))
+            }
+            return FakeWire.result(to: iq)
+        }
+        session.connectForTesting(wire)
+        session.fetchDisplayed()
+        #expect(await eventually { publishes().count == 4 })
+        wire.releasePings()
+        #expect(await eventually { publishes().count == 8 && !owed })
+        _ = await eventually(timeout: 0.3) { false }
+        let configures = wire.written.compactMap { $0 as? Iq }.filter { $0.firstChild(name: "pubsub")?.firstChild(name: "configure") != nil }
+        #expect(configures.count == 1)
+    }
+
     @Test func aChatAnotherDeviceReadWhileTheEarlierPublishesWereInFlightIsNotPublishedOver() async throws {
         try readOffline()
         let chats = try readMoreChatsOffline(4)
