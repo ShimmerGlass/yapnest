@@ -138,7 +138,7 @@ What Yapnest implements, and where it stops short.
 | XEP-0191 | Blocking Command | Full. |
 | XEP-0198 | Stream Management | Full: acks and resumption, inline with SASL2. |
 | XEP-0199 | XMPP Ping | Full. Also confirms a sent message on a server without stream management. |
-| XEP-0202 | Entity Time | Ask the account's server for its time, once per connection, to tell how far this device's clock is from it. Times in the synced settings (when a chat was archived) cross between devices in the server's clock, so devices whose clocks differ agree. Requests to us aren't answered. A server that doesn't answer leaves the estimate to the archive's timestamps. |
+| XEP-0202 | Entity Time | Ask the account's server for its time, once per connection, to tell how far this device's clock is from it. Times in the synced settings (when a chat was archived) cross between devices in the server's clock, so devices whose clocks differ agree. Requests to us aren't answered. A server that doesn't answer leaves the estimate as it was. |
 | XEP-0203 | Delayed Delivery | Read. |
 | XEP-0215 | External Service Discovery | STUN and TURN servers are asked for from the account's server when a call starts or rings, and kept until their credentials run out (10 minutes when they don't say). Without any the call still tries a direct path; with Always Relay Calls on, a call goes only through the discovered relay and is refused before ringing if there is none. |
 | XEP-0223 | Persistent Storage of Private Data via PubSub | Used for bookmarks and read state, and for Yapnest's own settings (pins, archived chats, link preview and sound choices, GIF favorites, emoji usage and the like), in a node only the account can read, so they follow the user to their other devices. |

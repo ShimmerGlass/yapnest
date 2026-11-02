@@ -125,7 +125,7 @@ struct CallSignal: Sendable, Equatable {
         self.isFromAccount = isFromAccount
         isTieBreak = element.name != "propose" && element.firstChild(name: "tie-break") != nil
         if case .proceed = action { omemoDevice = CallFingerprints.device(in: element) }
-        self.timestamp = source.archivedAt.map { $0.addingTimeInterval(-clockOffset) }
+        self.timestamp = source.archivedAt.map { AppDatabase.localTime($0, offset: clockOffset) }
             ?? InboundMessage.trustedDelay(in: stanza, stamper: account, account: account, now: now, clockOffset: clockOffset)
     }
 

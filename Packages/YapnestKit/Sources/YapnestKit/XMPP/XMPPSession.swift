@@ -388,12 +388,10 @@ public final class XMPPSession: @unchecked Sendable {
         var mucService: String?
         /// A new session waits for account discovery before catching up.
         var awaitsAccountDiscovery = false
-        /// How this device's clock was compared with the server's this session:
-        /// see `XMPPSession+ServerClock`.
-        var clock: ClockState?
-        /// The offset last written to the database, so an archive stamp that
-        /// moves the estimate by less than a second doesn't open a write.
-        var recordedClockOffset: TimeInterval?
+        /// The server's clock less ours, read from the database on first use
+        /// and kept current as the server's answer is recorded: see
+        /// `XMPPSession+ServerClock`.
+        var clockOffset: TimeInterval?
         var clockEstimate: Task<Void, Never>?
         /// What a resumed stream does again, as nothing else would before the
         /// next new session; a new session does all of it itself.
@@ -792,7 +790,6 @@ public final class XMPPSession: @unchecked Sendable {
                 let serverId = archived.message.stanzaId?[source.martin] ?? archived.messageId
                 let origin = InboundMessage.Source.archive(serverId: serverId, timestamp: archived.timestamp)
                 let isHistory = self.lock.withLock { $0.historyQueries.contains(archived.query.id) }
-                if !isHistory { self.noteArchiveStamp(archived.timestamp, arrivedAt: Date()) }
                 let isAccount = source == self.account
                 guard isAccount || self.isGroup(source) else { return }
                 guard Self.archivedMessage(archived.message, belongsTo: source, isAccount: isAccount) else {
@@ -1545,11 +1542,7 @@ public final class XMPPSession: @unchecked Sendable {
                 // speaks once account discovery returns, which Martin starts
                 // itself. Asking again would make OMEMO publish its bundle
                 // twice at once, and a new device's keys clobber each other.
-                lock.withLock {
-                    $0.awaitsAccountDiscovery = true
-                    $0.clock = nil
-                    $0.recordedClockOffset = nil
-                }
+                lock.withLock { $0.awaitsAccountDiscovery = true }
                 runOnceConnected(attempt: attempt) { [self] in
                     accountDiscovered(client.module(.disco).accountDiscoResult)
                 }

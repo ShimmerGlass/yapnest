@@ -56,31 +56,26 @@ struct ServerClockTests {
         #expect(try db.setting(.serverClockOffset) == nil)
     }
 
-    @Test func archiveStampsStandInUntilTheServerAnswers() throws {
-        let arrival = Date(timeIntervalSince1970: 5000)
-        session.noteArchiveStamp(arrival.addingTimeInterval(118), arrivedAt: arrival)
-        #expect(try db.setting(.serverClockOffset) == "118000")
-        // A message that waited, such as one from the catch-up, says less.
-        session.noteArchiveStamp(arrival.addingTimeInterval(-60), arrivedAt: arrival)
-        #expect(try db.setting(.serverClockOffset) == "118000")
-        session.noteArchiveStamp(arrival.addingTimeInterval(-3600), arrivedAt: arrival)
-        #expect(try db.setting(.serverClockOffset) == "118000")
-        session.noteArchiveStamp(arrival.addingTimeInterval(120), arrivedAt: arrival)
-        #expect(try db.setting(.serverClockOffset) == "120000")
-
-        session.noteClockOffset(121.5)
-        session.noteArchiveStamp(arrival.addingTimeInterval(500), arrivedAt: arrival)
-        #expect(try db.setting(.serverClockOffset) == "121500")
-        #expect(session.lock.withLock { $0.clock } == .entityTime)
+    @Test func theRecordedOffsetIsKeptForLaterStanzas() throws {
+        #expect(session.serverClockOffset == 0)
+        session.noteClockOffset(120)
+        // Read from the cache: the database no longer matters.
+        try db.writer.write { try AppDatabase.setSetting($0, .serverClockOffset, "5000") }
+        #expect(session.serverClockOffset == 120)
+        #expect(session.serverTime(of: Date(timeIntervalSince1970: 880)) == Date(timeIntervalSince1970: 1000))
     }
 
-    @Test func aStampThatMovesTheEstimateByLessThanASecondIsNotRecorded() {
-        let arrival = Date(timeIntervalSince1970: 5000)
-        session.noteArchiveStamp(arrival.addingTimeInterval(118), arrivedAt: arrival)
-        session.noteArchiveStamp(arrival.addingTimeInterval(118.5), arrivedAt: arrival)
-        #expect(session.lock.withLock { $0.clock } == .archive(best: 118.5))
-        #expect(session.lock.withLock { $0.recordedClockOffset } == 118)
-        session.noteArchiveStamp(arrival.addingTimeInterval(119.5), arrivedAt: arrival)
-        #expect(session.lock.withLock { $0.recordedClockOffset } == 119.5)
+    @Test func theStoredOffsetIsLoadedOnFirstUse() throws {
+        try db.noteServerClockOffset(-90)
+        #expect(session.serverClockOffset == -90)
+    }
+
+    @Test func archiveStampsDoNotMoveTheOffset() throws {
+        let arrival = Date()
+        session.handle(parseStanza("<message from='alice@example.org/p' to='me@example.org' type='chat' id='m1'><body>hi</body></message>"),
+                       source: .archive(serverId: "s1", timestamp: arrival.addingTimeInterval(300)))
+        session.flushArchive()
+        #expect(try db.setting(.serverClockOffset) == nil)
+        #expect(session.serverClockOffset == 0)
     }
 }

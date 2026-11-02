@@ -339,12 +339,12 @@ extension InboundMessage {
             // but in this device's clock like every other stored time, so a
             // chat archived on a device with a different clock still compares
             // right with it.
-            self.timestamp = timestamp.map { $0.addingTimeInterval(-clockOffset) }
+            self.timestamp = timestamp.map { AppDatabase.localTime($0, offset: clockOffset) }
                 ?? Self.trustedDelay(in: stanza, stamper: stamper, account: account, now: now, clockOffset: clockOffset)
         case .live, .carbon:
             self.serverId = stanza.stanzaId?[stamper.martin]
             let stamp = Self.trustedStamp(in: stanza, stamper: stamper, account: account)
-            self.timestamp = min(stamp.map { $0.addingTimeInterval(-clockOffset) } ?? now, now)
+            self.timestamp = min(stamp.map { AppDatabase.localTime($0, offset: clockOffset) } ?? now, now)
             self.isDelayed = stamp != nil
         }
 
@@ -437,7 +437,7 @@ extension InboundMessage {
     /// server's clock, and the result in ours: `clockOffset` is how far the
     /// server's is ahead.
     static func trustedDelay(in stanza: Martin.Message, stamper: JID, account: JID, now: Date, clockOffset: TimeInterval = 0) -> Date {
-        min(trustedStamp(in: stanza, stamper: stamper, account: account).map { $0.addingTimeInterval(-clockOffset) } ?? now, now)
+        min(trustedStamp(in: stanza, stamper: stamper, account: account).map { AppDatabase.localTime($0, offset: clockOffset) } ?? now, now)
     }
 
     /// The latest stamp of a trusted `<delay>`, if there is one.
