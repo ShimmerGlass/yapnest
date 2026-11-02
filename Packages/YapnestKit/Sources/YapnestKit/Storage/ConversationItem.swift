@@ -190,12 +190,10 @@ extension AppDatabase {
             let candidates = try Message
                 .filter(Self.repliedTo(replyIds, in: conversationId))
                 .fetchAll(db)
-            for candidate in candidates {
-                for id in Set(candidate.referenceIds) where replyIds.contains(id) {
-                    if let current = quoted[id], current.referenceRank(for: id)! >= candidate.referenceRank(for: id)! { continue }
-                    quoted[id] = candidate
-                }
-            }
+            quoted = Self.bestReferenced(
+                candidates, replyIds: replyIds,
+                references: { Set($0.referenceIds) }, rank: { $0.referenceRank(for: $1)! },
+            )
             quotedAttachments = try Self.attachments(db, messageIds: candidates.compactMap(\.id))
         }
 
@@ -210,6 +208,25 @@ extension AppDatabase {
                 quotedAttachment: message.replyToId.flatMap { quoted[$0] }.flatMap { quotedAttachments[$0.id!] },
             )
         }
+    }
+
+    /// For each of `replyIds`, the candidate it most likely names, by
+    /// `Message.ReferenceRank`. `references` are the ids a candidate can be named
+    /// by, and `rank` how well a candidate fits one of them. A caller that
+    /// holds whole messages and one that holds only the columns share it.
+    static func bestReferenced<Candidate>(
+        _ candidates: [Candidate], replyIds: Set<String>,
+        references: (Candidate) -> Set<String>, rank: (Candidate, String) -> Message.ReferenceRank,
+    ) -> [String: Candidate] {
+        var best: [String: (rank: Message.ReferenceRank, candidate: Candidate)] = [:]
+        for candidate in candidates {
+            for reference in references(candidate) where replyIds.contains(reference) {
+                let candidateRank = rank(candidate, reference)
+                if let current = best[reference], current.rank >= candidateRank { continue }
+                best[reference] = (candidateRank, candidate)
+            }
+        }
+        return best.mapValues(\.candidate)
     }
 
     /// The messages of the conversation that any of `ids` names, by any of their ids.
@@ -578,17 +595,17 @@ final class ConversationItemCache: @unchecked Sendable {
             let candidates = try Row.fetchAll(db, Message
                 .filter(AppDatabase.repliedTo(replyIds, in: conversationId))
                 .select(Column("id"), Column("rev"), Column("timestamp"), Column("remoteId"), Column("originId"), Column("serverId")))
-            var best: [String: Message.ReferenceRank] = [:]
-            for row in candidates {
-                let key = QuoteKey(id: row["id"], rev: row["rev"])
-                let ids: [String?] = [row["remoteId"], row["originId"], row["serverId"]]
-                for reference in Set(ids.compactMap { $0 }) where replyIds.contains(reference) {
-                    let rank = Message.ReferenceRank(isServerId: (row["serverId"] as String?) == reference, timestamp: row["timestamp"], id: key.id)
-                    if let current = best[reference], current >= rank { continue }
-                    best[reference] = rank
-                    quoteKeys[reference] = key
-                }
-            }
+            let best = AppDatabase.bestReferenced(
+                candidates, replyIds: replyIds,
+                references: { row in
+                    let ids: [String?] = [row["remoteId"], row["originId"], row["serverId"]]
+                    return Set(ids.compactMap { $0 })
+                },
+                rank: { row, reference in
+                    Message.ReferenceRank(isServerId: (row["serverId"] as String?) == reference, timestamp: row["timestamp"], id: row["id"])
+                },
+            )
+            quoteKeys = best.mapValues { QuoteKey(id: $0["id"], rev: $0["rev"]) }
         }
 
         // Rebuild what moved and what quotes something that did.
