@@ -177,11 +177,17 @@ struct PendingReactionTests {
         return message
     }
 
-    private func echo(id: String, emojis: [String]) throws {
-        let xml = "<message from='cake@rooms.example.org/me' type='groupchat' id='\(id)'><reactions id='s1' xmlns='urn:xmpp:reactions:0'>"
+    /// A message carrying our `emojis` for the message `target`, as the server
+    /// delivers it. `to` is left out of a room's.
+    private func reactionStanza(from: String, to: String? = nil, type: String, id: String, target: String, emojis: [String]) throws -> Martin.Message {
+        let xml = "<message from='\(from)'\(to.map { " to='\($0)'" } ?? "") type='\(type)' id='\(id)'><reactions id='\(target)' xmlns='urn:xmpp:reactions:0'>"
             + emojis.map { "<reaction>\($0)</reaction>" }.joined() + "</reactions></message>"
         let element = try #require(Element.from(string: xml))
-        let stanza = try #require(Stanza.from(element: element) as? Martin.Message)
+        return try #require(Stanza.from(element: element) as? Martin.Message)
+    }
+
+    private func echo(id: String, emojis: [String]) throws {
+        let stanza = try reactionStanza(from: "cake@rooms.example.org/me", type: "groupchat", id: id, target: "s1", emojis: emojis)
         let context = RoomContext(jid: room, nickname: "me")
         let inbound = try #require(InboundMessage(groupchat: stanza, room: context, account: me, source: .live))
         try database.ingest(inbound)
@@ -214,12 +220,15 @@ struct PendingReactionTests {
         #expect(!(try isPending(in: room)))
     }
 
+    private func ingestOneToOne(from: String, id: String, emojis: [String], source: InboundMessage.Source) throws -> InboundMessage {
+        let stanza = try reactionStanza(from: from, to: "alice@example.org", type: "chat", id: id, target: "1", emojis: emojis)
+        let inbound = try #require(InboundMessage(stanza, account: me, source: source, now: Date()))
+        try database.ingest(inbound)
+        return inbound
+    }
+
     private func carbonFromOtherDevice(id: String, emojis: [String]) throws {
-        let xml = "<message from='me@example.org/laptop' to='alice@example.org' type='chat' id='\(id)'><reactions id='1' xmlns='urn:xmpp:reactions:0'>"
-            + emojis.map { "<reaction>\($0)</reaction>" }.joined() + "</reactions></message>"
-        let element = try #require(Element.from(string: xml))
-        let stanza = try #require(Stanza.from(element: element) as? Martin.Message)
-        try database.ingest(try #require(InboundMessage(stanza, account: me, source: .carbon(sent: true), now: Date())))
+        _ = try ingestOneToOne(from: "me@example.org/laptop", id: id, emojis: emojis, source: .carbon(sent: true))
     }
 
     // MARK: Taking the last reaction back
@@ -328,13 +337,8 @@ struct PendingReactionTests {
     }
 
     private func archivedFromUs(id: String, emojis: [String]) throws {
-        let xml = "<message from='me@example.org' to='alice@example.org' type='chat' id='\(id)'><reactions id='1' xmlns='urn:xmpp:reactions:0'>"
-            + emojis.map { "<reaction>\($0)</reaction>" }.joined() + "</reactions></message>"
-        let element = try #require(Element.from(string: xml))
-        let stanza = try #require(Stanza.from(element: element) as? Martin.Message)
-        let inbound = try #require(InboundMessage(stanza, account: me, source: .archive(serverId: "a-\(id)", timestamp: Date(timeIntervalSince1970: 100)), now: Date()))
+        let inbound = try ingestOneToOne(from: "me@example.org", id: id, emojis: emojis, source: .archive(serverId: "a-\(id)", timestamp: Date(timeIntervalSince1970: 100)))
         #expect(inbound.isOutgoing && inbound.isReplay)
-        try database.ingest(inbound)
     }
 
     @Test func anArchivedReplayOfAnOlderSetLeavesOursPendingAlone() throws {
