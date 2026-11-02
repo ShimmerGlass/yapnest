@@ -60,6 +60,9 @@ struct RoomCatchUpResendTests {
         session.drainSendQueue(room)
         #expect(wire.messages.filter { $0.body == "hi" }.isEmpty)
         await eventually("the lists to be asked for") { wire.heldPings > 0 }
+        // The lists are asked for one after another, and under load only the
+        // first may be out yet: the ones still to come must not be held.
+        wire.holdReplies(to: nil)
         wire.releasePings()
         await eventually("the lists") { session.roomStatus(room)?.membersListed == true }
         #expect(session.roomStatus(room)?.awaitsMemberLists == false)
@@ -98,6 +101,7 @@ struct RoomCatchUpResendTests {
         #expect(session.roomStatus(room)?.awaitsMemberLists == true)
         session.client.update(state: .connected(resumed: true))
         await eventually("the lists to be asked for again") { wire.heldPings > 0 }
+        wire.holdReplies(to: nil)
         wire.releasePings()
         await eventually("the lists") { session.roomStatus(room)?.awaitsMemberLists == false }
         await eventually("the message to go out once the lists are in") {
