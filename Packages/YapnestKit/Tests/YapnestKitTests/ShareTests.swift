@@ -187,6 +187,17 @@ struct ShareTests {
         #expect(Set(try sender.recipients().map(\.conversation.peer)) == [alice, room])
     }
 
+    @Test func archivedChatsAreRecipientsToo() throws {
+        let account = directory.appending(path: "account")
+        let sender = ShareSender(credentials: .init(jid: me, password: "x"), directory: account, resource: "share",
+                                 lock: ProcessLock(url: directory.appending(path: "l")))
+        let db = try AccountDirectory(url: account).openDatabase()
+        let bob = JID("bob@example.org")!
+        for peer in [alice, bob] { try db.insert(Message(conversationId: db.conversation(with: peer).id!, direction: .incoming, sender: peer, body: "hi", remoteId: peer.description)) }
+        try db.setArchived(true, conversationId: db.conversation(with: bob).id!)
+        #expect(Set(try sender.recipients().map(\.conversation.peer)) == [alice, bob])
+    }
+
     // MARK: Suggestions
 
     @Test func suggestionsNameTheChatByItsAddress() throws {
