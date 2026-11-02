@@ -277,6 +277,72 @@ struct OMEMOStoreTests {
         #expect(holders.forOtherOwnDevices)
     }
 
+    /// What a build from before the guard would have left for our own device.
+    private func plantRows(for deviceId: UInt32, in database: AppDatabase) throws {
+        try database.writer.write { db in
+            let id = Int32(bitPattern: deviceId)
+            try db.execute(sql: "INSERT INTO omemoIdentity (name, deviceId, key, status, firstSeen) VALUES (?, ?, ?, ?, ?)",
+                           arguments: [me.description, id, key(9), IdentityStatus.trustedActive.rawValue, Date()])
+            try db.execute(sql: "INSERT INTO omemoSession (name, deviceId, data) VALUES (?, ?, ?)", arguments: [me.description, id, Data([1])])
+            try db.execute(sql: "INSERT INTO deviceNotice (deviceId, fingerprint, firstSeen) VALUES (?, ?, ?)", arguments: [id, "ab", Date()])
+        }
+    }
+
+    private func ownRows(of deviceId: UInt32, in database: AppDatabase) throws -> Int {
+        try database.reader.read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT (SELECT COUNT(*) FROM omemoIdentity WHERE deviceId = ?) + (SELECT COUNT(*) FROM omemoSession WHERE deviceId = ?)
+                     + (SELECT COUNT(*) FROM deviceNotice WHERE deviceId = ?)
+                """, arguments: [Int32(bitPattern: deviceId), Int32(bitPattern: deviceId), Int32(bitPattern: deviceId)]) ?? 0
+        }
+    }
+
+    @Test func aForgedIdentityForOurOwnDeviceIsNeitherSavedNorTrusted() throws {
+        let database = try AppDatabase.inMemory()
+        let omemo = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        let own = SignalAddress(name: me.description, deviceId: Int32(bitPattern: omemo.deviceId))
+        #expect(!omemo.store.save(identity: own, publicKeyData: key(9)))
+        #expect(!omemo.store.isTrusted(identity: own, publicKeyData: key(9)))
+        #expect(omemo.store.identities(forName: me.description).isEmpty)
+        #expect(try ownRows(of: omemo.deviceId, in: database) == 0)
+    }
+
+    @Test func ourOwnDeviceIsNeverOneOfTheDevicesWeEncryptTo() throws {
+        let database = try AppDatabase.inMemory()
+        let omemo = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        try plantRows(for: omemo.deviceId, in: database)
+        let other = SignalAddress(name: me.description, deviceId: Int32(bitPattern: omemo.deviceId) &+ 1)
+        #expect(omemo.store.save(identity: other, publicKeyData: key(2)))
+        #expect(omemo.store.storeSessionRecord(Data([1]), forAddress: other))
+        #expect(omemo.store.ownDevicesToEncryptTo() == [other.deviceId])
+    }
+
+    @Test func launchRemovesWhatAnOlderBuildSavedForOurOwnDevice() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let first = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        try plantRows(for: first.deviceId, in: database)
+        #expect(try ownRows(of: first.deviceId, in: database) == 3)
+        let relaunched = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(relaunched.deviceId == first.deviceId)
+        #expect(try ownRows(of: first.deviceId, in: database) == 0)
+    }
+
+    @Test func theDeviceKeptFromTheKeychainHasNoRowsOfItsOwn() throws {
+        let database = try AppDatabase.inMemory(), keys = MemoryIdentityKeyStore()
+        let kept = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(kept.store.storeSignedPreKey(try Self.signedPreKey(1, by: kept), withId: 1))
+        try plantRows(for: kept.deviceId, in: database)
+        let older = try OMEMOEncryption(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
+        let olderPair = try #require((older.store.keyPair() as? SignalIdentityKeyPair)?.keyPair)
+        try database.setSetting(.omemoIdentityKeyPair, olderPair.base64EncodedString())
+        try database.setSetting(.omemoRegistrationId, String(older.deviceId))
+        #expect(kept.store.storeSignedPreKey(try Self.signedPreKey(2, by: older), withId: 2))
+
+        let upgraded = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
+        #expect(upgraded.deviceId == kept.deviceId)
+        #expect(try ownRows(of: kept.deviceId, in: database) == 0)
+    }
+
     /// A move cut short after the keychain took the key, with the key still
     /// in the database, is finished, not taken for another device.
     @Test func aMoveCutShortIsFinished() throws {

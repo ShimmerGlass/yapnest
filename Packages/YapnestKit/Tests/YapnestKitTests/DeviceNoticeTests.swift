@@ -53,7 +53,7 @@ struct DeviceNoticeTests {
         let encryption = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
         try database.noteDeviceList(of: me.description, ids: [1])
         let own = Int32(bitPattern: encryption.deviceId)
-        #expect(encryption.store.save(identity: SignalAddress(name: me.description, deviceId: own), publicKeyData: key(9)))
+        #expect(!encryption.store.save(identity: SignalAddress(name: me.description, deviceId: own), publicKeyData: key(9)))
         #expect(try database.deviceNotices().isEmpty)
     }
 

@@ -115,6 +115,24 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// The decision, inside the transaction. Also says whether a key kept in
     /// the database by a version from before was erased from it.
     private func findOrMakeIdentity(in db: Database, context: SignalContext) throws -> (StoredIdentity, erasedKeys: Bool) {
+        let result = try decideIdentity(in: db, context: context)
+        try Self.dropRowsOfOwnDevice(result.0.registrationId, account: account, in: db)
+        return result
+    }
+
+    /// Our own device is its key pair, never a row: a row for its id would
+    /// make it one of our other devices, and a message we send would be
+    /// encrypted to whoever could pass for it. An older build saved one when
+    /// a message named our address and device id, and one that took the id of
+    /// a device it replaced kept that device's rows.
+    private static func dropRowsOfOwnDevice(_ registrationId: UInt32, account: String, in db: Database) throws {
+        let id = Int32(bitPattern: registrationId)
+        try db.execute(sql: "DELETE FROM omemoIdentity WHERE name = ? AND deviceId = ?", arguments: [account, id])
+        try db.execute(sql: "DELETE FROM omemoSession WHERE name = ? AND deviceId = ?", arguments: [account, id])
+        try db.execute(sql: "DELETE FROM deviceNotice WHERE deviceId = ?", arguments: [id])
+    }
+
+    private func decideIdentity(in db: Database, context: SignalContext) throws -> (StoredIdentity, erasedKeys: Bool) {
         var registrationId = try AppDatabase.setting(db, .omemoRegistrationId).flatMap { UInt32($0) }
         var erased = false
         if let legacy = try AppDatabase.setting(db, .omemoIdentityKeyPair) {
@@ -357,8 +375,11 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         } ?? nil
     }
 
+    /// The devices of `name` we hold a session with. Never this install's own,
+    /// which has none: see `dropRowsOfOwnDevice`.
     func allDevices(for name: String, activeAndTrusted: Bool) -> [Int32] {
-        read { db in
+        let local = Int32(bitPattern: localRegistrationId())
+        let devices: [Int32]? = read { db in
             if activeAndTrusted {
                 let usable = [IdentityStatus.trustedActive, .verifiedActive].map(\.rawValue)
                 return try Int32.fetchAll(db, sql: """
@@ -368,7 +389,8 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
                     """, arguments: [name])
             }
             return try Int32.fetchAll(db, sql: "SELECT deviceId FROM omemoSession WHERE name = ?", arguments: [name])
-        } ?? []
+        }
+        return (devices ?? []).filter { name != account || $0 != local }
     }
 
     func storeSessionRecord(_ data: Data, forAddress address: SignalAddress) -> Bool {
@@ -524,7 +546,7 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     }
 
     func save(identity address: SignalAddress, publicKeyData: Data?) -> Bool {
-        guard let key = publicKeyData else { return false }
+        guard let key = publicKeyData, !isLocalDevice(address) else { return false }
         return write { db in
             if let stored = try Data.fetchOne(db, sql: "SELECT key FROM omemoIdentity WHERE name = ? AND deviceId = ?", arguments: [address.name, address.deviceId]) {
                 // A device's identity never changes; isTrusted refuses a different one.
@@ -543,7 +565,6 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
             let date = now()
             try db.execute(sql: "INSERT INTO omemoIdentity (name, deviceId, key, status, firstSeen) VALUES (?, ?, ?, ?, ?)",
                            arguments: [address.name, address.deviceId, key, status.rawValue, date])
-            guard !isLocalDevice(address) else { return }
             // Whatever its status, the device now gets or may get our messages; the user hears of it.
             // A side effect must never cost the session its device: if the
             // notice can't be written, only it is rolled back.
@@ -574,7 +595,9 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// before and not be marked compromised. Undecided keys pass, so their
     /// messages can still be read; they just aren't encrypted to.
     func isTrusted(identity address: SignalAddress, publicKeyData: Data?) -> Bool {
-        guard let key = publicKeyData else { return false }
+        // We never have a session with ourselves, so a key claiming our own
+        // address and device id is a forgery, not a first use.
+        guard let key = publicKeyData, !isLocalDevice(address) else { return false }
         guard let row = read({ db in
             try Row.fetchOne(db, sql: "SELECT key, status FROM omemoIdentity WHERE name = ? AND deviceId = ?", arguments: [address.name, address.deviceId])
         }) else { return false }
