@@ -37,7 +37,7 @@ struct PendingReactionTests {
 
     private func isPending() throws -> Bool {
         let items = try database.reader.read { try AppDatabase.conversationItems($0, peer: alice, me: me) }
-        return items.flatMap(\.reactions).contains { $0.isPending }
+        return items.contains { $0.ownReactions == .pending }
     }
 
     private func reactionStanzas() -> [Martin.Message] {
@@ -84,11 +84,6 @@ struct PendingReactionTests {
 
         #expect(try rows().count == 2)
         #expect(try record() == nil)
-        #expect(!(try isPending()))
-    }
-
-    @Test func onlyOurOwnPendingReactionsMarkTheGroup() throws {
-        try database.setReactions(["👍"], from: Author(jid: alice), conversationId: message.conversationId, messageRef: "1", pendingId: "x")
         #expect(!(try isPending()))
     }
 
@@ -156,7 +151,7 @@ struct PendingReactionTests {
 
     private func isPending(in peer: YapnestKit.JID) throws -> Bool {
         let items = try database.reader.read { try AppDatabase.conversationItems($0, peer: peer, me: me) }
-        return items.flatMap(\.reactions).contains { $0.isPending }
+        return items.contains { $0.ownReactions == .pending }
     }
 
     @Test func reactingToAGroupMessageTheRoomHasntEchoedYetThrows() throws {

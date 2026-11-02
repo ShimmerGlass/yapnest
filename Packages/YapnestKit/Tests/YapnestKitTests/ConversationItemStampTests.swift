@@ -23,7 +23,7 @@ struct ConversationItemStampTests {
         }
 
         expectNewStamp("message") { $0.message.body = "changed" }
-        expectNewStamp("reactions") { $0.reactions = [.init(emoji: "👍", senders: [], includesMe: true, isPending: false, error: nil)] }
+        expectNewStamp("reactions") { $0.reactions = [.init(emoji: "👍", senders: [], includesMe: true)] }
         expectNewStamp("quote") { $0.quote = .init(author: nil, text: "quoted", messageId: nil) }
         expectNewStamp("preview") { $0.preview = LinkPreview(url: "https://example.org", kind: .none) }
         expectNewStamp("attachment") { $0.attachment = Attachment(messageId: 1, url: nil, name: "a.png", mimeType: nil, state: .pendingUpload) }

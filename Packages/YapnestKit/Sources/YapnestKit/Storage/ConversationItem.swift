@@ -9,14 +9,6 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
         public var emoji: String
         public var senders: [Author]
         public var includesMe: Bool
-        /// One of ours is still waiting for the server to acknowledge it.
-        public var isPending: Bool
-        /// Why one of ours never reached the other side, for good. Only ever
-        /// set on our own.
-        public var error: String?
-
-        public var isFailed: Bool { error != nil }
-
         /// What a reaction that wasn't delivered says when the server gave no
         /// reason of its own.
         public static var notDelivered: String { String(localized: "The reaction couldn't be delivered.") }
@@ -231,8 +223,6 @@ extension AppDatabase {
                     emoji: emoji,
                     senders: reactions.sorted { ($0.sender, $0.nick) < ($1.sender, $1.nick) }.map(\.author),
                     includesMe: reactions.contains { $0.sender == me },
-                    isPending: own?.pendingId != nil && reactions.contains { $0.sender == me },
-                    error: reactions.contains { $0.sender == me } ? own?.error : nil,
                 )
             }
             .sorted { ($0.senders.count, $1.emoji) > ($1.senders.count, $0.emoji) }

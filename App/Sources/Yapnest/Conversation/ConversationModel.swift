@@ -1255,7 +1255,7 @@ final class ConversationModel {
         var direction: Message.Direction
         var author: Author
         var timestamp: Date
-        var hasReactions: Bool
+        var showsReactionChip: Bool
         var isEvent: Bool
 
         init(_ item: ConversationItem) {
@@ -1263,7 +1263,7 @@ final class ConversationModel {
             direction = item.message.direction
             author = item.message.author
             timestamp = item.message.timestamp
-            hasReactions = item.showsReactionChip
+            showsReactionChip = item.showsReactionChip
         }
     }
 
@@ -1658,7 +1658,7 @@ final class ConversationModel {
             dayHeader: showsDay ? message.timestamp.dayHeaderFormatted(now: environment.now) : nil,
             showsUnreadDivider: inputs.hasUnreadDivider,
             joinsPrevious: joinsPrevious,
-            joinsNext: grouped(this, inputs.next) && inputs.next?.hasReactions != true && !item.showsReactionChip,
+            joinsNext: grouped(this, inputs.next) && inputs.next?.showsReactionChip != true && !item.showsReactionChip,
         )
 
         let time = message.timestamp.formatted(date: .omitted, time: .shortened)

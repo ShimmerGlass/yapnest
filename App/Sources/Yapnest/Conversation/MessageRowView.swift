@@ -89,13 +89,14 @@ struct MessageRowView: View, Equatable {
     private var bubbleRow: some View {
         let reactions = row.item.reactions
         let showsChip = row.item.showsReactionChip
+        let pending = row.item.ownReactions == .pending && reactions.contains(where: \.includesMe)
         return RowBubble(row: row, model: model)
             .padding(.bottom, showsChip ? chipClearance : 0)
             .overlay(alignment: row.isOutgoing ? .bottomLeading : .bottomTrailing) {
                 if showsChip {
                     // Tapping the chip opens the list of who reacted; the Mac
                     // gets the same list on hover.
-                    ReactionsChip(reactions: reactions, failed: row.item.reactionFailure != nil, who: Platform.isMac ? reactionTooltip : nil) { model.showReactions(for: row.id) }
+                    ReactionsChip(reactions: reactions, failed: row.item.reactionFailure != nil, pending: pending, who: Platform.isMac ? reactionTooltip : nil) { model.showReactions(for: row.id) }
                         .padding(.horizontal, 8)
                 }
             }

@@ -423,14 +423,14 @@ struct ReactionsChip: View {
     /// Ours never reached the other side. With no reaction left to show, the
     /// chip is only this.
     let failed: Bool
+    /// Ours isn't acknowledged yet.
+    let pending: Bool
     /// Who reacted with each emoji, shown as a tooltip. Empty shows nothing.
     var who: String?
     let onTap: () -> Void
 
     /// The chip's height at the default text size, growing with Dynamic Type.
     @ScaledMetric private var height: CGFloat = Platform.isMac ? 34 : 28
-
-    private var isPending: Bool { reactions.contains(where: \.isPending) }
 
     private func label(total: Int, emojis: String) -> Text {
         reactions.isEmpty ? Text(Image(systemName: "exclamationmark")) : Text(total > 1 ? "\(emojis) \(total)" : emojis)
@@ -462,14 +462,14 @@ struct ReactionsChip: View {
                     if failed {
                         // Ours never reached the other side; a tap says why.
                         Capsule().strokeBorder(Color.red, lineWidth: 1.25)
-                    } else if isPending {
+                    } else if pending {
                         Capsule().strokeBorder(Color.secondary, style: StrokeStyle(lineWidth: 1.25, lineCap: .round, dash: [0, 3.5]))
                     }
                 }
         }
         .buttonStyle(.plain)
         .help(who ?? "")
-        .accessibilityLabel(reactions.map { "\($0.emoji) \($0.senders.count)" }.joined(separator: ", ") + (failed ? ", " + String(localized: "Not delivered") : isPending ? ", " + String(localized: "Sending") : ""))
+        .accessibilityLabel(reactions.map { "\($0.emoji) \($0.senders.count)" }.joined(separator: ", ") + (failed ? ", " + String(localized: "Not delivered") : pending ? ", " + String(localized: "Sending") : ""))
     }
 }
 

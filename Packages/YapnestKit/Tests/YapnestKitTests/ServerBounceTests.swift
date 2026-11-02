@@ -106,9 +106,8 @@ struct ServerBounceTests {
         bounce(try #require(stanza.id))
 
         let items = try database.reader.read { try AppDatabase.conversationItems($0, peer: alice, me: me) }
-        let group = try #require(items.flatMap(\.reactions).first)
-        #expect(group.error == "The reaction couldn't be delivered: Nope (forbidden)")
-        #expect(!group.isPending)
+        let item = try #require(items.first { !$0.reactions.isEmpty })
+        #expect(item.ownReactions == .failed("The reaction couldn't be delivered: Nope (forbidden)"))
     }
 
     @Test func anErrorFromSomeoneElseIsNotTaken() throws {

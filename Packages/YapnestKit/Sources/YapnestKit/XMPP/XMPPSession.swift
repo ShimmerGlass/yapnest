@@ -3177,7 +3177,7 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     /// Sends our reactions on `message` again, after the other side never got
-    /// them (see `ReactionGroup.error`).
+    /// them (see `ConversationItem.ownReactions`).
     public func retryReactions(on message: Message, peer: JID) throws {
         try setMyReactions(database.reactions(on: message, from: account), on: message, peer: peer)
     }
