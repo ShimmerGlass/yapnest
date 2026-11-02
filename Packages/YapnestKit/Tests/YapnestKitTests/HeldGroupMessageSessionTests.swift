@@ -149,9 +149,10 @@ struct HeldGroupMessageSessionTests {
     }
 
     /// What a device of the room's own writes to us as Bob's, which would
-    /// read as his if decoded.
-    private func roomSays(_ id: String, _ body: String, from device: OtherDevice) throws {
-        let stanza: Martin.Message = parseStanza("<message from='\(room)/Bob' type='groupchat' id='\(id)'><body>fallback</body></message>")
+    /// read as his if decoded; with `target`, a correction of that message.
+    private func roomSays(_ id: String, _ body: String, from device: OtherDevice, replacing target: String? = nil) throws {
+        let replace = target.map { "<replace xmlns='urn:xmpp:message-correct:0' id='\($0)'/>" } ?? ""
+        let stanza: Martin.Message = parseStanza("<message from='\(room)/Bob' type='groupchat' id='\(id)'><body>fallback</body>\(replace)</message>")
         stanza.addChild(try device.encrypt(body, to: session))
         session.handleRoomStanza(stanza, source: .live)
     }
@@ -423,15 +424,6 @@ struct HeldGroupMessageSessionTests {
     }
 
     /// What a device of Bob's, not yet vouched for, writes as a correction of `target`.
-    private func roomCorrects(_ id: String, _ target: String, _ body: String, from device: OtherDevice) throws {
-        let stanza: Martin.Message = parseStanza("""
-            <message from='\(room)/Bob' type='groupchat' id='\(id)'><body>fallback</body>\
-            <replace xmlns='urn:xmpp:message-correct:0' id='\(target)'/></message>
-            """)
-        stanza.addChild(try device.encrypt(body, to: session))
-        session.handleRoomStanza(stanza, source: .live)
-    }
-
     /// Bob's message `id`, already stored as an encrypted one.
     @discardableResult
     private func storeOriginal(_ id: String, _ body: String) throws -> YapnestKit.Message {
@@ -452,7 +444,7 @@ struct HeldGroupMessageSessionTests {
         try storeOriginal("g0", "cake at four")
         bobsServer(list: .error("remote-server-timeout", "wait"))
 
-        try roomCorrects("g1", "g0", "cake at five", from: device)
+        try roomSays("g1", "cake at five", from: device, replacing: "g0")
         await eventually("the list to be asked for") { requested(OMEMOModule.DEVICES_LIST_NODE) }
 
         // Held as a placeholder, which is what its hold attaches to.
@@ -475,7 +467,7 @@ struct HeldGroupMessageSessionTests {
         try storeOriginal("g0", "cake at four")
         bobsServer(list: .ids([111]))
 
-        try roomCorrects("g1", "g0", "cake at five", from: device)
+        try roomSays("g1", "cake at five", from: device, replacing: "g0")
         await eventually("the hold to be dropped") { held.isEmpty && requested(OMEMOModule.DEVICES_LIST_NODE) }
 
         #expect(try stored("g1").encryption == .omemoUndecryptable)
@@ -492,7 +484,7 @@ struct HeldGroupMessageSessionTests {
         bobsServer(list: .error("remote-server-timeout", "wait"))
         // Nothing is stored, so there is no hold and no device check to wait for.
 
-        try roomCorrects("g1", "g0", "cake at five", from: device)
+        try roomSays("g1", "cake at five", from: device, replacing: "g0")
 
         #expect(held.isEmpty)
         #expect(copies("g1") == 0)

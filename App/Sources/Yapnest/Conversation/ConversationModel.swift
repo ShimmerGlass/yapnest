@@ -2889,17 +2889,14 @@ final class ConversationModel {
         guard let message = items[id]?.message else { return }
         let key = ActionKey(messageID: id, actionID: actionID)
         guard choosingActions.insert(key).inserted else { return }
-        let session = session
-        enqueue { [weak self] in
-            do {
-                // Detached so its database writes stay off the main thread.
-                try await Task.detached(priority: .userInitiated) { try await session.chooseAction(actionID, on: message) }.value
-                self?.choosingActions.remove(key)
-            } catch {
-                self?.choosingActions.remove(key)
-                self?.prompt = .error(error.localizedDescription)
-            }
-        }
+        write({ [session] in
+            try await session.chooseAction(actionID, on: message)
+        }, then: { [weak self] in
+            self?.choosingActions.remove(key)
+        }, onFailure: { [weak self] error in
+            self?.choosingActions.remove(key)
+            self?.prompt = .error(error.localizedDescription)
+        })
     }
 
     func react(_ emoji: String, to id: Int64) {
@@ -2953,7 +2950,7 @@ final class ConversationModel {
     /// the one before, so a reaction toggled twice or a message retracted
     /// right after being sent lands in that order.
     private func write(
-        _ work: @escaping @Sendable () throws -> Void,
+        _ work: @escaping @Sendable () async throws -> Void,
         then success: @escaping () -> Void = {},
         onFailure: ((Error) -> Void)? = nil,
     ) {

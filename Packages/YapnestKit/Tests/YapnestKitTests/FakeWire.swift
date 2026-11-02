@@ -134,11 +134,11 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
         }
         if !fails { module?.processOutgoing(stanza: stanza) }
         let handOver: () -> Void = { writeCompleted?(fails ? .failure(.undefined_condition) : .success(())) }
-        if lock.withLock({ holdingHandOvers }) {
-            lock.withLock { handOvers.append(handOver) }
-        } else {
-            handOver()
+        let held = lock.withLock {
+            if holdingHandOvers { handOvers.append(handOver) }
+            return holdingHandOvers
         }
+        if !held { handOver() }
     }
 
     /// A result for `request`, carrying `children`.

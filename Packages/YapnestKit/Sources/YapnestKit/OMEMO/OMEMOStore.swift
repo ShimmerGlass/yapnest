@@ -42,6 +42,8 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// with, so it answered 0 and the ids the caller makes from it may be in
     /// use. `storePreKey` refuses until a read succeeds. Guarded by `lock`.
     private var preKeyIdUnknown = false
+    /// The signed prekey whose publish was last recorded. Guarded by `lock`.
+    private var lastPublishedSignedPreKey: UInt32?
 
     private struct SessionBatch {
         /// As read when the send began.
@@ -539,6 +541,12 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// Only the first time counts: the same key published again leaves its
     /// predecessor's grace period running from the first.
     func signedPreKeyPublished(id: UInt32) {
+        // Every bundle publish says so, prekey refills and reconnects too,
+        // and only a new key's first one writes anything.
+        guard lock.withLock({ () -> Bool in
+            defer { lastPublishedSignedPreKey = id }
+            return lastPublishedSignedPreKey != id
+        }) else { return }
         let date = now()
         _ = write { db in
             try db.execute(sql: "UPDATE omemoSignedPreKey SET publishedAt = ? WHERE id = ? AND publishedAt IS NULL", arguments: [date, id])

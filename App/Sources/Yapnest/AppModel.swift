@@ -18,6 +18,10 @@ func offMain<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async thro
     try await Task.detached(priority: .userInitiated, operation: work).value
 }
 
+func offMain<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
+    try await Task.detached(priority: .userInitiated, operation: work).value
+}
+
 /// Owns the signed-in account's session and exposes its state to the UI.
 @MainActor
 @Observable

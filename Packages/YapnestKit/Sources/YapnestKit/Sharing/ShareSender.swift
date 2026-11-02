@@ -76,8 +76,9 @@ public struct ShareSender: Sendable {
     public func recipients() throws -> [ChatListItem] {
         // Archived chats are offered too: archiving tidies the list, and a
         // suggestion the system learned for one would otherwise lead nowhere.
-        let database = try openDatabase()
-        return try (database.chatList() + database.chatList(archived: true))
+        try openDatabase().reader.read { db in
+            try ChatListItem.fetch(db, archived: false) + ChatListItem.fetch(db, archived: true)
+        }
             .filter { $0.groupChat?.hasLeft != true && $0.contact?.isBlocked != true }
             .sorted { $0.conversation.lastActivityAt > $1.conversation.lastActivityAt }
     }

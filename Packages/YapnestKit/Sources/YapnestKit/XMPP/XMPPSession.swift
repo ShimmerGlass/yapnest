@@ -3261,19 +3261,15 @@ public final class XMPPSession: @unchecked Sendable {
     /// "offline" would make the user send an action twice.
     func writeAwaitingHandOver(_ stanza: Stanza) async -> Bool {
         guard isConnected else { return false }
-        let waiting = OSAllocatedUnfairLock<CheckedContinuation<Bool, Never>?>(initialState: nil)
-        let finish: @Sendable (Bool) -> Void = { tookIt in
-            waiting.withLock { continuation in
-                continuation?.resume(returning: tookIt)
-                continuation = nil
-            }
-        }
         return await withCheckedContinuation { continuation in
-            waiting.withLock { $0 = continuation }
+            let once = Once()
             client.context.writer.write(stanza) { result in
-                if case .failure = result { finish(false) } else { finish(true) }
+                guard once.first() else { return }
+                if case .failure = result { continuation.resume(returning: false) } else { continuation.resume(returning: true) }
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { finish(true) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+                if once.first() { continuation.resume(returning: true) }
+            }
         }
     }
 }
