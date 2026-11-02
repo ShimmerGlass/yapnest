@@ -174,3 +174,43 @@ public struct FileMetadata: Sendable, Equatable {
         return Element(name: "file-sharing", xmlns: NS.sfs, children: [file, sources]).with(attribute: "disposition", "inline")
     }
 }
+
+/// What `FileMetadata.outgoing` found for the files we sent, so a message sent
+/// again (after a bounce, a reconnect or a retry) doesn't read and hash its
+/// file once more. An entry is kept while the file and what is known of it stay
+/// as they were: a changed file, or a picture whose size was filled in since, is
+/// read again.
+final class OutgoingFileMetadata: @unchecked Sendable {
+    private struct Key: Hashable {
+        var path: String
+        var fileSize: Int?
+        var modified: Date?
+        var attachment: Attachment
+    }
+
+    /// Far more than the files a user has in flight; the cache is emptied past it.
+    private static let capacity = 32
+
+    private let lock = NSLock()
+    private var found: [Key: FileMetadata] = [:]
+    private let compute: @Sendable (Attachment, AttachmentStore) -> FileMetadata?
+
+    init(compute: @escaping @Sendable (Attachment, AttachmentStore) -> FileMetadata? = { FileMetadata.outgoing(for: $0, in: $1) }) {
+        self.compute = compute
+    }
+
+    /// Reads the file, so call it off the main thread, as `FileMetadata.outgoing`.
+    func metadata(for attachment: Attachment, in store: AttachmentStore) -> FileMetadata? {
+        guard let file = store.url(for: attachment) else { return compute(attachment, store) }
+        let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let key = Key(path: file.path, fileSize: values?.fileSize, modified: values?.contentModificationDate, attachment: attachment)
+        if let known = lock.withLock({ found[key] }) { return known }
+        // A failed read isn't kept, as the file may only have been unavailable.
+        guard let metadata = compute(attachment, store) else { return nil }
+        lock.withLock {
+            if found.count >= Self.capacity { found.removeAll() }
+            found[key] = metadata
+        }
+        return metadata
+    }
+}

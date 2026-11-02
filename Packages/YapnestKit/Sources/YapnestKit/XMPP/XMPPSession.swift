@@ -111,6 +111,7 @@ public final class XMPPSession: @unchecked Sendable {
     public let videoCallablePeers = CurrentValueSubject<Set<JID>, Never>([])
     public let avatars: AvatarStore
     public let attachments: AttachmentStore
+    let outgoingFileMetadata = OutgoingFileMetadata()
     /// Development servers without TLS serve encrypted files over plain HTTP too.
     let allowsInsecureTransfers: Bool
     /// This client's XEP-0484 token, for signing in without the password.
@@ -2684,7 +2685,7 @@ public final class XMPPSession: @unchecked Sendable {
             // Encrypted, the URL must only travel inside the OMEMO payload.
             if let attachment {
                 OutboundStanza.addFile(
-                    url: message.body, metadata: FileMetadata.outgoing(for: attachment, in: attachments),
+                    url: message.body, metadata: outgoingFileMetadata.metadata(for: attachment, in: attachments),
                     encrypted: message.encryption != .none, to: stanza,
                 )
             }

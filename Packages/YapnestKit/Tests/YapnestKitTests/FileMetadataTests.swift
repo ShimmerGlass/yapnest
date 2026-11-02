@@ -4,6 +4,7 @@ import Foundation
 import GRDB
 import ImageIO
 @preconcurrency import Martin
+import Synchronization
 import Testing
 import UniformTypeIdentifiers
 @testable import YapnestKit
@@ -366,6 +367,24 @@ struct FileMetadataSendingTests {
         pdf.name = "a.pdf"
         pdf.mimeType = "application/pdf"
         #expect(FileMetadata.outgoing(for: pdf, in: store) == nil)
+    }
+
+    @Test func aFileSentAgainIsNotReadAgain() throws {
+        let png = try AvatarImages.png(side: 120)
+        let (store, attachment) = try store(with: png, named: "cat.png")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let reads = Mutex(0)
+        let cache = OutgoingFileMetadata { attachment, store in
+            reads.withLock { $0 += 1 }
+            return FileMetadata.outgoing(for: attachment, in: store)
+        }
+        let first = try #require(cache.metadata(for: attachment, in: store))
+        #expect(cache.metadata(for: attachment, in: store) == first)
+        #expect(reads.withLock { $0 } == 1)
+        // A file replaced under the same name is read.
+        try AvatarImages.png(side: 90).write(to: #require(store.url(for: attachment)))
+        _ = cache.metadata(for: attachment, in: store)
+        #expect(reads.withLock { $0 } == 2)
     }
 
     @Test func unencryptedFileCarriesMetadataAndTheLink() throws {
