@@ -105,6 +105,42 @@ struct ConversationScrollTests {
         #expect(scrolledToNewest(f))
     }
 
+    /// The flipped list rests at its newest end by itself. A scroll started
+    /// as the hold is let go of, in the middle of the user's flick, took the
+    /// fling over and slowed it just before the end (#232).
+    @Test func aCoastBackToTheNewestEndKeepsItsOwnDecelerationWhenNothingWaited() async throws {
+        let f = try await opened(distance: 3_000, flipped: true)
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+        await eventually("the newest messages were never held") { f.model.isBounded }
+
+        f.model.scrollPhase = .decelerating
+        let requests = f.model.scrollRevision
+        f.model.geometryChanged(geometry(flipped: true, distanceFromBottom: 40))
+        f.model.awayFromBottomChanged(false)
+        await eventually("the window never opened to the newest") { !f.model.isBounded }
+        #expect(await stays(for: .milliseconds(300)) { f.model.scrollRevision == requests })
+    }
+
+    @Test func aCoastBackToTheNewestEndIsFollowedWhenAMessageWaited() async throws {
+        let f = try await opened(distance: 3_000, flipped: true)
+        scrolledUp(f)
+        f.model.userStartedScrolling()
+        f.model.awayFromBottomChanged(true)
+        await eventually("the newest messages were never held") { f.model.isBounded }
+        let incoming = try f.add("hello from them")
+        await eventually("the waiting message was never counted") { f.model.unreadCount == 1 }
+
+        f.model.scrollPhase = .decelerating
+        let requests = f.model.scrollRevision
+        f.model.geometryChanged(geometry(flipped: true, distanceFromBottom: 40))
+        f.model.awayFromBottomChanged(false)
+        await eventually("the waiting message never came in") { f.rowIDs.last == incoming.id }
+        #expect(f.model.scrollRevision > requests)
+        #expect(f.model.followsBottom)
+    }
+
     /// The bounded window would otherwise make the last row no longer the
     /// newest, and the quick responses under it would go, moving the list by
     /// their height just as the hold is meant to prevent.

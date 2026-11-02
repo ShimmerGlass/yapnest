@@ -327,6 +327,10 @@ final class ConversationModel {
     /// the row is worked out on the layout from before it, and a correction
     /// once it's measured is undone by the scroll view on iOS 26.4 and 27.
     private var holdsNewest: Bool { heldEnd != nil && heldEnd == windowEnd }
+    /// The newest row when the hold was let go of in the middle of a coast.
+    /// The apply that takes in the window doesn't follow the bottom if that is
+    /// still the newest row.
+    @ObservationIgnored private var releasedCoastAt: Int64?
     /// Where `holdNewest` ended the window. Any other window replaces it.
     @ObservationIgnored private var heldEnd: MessageCursor?
     /// Moves with each `observeMessages`, so that an emission from an
@@ -799,6 +803,8 @@ final class ConversationModel {
         // Below the window there are messages the list doesn't show, so it
         // isn't at the end of the conversation wherever it's scrolled.
         let bounded = windowEnd != nil
+        let quietRelease = releasedCoastAt != nil && releasedCoastAt == newItems.last?.id && scrollPhase == .decelerating
+        releasedCoastAt = nil
 
         if !hasLoaded {
             // The window was opened to reach the first unread message. Only
@@ -897,7 +903,7 @@ final class ConversationModel {
             // Rows added below would push the ones on screen up, as the list
             // follows its bottom edge.
             keepAnchorInPlace()
-        } else if lastIsMine || (wasNearBottom && !isAtBottomEdge && !bounded) {
+        } else if lastIsMine || (wasNearBottom && !isAtBottomEdge && !bounded && !quietRelease) {
             if isFlipped {
                 scrollToBottom(animated: !reshapeOnly && !prepended && !trimming, reason: "rowsChanged.follow")
             } else {
@@ -2060,6 +2066,12 @@ final class ConversationModel {
     private func releaseNewest() {
         guard holdsNewest else { return }
         FrameLog.event("releaseNewest")
+        // The flipped list rests at its newest end by itself. A coast that
+        // brings the list back here has nothing to be followed down to unless
+        // a message arrived meanwhile, and an animated scroll started in the
+        // middle of it took the fling over: it slowed just before the end, and
+        // on a phone could stop short and snap into place when it settled.
+        releasedCoastAt = scrollPhase == .decelerating ? order.last : nil
         windowEnd = nil
         observeMessages()
     }
