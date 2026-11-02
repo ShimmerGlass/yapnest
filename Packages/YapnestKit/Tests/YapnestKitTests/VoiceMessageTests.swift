@@ -93,6 +93,7 @@ struct AudioDetectionTests {
         "Voice message.m4a", "voice message 2.m4a", "voice-message-20260101-101010.ogg", "voice_message.opus",
         "RECORDING_20260101_101010123.m4a", "RECORDING_20260101_101010123.oga",
         "recording_20260101_101010123.M4A", "3F2504E0-4F89-41D3-9A0C-0305E82C3301.m4a", "3f2504e0-4f89-41d3-9a0c-0305e82c3301.m4a",
+        "VOICE MESSAGE.M4A", "recording_20260101_101010.opus", "RECORDING_20260101_1010101.ogg",
     ])
     func voiceClipsOfEachClientAreRecognised(name: String) {
         #expect(AudioFormat.isVoiceClip(mimeType: nil, name: name), "\(name)")
@@ -102,6 +103,10 @@ struct AudioDetectionTests {
     @Test(arguments: [
         "Song.mp3", "voice.m4a", "meeting recording.m4a", "RECORDING.m4a", "RECORDING_2026_1.m4a", "my voice message.m4a",
         "3F2504E0-4F89-41D3-9A0C-0305E82C3301.mp3", "3F2504E0-4F89-41D3-9A0C-0305E82C3301.m4a.pdf", "Voice message.pdf",
+        "voicemessage.m4a", "voice.message.m4a", "RECORDING_2026010_101010123.m4a", "RECORDING_20260101_10101.m4a",
+        "RECORDING_20260101_1010101234.m4a", "RECORDING_20260101_101010123.wav", "RECORDING_20260101_101010123.m4a ",
+        "3F2504E0-4F89-41D3-9A0C-0305E82C330.m4a", "3F2504E0-4F89-41D3-9A0C-0305E82C330G.m4a", "3F2504E04F8941D39A0C0305E82C3301.m4a",
+        "RECORDING_２０２６０１０１_101010123.m4a",
     ])
     func otherFilesAreNotVoiceClips(name: String) {
         #expect(!AudioFormat.isVoiceClip(mimeType: nil, name: name), "\(name)")

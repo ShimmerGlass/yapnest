@@ -46,17 +46,43 @@ public enum AudioFormat {
     ///   it records Opus, .mp4 on some devices).
     /// - Monal: a UUID and ".m4a".
     /// Dino and Siskin record nothing, and send what is picked under its own name.
-    static let voiceNamePatterns = [
-        "^voice[ _-]message.*",
-        "^RECORDING_[0-9]{8}_[0-9]{6,9}\\.(m4a|mp4|oga|ogg|opus)$",
-        "^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\.m4a$",
-    ].map { try! NSRegularExpression(pattern: $0, options: .caseInsensitive) }
+    /// Matched by hand rather than by regular expressions: a row asks on every
+    /// render, and these shapes are simple.
+    static func hasVoiceName(_ name: String) -> Bool {
+        let lowered = name.lowercased()
+        if lowered.hasPrefix("voice"), let separator = lowered.dropFirst(5).first, " _-".contains(separator),
+           lowered.dropFirst(6).hasPrefix("message") {
+            return true
+        }
+        return isConversationsRecordingName(lowered) || isMonalRecordingName(lowered)
+    }
+
+    /// "recording_20260101_101010123.m4a": 8 digits, 6 to 9 digits, and an extension Conversations uses.
+    private static func isConversationsRecordingName(_ lowered: String) -> Bool {
+        guard lowered.hasPrefix("recording_") else { return false }
+        let parts = lowered.dropFirst("recording_".count).split(separator: "_", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[0].count == 8, parts[0].allSatisfy(isASCIIDigit) else { return false }
+        let tail = parts[1].split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        guard tail.count == 2, (6...9).contains(tail[0].count), tail[0].allSatisfy(isASCIIDigit) else { return false }
+        return ["m4a", "mp4", "oga", "ogg", "opus"].contains(tail[1])
+    }
+
+    /// "3f2504e0-4f89-41d3-9a0c-0305e82c3301.m4a": a UUID and ".m4a".
+    private static func isMonalRecordingName(_ lowered: String) -> Bool {
+        guard lowered.hasSuffix(".m4a") else { return false }
+        let groups = lowered.dropLast(4).split(separator: "-", omittingEmptySubsequences: false)
+        return groups.map(\.count) == [8, 4, 4, 4, 12] && groups.allSatisfy { $0.allSatisfy { $0.isASCII && $0.isHexDigit } }
+    }
+
+    private static func isASCIIDigit(_ character: Character) -> Bool {
+        character.isASCII && character.isNumber
+    }
 
     /// Whether a sound is someone's voice message rather than a song or a
     /// recording that was picked: by its name alone, as above.
     public static func isVoiceClip(mimeType: String?, name: String) -> Bool {
         guard isAudio(mimeType: mimeType, name: name) else { return false }
-        return voiceNamePatterns.contains { $0.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil }
+        return hasVoiceName(name)
     }
 
     /// A length as a clock reads it: "0:07", "12:30", "1:02:03".
