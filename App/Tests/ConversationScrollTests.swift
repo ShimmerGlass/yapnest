@@ -206,6 +206,17 @@ struct ConversationScrollTests {
         #expect(f.model.scroll.edge == .top)
     }
 
+    /// Content taller than the view by less than the distance that counts as
+    /// away: at its oldest end the list is still near the newest message, and
+    /// followed it back down on any change, leaving the oldest one hidden (#229).
+    @Test func aShortListRestingAtItsOldestEndStaysThereWhenARowChanges() async throws {
+        let f = try await opened(distance: 3_000, flipped: true)
+        f.model.geometryChanged(geometry(flipped: true, distanceFromBottom: 100, container: 800, content: 900))
+        let incoming = try f.add("hello from them")
+        await eventually("the message never showed") { f.rowIDs.last == incoming.id }
+        #expect(notScrolled(f))
+    }
+
     /// The Mac's list keeps its place as rows come in below.
     @Test func theUnflippedListTakesInMessagesWhileScrolledUp() async throws {
         let f = try await opened(distance: 3_000, flipped: false)

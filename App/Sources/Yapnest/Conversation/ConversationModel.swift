@@ -781,6 +781,11 @@ final class ConversationModel {
     private func apply(_ newItems: [ConversationItem], generation: Int, prebuilt: Prebuilt? = nil) {
         guard generation == self.generation else { return }
         let wasNearBottom = isNearBottom
+        // A list that scrolls by less than the distance that counts as away
+        // is near its newest message even at its oldest end, so resting there
+        // must not read as a reason to follow the bottom: it took a reader of
+        // the oldest message back down on a release, a reaction or an edit.
+        let restsAtOldestEnd = geometry.map { Self.distanceFromTop($0, flipped: isFlipped) <= 1.5 } ?? false
         let previousOrder = order
         FrameLog.event("apply begin items=\(newItems.count) previous=\(previousOrder.count)")
         defer { FrameLog.event("apply end rows=\(rows.count)") }
@@ -897,7 +902,7 @@ final class ConversationModel {
             // Rows added below would push the ones on screen up, as the list
             // follows its bottom edge.
             keepAnchorInPlace()
-        } else if lastIsMine || (wasNearBottom && !isAtBottomEdge && !bounded) {
+        } else if lastIsMine || (wasNearBottom && !isAtBottomEdge && !restsAtOldestEnd && !bounded) {
             if isFlipped {
                 scrollToBottom(animated: !reshapeOnly && !prepended && !trimming, reason: "rowsChanged.follow")
             } else {
