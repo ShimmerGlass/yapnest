@@ -11,20 +11,12 @@ public struct Reaction: Codable, Hashable, Sendable, FetchableRecord, Persistabl
     /// In rooms that vouch for XEP-0421 ids: the reactor's, which outlasts
     /// their nickname.
     public var occupantId: String?
-    /// For our own reactions: the id of the stanza that carries them while the
-    /// server hasn't acknowledged it. Nil once it has, and on anyone else's.
-    public var pendingId: String?
-    /// For our own reactions: why the server (or the give-up) kept them from
-    /// reaching the other side for good. Cleared when they are sent again.
-    public var error: String?
-
-    public init(messageId: Int64, sender: JID, nick: String = "", emoji: String, occupantId: String? = nil, pendingId: String? = nil) {
+    public init(messageId: Int64, sender: JID, nick: String = "", emoji: String, occupantId: String? = nil) {
         self.messageId = messageId
         self.sender = sender
         self.nick = nick
         self.emoji = emoji
         self.occupantId = occupantId
-        self.pendingId = pendingId
     }
 
     public var author: Author { Author(jid: sender, nick: nick.isEmpty ? nil : nick, occupantId: occupantId) }

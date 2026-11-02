@@ -331,6 +331,21 @@ struct ConversationObservationTests {
         #expect(second == (try fresh()))
     }
 
+    /// An empty set has no reaction rows, so the record alone must redraw the
+    /// message, and a failure must show on the item.
+    @Test func aRecordWithNoReactionRowsRedrawsItsMessage() async throws {
+        try fill(3)
+        try db.setReactions([], from: Author(jid: me), conversationId: conversationId, messageRef: "m1", pendingId: "r1")
+        var iterator = db.observeConversation(peer: alice, me: me)
+            .values(in: db.reader, bufferingPolicy: .bufferingNewest(1)).makeAsyncIterator()
+        let first = try #require(try await iterator.next())
+        #expect(first.contains { $0.ownReactions == .pending })
+        try db.clearPending(.reaction, id: "r1", error: "Nope")
+        let second = try #require(try await iterator.next())
+        #expect(second.contains { $0.ownReactions == .failed("Nope") })
+        #expect(second == (try fresh()))
+    }
+
     // MARK: Cost
 
     /// A receipt for the newest outgoing message, with the window at 500 and 2500.

@@ -19,6 +19,11 @@ extension AppDatabase {
         return Dictionary(grouping: try Reaction.filter(messageIds.contains(Column("messageId"))).fetchAll(db), by: \.messageId)
     }
 
+    static func ownReactions(_ db: Database, messageIds: some Collection<Int64>) throws -> [Int64: OwnReaction] {
+        guard !messageIds.isEmpty else { return [:] }
+        return Dictionary(uniqueKeysWithValues: try OwnReaction.filter(messageIds.contains(Column("messageId"))).fetchAll(db).map { ($0.messageId, $0) })
+    }
+
     static func linkPreviews(_ db: Database, urls: Set<String>) throws -> [String: LinkPreview] {
         guard !urls.isEmpty else { return [:] }
         return Dictionary(

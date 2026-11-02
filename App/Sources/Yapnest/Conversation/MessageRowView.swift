@@ -88,13 +88,14 @@ struct MessageRowView: View, Equatable {
 
     private var bubbleRow: some View {
         let reactions = row.item.reactions
+        let showsChip = row.item.showsReactionChip
         return RowBubble(row: row, model: model)
-            .padding(.bottom, reactions.isEmpty ? 0 : chipClearance)
+            .padding(.bottom, showsChip ? chipClearance : 0)
             .overlay(alignment: row.isOutgoing ? .bottomLeading : .bottomTrailing) {
-                if !reactions.isEmpty {
+                if showsChip {
                     // Tapping the chip opens the list of who reacted; the Mac
                     // gets the same list on hover.
-                    ReactionsChip(reactions: reactions, who: Platform.isMac ? reactionTooltip : nil) { model.showReactions(for: row.id) }
+                    ReactionsChip(reactions: reactions, failed: row.item.reactionFailure != nil, who: Platform.isMac ? reactionTooltip : nil) { model.showReactions(for: row.id) }
                         .padding(.horizontal, 8)
                 }
             }
@@ -133,7 +134,7 @@ struct MessageRowView: View, Equatable {
                 if row.item.quote != nil {
                     Button("Go to quoted message") { model.scrollToQuoted(of: row.id) }
                 }
-                if !row.item.reactions.isEmpty {
+                if row.item.showsReactionChip {
                     Button("Show reactions") { model.showReactions(for: row.id) }
                 }
                 if let link = row.message.link.flatMap(URL.init(string:)) {

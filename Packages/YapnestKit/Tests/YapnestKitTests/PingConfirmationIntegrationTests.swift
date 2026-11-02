@@ -51,8 +51,10 @@ extension LiveServer {
             try a.toggleReaction("👍", on: message, peer: bob)
             // The databases hold the reactions of earlier runs too.
             try await LiveServer.waitUntil("the reaction to be confirmed") {
-                let rows = try a.database.reader.read { try Reaction.filter(Column("messageId") == message.id).fetchAll($0) }
-                return rows.count == 1 && rows.allSatisfy { $0.pendingId == nil }
+                let (rows, record) = try a.database.reader.read { db in
+                    (try Reaction.filter(Column("messageId") == message.id).fetchAll(db), try OwnReaction.fetchOne(db, key: message.id))
+                }
+                return rows.count == 1 && record?.pendingId == nil
             }
             let theirs = try #require(try messages(b, body: body).first)
             try await LiveServer.waitUntil("bob to see it") {

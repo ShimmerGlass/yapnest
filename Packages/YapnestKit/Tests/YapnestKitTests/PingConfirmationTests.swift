@@ -32,7 +32,7 @@ struct PingConfirmationTests {
     }
 
     private func isReactionPending() throws -> Bool {
-        try database.reader.read { try Reaction.fetchAll($0) }.contains { $0.pendingId != nil }
+        try database.reader.read { try OwnReaction.fetchAll($0) }.contains { $0.pendingId != nil }
     }
 
     private func reactingToAMessage() throws -> YapnestKit.Message {

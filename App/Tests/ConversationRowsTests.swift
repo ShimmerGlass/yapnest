@@ -105,6 +105,24 @@ struct ConversationRowsTests {
         #expect(f.model.rows[0].content.accessibilityLabel.contains(String(localized: "Edited")))
     }
 
+    @Test func aFailedEmptyReactionSetStillShowsTheChipAndItsPrompt() async throws {
+        let f = try ConversationFixture()
+        let theirs = try f.add("hello", read: true)
+        await f.start()
+        let id = try #require(theirs.id)
+        #expect(f.model.rows.first { $0.id == id }?.item.showsReactionChip == false)
+
+        // We took our last reaction back and the server refused it, so no
+        // reaction row is left to carry the failure.
+        try await f.database.writer.write { try OwnReaction(messageId: id, error: "Nope").insert($0) }
+        await eventually("the failure never showed") { f.model.rows.first { $0.id == id }?.item.showsReactionChip == true }
+
+        #expect(f.model.rows.first { $0.id == id }?.item.reactions.isEmpty == true)
+        #expect(f.model.reactionFailureText(of: id) == "Nope")
+        f.model.showReactions(for: id)
+        #expect(f.model.prompt == .reactionFailure(id))
+    }
+
     @Test func aDeletedMessageShowsNoTraceOfItsText() async throws {
         let f = try ConversationFixture()
         let theirs = try f.add("secret words", read: true)

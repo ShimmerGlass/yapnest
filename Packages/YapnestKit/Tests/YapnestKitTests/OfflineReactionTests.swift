@@ -25,13 +25,13 @@ struct OfflineReactionTests {
 
         let rows = try session.database.reader.read { try Reaction.fetchAll($0) }
         #expect(rows.count == 1)
-        #expect(rows[0].pendingId != nil)
+        #expect(try session.database.reader.read { try OwnReaction.fetchOne($0)?.pendingId } != nil)
     }
 
     @Test func aNewSessionSendsAReactionMadeOfflineOnce() throws {
         let (session, message) = try setUp()
         try session.toggleReaction("👍", on: message, peer: bob)
-        let id = try #require(try session.database.reader.read { try Reaction.fetchOne($0)?.pendingId })
+        let id = try #require(try session.database.reader.read { try OwnReaction.fetchOne($0)?.pendingId })
 
         let wire = FakeWire()
         session.connectForTesting(wire)
@@ -44,7 +44,7 @@ struct OfflineReactionTests {
     @Test func aResumedSessionSendsAReactionMadeOfflineOnce() throws {
         let (session, message) = try setUp()
         try session.toggleReaction("👍", on: message, peer: bob)
-        let id = try #require(try session.database.reader.read { try Reaction.fetchOne($0)?.pendingId })
+        let id = try #require(try session.database.reader.read { try OwnReaction.fetchOne($0)?.pendingId })
 
         let wire = FakeWire()
         session.connectForTesting(wire)

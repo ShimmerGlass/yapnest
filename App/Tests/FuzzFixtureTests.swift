@@ -126,7 +126,7 @@ struct FuzzFixtureTests {
                 #expect(FileManager.default.fileExists(atPath: directory.previews.appending(path: preview.imageFile!).path))
             }
             #expect(try Reaction.fetchCount(db) == all.reduce(0) { $0 + $1.reactions.count })
-            #expect(try Reaction.filter(Column("pendingId") != nil).fetchCount(db) == all.reduce(0) { $0 + $1.reactions.filter(\.isPending).count })
+            #expect(try OwnReaction.filter(Column("pendingId") != nil).fetchCount(db) == all.filter { $0.reactions.contains(where: \.isPending) }.count)
             #expect(try Message.filter(Column("isRetracted") == true).fetchCount(db) == all.filter(\.retracted).count)
         }
     }

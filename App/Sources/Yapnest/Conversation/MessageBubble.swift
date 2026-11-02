@@ -420,6 +420,9 @@ struct QuotePreview: View {
 /// The reactions button hanging off a bubble's bottom edge.
 struct ReactionsChip: View {
     let reactions: [ConversationItem.ReactionGroup]
+    /// Ours never reached the other side. With no reaction left to show, the
+    /// chip is only this.
+    let failed: Bool
     /// Who reacted with each emoji, shown as a tooltip. Empty shows nothing.
     var who: String?
     let onTap: () -> Void
@@ -428,13 +431,16 @@ struct ReactionsChip: View {
     @ScaledMetric private var height: CGFloat = Platform.isMac ? 34 : 28
 
     private var isPending: Bool { reactions.contains(where: \.isPending) }
-    private var isFailed: Bool { reactions.contains(where: \.isFailed) }
+
+    private func label(total: Int, emojis: String) -> Text {
+        reactions.isEmpty ? Text(Image(systemName: "exclamationmark")) : Text(total > 1 ? "\(emojis) \(total)" : emojis)
+    }
 
     var body: some View {
         let total = reactions.reduce(0) { $0 + $1.senders.count }
         let emojis = reactions.prefix(3).map(\.emoji).joined()
         Button(action: onTap) {
-            Text(total > 1 ? "\(emojis) \(total)" : emojis)
+            label(total: total, emojis: emojis)
                 // The Mac's footnote is too small to tell one emoji from another.
                 .font(Platform.isMac ? .title3 : .footnote)
                 .foregroundStyle(.primary)
@@ -453,7 +459,7 @@ struct ReactionsChip: View {
                 }
                 // The dots of the sending icon: ours isn't acknowledged yet.
                 .overlay {
-                    if isFailed {
+                    if failed {
                         // Ours never reached the other side; a tap says why.
                         Capsule().strokeBorder(Color.red, lineWidth: 1.25)
                     } else if isPending {
@@ -463,7 +469,7 @@ struct ReactionsChip: View {
         }
         .buttonStyle(.plain)
         .help(who ?? "")
-        .accessibilityLabel(reactions.map { "\($0.emoji) \($0.senders.count)" }.joined(separator: ", ") + (isFailed ? ", " + String(localized: "Not delivered") : isPending ? ", " + String(localized: "Sending") : ""))
+        .accessibilityLabel(reactions.map { "\($0.emoji) \($0.senders.count)" }.joined(separator: ", ") + (failed ? ", " + String(localized: "Not delivered") : isPending ? ", " + String(localized: "Sending") : ""))
     }
 }
 

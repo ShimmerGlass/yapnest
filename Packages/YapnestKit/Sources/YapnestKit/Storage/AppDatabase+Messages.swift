@@ -209,10 +209,10 @@ extension AppDatabase {
     /// Replaces `author`'s reactions on the referenced message, as XEP-0444
     /// requires: each reactions element carries the full set. Returns false if
     /// the message isn't stored, or is retracted: a replay would otherwise
-    /// put back reactions that retracting removed. `pendingId` marks ours as
-    /// not yet acknowledged by the server. `echoOf` is the id of the stanza
-    /// the set came from, so that an echo of one of ours leaves a newer
-    /// pending set alone.
+    /// put back reactions that retracting removed. `pendingId` records ours as
+    /// not yet acknowledged by the server, even when the set is empty.
+    /// `fromUs` and `stanzaId` say that the set came from one of our devices
+    /// (this one's echo, or another's) in the stanza `stanzaId`.
     @discardableResult
     public func setReactions(_ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil) throws -> Bool {
         try writer.write { db in
@@ -226,7 +226,7 @@ extension AppDatabase {
     }
 
     @discardableResult
-    static func setReactions(_ db: Database, _ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil, echoOf: String? = nil) throws -> Bool {
+    static func setReactions(_ db: Database, _ emojis: Set<String>, from author: Author, conversationId: Int64, messageRef: String, pendingId: String? = nil, fromUs: Bool = false, stanzaId: String? = nil) throws -> Bool {
         guard let message = try referencedMessage(db, conversationId: conversationId, id: messageRef), let messageId = message.id, !message.isRetracted else {
             return false
         }
@@ -244,12 +244,11 @@ extension AppDatabase {
         } else {
             byAddress
         }
-        // The echo of an earlier stanza of ours (a room reflecting it, or an
-        // archive replaying it) arrives after we toggled again. Its set is
-        // stale, and replacing the rows would drop the newer pending id before
-        // the server has the newer set.
-        if let echoOf, try Reaction.filter(Column("messageId") == messageId).filter(previous)
-            .filter(Column("pendingId") != nil && Column("pendingId") != echoOf).isEmpty(db) == false {
+        if fromUs, let stanzaId, let record = try OwnReaction.fetchOne(db, key: messageId), record.earlierIds.contains(stanzaId) {
+            // The echo of an earlier stanza of ours (a room reflecting it, or an
+            // archive replaying it) arrives after we toggled again. Its set is
+            // stale, and replacing the rows would drop the newer one before the
+            // server has it.
             return true
         }
         // A new occupant can take the nickname a former one reacted under; the
@@ -258,7 +257,17 @@ extension AppDatabase {
         let sameKey = Column("sender") == author.jid && Column("nick") == (author.nick ?? "")
         try Reaction.filter(Column("messageId") == messageId).filter(previous || sameKey).deleteAll(db)
         for emoji in emojis {
-            try Reaction(messageId: messageId, sender: author.jid, nick: author.nick ?? "", emoji: emoji, occupantId: author.occupantId, pendingId: pendingId).insert(db)
+            try Reaction(messageId: messageId, sender: author.jid, nick: author.nick ?? "", emoji: emoji, occupantId: author.occupantId).insert(db)
+        }
+        if let pendingId {
+            try Self.pendOwnReactions(db, messageId: messageId, id: pendingId)
+        } else if fromUs {
+            // The echo of our newest stanza is its acknowledgement. A set from
+            // another of our devices is newer than the one we hold unsent, and
+            // goes through the same server: if ours was already written, its
+            // own echo follows at the server and is applied then, as it is
+            // everywhere else. Either way nothing is left for us to send.
+            try OwnReaction.deleteOne(db, key: messageId)
         }
         return true
     }

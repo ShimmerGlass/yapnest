@@ -27,6 +27,14 @@ struct PendingReactionTests {
         try database.reader.read { try Reaction.fetchAll($0) }
     }
 
+    private func pendingId() throws -> String? {
+        try database.reader.read { try OwnReaction.fetchOne($0)?.pendingId }
+    }
+
+    private func record() throws -> OwnReaction? {
+        try database.reader.read { try OwnReaction.fetchOne($0) }
+    }
+
     private func isPending() throws -> Bool {
         let items = try database.reader.read { try AppDatabase.conversationItems($0, peer: alice, me: me) }
         return items.flatMap(\.reactions).contains { $0.isPending }
@@ -42,11 +50,11 @@ struct PendingReactionTests {
 
         let stanza = try #require(reactionStanzas().first)
         let id = try #require(stanza.id)
-        #expect(try rows().map(\.pendingId) == [id])
+        #expect(try pendingId() == id)
         #expect(try isPending())
 
         session.acknowledged(stanza)
-        #expect(try rows().map(\.pendingId) == [nil])
+        #expect(try pendingId() == nil)
         #expect(!(try isPending()))
     }
 
@@ -72,11 +80,10 @@ struct PendingReactionTests {
         try session.toggleReaction("👍", on: message, peer: alice)
         #expect(try isPending())
 
-        // From our other device's carbon, or a room's echo.
-        try database.setReactions(["👍", "❤️"], from: me, conversationId: message.conversationId, messageRef: "1")
+        try carbonFromOtherDevice(id: "other-device", emojis: ["👍", "❤️"])
 
         #expect(try rows().count == 2)
-        #expect(try rows().allSatisfy { $0.pendingId == nil })
+        #expect(try record() == nil)
         #expect(!(try isPending()))
     }
 
@@ -144,7 +151,7 @@ struct PendingReactionTests {
         session.sendUnclaimedPending()
         #expect(reactionStanzas().isEmpty)
         #expect(!(try isPending(in: room)))
-        #expect(try rows().allSatisfy { $0.error == nil })
+        #expect(try record()?.error == nil)
     }
 
     private func isPending(in peer: YapnestKit.JID) throws -> Bool {
@@ -188,19 +195,19 @@ struct PendingReactionTests {
     @Test func theEchoOfAnEarlierReactionStanzaLeavesANewerPendingSetAlone() throws {
         let message = try joinedRoomMessage()
         try session.toggleReaction("👍", on: message, peer: room)
-        let first = try #require(try rows().first?.pendingId)
+        let first = try #require(try pendingId())
         try session.toggleReaction("❤️", on: message, peer: room)
-        let second = try #require(try rows().first?.pendingId)
+        let second = try #require(try pendingId())
         #expect(first != second)
 
         try echo(id: first, emojis: ["👍"])
 
         #expect(Set(try rows().map(\.emoji)) == ["👍", "❤️"])
-        #expect(try rows().allSatisfy { $0.pendingId == second })
+        #expect(try pendingId() == second)
         #expect(try isPending(in: room))
 
         try echo(id: second, emojis: ["👍", "❤️"])
-        #expect(try rows().allSatisfy { $0.pendingId == nil })
+        #expect(try pendingId() == nil)
     }
 
     @Test func reactingInARoomWeLeftThrowsAndLeavesNothingPending() throws {
@@ -210,5 +217,107 @@ struct PendingReactionTests {
         #expect(throws: XMPPSession.MessageActionError.leftGroup) { try session.toggleReaction("❤️", on: message, peer: room) }
         #expect(Set(try rows().map(\.emoji)) == ["👍"])
         #expect(!(try isPending(in: room)))
+    }
+
+    private func carbonFromOtherDevice(id: String, emojis: [String]) throws {
+        let xml = "<message from='me@example.org/laptop' to='alice@example.org' type='chat' id='\(id)'><reactions id='1' xmlns='urn:xmpp:reactions:0'>"
+            + emojis.map { "<reaction>\($0)</reaction>" }.joined() + "</reactions></message>"
+        let element = try #require(Element.from(string: xml))
+        let stanza = try #require(Stanza.from(element: element) as? Martin.Message)
+        try database.ingest(try #require(InboundMessage(stanza, account: me, source: .carbon(sent: true), now: Date())))
+    }
+
+    // MARK: Taking the last reaction back
+
+    @Test func takingBackTheLastReactionOfflineIsStoredAndSentOnceConnected() throws {
+        let offline = try makeSession(me, database: database)
+        try database.setReactions(["👍"], from: Author(jid: me), conversationId: message.conversationId, messageRef: "1")
+        try offline.toggleReaction("👍", on: message, peer: alice)
+
+        #expect(try rows().isEmpty)
+        let id = try #require(try pendingId())
+        #expect(try isOwnPending())
+
+        let wire = FakeWire()
+        offline.connectForTesting(wire)
+        offline.sendUnclaimedPending()
+        let stanza = try #require(wire.messages.filter { $0.firstChild(name: "reactions", xmlns: NS.reactions) != nil }.first)
+        #expect(stanza.id == id)
+        #expect(stanza.firstChild(name: "reactions", xmlns: NS.reactions)?.children.isEmpty == true)
+
+        offline.enableAcknowledgementsForTesting()
+        offline.acknowledged(stanza)
+        #expect(try record() == nil)
+    }
+
+    @Test func aPassingBounceOfTheEmptySetMakesItPendingAgain() throws {
+        session.enableAcknowledgementsForTesting()
+        try database.setReactions(["👍"], from: Author(jid: me), conversationId: message.conversationId, messageRef: "1")
+        try session.toggleReaction("👍", on: message, peer: alice)
+        let stanza = try #require(reactionStanzas().first)
+        let id = try #require(stanza.id)
+        session.acknowledged(stanza)
+        #expect(try record() == nil)
+
+        try database.repend(.reactions(messageId: message.id!), id: id, ifNotSupersededBy: id)
+
+        #expect(try pendingId() == id)
+        #expect(try isOwnPending())
+    }
+
+    @Test func aFinalErrorOfTheEmptySetShowsAsFailedWithNoRows() throws {
+        session.enableAcknowledgementsForTesting()
+        try database.setReactions(["👍"], from: Author(jid: me), conversationId: message.conversationId, messageRef: "1")
+        try session.toggleReaction("👍", on: message, peer: alice)
+        let id = try #require(try pendingId())
+
+        try database.clearPending(.reaction, id: id, error: "Nope")
+
+        #expect(try rows().isEmpty)
+        let items = try database.reader.read { try AppDatabase.conversationItems($0, peer: alice, me: me) }
+        #expect(items.first?.ownReactions == .failed("Nope"))
+        #expect(try record()?.pendingId == nil)
+    }
+
+    private func isOwnPending() throws -> Bool {
+        let items = try database.reader.read { try AppDatabase.conversationItems($0, peer: alice, me: me) }
+        return items.contains { $0.ownReactions == .pending }
+    }
+
+    // MARK: Another of our devices
+
+    @Test func aSetFromAnotherOfOurDevicesIsAppliedAndDropsOursPending() throws {
+        let offline = try makeSession(me, database: database)
+        try offline.toggleReaction("👍", on: message, peer: alice)
+        #expect(try pendingId() != nil)
+
+        try carbonFromOtherDevice(id: "other-device", emojis: ["❤️"])
+
+        #expect(Set(try rows().map(\.emoji)) == ["❤️"])
+        #expect(try record() == nil)
+        let wire = FakeWire()
+        offline.connectForTesting(wire)
+        offline.sendUnclaimedPending()
+        #expect(reactionStanzas(in: wire).isEmpty)
+    }
+
+    private func reactionStanzas(in wire: FakeWire) -> [Martin.Message] {
+        wire.messages.filter { $0.firstChild(name: "reactions", xmlns: NS.reactions) != nil }
+    }
+
+    @Test func aLateEchoOfAnEarlierStanzaOfOursIsIgnored() throws {
+        let message = try joinedRoomMessage()
+        try session.toggleReaction("👍", on: message, peer: room)
+        let first = try #require(try pendingId())
+        try session.toggleReaction("👍", on: message, peer: room)
+        let second = try #require(try pendingId())
+        #expect(try record()?.earlierIds == [first])
+
+        try echo(id: first, emojis: ["👍"])
+        #expect(try rows().isEmpty)
+        #expect(try pendingId() == second)
+
+        try echo(id: second, emojis: [])
+        #expect(try record() == nil)
     }
 }

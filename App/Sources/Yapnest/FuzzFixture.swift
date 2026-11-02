@@ -123,8 +123,10 @@ struct FuzzFixture {
                         nick: isGroup ? (reaction.reactor ?? Self.nickname) : "",
                         emoji: reaction.emoji,
                         occupantId: isGroup ? "occupant-\(reaction.reactor ?? Self.nickname)" : nil,
-                        pendingId: isMine && reaction.isPending ? "fz-pending-\(prefix)-\(index)" : nil,
                     ).insert(db)
+                }
+                if planned.reactions.contains(where: { $0.reactor == nil && $0.isPending }) {
+                    try OwnReaction(messageId: id, pendingId: "fz-pending-\(prefix)-\(index)").insert(db)
                 }
             }
         }

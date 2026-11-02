@@ -157,15 +157,13 @@ extension AppDatabase {
     /// on, its conversation's peer, and the id of the stanza that carries them.
     func pendingReactions() throws -> [(message: Message, peer: JID, id: String)] {
         try reader.read { db in
-            let rows = try Reaction.filter(Column("pendingId") != nil).fetchAll(db)
-            var seen = Set<Int64>()
-            let messages = Dictionary(uniqueKeysWithValues: try Message.fetchAll(db, keys: Set(rows.map(\.messageId))).compactMap { message in
+            let records = try OwnReaction.filter(Column("pendingId") != nil).fetchAll(db)
+            let messages = Dictionary(uniqueKeysWithValues: try Message.fetchAll(db, keys: Set(records.map(\.messageId))).compactMap { message in
                 message.id.map { ($0, message) }
             })
             let peers = try Self.peers(db, conversationIds: Set(messages.values.map(\.conversationId)))
-            return rows.compactMap { row in
-                guard let id = row.pendingId, seen.insert(row.messageId).inserted,
-                      let message = messages[row.messageId], let peer = peers[message.conversationId] else { return nil }
+            return records.compactMap { record in
+                guard let id = record.pendingId, let message = messages[record.messageId], let peer = peers[message.conversationId] else { return nil }
                 return (message, peer, id)
             }
         }
@@ -174,23 +172,54 @@ extension AppDatabase {
     /// The two kinds of change that wait for the server's acknowledgement of a
     /// stanza of their own, each pending under that stanza's id.
     enum PendingKind: Hashable, CaseIterable {
-        /// Our reactions on a message, in the reaction rows.
+        /// Our reactions on a message, in its `OwnReaction` record.
         case reaction
         /// A correction or retraction, on the message itself.
         case action
+    }
 
-        fileprivate var pendingColumn: String { self == .reaction ? "pendingId" : "actionPendingId" }
-        fileprivate var errorColumn: String { self == .reaction ? "error" : "actionError" }
+    /// Records the stanza `id` as the newest to carry our reactions on a
+    /// message, whatever the set, and clears a failure. The one it replaces
+    /// keeps its id, as its echo may still arrive.
+    static func pendOwnReactions(_ db: Database, messageId: Int64, id: String) throws {
+        var record = try OwnReaction.fetchOne(db, key: messageId) ?? OwnReaction(messageId: messageId)
+        if let old = record.pendingId, old != id { record.earlierIds.append(old) }
+        record.pendingId = id
+        record.error = nil
+        try record.save(db)
+    }
+
+    /// Ends the pending state of our reactions on a message: the server has
+    /// them, or, with an `error`, they are given up on and show as failed. The
+    /// stanza given up on keeps its id, as its echo may still arrive. Nothing
+    /// is done where `bouncedId` isn't the id pending: a newer set stands.
+    private static func settleOwnReactions(_ db: Database, messageId: Int64, error: String?, unlessSupersededBy bouncedId: String? = nil) throws {
+        let stored = try OwnReaction.fetchOne(db, key: messageId)
+        if let bouncedId, let pending = stored?.pendingId, pending != bouncedId { return }
+        guard let error else {
+            try OwnReaction.deleteOne(db, key: messageId)
+            return
+        }
+        guard try Message.exists(db, key: messageId) else { return }
+        var record = stored ?? OwnReaction(messageId: messageId)
+        if let old = record.pendingId { record.earlierIds.append(old) }
+        record.pendingId = nil
+        record.error = error
+        try record.save(db)
     }
 
     /// The server has the stanza `id` of a `kind` of change; or, with an
     /// `error`, it was given up on and shows as failed.
     func clearPending(_ kind: PendingKind, id: String, error: String? = nil) throws {
         try writer.write { db in
-            let assignments = Self.clearing(kind.pendingColumn, errorColumn: kind.errorColumn, error: error)
             switch kind {
-            case .reaction: try Reaction.filter(Column(kind.pendingColumn) == id).updateAll(db, assignments)
-            case .action: try Message.filter(Column(kind.pendingColumn) == id).updateAll(db, assignments)
+            case .reaction:
+                guard let record = try OwnReaction.filter(Column("pendingId") == id).fetchOne(db) else { return }
+                try Self.settleOwnReactions(db, messageId: record.messageId, error: error)
+            case .action:
+                var assignments = [Column("actionPendingId").set(to: nil)]
+                if let error { assignments.append(Column("actionError").set(to: error)) }
+                try Message.filter(Column("actionPendingId") == id).updateAll(db, assignments)
             }
         }
     }
@@ -198,22 +227,19 @@ extension AppDatabase {
     /// Gives up on a message's pending changes of a `kind` that can no longer be
     /// sent, so they don't stay marked as sending for good. With an `error` they
     /// show as failed, which is for a bounce that came after the stanza was
-    /// acknowledged and which the stanza's id no longer finds; `sender` then
-    /// keeps reactions to our own rows (an action is the message's own).
+    /// acknowledged and which the stanza's id no longer finds.
     /// `bouncedId` is the stanza that bounced: a change pending under another
     /// id is a newer one, which stands.
-    func clearPending(_ kind: PendingKind, messageId: Int64, from sender: JID? = nil, error: String? = nil, unlessSupersededBy bouncedId: String? = nil) throws {
+    func clearPending(_ kind: PendingKind, messageId: Int64, error: String? = nil, unlessSupersededBy bouncedId: String? = nil) throws {
         try writer.write { db in
-            let assignments = Self.clearing(kind.pendingColumn, errorColumn: kind.errorColumn, error: error)
             switch kind {
             case .reaction:
-                var request = Reaction.filter(Column("messageId") == messageId)
-                if let sender { request = request.filter(Column("sender") == sender) }
-                if let bouncedId { request = request.filter(Self.notSuperseded(kind.pendingColumn, by: bouncedId)) }
-                try request.updateAll(db, assignments)
+                try Self.settleOwnReactions(db, messageId: messageId, error: error, unlessSupersededBy: bouncedId)
             case .action:
+                var assignments = [Column("actionPendingId").set(to: nil)]
+                if let error { assignments.append(Column("actionError").set(to: error)) }
                 var request = Message.filter(key: messageId)
-                if let bouncedId { request = request.filter(Self.notSuperseded(kind.pendingColumn, by: bouncedId)) }
+                if let bouncedId { request = request.filter(Self.notSuperseded("actionPendingId", by: bouncedId)) }
                 try request.updateAll(db, assignments)
             }
         }
@@ -232,17 +258,10 @@ extension AppDatabase {
         Dictionary(uniqueKeysWithValues: conversations.compactMap { chat in chat.id.map { ($0, chat.peer) } })
     }
 
-    /// Clears a pending id, and records why where an `error` is given.
-    private static func clearing(_ pending: String, errorColumn: String, error: String?) -> [ColumnAssignment] {
-        var assignments = [Column(pending).set(to: nil)]
-        if let error { assignments.append(Column(errorColumn).set(to: error)) }
-        return assignments
-    }
-
     /// What a bounce or the user makes pending again, under the stanza `id`.
     enum Resend {
         case action(messageId: Int64)
-        case reactions(messageId: Int64, from: JID)
+        case reactions(messageId: Int64)
     }
 
     /// Marks `item` pending under `id` and clears a failure, so the resend
@@ -256,11 +275,10 @@ extension AppDatabase {
                 if let bouncedId { request = request.filter(Self.notSuperseded("actionPendingId", by: bouncedId)) }
                 try request
                     .updateAll(db, Column("actionPendingId").set(to: id), Column("actionError").set(to: nil))
-            case .reactions(let messageId, let sender):
-                var request = Reaction.filter(Column("messageId") == messageId && Column("sender") == sender)
-                if let bouncedId { request = request.filter(Self.notSuperseded("pendingId", by: bouncedId)) }
-                try request
-                    .updateAll(db, Column("pendingId").set(to: id), Column("error").set(to: nil))
+            case .reactions(let messageId):
+                if let bouncedId, let pending = try OwnReaction.fetchOne(db, key: messageId)?.pendingId, pending != bouncedId { return }
+                guard try Message.exists(db, key: messageId) else { return }
+                try Self.pendOwnReactions(db, messageId: messageId, id: id)
             }
         }
     }

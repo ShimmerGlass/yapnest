@@ -938,7 +938,7 @@ final class ConversationModel {
         // above scroll), and not for a change that moves nothing.
         let appendedBelow = previousOrder.last.flatMap { orderIndex[$0] }.map { $0 < order.count - 1 } ?? false
         let changesHeight = resizes || built.changes.contains { change in
-            change.before.map { $0.content.item.reactions.isEmpty != change.after.content.item.reactions.isEmpty } ?? false
+            change.before.map { $0.content.item.showsReactionChip != change.after.content.item.showsReactionChip } ?? false
         }
         // Flipped, a list on its way to the newest end gets there whatever
         // comes in, and holding a row would stop it.
@@ -1263,7 +1263,7 @@ final class ConversationModel {
             direction = item.message.direction
             author = item.message.author
             timestamp = item.message.timestamp
-            hasReactions = !item.reactions.isEmpty
+            hasReactions = item.showsReactionChip
         }
     }
 
@@ -1658,7 +1658,7 @@ final class ConversationModel {
             dayHeader: showsDay ? message.timestamp.dayHeaderFormatted(now: environment.now) : nil,
             showsUnreadDivider: inputs.hasUnreadDivider,
             joinsPrevious: joinsPrevious,
-            joinsNext: grouped(this, inputs.next) && inputs.next?.hasReactions != true && item.reactions.isEmpty,
+            joinsNext: grouped(this, inputs.next) && inputs.next?.hasReactions != true && !item.showsReactionChip,
         )
 
         let time = message.timestamp.formatted(date: .omitted, time: .shortened)
@@ -2991,7 +2991,7 @@ final class ConversationModel {
     }
 
     func reactionFailureText(of id: Int64) -> String {
-        items[id]?.reactions.lazy.compactMap(\.error).first ?? ConversationItem.ReactionGroup.notDelivered
+        items[id]?.reactionFailure ?? ConversationItem.ReactionGroup.notDelivered
     }
 
     func reply(to id: Int64) {
@@ -3207,7 +3207,7 @@ final class ConversationModel {
     }
 
     func showReactions(for id: Int64) {
-        let failed = items[id]?.reactions.contains(where: \.isFailed) == true
+        let failed = items[id]?.reactionFailure != nil
         prompt = failed ? .reactionFailure(id) : .reactions(id)
     }
 

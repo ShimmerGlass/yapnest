@@ -151,7 +151,7 @@ struct ServerBounceTests {
 
         try session.retryReactions(on: incoming, peer: alice)
         #expect(reactionStanzas().count == 2)
-        #expect(try database.reader.read { try Reaction.fetchOne($0)?.error } == nil)
+        #expect(try database.reader.read { try OwnReaction.fetchOne($0)?.error } == nil)
 
         let second = try #require(reactionStanzas().last)
         session.acknowledged(second)
@@ -191,8 +191,8 @@ struct ServerBounceTests {
         bounce(id, type: "wait", condition: "recipient-unavailable")
 
         #expect(reactionStanzas().map(\.id) == [id, id])
-        #expect(try database.reader.read { try Reaction.fetchOne($0)?.pendingId } == id)
-        #expect(try database.reader.read { try Reaction.fetchOne($0)?.error } == nil)
+        #expect(try database.reader.read { try OwnReaction.fetchOne($0)?.pendingId } == id)
+        #expect(try database.reader.read { try OwnReaction.fetchOne($0)?.error } == nil)
     }
 
     @Test func aPassingBounceOfAMessageSendsItAgainInsteadOfFailingIt() throws {
@@ -287,7 +287,7 @@ struct ServerBounceTests {
         let stanza = try #require(reactionStanzas().first)
         bounce(try #require(stanza.id), type: "wait", condition: "policy-violation")
         session.acknowledged(stanza)
-        #expect(try database.reader.read { try Reaction.fetchOne($0)?.pendingId } == stanza.id)
+        #expect(try database.reader.read { try OwnReaction.fetchOne($0)?.pendingId } == stanza.id)
     }
 
     @Test func anAcknowledgementAfterAPassingBounceKeepsAMessagePending() throws {
@@ -349,7 +349,8 @@ struct ServerBounceTests {
         bounce(try #require(stanza.id))
         let rows = try database.reader.read { try Reaction.fetchAll($0) }
         #expect(rows.count == 2)
-        #expect(rows.allSatisfy { $0.pendingId == "B" && $0.error == nil })
+        let record = try database.reader.read { try OwnReaction.fetchOne($0) }
+        #expect(record?.pendingId == "B" && record?.error == nil)
     }
 
     // MARK: Changes from elsewhere

@@ -22,6 +22,13 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
         public static var notDelivered: String { String(localized: "The reaction couldn't be delivered.") }
     }
 
+    /// Where our reactions on the message stand when the server hasn't
+    /// acknowledged them, which an empty set has no reaction to show.
+    public enum OwnReactionState: Hashable, Sendable {
+        case pending
+        case failed(String)
+    }
+
     public struct Quote: Hashable, Sendable {
         public var author: Author?
         public var text: String
@@ -38,6 +45,10 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
     public var reactions: [ReactionGroup] {
         didSet { stamp = Self.nextStamp() }
     }
+    /// Nil once the server has our reactions, or if we have none to send.
+    public var ownReactions: OwnReactionState? = nil {
+        didSet { stamp = Self.nextStamp() }
+    }
     public var quote: Quote? {
         didSet { stamp = Self.nextStamp() }
     }
@@ -48,6 +59,15 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
     public var attachment: Attachment? {
         didSet { stamp = Self.nextStamp() }
     }
+
+    /// Why our reactions never reached the other side, which shows even when
+    /// we have none left to show (we took the last one back).
+    public var reactionFailure: String? {
+        if case .failed(let reason) = ownReactions { reason } else { nil }
+    }
+
+    /// Whether a chip hangs off the message: it has reactions, or ours failed.
+    public var showsReactionChip: Bool { !reactions.isEmpty || reactionFailure != nil }
 
     /// Names this content: every build and every change gets a stamp no other
     /// content in the process has had, so items with equal stamps are equal
@@ -62,13 +82,14 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
     private static func nextStamp() -> Int64 { stamps.withLock { $0 += 1; return $0 } }
 
     public static func == (a: Self, b: Self) -> Bool {
-        a.stamp == b.stamp || a.message == b.message && a.reactions == b.reactions && a.quote == b.quote
+        a.stamp == b.stamp || a.message == b.message && a.reactions == b.reactions && a.ownReactions == b.ownReactions && a.quote == b.quote
             && a.preview == b.preview && a.attachment == b.attachment
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(message)
         hasher.combine(reactions)
+        hasher.combine(ownReactions)
         hasher.combine(quote)
         hasher.combine(preview)
         hasher.combine(attachment)
@@ -157,6 +178,7 @@ extension AppDatabase {
 
         let ids = messages.compactMap(\.id)
         let reactionsByMessage = try Self.reactions(db, messageIds: ids)
+        let ownByMessage = try Self.ownReactions(db, messageIds: ids)
         let attachments = try Self.attachments(db, messageIds: ids)
         let previews = try Self.linkPreviews(db, urls: Set(messages.compactMap(\.link)))
 
@@ -182,6 +204,7 @@ extension AppDatabase {
             Self.item(
                 message, me: me,
                 reactions: reactionsByMessage[message.id!] ?? [],
+                own: ownByMessage[message.id!],
                 attachment: attachments[message.id!],
                 preview: message.link.flatMap { previews[$0] },
                 quoted: message.replyToId.flatMap { quoted[$0] },
@@ -201,15 +224,15 @@ extension AppDatabase {
 
     /// Everything that goes into one item. Both the full fetch and the cached
     /// observation build items here, so they can't drift apart.
-    static func item(_ message: Message, me: JID, reactions: [Reaction], attachment: Attachment?, preview: LinkPreview?, quoted original: Message?, quotedAttachment: Attachment?) -> ConversationItem {
+    static func item(_ message: Message, me: JID, reactions: [Reaction], own: OwnReaction?, attachment: Attachment?, preview: LinkPreview?, quoted original: Message?, quotedAttachment: Attachment?) -> ConversationItem {
         let groups = Dictionary(grouping: reactions, by: \.emoji)
             .map { emoji, reactions in
                 ConversationItem.ReactionGroup(
                     emoji: emoji,
                     senders: reactions.sorted { ($0.sender, $0.nick) < ($1.sender, $1.nick) }.map(\.author),
                     includesMe: reactions.contains { $0.sender == me },
-                    isPending: reactions.contains { $0.sender == me && $0.pendingId != nil },
-                    error: reactions.first { $0.sender == me && $0.error != nil }?.error,
+                    isPending: own?.pendingId != nil && reactions.contains { $0.sender == me },
+                    error: reactions.contains { $0.sender == me } ? own?.error : nil,
                 )
             }
             .sorted { ($0.senders.count, $1.emoji) > ($1.senders.count, $0.emoji) }
@@ -222,7 +245,8 @@ extension AppDatabase {
                 quote = .init(author: message.replyToSender.map { Author(jid: $0) }, text: message.replyFallback.map { Attachment.quoteSummary(text: $0, attachment: nil) ?? $0 } ?? "", messageId: nil)
             }
         }
-        return ConversationItem(message: message, reactions: groups, quote: quote, preview: preview, attachment: attachment)
+        let state: ConversationItem.OwnReactionState? = if own?.pendingId != nil { .pending } else { own?.error.map { .failed($0) } }
+        return ConversationItem(message: message, reactions: groups, ownReactions: state, quote: quote, preview: preview, attachment: attachment)
     }
 
     /// What `observeConversation` emits: the items, and a version that moves
@@ -239,7 +263,7 @@ extension AppDatabase {
     /// worked out by GRDB, which would fetch on the writer after each commit
     /// and hold every write up while a chat is open (see `observeChatList`).
     static let conversationTables: [any DatabaseRegionConvertible] = [
-        Table(Conversation.databaseTableName), Table(Message.databaseTableName), Table(Reaction.databaseTableName),
+        Table(Conversation.databaseTableName), Table(Message.databaseTableName), Table(Reaction.databaseTableName), Table(OwnReaction.databaseTableName),
         Table(Attachment.databaseTableName), Table(LinkPreview.databaseTableName),
     ]
 
@@ -486,6 +510,7 @@ final class ConversationItemCache: @unchecked Sendable {
         var message: Message
         var rev: Int64
         var reactions: [Reaction]
+        var own: OwnReaction?
         var attachment: Attachment?
         var preview: LinkPreview?
         var quote: QuoteKey?
@@ -544,6 +569,7 @@ final class ConversationItemCache: @unchecked Sendable {
         }
         let ids = Array(fresh.keys)
         let reactions = try AppDatabase.reactions(db, messageIds: ids)
+        let owned = try AppDatabase.ownReactions(db, messageIds: ids)
         let attachments = try AppDatabase.attachments(db, messageIds: ids)
         let previews = try AppDatabase.linkPreviews(db, urls: Set(fresh.values.compactMap(\.link)))
 
@@ -592,14 +618,15 @@ final class ConversationItemCache: @unchecked Sendable {
             let message = fresh[id] ?? old!.message
             let quote = message.replyToId.flatMap { quoteKeys[$0] }
             let entryReactions = isFresh ? reactions[id] ?? [] : old!.reactions
+            let own = isFresh ? owned[id] : old!.own
             let attachment = isFresh ? attachments[id] : old!.attachment
             let preview = isFresh ? message.link.flatMap { previews[$0] } : old!.preview
             let item = AppDatabase.item(
-                message, me: me, reactions: entryReactions, attachment: attachment, preview: preview,
+                message, me: me, reactions: entryReactions, own: own, attachment: attachment, preview: preview,
                 quoted: quote.flatMap { quotedMessages[$0.id] },
                 quotedAttachment: quote.flatMap { quotedAttachments[$0.id] },
             )
-            next[id] = Entry(message: message, rev: revs[id] ?? old!.rev, reactions: entryReactions, attachment: attachment, preview: preview, quote: quote, item: item)
+            next[id] = Entry(message: message, rev: revs[id] ?? old!.rev, reactions: entryReactions, own: own, attachment: attachment, preview: preview, quote: quote, item: item)
         }
         for (id, _) in revisions where next[id] == nil {
             next[id] = entries[id]

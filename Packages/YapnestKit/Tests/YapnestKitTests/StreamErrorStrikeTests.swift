@@ -240,16 +240,16 @@ struct StreamErrorStrikeTests {
         wire.failsWrites = true
         try session.toggleReaction("👍", on: incoming, peer: alice)
         wire.failsWrites = false
-        let id = try #require(try database.reader.read { try Reaction.fetchOne($0)?.pendingId })
+        let id = try #require(try database.reader.read { try OwnReaction.fetchOne($0)?.pendingId })
         reconnect()
         for _ in 0..<2 {
             close(with: streamError("policy-violation"))
-            #expect(try database.reader.read { try Reaction.fetchOne($0)?.pendingId } == id)
+            #expect(try database.reader.read { try OwnReaction.fetchOne($0)?.pendingId } == id)
             reconnect()
         }
         close(with: streamError("policy-violation"))
-        #expect(try database.reader.read { try Reaction.fetchOne($0)?.pendingId } == nil)
-        #expect(try database.reader.read { try Reaction.fetchOne($0)?.error } != nil)
+        #expect(try database.reader.read { try OwnReaction.fetchOne($0)?.pendingId } == nil)
+        #expect(try database.reader.read { try OwnReaction.fetchOne($0)?.error } != nil)
         let writes = written(id)
         reconnect()
         #expect(written(id) == writes)
@@ -274,7 +274,7 @@ struct StreamErrorStrikeTests {
         wire.failsWrites = true
         try session.toggleReaction("👍", on: incoming, peer: alice)
         wire.failsWrites = false
-        let id = try #require(try database.reader.read { try Reaction.fetchOne($0)?.pendingId })
+        let id = try #require(try database.reader.read { try OwnReaction.fetchOne($0)?.pendingId })
         reconnect()
         session.lock.withLock { $0.pendingStanzas.remove(id) }
         close(with: streamError("policy-violation"))
@@ -294,27 +294,27 @@ struct StreamErrorStrikeTests {
         let incoming = try database.insert(YapnestKit.Message(conversationId: conversation, direction: .incoming, sender: alice, body: "hi", remoteId: "1"))
         try session.toggleReaction("👍", on: incoming, peer: alice)
         session.drainSendQueue(alice)
-        let id = try #require(try database.reader.read { try Reaction.fetchOne($0)?.pendingId })
+        let id = try #require(try database.reader.read { try OwnReaction.fetchOne($0)?.pendingId })
         for _ in 0..<2 {
             close(with: streamError("policy-violation"))
             reconnect()
         }
         close(with: streamError("policy-violation"))
-        #expect(try database.reader.read { try Reaction.fetchOne($0)?.pendingId } == nil)
+        #expect(try database.reader.read { try OwnReaction.fetchOne($0)?.pendingId } == nil)
         return id
     }
 
     @Test func aPassingBounceOfGivenUpReactionsDoesNotMakeThemPendingOrSendThemAgain() throws {
         let id = try givenUpReaction()
-        let error = try database.reader.read { try Reaction.fetchOne($0)?.error }
+        let error = try database.reader.read { try OwnReaction.fetchOne($0)?.error }
         let writes = written(id)
 
         bounce(id, type: "wait", condition: "resource-constraint")
         session.sendUnclaimedPending()
         session.drainSendQueue(alice)
 
-        #expect(try database.reader.read { try Reaction.fetchOne($0)?.pendingId } == nil)
-        #expect(try database.reader.read { try Reaction.fetchOne($0)?.error } == error)
+        #expect(try database.reader.read { try OwnReaction.fetchOne($0)?.pendingId } == nil)
+        #expect(try database.reader.read { try OwnReaction.fetchOne($0)?.error } == error)
         #expect(written(id) == writes)
     }
 

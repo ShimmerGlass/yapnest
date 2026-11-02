@@ -143,13 +143,12 @@ extension XMPPSession {
     /// nothing done, if the stanza was written already.
     func beginWrite(_ kind: PendingKind, id: String, messageId: Int64, peer: JID, failure: String) -> Bool {
         guard lock.withLock({ $0.pendingStanzas.insert(id, of: kind) }) else { return false }
-        let account = account
         let key: BounceKey
         let resend: AppDatabase.Resend
         switch kind {
         case .reaction:
             key = .reactions(messageId)
-            resend = .reactions(messageId: messageId, from: account)
+            resend = .reactions(messageId: messageId)
         case .action:
             key = .action(messageId)
             resend = .action(messageId: messageId)
@@ -160,7 +159,7 @@ extension XMPPSession {
             repend: { [weak self] in try? self?.database.repend(resend, id: id, ifNotSupersededBy: id) },
             fail: { [weak self] error in
                 try? self?.database.clearPending(
-                    kind, messageId: messageId, from: account, error: error.describe(failure), unlessSupersededBy: id,
+                    kind, messageId: messageId, error: error.describe(failure), unlessSupersededBy: id,
                 )
             },
         )

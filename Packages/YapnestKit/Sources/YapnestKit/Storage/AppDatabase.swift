@@ -889,6 +889,43 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v56-own-reactions") { db in
+            // The pending id and the error of our reactions moved from their
+            // rows to a record of their own, as the set can be empty and an
+            // empty set has no row to carry them.
+            try db.execute(sql: """
+                CREATE TABLE ownReaction (
+                    messageId INTEGER PRIMARY KEY REFERENCES message(id) ON DELETE CASCADE,
+                    pendingId TEXT,
+                    error TEXT,
+                    earlierIds TEXT NOT NULL DEFAULT '[]'
+                )
+                """)
+            try db.execute(sql: "CREATE INDEX ownReaction_on_pendingId ON ownReaction(pendingId) WHERE pendingId IS NOT NULL")
+            try db.execute(sql: """
+                INSERT INTO ownReaction (messageId, pendingId, error)
+                SELECT messageId, MAX(pendingId), CASE WHEN MAX(pendingId) IS NULL THEN MAX(error) END
+                FROM reaction WHERE pendingId IS NOT NULL OR error IS NOT NULL GROUP BY messageId
+                """)
+            try db.execute(sql: "DROP INDEX reaction_on_pendingId")
+            try db.execute(sql: "ALTER TABLE reaction DROP COLUMN pendingId")
+            try db.execute(sql: "ALTER TABLE reaction DROP COLUMN error")
+            // The message's revision goes up with the record, as it does with
+            // its reactions, so the row is rebuilt.
+            try db.execute(sql: """
+                CREATE TRIGGER ownReaction_inserted_revision AFTER INSERT ON ownReaction
+                BEGIN UPDATE message SET rev = rev + 1 WHERE id = NEW.messageId; END
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER ownReaction_updated_revision AFTER UPDATE ON ownReaction
+                BEGIN UPDATE message SET rev = rev + 1 WHERE id = NEW.messageId; END
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER ownReaction_deleted_revision AFTER DELETE ON ownReaction
+                BEGIN UPDATE message SET rev = rev + 1 WHERE id = OLD.messageId; END
+                """)
+        }
+
         return migrator
     }
 
