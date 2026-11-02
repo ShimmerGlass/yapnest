@@ -61,6 +61,13 @@ public struct ConversationItem: Hashable, Sendable, Identifiable {
     /// Whether a chip hangs off the message: it has reactions, or ours failed.
     public var showsReactionChip: Bool { !reactions.isEmpty || reactionFailure != nil }
 
+    /// Whether the chip shows ours as still sending. Only while some of ours
+    /// are on it: an empty set on its way has nothing of ours to mark, and
+    /// others' reactions mustn't look like they are waiting on us.
+    public var showsReactionsPending: Bool {
+        ownReactions == .pending && reactions.contains(where: \.includesMe)
+    }
+
     /// Names this content: every build and every change gets a stamp no other
     /// content in the process has had, so items with equal stamps are equal
     /// without comparing them field by field. Items built apart have different

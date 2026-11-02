@@ -87,6 +87,18 @@ struct PendingReactionTests {
         #expect(!(try isPending()))
     }
 
+    @Test func onlyOurOwnPendingReactionsShowAsSending() throws {
+        session.enableAcknowledgementsForTesting()
+        try database.setReactions(["👀"], from: Author(jid: alice), conversationId: message.conversationId, messageRef: "1")
+        try session.toggleReaction("👍", on: message, peer: alice)
+        #expect(try database.reader.read { try AppDatabase.conversationItems($0, peer: alice, me: me) }.first?.showsReactionsPending == true)
+        // Taking ours back leaves only theirs, which aren't waiting on us.
+        try session.toggleReaction("👍", on: message, peer: alice)
+        let item = try #require(try database.reader.read { try AppDatabase.conversationItems($0, peer: alice, me: me) }.first)
+        #expect(item.ownReactions == .pending)
+        #expect(!item.showsReactionsPending)
+    }
+
     @Test func aNewSessionSendsAPendingReactionAgainWithTheSameIdOnce() throws {
         session.enableAcknowledgementsForTesting()
         try session.toggleReaction("👍", on: message, peer: alice)
