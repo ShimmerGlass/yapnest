@@ -1555,10 +1555,17 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
             if needKeys > 0 {
                 changed = true;
                 let currentPreKeyId = self.storage.preKeyStore.currentPreKeyId();
-                var newKeys = self.signalContext.generatePreKeys(withStartingPreKeyId: currentPreKeyId + 1, count: UInt32(needKeys));
-                newKeys = newKeys.filter { (key) in
-                    self.storage.preKeyStore.storePreKey(key.serializedData!, withId: key.preKeyId);
+                let newKeys = self.signalContext.generatePreKeys(withStartingPreKeyId: currentPreKeyId + 1, count: UInt32(needKeys));
+                // A refused key (the store can't tell which ids are free) must not lead to a
+                // bundle with fewer keys than the one on the server.
+                let refused = newKeys.filter { (key) in
+                    !self.storage.preKeyStore.storePreKey(key.serializedData!, withId: key.preKeyId);
                 };
+                guard refused.isEmpty else {
+                    logger.error("Refused \(refused.count) of \(newKeys.count) new prekeys, not publishing the bundle");
+                    failure?();
+                    return;
+                }
                 validKeys = validKeys + newKeys;
             }
 

@@ -227,6 +227,36 @@ struct OMEMOPreKeyTests {
         #expect(try markedDeleted(database) == 0)
     }
 
+    /// A store that can't read which prekey ids are free refuses new keys, and
+    /// a bundle of the few that remain would replace the full one on the server.
+    @Test func aRefusedPreKeyStoreDoesNotPublishAThinnerBundle() async throws {
+        let (_, server, client, database) = try await setUp()
+        defer { withExtendedLifetime(client) {} }
+        #expect(server.publishedPreKeyIds.count == 100)
+
+        let restarted = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        restarted.module.registrationRetryDelays = [3600]
+        let second = XMPPClient()
+        second.connectionConfiguration.userJid = BareJID(me.description)
+        second.writer = server
+        _ = second.modulesManager.register(DiscoveryModule(identity: .init(category: "client", type: "pc", name: "Test")))
+        _ = second.modulesManager.register(PubSubModule())
+        _ = second.modulesManager.register(restarted.module)
+        defer { withExtendedLifetime(second) {} }
+        restarted.module.isPepAvailable = true
+        await eventually("the module to be ready") { restarted.module.isReady }
+
+        let before = server.bundlePublishes
+        let ids = server.publishedPreKeyIds
+        try await database.writer.write { try $0.execute(sql: "ALTER TABLE omemoPreKey RENAME TO omemoPreKeyAside") }
+        restarted.module.publishDeviceBundleIfNeeded(completionHandler: nil)
+        try await Task.sleep(for: .milliseconds(500))
+        try await database.writer.write { try $0.execute(sql: "ALTER TABLE omemoPreKeyAside RENAME TO omemoPreKey") }
+
+        #expect(server.bundlePublishes == before)
+        #expect(server.publishedPreKeyIds == ids)
+    }
+
     @Test func aPreKeyLeftMarkedByAnExtensionIsRepublishedAtTheNextStart() async throws {
         let (bob, server, client, database) = try await setUp()
         defer { withExtendedLifetime(client) {} }

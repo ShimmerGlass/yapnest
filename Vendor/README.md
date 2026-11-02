@@ -1051,6 +1051,17 @@ Each entry gives what went wrong for users, why, and what changed.
   rotates it weekly and keeps the replaced one for four weeks. Pinned by
   `OMEMOPreKeyTests`.
 
+**A refused prekey store led to a thinner bundle** (`publishDeviceBundle(currentBundle:)`)
+- *Symptom:* after a failed read of the prekey ids, our published bundle
+  could end up with few or no one-time prekeys, over the good one on the
+  server, so contacts could no longer start sessions with the full set.
+- *Cause:* new prekeys the store refused to keep (it can't tell which ids
+  are free until a read succeeds) were dropped from the list, and the bundle
+  was published with what was left.
+- *Fix:* if any new prekey is refused, nothing is published: the failure is
+  logged and `failure` called, and the next check tries again. Pinned by
+  `OMEMOPreKeyTests`.
+
 **A room could give any member a device of its own** (`readDeviceList`,
 `readIdentityKey`, `OMEMOBundle.identityKey`)
 - *Symptom:* a group's service could post an encrypted message as any
