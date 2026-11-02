@@ -54,9 +54,9 @@ extension AppDatabase {
         try writer.write { db in try Self.insert(db, message).message }
     }
 
-    ///
-    /// - Parameter quietly: stores it without it counting as news: the chat
-    ///   keeps its place in the list and its archived state.
+    /// Stores `message` unless it's a copy of one stored. `quietly` stores it
+    /// without it counting as news: the chat keeps its place in the list and
+    /// its archived state.
     static func insert(_ db: Database, _ message: Message, quietly: Bool = false) throws -> (message: Message, inserted: Bool) {
         var message = message
         if let existing = try duplicate(of: message, db) {
