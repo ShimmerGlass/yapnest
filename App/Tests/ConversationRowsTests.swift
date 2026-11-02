@@ -121,11 +121,16 @@ struct ConversationRowsTests {
         #expect(f.model.reactionFailureText(of: id) == "Nope")
         f.model.showReactions(for: id)
         #expect(f.model.prompt == .reactionFailure(id))
+        // Nothing of ours is left to remove, so only trying again is offered.
+        #expect(!f.model.canRemoveReactions(of: id))
         let label = try #require(f.model.rows.first { $0.id == id }?.content.accessibilityLabel)
         #expect(label.contains(String(localized: "Not delivered")))
         #expect(ReactionsChip.accessibilityLabel(reactions: [], failed: true, pending: false) == String(localized: "Not delivered"))
         #expect(ReactionsChip.accessibilityLabel(reactions: [], failed: false, pending: true) == String(localized: "Sending"))
 
+        // With one of ours still on it, taking it back is a choice of its own.
+        try await f.database.writer.write { [me = f.me] in try Reaction(messageId: id, sender: me, nick: "", emoji: "👍", occupantId: nil).insert($0) }
+        await eventually("our reaction never showed") { f.model.canRemoveReactions(of: id) }
     }
 
     @Test func aDeletedMessageShowsNoTraceOfItsText() async throws {

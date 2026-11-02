@@ -73,7 +73,9 @@ private struct ConversationPrompts: ViewModifier {
             Button("Cancel", role: .cancel) {}
         case .reactionFailure(let id):
             Button("Try Again") { model.retryReactions(id) }
-            Button("Remove", role: .destructive) { model.removeReactions(id) }
+            if model.canRemoveReactions(of: id) {
+                Button("Remove", role: .destructive) { model.removeReactions(id) }
+            }
             Button("Cancel", role: .cancel) {}
         case .microphoneDenied:
             Button("Open Settings") {

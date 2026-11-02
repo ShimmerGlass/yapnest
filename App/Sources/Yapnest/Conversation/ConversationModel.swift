@@ -2991,6 +2991,12 @@ final class ConversationModel {
         (items[id]?.message.deliveryProblem ?? .notSent).title
     }
 
+    /// Whether taking our reactions back on the message differs from trying
+    /// again. With none of ours left, both send the same empty set.
+    func canRemoveReactions(of id: Int64) -> Bool {
+        items[id]?.reactions.contains(where: \.includesMe) ?? false
+    }
+
     func reactionFailureText(of id: Int64) -> String {
         items[id]?.reactionFailure ?? ConversationItem.ReactionGroup.notDelivered
     }
