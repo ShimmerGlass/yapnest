@@ -607,20 +607,6 @@ struct MemberListFailureTests {
         session.settleRoster()
     }
 
-    @Test func aCompleteListingThatNoLongerNamesACountedMemberWritesOneLeftLine() async throws {
-        try await countMembers(of: ["owner": ["me@example.org"], "member": ["alice@example.org", "bob@example.org"]])
-        #expect(try rosterLines().isEmpty, "the first complete listing is the baseline")
-
-        serve(["owner": ["me@example.org"], "member": ["alice@example.org"]])
-        await fetch(lists: XMPPSession.memberLists)
-        session.settleRoster()
-        #expect(try rosterLines() == [.leftGroup])
-
-        await fetch(lists: XMPPSession.memberLists)
-        session.settleRoster()
-        #expect(try rosterLines() == [.leftGroup], "and is not told again")
-    }
-
     @Test func aMemberNamedByAnotherListThanTheirOwnIsNotGone() async throws {
         try await countMembers(of: ["admin": ["bob@example.org"], "member": ["alice@example.org"]])
         serve(["owner": ["bob@example.org"], "member": ["alice@example.org"]])

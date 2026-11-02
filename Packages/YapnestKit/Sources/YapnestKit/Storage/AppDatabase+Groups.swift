@@ -108,6 +108,14 @@ extension AppDatabase {
             }
             try group.update(db)
 
+            // What was counted under the old rules is not compared with: a
+            // room that became private counts afresh from its next complete
+            // listing, quietly, and one that stopped being so counts nothing.
+            if wasPrivate != group.isPrivate {
+                try Self.rosterClear(db, group.conversationId)
+                if group.isPrivate { try Self.rosterBeginBaseline(db, group.conversationId) }
+            }
+
             if !group.isPrivate {
                 conversation.isEncrypted = false
             } else if !wasPrivate {

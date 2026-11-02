@@ -787,7 +787,7 @@ public final class AppDatabase: Sendable {
 
         migrator.registerMigration("v49-group-roster") { db in
             // Who we count as being in each group, so that someone the room
-            // adds or loses shows in the chat: see `AppDatabase.rosterArrived`.
+            // adds or loses shows in the chat: see `AppDatabase.rosterListingDone`.
             try db.create(table: "groupRoster") { t in
                 t.column("conversationId", .integer).notNull().references("conversation", onDelete: .cascade)
                 t.column("key", .text).notNull()
@@ -799,9 +799,8 @@ public final class AppDatabase: Sendable {
                 t.column("hasLeft", .boolean).notNull().defaults(to: false)
                 t.primaryKey(["conversationId", "key"])
             }
-            // Present for the groups whose first join has been recorded.
-            // `listed` is whether the members listed after that join, which
-            // are counted without a word, have all come.
+            // Present for the groups whose baseline has begun. `listed` is
+            // whether the baseline's complete member listing has come.
             try db.create(table: "groupRosterTaken") { t in
                 t.primaryKey("conversationId", .integer).references("conversation", onDelete: .cascade)
                 t.column("listed", .boolean).notNull().defaults(to: false)
@@ -933,6 +932,19 @@ public final class AppDatabase: Sendable {
                 t.add(column: "publishedAt", .datetime)
             }
             try db.execute(sql: "UPDATE omemoSignedPreKey SET publishedAt = createdAt")
+        }
+
+        migrator.registerMigration("v58-group-roster-members") { db in
+            // The roster follows membership, not presence, so it needs only
+            // the members. Every private group counts them afresh, quietly,
+            // on its next join.
+            try db.drop(table: "groupRoster")
+            try db.create(table: "groupRoster") { t in
+                t.column("conversationId", .integer).notNull().references("conversation", onDelete: .cascade)
+                t.column("jid", .text).notNull()
+                t.primaryKey(["conversationId", "jid"])
+            }
+            try db.execute(sql: "DELETE FROM groupRosterTaken")
         }
 
         return migrator

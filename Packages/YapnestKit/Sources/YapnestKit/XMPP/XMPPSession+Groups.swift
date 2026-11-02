@@ -580,9 +580,6 @@ extension XMPPSession {
                     if let participantsMayChangeSubject { $0?.participantsMayChangeSubject = participantsMayChangeSubject }
                 }
                 self.roomAvatarAnnounced(room, form: info.form)
-                if let before, let after = try? self.database.groupChat(room), before.isPrivate != after.isPrivate {
-                    self.rosterKeysChanged(room, isJoined: self.roomStatus(room)?.isJoined == true)
-                }
                 self.roomInfoChanged(room, from: before)
                 done?(.info(hasArchive: features.contains("urn:xmpp:mam:2")))
             case .failure(let error):
@@ -611,8 +608,12 @@ extension XMPPSession {
     private func roomInfoChanged(_ room: JID, from before: GroupChat?) {
         guard roomStatus(room)?.isJoined == true, let group = try? database.groupChat(room) else { return }
         // Members are only listed on joining, and a room that has just
-        // started showing addresses has nobody listed to encrypt for.
-        if group.isNonAnonymous, before?.isNonAnonymous != true { fetchMembers(room, lists: Self.memberLists) }
+        // started showing addresses has nobody listed to encrypt for. One
+        // that has just become private begins counting its members afresh
+        // (`setRoomInfo`), and this listing is what fills the count.
+        if group.isNonAnonymous, before?.isNonAnonymous != true || before?.isPrivate != group.isPrivate {
+            fetchMembers(room, lists: Self.memberLists)
+        }
         // Our bookmark carries the name too, and would put the old one back;
         // `setRoomInfo` owed it in the write that stored the name.
         if group.name != before?.name, group.bookmarkOwed { sendOwedBookmarks() }
@@ -960,7 +961,7 @@ extension XMPPSession {
         }
         if retryable { scheduleRejoin(room) }
         // Kicks and restarts end this visit; the rest end membership.
-        if statuses.contains(301) || statuses.contains(321) || statuses.contains(322) {
+        if !statuses.isDisjoint(with: Self.membershipEndStatuses) {
             markLeft(room, owingBookmark: true)
             sendOwedBookmarks()
         }
@@ -1075,13 +1076,13 @@ extension XMPPSession {
         Task { [weak self] in
             let listed = await self?.fetchMembersWarning(room, lists: lists)
             // After the lists, which `listReceived` has told the roster of.
-            // A fetch of fewer than all three can't tell who is gone.
-            if let listed, Set(lists).isSuperset(of: Self.memberLists) { self?.rosterListingDone(room, members: listed) }
+            if let listed { self?.rosterListingDone(room, members: listed) }
             done?()
         }
     }
 
-    /// Who the member lists name together, if they all came.
+    /// Who the member lists name together, if all of them were asked for and
+    /// came: a fetch of fewer can't tell who is gone.
     private func fetchMembersWarning(_ room: JID, lists: [RoomAffiliation]) async -> [JID]? {
         let attempt = lock.withLock { $0.attempt }
         let key = "room-members:\(room)"
@@ -1108,7 +1109,7 @@ extension XMPPSession {
             let jids = try await requestLists(members, of: room)
             named.withLock { $0 = jids }
         }
-        if case .succeeded = outcome { return named.withLock { $0 } }
+        if case .succeeded = outcome, Set(members) == Set(Self.memberLists) { return named.withLock { $0 } }
         return nil
     }
 
@@ -1116,25 +1117,31 @@ extension XMPPSession {
     /// first failure. Otherwise it returns everyone the lists name.
     @discardableResult
     private func requestLists(_ lists: [RoomAffiliation], of room: JID) async throws -> [JID] {
-        let named = OSAllocatedUnfairLock(initialState: [JID]())
-        let failure = await withTaskGroup(of: Error?.self) { group in
+        let results = await withTaskGroup(of: Result<[JID], Error>.self) { group in
             for affiliation in lists {
                 group.addTask { [self] in
                     do {
                         let response = try await retryingPassingErrors { try await client.context.writer.write(iq: OutboundStanza.affiliationList(affiliation, of: room)) }
-                        named.withLock { $0 += listReceived(affiliation, in: room, response) }
-                        return nil
+                        return .success(listReceived(affiliation, in: room, response))
                     } catch {
-                        return error
+                        return .failure(error)
                     }
                 }
             }
-            var first: Error?
-            for await error in group { first = first ?? error }
-            return first
+            var all: [Result<[JID], Error>] = []
+            for await result in group { all.append(result) }
+            return all
         }
-        if let failure { throw failure }
-        return named.withLock { $0 }
+        var named: [JID] = []
+        var first: Error?
+        for result in results {
+            switch result {
+            case .success(let jids): named += jids
+            case .failure(let error): first = first ?? error
+            }
+        }
+        if let first { throw first }
+        return named
     }
 
     @discardableResult

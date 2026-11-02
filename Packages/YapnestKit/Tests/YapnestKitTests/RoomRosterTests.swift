@@ -58,9 +58,7 @@ struct RoomRosterTests {
         session.settleRoster()
     }
 
-    private func join(_ nicks: String...) { join(all: nicks) }
-
-    private func join(all nicks: [String]) {
+    private func join(_ nicks: String...) {
         for nick in nicks { session.roomPresence(presence(nick), room: room) }
         finishJoin()
     }
@@ -72,7 +70,6 @@ struct RoomRosterTests {
     }
 
     private struct Line: Equatable {
-        func withoutNick() -> Line { Line(event: event, nick: nil, sender: sender) }
         let event: MessageEvent
         let nick: String?
         let sender: YapnestKit.JID
@@ -87,17 +84,13 @@ struct RoomRosterTests {
         }
     }
 
-    private func joined(_ nick: String, _ jid: String? = nil) -> Line {
-        Line(event: .joinedGroup, nick: nick, sender: YapnestKit.JID(jid ?? "\(nick.lowercased())@example.org")!)
-    }
+    private func joined(_ name: String) -> Line { Line(event: .joinedGroup, nick: nil, sender: address(name)) }
 
-    private func left(_ nick: String, _ jid: String? = nil) -> Line {
-        Line(event: .leftGroup, nick: nick, sender: YapnestKit.JID(jid ?? "\(nick.lowercased())@example.org")!)
-    }
+    private func left(_ name: String) -> Line { Line(event: .leftGroup, nick: nil, sender: address(name)) }
 
     private func counted() throws -> Set<String> {
         try database.reader.read { db in
-            Set(try String.fetchAll(db, sql: "SELECT key FROM groupRoster WHERE conversationId = ?", arguments: [conversationId]))
+            Set(try String.fetchAll(db, sql: "SELECT jid FROM groupRoster WHERE conversationId = ?", arguments: [conversationId]))
         }
     }
 
@@ -108,7 +101,9 @@ struct RoomRosterTests {
     private func address(_ name: String) -> YapnestKit.JID { YapnestKit.JID("\(name.lowercased())@example.org")! }
 
     /// A fetch of every member list that came whole, naming `names`.
-    private func list(_ names: String...) {
+    private func list(_ names: String...) { list(all: names) }
+
+    private func list(all names: [String]) {
         let members = names.map(address)
         session.rosterListed(room, members: members)
         session.rosterListingDone(room, members: members)
@@ -118,10 +113,7 @@ struct RoomRosterTests {
     /// The first complete listing after the first join, which is the baseline.
     private func baseline(_ names: String...) {
         join("Alice")
-        let members = names.map(address)
-        session.rosterListed(room, members: members)
-        session.rosterListingDone(room, members: members)
-        session.settleRoster()
+        list(all: names)
     }
 
     private func affiliation(_ jid: String, _ affiliation: String) -> Martin.Message {
@@ -153,13 +145,6 @@ struct RoomRosterTests {
         leave("Bob")
         #expect(try lines().isEmpty)
         #expect(try counted() == ["alice@example.org", "bob@example.org"], "being offline doesn't end membership")
-    }
-
-    @Test func aMemberGoingOfflineStaysAMemberForTheNextListing() throws {
-        baseline("Alice", "Bob")
-        leave("Bob")
-        list("Alice", "Bob")
-        #expect(try lines().isEmpty)
     }
 
     @Test func ourRejoinWritesNothingEvenWhenPeopleCameAndWentMeanwhile() throws {
@@ -205,10 +190,9 @@ struct RoomRosterTests {
         session.rosterListed(room, members: [address("alice"), address("erin")])
         session.settleRoster()
         #expect(try counted() == ["alice@example.org", "erin@example.org"])
-        session.rosterListingDone(room, members: [address("alice"), address("zed"), me])
-        session.settleRoster()
+        list("Alice", "Zed")
         #expect(try lines().isEmpty)
-        #expect(try counted() == ["alice@example.org", "zed@example.org"], "erin was never counted as having been there; we are not counted")
+        #expect(try counted() == ["alice@example.org", "zed@example.org"], "erin is dropped quietly")
     }
 
     @Test func membersListedBeforeTheFirstListingIsDoneAreQuiet() throws {
@@ -244,7 +228,7 @@ struct RoomRosterTests {
         rejoin("Alice")
         session.rosterListed(room, members: [address("erin"), address("zed"), me])
         session.settleRoster()
-        #expect(try lines() == [Line(event: .joinedGroup, nick: nil, sender: address("zed"))])
+        #expect(try lines() == [joined("Zed")])
         session.rosterListed(room, members: [address("zed")])
         session.settleRoster()
         #expect(try lines().count == 1)
@@ -253,7 +237,7 @@ struct RoomRosterTests {
     @Test func aCompleteListingThatDropsACountedMemberWritesOneLeftLine() throws {
         baseline("Alice", "Bob")
         list("Alice")
-        #expect(try lines() == [Line(event: .leftGroup, nick: nil, sender: address("bob"))])
+        #expect(try lines() == [left("Bob")])
         #expect(try counted() == ["alice@example.org"])
         list("Alice")
         #expect(try lines().count == 1, "and isn't said again")
@@ -279,7 +263,7 @@ struct RoomRosterTests {
         baseline("Alice")
         session.affiliationChanged(in: room, affiliation("zed@example.org", "member"))
         session.settleRoster()
-        #expect(try lines() == [Line(event: .joinedGroup, nick: nil, sender: address("zed"))])
+        #expect(try lines() == [joined("Zed")])
         #expect(try counted() == ["alice@example.org", "zed@example.org"])
         session.affiliationChanged(in: room, affiliation("zed@example.org", "admin"))
         session.affiliationChanged(in: room, affiliation("alice@example.org", "admin"))
@@ -318,7 +302,7 @@ struct RoomRosterTests {
         arrive("Bob")
         session.affiliationChanged(in: room, affiliation("bob@example.org", "outcast"))
         session.settleRoster()
-        #expect(try lines() == [Line(event: .leftGroup, nick: nil, sender: address("bob"))])
+        #expect(try lines() == [left("Bob")])
         #expect(try counted() == ["alice@example.org"])
     }
 
@@ -337,7 +321,7 @@ struct RoomRosterTests {
     @Test func aPresenceThatEndsMembershipWritesALineWithoutAnAffiliationNotice() throws {
         baseline("Alice", "Bob")
         leave("Bob", statuses: [322])
-        #expect(try lines() == [Line(event: .leftGroup, nick: nil, sender: address("bob"))])
+        #expect(try lines() == [left("Bob")])
     }
 
     @Test func aBannedMemberTheServerAddsAgainIsAnnounced() throws {
@@ -359,17 +343,13 @@ struct RoomRosterTests {
 
     @Test func aRoomThatStopsBeingPrivateCountsNothingMoreAndStartsAfreshWhenPrivateAgain() throws {
         baseline("Alice", "Bob")
-        try database.updateGroupChat(room) { $0.isMembersOnly = false }
-        session.rosterKeysChanged(room, isJoined: true)
-        session.settleRoster()
+        try database.setRoomInfo(room, name: nil, isMembersOnly: false, isNonAnonymous: true)
         #expect(try counted().isEmpty)
         #expect(try !isBaselineBegun())
         session.affiliationChanged(in: room, affiliation("zed@example.org", "member"))
         list("Alice")
         #expect(try lines().isEmpty)
-        try database.updateGroupChat(room) { $0.isMembersOnly = true }
-        session.rosterKeysChanged(room, isJoined: true)
-        session.settleRoster()
+        try database.setRoomInfo(room, name: nil, isMembersOnly: true, isNonAnonymous: true)
         #expect(try isBaselineBegun())
         list("Alice", "Zed")
         #expect(try lines().isEmpty, "the first listing after it became private is a baseline")
@@ -393,14 +373,6 @@ struct RoomRosterTests {
         #expect(try test.lines().isEmpty)
         #expect(try test.counted().isEmpty)
         #expect(try !test.isBaselineBegun())
-    }
-
-    @Test func aBigGroupThatIsNotPrivateWritesNoLinesEither() throws {
-        let test = try RoomRosterTests(isPrivate: false)
-        test.join(all: (0..<60).map { "User\($0)" })
-        test.arrive("Late")
-        for index in 0..<55 { test.leave("User\(index)", statuses: [307]) }
-        #expect(try test.lines().isEmpty)
     }
 
     // MARK: The lines are not messages

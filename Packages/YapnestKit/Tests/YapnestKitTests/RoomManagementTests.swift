@@ -433,6 +433,20 @@ struct RoomManagementSessionTests {
         #expect(try database.conversation(id: group().conversationId)?.isEncrypted == false)
     }
 
+    @Test func aRoomThatBecomesPrivateBeginsCountingItsMembersAndListsThem() async throws {
+        try database.setRoomInfo(room, name: "Cake", isMembersOnly: false, isNonAnonymous: true)
+        join(as: .owner)
+        #expect(try baselineBegun() == false)
+        session.refreshRoomInfo(room)
+        #expect(await eventually { !requests(in: "http://jabber.org/protocol/muc#admin").isEmpty })
+        #expect(try group().isPrivate)
+        #expect(try baselineBegun() == true)
+    }
+
+    private func baselineBegun() throws -> Bool? {
+        try database.reader.read { try Bool.fetchOne($0, sql: "SELECT EXISTS (SELECT 1 FROM groupRosterTaken)") }
+    }
+
     @Test func aConfigurationNoticeFromTheRoomReadsItsInfoAgain() async throws {
         join(as: .owner)
         info.value = (["muc_membersonly"], "Cake")

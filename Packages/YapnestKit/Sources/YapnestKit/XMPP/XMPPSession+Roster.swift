@@ -17,42 +17,37 @@ extension XMPPSession {
         }
     }
 
-    /// The room became private or stopped being so. What was counted under the
-    /// other rules is dropped, and a room we are in counts afresh from its
-    /// next complete listing, quietly.
-    func rosterKeysChanged(_ room: JID, isJoined: Bool) {
+    /// Runs `change` for a private group on `rosterQueue`; other groups count
+    /// nothing, as there being a member is not what lets someone read what we send.
+    private func countingPrivate(_ room: JID, _ change: @escaping @Sendable (GroupChat) throws -> Void) {
         rosterQueue.async { [self] in
-            guard let group = try? database.groupChat(room) else { return }
-            try? database.rosterRekeyed(conversationId: group.conversationId, takesBaseline: isJoined && group.isPrivate)
+            guard let group = try? database.groupChat(room), group.isPrivate else { return }
+            do {
+                try change(group)
+            } catch {
+                logger.error("Failed to count a group's members: \(error)")
+            }
         }
     }
 
     /// Our own join is over: the first time, the baseline begins. A rejoin
     /// compares nothing, as the member lists are what is compared.
     func rosterSelfJoined(_ room: JID) {
-        rosterQueue.async { [self] in
-            guard let group = try? database.groupChat(room), group.isPrivate else { return }
-            do {
-                try database.rosterSelfJoined(conversationId: group.conversationId)
-            } catch {
-                logger.error("Failed to begin counting a group's members: \(error)")
-            }
-        }
+        countingPrivate(room) { [database] in try database.rosterSelfJoined(conversationId: $0.conversationId) }
     }
 
     /// A presence took someone's membership (301, 321, 322), which the
     /// affiliation notice usually reports too.
     func rosterRemoved(_ room: JID, jid: JID?, statuses: Set<Int>) {
         guard let jid, jid != account, !statuses.isDisjoint(with: Self.membershipEndStatuses) else { return }
-        rosterAffiliated(room, jid: jid, affiliation: statuses.contains(301) ? .outcast : .none)
+        rosterAffiliated(room, jid: jid, isMember: false)
     }
 
-    /// The room listed members. Only a private group counts them, as there
-    /// being a member is what lets someone read what we send.
+    /// The room listed members.
     func rosterListed(_ room: JID, members: [JID]) {
-        rosterQueue.async { [self] in
-            guard let group = try? database.groupChat(room), group.isPrivate else { return }
-            try? database.rosterListed(conversationId: group.conversationId, room: room, members: members.filter { $0 != account }, at: Date())
+        let members = members.filter { $0 != account }
+        countingPrivate(room) { [database] in
+            try database.rosterListed(conversationId: $0.conversationId, room: room, members: members, at: Date())
         }
     }
 
@@ -60,18 +55,21 @@ extension XMPPSession {
     /// `members` is their union. Only then can absence be judged: a list that
     /// failed or was forbidden would make its members look gone.
     func rosterListingDone(_ room: JID, members: [JID]) {
-        rosterQueue.async { [self] in
-            guard let group = try? database.groupChat(room), group.isPrivate else { return }
-            try? database.rosterListingDone(conversationId: group.conversationId, room: room, members: members.filter { $0 != account }, at: Date())
+        let members = members.filter { $0 != account }
+        countingPrivate(room) { [database] in
+            try database.rosterListingDone(conversationId: $0.conversationId, room: room, members: members, at: Date())
         }
     }
 
     /// The room announced someone's affiliation, live.
     func rosterAffiliated(_ room: JID, jid: JID, affiliation: RoomAffiliation) {
+        rosterAffiliated(room, jid: jid, isMember: affiliation.isMember)
+    }
+
+    private func rosterAffiliated(_ room: JID, jid: JID, isMember: Bool) {
         guard jid != account else { return }
-        rosterQueue.async { [self] in
-            guard let group = try? database.groupChat(room), group.isPrivate else { return }
-            try? database.rosterAffiliated(conversationId: group.conversationId, room: room, jid: jid, isMember: affiliation.isMember, at: Date())
+        countingPrivate(room) { [database] in
+            try database.rosterAffiliated(conversationId: $0.conversationId, room: room, jid: jid, isMember: isMember, at: Date())
         }
     }
 
