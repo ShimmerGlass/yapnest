@@ -2069,8 +2069,7 @@ final class ConversationModel {
         // The flipped list rests at its newest end by itself. A coast that
         // brings the list back here has nothing to be followed down to unless
         // a message arrived meanwhile, and an animated scroll started in the
-        // middle of it took the fling over: it slowed just before the end, and
-        // on a phone could stop short and snap into place when it settled.
+        // middle of it took the fling over and slowed it just before the end.
         releasedCoastAt = scrollPhase == .decelerating ? order.last : nil
         windowEnd = nil
         observeMessages()
