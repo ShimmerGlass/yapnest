@@ -172,6 +172,8 @@ public final class XMPPSession: @unchecked Sendable {
     var occupantWindow: TimeInterval = 0.05
     /// Runs the count of who is in each group: see `XMPPSession+Roster.swift`.
     let rosterQueue = DispatchQueue(label: "Yapnest.roster")
+    /// Touched only on `rosterQueue`.
+    let rosterRemovals = RosterRemovals()
     let callableUpdatePending = OSAllocatedUnfairLock(initialState: false)
     /// The relays found for calls.
     let iceServerCache = IceServerCache()

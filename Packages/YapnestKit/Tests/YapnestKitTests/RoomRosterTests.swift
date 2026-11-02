@@ -105,7 +105,6 @@ struct RoomRosterTests {
 
     private func list(all names: [String]) {
         let members = names.map(address)
-        session.rosterListed(room, members: members)
         session.rosterListingDone(room, members: members, since: Date().addingTimeInterval(60))
         session.settleRoster()
     }
@@ -194,24 +193,22 @@ struct RoomRosterTests {
 
     @Test func theFirstCompleteListingIsCountedWithoutLinesInBothDirections() throws {
         join("Alice")
-        session.rosterListed(room, members: [address("alice"), address("erin")])
+        session.affiliationChanged(in: room, affiliation("erin@example.org", "member"))
         session.settleRoster()
-        #expect(try counted() == ["alice@example.org", "erin@example.org"])
+        #expect(try counted() == ["erin@example.org"])
         list("Alice", "Zed")
         #expect(try lines().isEmpty)
         #expect(try counted() == ["alice@example.org", "zed@example.org"], "erin is dropped quietly")
     }
 
-    @Test func membersListedBeforeTheFirstListingIsDoneAreQuiet() throws {
+    @Test func theFirstListingCountsWhoItNamesWithoutLines() throws {
         join("Alice")
-        session.rosterListed(room, members: [address("erin")])
-        session.rosterListed(room, members: [address("zed")])
-        session.settleRoster()
+        list("Erin", "Zed")
         #expect(try lines().isEmpty)
+        #expect(try counted() == ["erin@example.org", "zed@example.org"])
     }
 
     @Test func aMemberListBeforeTheFirstJoinCountsNothing() throws {
-        session.rosterListed(room, members: [address("erin")])
         session.rosterListingDone(room, members: [address("erin")], since: Date().addingTimeInterval(60))
         session.settleRoster()
         #expect(try counted().isEmpty)
@@ -233,11 +230,9 @@ struct RoomRosterTests {
     @Test func aMemberAddedWhileWeWereAwayIsAnnouncedByTheNextListing() throws {
         baseline("Alice", "Erin")
         rejoin("Alice")
-        session.rosterListed(room, members: [address("erin"), address("zed"), me])
-        session.settleRoster()
+        list("Alice", "Erin", "Zed")
         #expect(try lines() == [joined("Zed")])
-        session.rosterListed(room, members: [address("zed")])
-        session.settleRoster()
+        list("Alice", "Erin", "Zed")
         #expect(try lines().count == 1)
     }
 
@@ -389,14 +384,13 @@ struct RoomRosterTests {
         let fetchBegan = at(-50)
         try database.rosterAffiliated(conversationId: conversationId, room: room, jid: address("zed"), isMember: true, at: at(-40))
         try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice")], since: fetchBegan, at: later)
-        #expect(try counted() == ["zed@example.org"])
+        #expect(try counted() == ["alice@example.org", "zed@example.org"])
         #expect(try lines() == [joined("Zed")])
     }
 
     @Test func aMemberCountedBeforeAFetchBeganAndNotNamedHasLeft() throws {
         try database.rosterSelfJoined(conversationId: conversationId, at: at(-300))
-        try database.rosterListed(conversationId: conversationId, room: room, members: [address("zed")], at: at(-250))
-        try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("zed")], since: at(-200), at: at(-200))
+        try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("zed")], since: at(-250), at: at(-250))
         try database.rosterListingDone(conversationId: conversationId, room: room, members: [], since: at(-100), at: at(-100))
         #expect(try lines() == [left("Zed")])
     }
@@ -405,7 +399,7 @@ struct RoomRosterTests {
         try database.rosterSelfJoined(conversationId: conversationId, at: at(-300))
         try database.rosterAffiliated(conversationId: conversationId, room: room, jid: address("zed"), isMember: true, at: at(-100))
         try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice")], since: at(-200), at: at(-50))
-        #expect(try counted() == ["zed@example.org"])
+        #expect(try counted() == ["alice@example.org", "zed@example.org"])
         #expect(try lines().isEmpty)
         #expect(try isListed() == true)
     }
@@ -414,16 +408,38 @@ struct RoomRosterTests {
         try database.rosterSelfJoined(conversationId: conversationId, at: at(-100))
         try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice")], since: at(-200), at: at(-90))
         #expect(try isListed() == false)
+        #expect(try counted().isEmpty, "a stale fetch adds nobody")
         try database.rosterListingRefused(conversationId: conversationId, since: at(-200))
         #expect(try isListed() == false)
         try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice")], since: at(-50), at: at(-40))
         #expect(try isListed() == true)
-        #expect(try counted().isEmpty)
+        #expect(try counted() == ["alice@example.org"])
+    }
+
+    @Test func aRemovalDuringAFetchWhoseListStillNamesTheMemberIsNotCountedAgain() throws {
+        try database.rosterSelfJoined(conversationId: conversationId, at: at(-300))
+        try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice"), address("bob")], since: at(-250), at: at(-250))
+        session.affiliationChanged(in: room, affiliation("bob@example.org", "none"))
+        session.settleRoster()
+        session.rosterListingDone(room, members: [address("alice"), address("bob")], since: at(-100))
+        session.settleRoster()
+        #expect(try lines() == [left("Bob")])
+        #expect(try counted() == ["alice@example.org"])
+    }
+
+    @Test func aRemovalByAPresenceDuringAFetchIsNotCountedAgainEither() throws {
+        try database.rosterSelfJoined(conversationId: conversationId, at: at(-300))
+        try database.rosterListingDone(conversationId: conversationId, room: room, members: [address("alice"), address("bob")], since: at(-250), at: at(-250))
+        leave("Bob", statuses: [301])
+        session.rosterListingDone(room, members: [address("alice"), address("bob")], since: at(-100))
+        session.settleRoster()
+        #expect(try lines() == [left("Bob")])
+        #expect(try counted() == ["alice@example.org"])
     }
 
     @Test func aRefusedListingEndsTheBaselineWithoutJudgingAnyone() throws {
         try database.rosterSelfJoined(conversationId: conversationId, at: at(-100))
-        try database.rosterListed(conversationId: conversationId, room: room, members: [address("zed")], at: at(-90))
+        try database.rosterAffiliated(conversationId: conversationId, room: room, jid: address("zed"), isMember: true, at: at(-90))
         try database.rosterListingRefused(conversationId: conversationId, since: at(-50))
         #expect(try isListed() == true)
         #expect(try counted() == ["zed@example.org"])

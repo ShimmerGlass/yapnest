@@ -465,7 +465,6 @@ struct RoomManagementSessionTests {
     @Test func ourOwnChangeOfAMembersAffiliationIsToldToTheRosterOnce() async throws {
         join(as: .owner, others: [anna: .member, ben: .member])
         session.rosterSelfJoined(room)
-        session.rosterListed(room, members: [anna])
         session.rosterListingDone(room, members: [anna], since: Date().addingTimeInterval(60))
         session.settleRoster()
         try await session.removeMember(anna, from: room)

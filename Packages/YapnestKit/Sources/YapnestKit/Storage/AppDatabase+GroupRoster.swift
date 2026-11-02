@@ -49,19 +49,6 @@ extension AppDatabase {
         try writer.write { try Self.rosterBeginBaseline($0, conversationId, at: date) }
     }
 
-    /// The room lists members. Those listed before the baseline's listing is
-    /// done are counted quietly: they were there. After that, a member we
-    /// have no entry for was added since.
-    func rosterListed(conversationId: Int64, room: JID, members: [JID], at date: Date) throws {
-        try writer.write { db in
-            guard let listed = try Self.rosterListedState(db, conversationId) else { return }
-            var counted = Set(try JID.fetchAll(db, sql: "SELECT jid FROM groupRoster WHERE conversationId = ?", arguments: [conversationId]))
-            for jid in members where counted.insert(jid).inserted {
-                try Self.rosterAdd(db, jid, conversationId: conversationId, writesLine: listed, at: date)
-            }
-        }
-    }
-
     /// Whether the baseline began before `since`, when the fetch that is
     /// reporting started. One that began earlier belongs to a baseline that
     /// was cleared since, and says nothing of this one.
@@ -70,18 +57,26 @@ extension AppDatabase {
     }
 
     /// One fetch of every member list, begun at `since`, came whole, naming
-    /// `members` together (each list has been through `rosterListed` already).
-    /// The first such listing is the baseline: those it no longer names are
-    /// dropped without a word. After that, whoever was counted and is no
-    /// longer named has left. Whoever was counted after `since` is left
-    /// alone, as the listing can't have known of them.
-    func rosterListingDone(conversationId: Int64, room: JID, members: [JID], since: Date, at date: Date) throws {
+    /// `members` together. Those it names that we haven't counted are counted:
+    /// quietly in the first such listing, which is the baseline, and as
+    /// joined after it. Whoever was counted and is no longer named is dropped,
+    /// quietly in the baseline and as having left after it. Whoever was
+    /// counted after `since` is left alone, and `removed` (who the room took
+    /// membership from after `since`) isn't counted again: the listing can't
+    /// have known of either.
+    func rosterListingDone(conversationId: Int64, room: JID, members: [JID], since: Date, removed: Set<JID> = [], at date: Date) throws {
         try writer.write { db in
             guard try Self.rosterBegan(db, conversationId, before: since), let listed = try Self.rosterListedState(db, conversationId) else { return }
             let named = Set(members)
-            let counted = try JID.fetchAll(db, sql: "SELECT jid FROM groupRoster WHERE conversationId = ? AND countedAt < ?", arguments: [conversationId, since])
-            for jid in counted.sorted() where !named.contains(jid) {
+            let counted = Dictionary(
+                uniqueKeysWithValues: try Row.fetchAll(db, sql: "SELECT jid, countedAt FROM groupRoster WHERE conversationId = ?", arguments: [conversationId])
+                    .map { ($0["jid"] as JID, $0["countedAt"] as Date) },
+            )
+            for (jid, countedAt) in counted.sorted(by: { $0.key < $1.key }) where !named.contains(jid) && countedAt < since {
                 try Self.rosterRemove(db, jid, conversationId: conversationId, writesLine: listed, at: date)
+            }
+            for jid in Set(members).sorted() where counted[jid] == nil && !removed.contains(jid) {
+                try Self.rosterAdd(db, jid, conversationId: conversationId, writesLine: listed, at: date)
             }
             try db.execute(sql: "UPDATE groupRosterTaken SET listed = 1 WHERE conversationId = ?", arguments: [conversationId])
         }

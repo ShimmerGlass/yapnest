@@ -1,6 +1,24 @@
 import Foundation
 @preconcurrency import Martin
 
+/// When each room last took membership from someone, kept in memory so that
+/// a member listing begun before it doesn't count them again. Touched only on
+/// `XMPPSession.rosterQueue`; what a restart loses is a fetch that is lost too.
+final class RosterRemovals: @unchecked Sendable {
+    private var at: [JID: [JID: Date]] = [:]
+
+    func record(_ jid: JID, in room: JID, at date: Date) { at[room, default: [:]][jid] = date }
+
+    /// Who was removed after `since`. Older records can't matter to any later
+    /// fetch, so they are dropped.
+    func removed(in room: JID, after since: Date) -> Set<JID> {
+        at[room] = at[room]?.filter { $0.value >= since }
+        return Set(at[room]?.keys.map { $0 } ?? [])
+    }
+
+    func forget(_ room: JID) { at[room] = nil }
+}
+
 /// Joins and leaves in a private group, as lines in its chat. A room's service
 /// could add someone who then receives everything we encrypt there, so the
 /// chat says who became a member and who stopped being one. Being online in
@@ -13,6 +31,7 @@ extension XMPPSession {
     /// A group we left or that ended: coming back is a first join.
     func rosterForget(_ room: JID) {
         rosterQueue.async { [self] in
+            rosterRemovals.forget(room)
             if let id = (try? database.groupChat(room))?.conversationId { try? database.forgetRoster(conversationId: id) }
         }
     }
@@ -46,22 +65,15 @@ extension XMPPSession {
         rosterAffiliated(room, jid: jid, isMember: false)
     }
 
-    /// The room listed members.
-    func rosterListed(_ room: JID, members: [JID]) {
-        let members = members.filter { $0 != account }
-        countingPrivate(room) { [database] in
-            try database.rosterListed(conversationId: $0.conversationId, room: room, members: members, at: Date())
-        }
-    }
-
     /// The owner, admin and member lists of the fetch begun at `since` have
     /// all come, and `members` is their union. Only then can absence be
     /// judged: a list that failed or was forbidden would make its members
     /// look gone.
     func rosterListingDone(_ room: JID, members: [JID], since: Date) {
         let members = members.filter { $0 != account }
-        countingPrivate(room) { [database] in
-            try database.rosterListingDone(conversationId: $0.conversationId, room: room, members: members, since: since, at: Date())
+        countingPrivate(room) { [database, rosterRemovals] in
+            let removed = rosterRemovals.removed(in: room, after: since)
+            try database.rosterListingDone(conversationId: $0.conversationId, room: room, members: members, since: since, removed: removed, at: Date())
         }
     }
 
@@ -77,7 +89,9 @@ extension XMPPSession {
 
     private func rosterAffiliated(_ room: JID, jid: JID, isMember: Bool) {
         guard jid != account else { return }
-        countingPrivate(room) { [database] in
+        let date = Date()
+        countingPrivate(room) { [database, rosterRemovals] in
+            if !isMember { rosterRemovals.record(jid, in: room, at: date) }
             try database.rosterAffiliated(conversationId: $0.conversationId, room: room, jid: jid, isMember: isMember, at: Date())
         }
     }

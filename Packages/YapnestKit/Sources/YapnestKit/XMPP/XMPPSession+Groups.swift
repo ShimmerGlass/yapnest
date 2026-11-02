@@ -1181,7 +1181,6 @@ extension XMPPSession {
             if affiliation == .outcast { status?.banned = [] }
             for jid in jids { status?.setAffiliation(affiliation, of: jid) }
         }
-        if affiliation.isMember { rosterListed(room, members: jids) }
         return jids
     }
 
