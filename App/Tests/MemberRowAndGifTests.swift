@@ -137,6 +137,26 @@ struct AnimatedImageViewTests {
         #expect(view.isAnimating)
     }
 
+    /// A Mac window that lost focus holds its GIFs on the frame they were
+    /// on, and plays them again once it has it back.
+    @Test func aGifHoldsItsFrameWhileTheWindowIsUnfocused() async throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let view = AnimatedUIImageView(frame: window.bounds)
+        window.addSubview(view)
+        view.source = .data(try animatedGif())
+        await eventually("no frame shown", timeout: .seconds(1)) { view.image != nil }
+        let shown = view.image
+
+        view.setWindowFocused(false)
+        #expect(!view.isAnimating)
+        // Long enough for a still of the first frame to have been decoded and shown.
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(view.image === shown)
+
+        view.setWindowFocused(true)
+        #expect(view.isAnimating)
+    }
+
     @Test func theOcclusionNotificationLeavesAVisibleGifPlaying() async throws {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         let view = AnimatedUIImageView(frame: window.bounds)
@@ -173,6 +193,13 @@ struct AnimatedPlaybackGateTests {
         var gate = AnimatedPlaybackGate(inWindow: true, inTransition: true)
         #expect(gate.showsFrames && !gate.animates)
         gate.inTransition = false
+        #expect(gate.animates)
+    }
+
+    @Test func anUnfocusedWindowShowsAFrameButDoesNotAnimate() {
+        var gate = AnimatedPlaybackGate(inWindow: true, windowUnfocused: true)
+        #expect(gate.showsFrames && !gate.animates)
+        gate.windowUnfocused = false
         #expect(gate.animates)
     }
 

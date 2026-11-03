@@ -45,11 +45,11 @@ struct AnimatedImageView: UIViewRepresentable {
     }
 }
 
-/// Whether a GIF should be running. A scene that is merely inactive, such as
-/// a Mac window that lost focus, keeps playing; one that is in the background
-/// or can't be seen (the screen locked or asleep, the app covered whole) has
-/// no use for frames, and the frame loop is timed by sleeping, so nothing else
-/// would slow it down.
+/// Whether a GIF should be running. A scene that is in the background or
+/// can't be seen (the screen locked or asleep, the app covered whole) has no
+/// use for frames, and the frame loop is timed by sleeping, so nothing else
+/// would slow it down. A Mac window that lost focus holds still too, as a
+/// window left beside the one being worked in shouldn't keep moving.
 struct AnimatedPlaybackGate: Equatable {
     var inWindow = false
     var sceneInBackground = false
@@ -59,10 +59,13 @@ struct AnimatedPlaybackGate: Equatable {
     /// to the GPU while it animates the slide, and a chat of GIFs made the
     /// slide jitter; the first frame shows, and they play once it's done.
     var inTransition = false
+    /// The Mac window isn't the one in focus. Its GIFs stop on the frame they
+    /// were showing.
+    var windowUnfocused = false
 
     /// Whether frames are decoded at all. Reduce motion still shows the first.
     var showsFrames: Bool { inWindow && !sceneInBackground && !occluded }
-    var animates: Bool { showsFrames && !reducesMotion && !inTransition }
+    var animates: Bool { showsFrames && !reducesMotion && !inTransition && !windowUnfocused }
 }
 
 final class AnimatedUIImageView: UIView {
@@ -84,6 +87,8 @@ final class AnimatedUIImageView: UIView {
     /// starting over showed the first again and waited out its delay, which
     /// held a GIF still for a moment after the slide had ended.
     private var stillShown: AnimatedImageView.Source?
+    /// The source the frame on show came from.
+    private var shownSource: AnimatedImageView.Source?
     var isAnimating: Bool { player != nil }
     var image: UIImage? { imageView.image }
     private(set) var gate = AnimatedPlaybackGate(
@@ -114,6 +119,13 @@ final class AnimatedUIImageView: UIView {
         for name in [UIScene.didEnterBackgroundNotification, UIScene.willEnterForegroundNotification] {
             center.addObserver(self, selector: #selector(sceneStateChanged(_:)), name: name, object: nil)
         }
+        // On iOS a scene is inactive only for a moment, under Control Center
+        // or the app switcher, and stopping there would only stutter.
+        if Platform.isMac {
+            for name in [UIScene.willDeactivateNotification, UIScene.didActivateNotification] {
+                center.addObserver(self, selector: #selector(focusChanged(_:)), name: name, object: nil)
+            }
+        }
     }
 
     @available(*, unavailable)
@@ -123,6 +135,7 @@ final class AnimatedUIImageView: UIView {
         super.didMoveToWindow()
         gate.inWindow = window != nil
         gate.sceneInBackground = window?.windowScene?.activationState == .background
+        gate.windowUnfocused = Platform.isMac && window?.windowScene?.activationState == .foregroundInactive
         gate.inTransition = false
         if window != nil, let transition = enclosingController?.transitionCoordinator {
             gate.inTransition = true
@@ -152,13 +165,20 @@ final class AnimatedUIImageView: UIView {
         return nil
     }
 
-    /// Only a backgrounded scene stops the animation. An inactive one is
-    /// still visible, such as a Mac window that lost focus.
     @objc private func sceneStateChanged(_ notification: Notification) {
         guard let scene = notification.object as? UIScene, scene === window?.windowScene else { return }
         // Tracked from the notifications: on the way back the scene's state
         // still says background when `willEnterForeground` is posted.
         update { $0.sceneInBackground = notification.name == UIScene.didEnterBackgroundNotification }
+    }
+
+    @objc private func focusChanged(_ notification: Notification) {
+        guard let scene = notification.object as? UIScene, scene === window?.windowScene else { return }
+        setWindowFocused(notification.name == UIScene.didActivateNotification)
+    }
+
+    func setWindowFocused(_ focused: Bool) {
+        update { $0.windowUnfocused = !focused }
     }
 
     @objc private func reduceMotionChanged() {
@@ -206,6 +226,13 @@ final class AnimatedUIImageView: UIView {
         guard gate.showsFrames else { return }
         guard let source else {
             imageView.image = nil
+            shownSource = nil
+            return
+        }
+        // Holding still for focus keeps whatever frame was on show, rather
+        // than jumping back to the first.
+        if gate.windowUnfocused, shownSource == source, imageView.image != nil {
+            stillShown = nil
             return
         }
         // Playing or even reading a frame of a big GIF decodes its whole
@@ -234,6 +261,7 @@ final class AnimatedUIImageView: UIView {
                 await MainActor.run {
                     guard let view = self, !Task.isCancelled else { return }
                     view.imageView.image = nil
+                    view.shownSource = nil
                     view.player = nil
                 }
                 return
@@ -256,6 +284,7 @@ final class AnimatedUIImageView: UIView {
                 let shown = await MainActor.run { () -> Bool in
                     guard let view = self, !Task.isCancelled else { return false }
                     view.imageView.image = UIImage(cgImage: image)
+                    view.shownSource = source
                     view.stillShown = stillOnly && isFirst ? source : nil
                     return true
                 }
