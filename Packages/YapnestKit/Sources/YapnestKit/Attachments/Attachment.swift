@@ -38,6 +38,12 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
     /// A tiny PNG the sender announced (see `FileMetadata`), drawn blurred until
     /// the file is downloaded. Dropped once it is.
     public var thumbnail: Data?
+    /// SHA-256 of our own file, worked out once when it is stored. Nil for a
+    /// file that is not ours, or was stored before it was kept.
+    public var sha256: Data?
+    /// The tiny PNG we announce our own picture with (see `FileMetadata`).
+    /// Apart from `thumbnail`, which is the sender's and is dropped once the file is here.
+    public var ownThumbnail: Data?
     /// File name in the attachment store, once the file is on this device.
     public var localFile: String?
     public var state: State
@@ -52,6 +58,8 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
         height: Double? = nil,
         duration: TimeInterval? = nil,
         thumbnail: Data? = nil,
+        sha256: Data? = nil,
+        ownThumbnail: Data? = nil,
         localFile: String? = nil,
         state: State,
     ) {
@@ -64,6 +72,8 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
         self.height = height
         self.duration = duration
         self.thumbnail = thumbnail
+        self.sha256 = sha256
+        self.ownThumbnail = ownThumbnail
         self.localFile = localFile
         self.state = state
     }

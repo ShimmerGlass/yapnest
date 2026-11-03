@@ -354,7 +354,7 @@ struct FileMetadataSendingTests {
         let png = try AvatarImages.png(side: 120)
         let (store, attachment) = try store(with: png, named: "cat.png")
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        let metadata = try #require(FileMetadata.outgoing(for: attachment, in: store))
+        let metadata = try #require(outgoingMetadata(for: attachment, in: store))
         #expect(metadata.size == Int64(png.count))
         #expect((metadata.width, metadata.height) == (40, 20))
         #expect(metadata.sha256 == Data(SHA256.hash(data: png)))
@@ -366,25 +366,74 @@ struct FileMetadataSendingTests {
         var pdf = attachment
         pdf.name = "a.pdf"
         pdf.mimeType = "application/pdf"
-        #expect(FileMetadata.outgoing(for: pdf, in: store) == nil)
+        #expect(outgoingMetadata(for: pdf, in: store) == nil)
     }
 
-    @Test func aFileSentAgainIsNotReadAgain() throws {
+    @Test func theFactsAreStoredWithTheFileAndNeverReadAgain() async throws {
+        let png = try AvatarImages.png(side: 120)
+        let directory = FileManager.default.temporaryDirectory.appending(path: "facts-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appending(path: "in/cat.png")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try png.write(to: source)
+        let database = try AppDatabase.inMemory()
+        let store = AttachmentStore(directory: directory.appending(path: "store"))
+        let hasher = FileHasher()
+        let outgoing = OutgoingMessages(database: database, attachments: store, account: me, hasher: hasher)
+        let prepared = try await outgoing.prepareFile(at: source)
+        let message = try outgoing.stage([.file(prepared)], to: alice)[0]
+        // Worked out once, when the file was stored.
+        #expect(hasher.filesHashed == 1)
+        let row = try #require(try database.attachment(messageId: message.id!))
+        let stored = try #require(store.url(for: row))
+        #expect(row.sha256 == Data(SHA256.hash(data: try Data(contentsOf: stored))))
+        #expect(row.ownThumbnail != nil && row.thumbnail == nil)
+
+        // A relaunch: a hasher that has seen nothing, and the row from the database.
+        let relaunched = FileHasher()
+        let completed = try OutgoingFileFacts.completing(row, in: store, database: database, with: relaunched)
+        #expect(relaunched.filesHashed == 0)
+        #expect(completed == row)
+        let metadata = try #require(FileMetadata.outgoing(for: completed))
+        #expect(metadata.sha256 == row.sha256 && metadata.thumbnail == row.ownThumbnail)
+        #expect(metadata.size == Int64(try Data(contentsOf: stored).count))
+    }
+
+    @Test func anOldRowGetsItsFactsOnceAndKeepsThem() async throws {
         let png = try AvatarImages.png(side: 120)
         let (store, attachment) = try store(with: png, named: "cat.png")
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        let reads = Mutex(0)
-        let cache = OutgoingFileMetadata { attachment, store in
-            reads.withLock { $0 += 1 }
-            return FileMetadata.outgoing(for: attachment, in: store)
+        let database = try AppDatabase.inMemory()
+        var message = YapnestKit.Message(conversationId: try database.conversation(with: alice).id!, direction: .outgoing, sender: me, body: "", remoteId: "m1")
+        message.isWrittenHere = true
+        let (stored, old) = try database.insert(message, attachment: attachment)
+        #expect(old.sha256 == nil && old.ownThumbnail == nil)
+        let hasher = FileHasher()
+
+        let filled = try OutgoingFileFacts.completing(old, in: store, database: database, with: hasher)
+        #expect(hasher.filesHashed == 1)
+        #expect(filled.sha256 == Data(SHA256.hash(data: png)) && filled.ownThumbnail != nil)
+        // Stored, so the next send, in this launch or another, finds it.
+        let row = try #require(try database.attachment(messageId: stored.id!))
+        #expect(row.sha256 == filled.sha256 && row.ownThumbnail == filled.ownThumbnail)
+        _ = try OutgoingFileFacts.completing(row, in: store, database: database, with: hasher)
+        #expect(hasher.filesHashed == 1)
+    }
+
+    @Test func theMigrationLeavesOldAttachmentsWithoutFacts() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v58-group-roster-members")
+        try queue.write { db in
+            try db.execute(sql: "INSERT INTO conversation (peer, kind, lastActivityAt) VALUES (?, 'chat', 0)", arguments: [alice])
+            try db.execute(sql: """
+                INSERT INTO message (conversationId, direction, sender, body, timestamp, status, isRead, encryption, remoteId)
+                VALUES (1, 'outgoing', ?, 'u', 0, 'delivered', 1, 'none', 'm1')
+                """, arguments: [me])
+            try db.execute(sql: "INSERT INTO attachment (messageId, url, name, state, size) VALUES (1, 'u', 'a.png', 'ready', 5)")
         }
-        let first = try #require(cache.metadata(for: attachment, in: store))
-        #expect(cache.metadata(for: attachment, in: store) == first)
-        #expect(reads.withLock { $0 } == 1)
-        // A file replaced under the same name is read.
-        try AvatarImages.png(side: 90).write(to: #require(store.url(for: attachment)))
-        _ = cache.metadata(for: attachment, in: store)
-        #expect(reads.withLock { $0 } == 2)
+        _ = try AppDatabase(queue)
+        let row = try #require(try queue.read { try YapnestKit.Attachment.fetchOne($0, key: 1) })
+        #expect(row.sha256 == nil && row.ownThumbnail == nil && row.size == 5)
     }
 
     @Test func unencryptedFileCarriesMetadataAndTheLink() throws {
@@ -393,7 +442,7 @@ struct FileMetadataSendingTests {
         defer { try? FileManager.default.removeItem(at: store.directory) }
         let url = "https://up.example/x/cat.png"
         let stanza = OutboundStanza.text(url, to: .direct(alice), id: "m1")
-        OutboundStanza.addFile(url: url, metadata: FileMetadata.outgoing(for: attachment, in: store), encrypted: false, to: stanza)
+        OutboundStanza.addFile(url: url, metadata: outgoingMetadata(for: attachment, in: store), encrypted: false, to: stanza)
 
         // The link is still where clients that know nothing else look.
         let text = wire(stanza)
@@ -420,11 +469,23 @@ struct FileMetadataSendingTests {
         let stanza = OutboundStanza.text(url, to: .direct(alice), id: "m1")
         let before = wire(stanza)
         // Even if metadata is passed, an encrypted chat sends none of it.
-        OutboundStanza.addFile(url: url, metadata: FileMetadata.outgoing(for: attachment, in: store), encrypted: true, to: stanza)
+        OutboundStanza.addFile(url: url, metadata: outgoingMetadata(for: attachment, in: store), encrypted: true, to: stanza)
         let after = wire(stanza)
         #expect(after == before)
         for forbidden in ["file-sharing", "urn:xmpp:sfs:0", "file:metadata", "thumbs", "thumbnail", "hashes", "url-data", "oob", "width", "height", "media-type"] {
             #expect(!after.contains(forbidden), "\(forbidden)")
         }
     }
+}
+
+/// What a send would tell about `attachment`'s stored file, found the way a
+/// row gets its facts.
+func outgoingMetadata(for attachment: YapnestKit.Attachment, in store: AttachmentStore) -> FileMetadata? {
+    guard let file = store.url(for: attachment),
+          let facts = try? OutgoingFileFacts.read(fileAt: file, name: attachment.name, mimeType: attachment.mimeType, with: FileHasher()) else { return nil }
+    var described = attachment
+    described.sha256 = facts.sha256
+    described.ownThumbnail = facts.thumbnail
+    described.size = facts.size
+    return FileMetadata.outgoing(for: described)
 }

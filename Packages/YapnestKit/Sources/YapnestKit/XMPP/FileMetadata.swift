@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import ImageIO
+import os
 import UniformTypeIdentifiers
 @preconcurrency import Martin
 
@@ -123,27 +124,25 @@ public struct FileMetadata: Sendable, Equatable {
 
     // MARK: Sending
 
-    /// What to tell the recipient of `attachment`'s file, which is a picture
-    /// or a sound in the store. Nil for anything else. Reads the file, so call
-    /// it off the main thread.
-    static func outgoing(for attachment: Attachment, in store: AttachmentStore) -> FileMetadata? {
+    /// What to tell the recipient of `attachment`, which is a picture or a
+    /// sound in the store, from what its row remembers of the file (see
+    /// `OutgoingFileFacts`). Nil for anything else, or a row not yet filled in.
+    static func outgoing(for attachment: Attachment) -> FileMetadata? {
+        guard let hash = attachment.sha256, let size = attachment.size else { return nil }
         if attachment.isAudio {
-            guard let file = store.url(for: attachment), let (size, hash) = try? FileCrypto.sizeAndHash(of: file) else { return nil }
             return FileMetadata(mediaType: attachment.mimeType, size: size, length: attachment.duration, name: attachment.name, sha256: hash)
         }
-        guard attachment.isImage, let width = attachment.imageSize.map({ Int($0.width) }), let height = attachment.imageSize.map({ Int($0.height) }),
-              let (data, hash) = contents(of: attachment, in: store),
-              let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        guard attachment.isImage, let width = attachment.imageSize.map({ Int($0.width) }), let height = attachment.imageSize.map({ Int($0.height) }) else { return nil }
         return FileMetadata(
-            mediaType: attachment.mimeType, size: Int64(data.count), width: width, height: height,
-            thumbnail: pngThumbnail(of: source, maxSide: sentThumbnailSide), name: attachment.name, sha256: hash,
+            mediaType: attachment.mimeType, size: size, width: width, height: height,
+            thumbnail: attachment.ownThumbnail, name: attachment.name, sha256: hash,
         )
     }
 
-    /// The stored file and its SHA-256.
-    private static func contents(of attachment: Attachment, in store: AttachmentStore) -> (Data, Data)? {
-        guard let file = store.url(for: attachment), let data = try? Data(contentsOf: file, options: .mappedIfSafe) else { return nil }
-        return (data, Data(SHA256.hash(data: data)))
+    /// A PNG of the picture at `file`, at most `sentThumbnailSide` on a side.
+    static func sentThumbnail(ofFileAt file: URL) -> Data? {
+        CGImageSourceCreateWithURL(file as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+            .flatMap { pngThumbnail(of: $0, maxSide: sentThumbnailSide) }
     }
 
     /// The `<file-sharing>` element for a file at `url`.
@@ -175,41 +174,54 @@ public struct FileMetadata: Sendable, Equatable {
     }
 }
 
-/// What `FileMetadata.outgoing` found for the files we sent, so a message sent
-/// again (after a bounce, a reconnect or a retry) doesn't read and hash its
-/// file once more. An entry is kept while the file and what is known of it stay
-/// as they were: a changed file, or a picture whose size was filled in since, is
-/// read again.
-final class OutgoingFileMetadata: @unchecked Sendable {
-    private struct Key: Hashable {
-        var fileSize: Int?
-        var modified: Date?
-        var attachment: Attachment
+/// Hashes files and counts them, so that a test can tell when a file is read
+/// again. Reading a file to hash it is the cost `OutgoingFileFacts` exists to
+/// pay only once.
+final class FileHasher: Sendable {
+    private let count = OSAllocatedUnfairLock(initialState: 0)
+
+    var filesHashed: Int { count.withLock { $0 } }
+
+    func sizeAndHash(of file: URL) throws -> (size: Int64, sha256: Data) {
+        count.withLock { $0 += 1 }
+        return try FileCrypto.sizeAndHash(of: file)
+    }
+}
+
+/// What a file we send is, worked out once: its hash, and for a picture the
+/// thumbnail we announce it with. They are kept on the attachment's row, as the
+/// stored file is written once under a fresh name and never changes, so a
+/// message sent again, after a relaunch too, and a Jingle offer don't read
+/// the file again.
+struct OutgoingFileFacts: Sendable {
+    var size: Int64
+    var sha256: Data
+    var thumbnail: Data?
+
+    /// Reads the file, so call it off the main thread.
+    static func read(fileAt file: URL, name: String, mimeType: String?, with hasher: FileHasher) throws -> OutgoingFileFacts {
+        let (size, hash) = try hasher.sizeAndHash(of: file)
+        let isImage = Attachment(messageId: 0, url: nil, name: name, mimeType: mimeType, state: .pendingUpload).isImage
+        return OutgoingFileFacts(size: size, sha256: hash, thumbnail: isImage ? FileMetadata.sentThumbnail(ofFileAt: file) : nil)
     }
 
-    /// Far more than the files a user has in flight; the cache is emptied past it.
-    private static let capacity = 32
-
-    private let lock = NSLock()
-    private var found: [Key: FileMetadata] = [:]
-    private let compute: @Sendable (Attachment, AttachmentStore) -> FileMetadata?
-
-    init(compute: @escaping @Sendable (Attachment, AttachmentStore) -> FileMetadata? = { FileMetadata.outgoing(for: $0, in: $1) }) {
-        self.compute = compute
-    }
-
-    /// Reads the file, so call it off the main thread, as `FileMetadata.outgoing`.
-    func metadata(for attachment: Attachment, in store: AttachmentStore) -> FileMetadata? {
-        guard let file = store.url(for: attachment) else { return compute(attachment, store) }
-        let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        let key = Key(fileSize: values?.fileSize, modified: values?.contentModificationDate, attachment: attachment)
-        if let known = lock.withLock({ found[key] }) { return known }
-        // A failed read isn't kept, as the file may only have been unavailable.
-        guard let metadata = compute(attachment, store) else { return nil }
-        lock.withLock {
-            if found.count >= Self.capacity { found.removeAll() }
-            found[key] = metadata
+    /// `attachment` with its hash and thumbnail: as it is if the row has them,
+    /// else (an attachment stored before they were kept) worked out and
+    /// stored now. Reads the file in that case, so call it off the main thread.
+    static func completing(_ attachment: Attachment, in store: AttachmentStore, database: AppDatabase, with hasher: FileHasher) throws -> Attachment {
+        if attachment.sha256 != nil, attachment.size != nil { return attachment }
+        guard let file = store.url(for: attachment) else { throw XMPPSession.AttachmentError.unreadable }
+        let facts: OutgoingFileFacts
+        do {
+            facts = try read(fileAt: file, name: attachment.name, mimeType: attachment.mimeType, with: hasher)
+        } catch {
+            throw XMPPSession.AttachmentError.unreadable
         }
-        return metadata
+        var completed = attachment
+        completed.sha256 = facts.sha256
+        completed.ownThumbnail = facts.thumbnail
+        completed.size = attachment.size ?? facts.size
+        try database.setOutgoingFacts(facts, messageId: attachment.messageId)
+        return completed
     }
 }

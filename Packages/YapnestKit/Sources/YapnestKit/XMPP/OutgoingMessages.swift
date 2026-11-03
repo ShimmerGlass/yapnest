@@ -10,6 +10,7 @@ struct OutgoingMessages: Sendable {
     let database: AppDatabase
     let attachments: AttachmentStore
     let account: JID
+    var hasher = FileHasher()
 
     struct Reply: Sendable {
         var id: String
@@ -24,12 +25,20 @@ struct OutgoingMessages: Sendable {
     /// A file already in the attachment store.
     struct PreparedFile: Sendable {
         var imported: AttachmentStore.Imported
+        var facts: OutgoingFileFacts?
     }
 
     /// Takes the file into the store. Photos are scaled down and stripped of
-    /// metadata, unless animated; other files go as they are.
+    /// metadata, unless animated; other files go as they are. The stored file
+    /// is final from here, so its hash and thumbnail are worked out now, once.
     func prepareFile(at url: URL, name: String? = nil, asPhoto: Bool = false) async throws -> PreparedFile {
-        PreparedFile(imported: try await attachments.importFile(at: url, name: name ?? url.lastPathComponent, asPhoto: asPhoto))
+        let imported = try await attachments.importFile(at: url, name: name ?? url.lastPathComponent, asPhoto: asPhoto)
+        // A file that can't be read back is left for the first send to fail on.
+        let facts = try? OutgoingFileFacts.read(
+            fileAt: attachments.directory.appending(path: imported.file), name: imported.name,
+            mimeType: AttachmentStore.mimeType(for: imported.name), with: hasher,
+        )
+        return PreparedFile(imported: imported, facts: facts)
     }
 
     /// Forgets files that were prepared but never made it into a message.
@@ -78,6 +87,8 @@ struct OutgoingMessages: Sendable {
                         width: imported.width.map(Double.init),
                         height: imported.height.map(Double.init),
                         duration: imported.duration,
+                        sha256: file.facts?.sha256,
+                        ownThumbnail: file.facts?.thumbnail,
                         localFile: imported.file,
                         state: .pendingUpload,
                     )

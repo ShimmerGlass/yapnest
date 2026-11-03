@@ -270,7 +270,7 @@ struct VoiceMetadataTests {
             messageId: 1, url: "https://up.example/x/clip.caf", name: "Voice message.m4a", mimeType: "audio/mp4", size: 1,
             duration: 2.0, localFile: "clip.caf", state: .ready,
         )
-        let metadata = try #require(FileMetadata.outgoing(for: attachment, in: store))
+        let metadata = try #require(outgoingMetadata(for: attachment, in: store))
         #expect(metadata.length == 2.0)
         #expect(metadata.mediaType == "audio/mp4")
         #expect(metadata.size == sound.fileSize)
@@ -297,7 +297,7 @@ struct VoiceMetadataTests {
         let url = "aesgcm://up.example/x/voice.m4a#0123"
         let stanza = OutboundStanza.text(url, to: .direct(alice), id: "m1")
         let before = stanza.element.stringValue
-        OutboundStanza.addFile(url: url, metadata: FileMetadata.outgoing(for: attachment, in: store), encrypted: true, to: stanza)
+        OutboundStanza.addFile(url: url, metadata: outgoingMetadata(for: attachment, in: store), encrypted: true, to: stanza)
         #expect(stanza.element.stringValue == before)
         #expect(!before.contains("length"))
     }

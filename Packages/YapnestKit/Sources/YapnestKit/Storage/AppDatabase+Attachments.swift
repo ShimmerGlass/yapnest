@@ -43,6 +43,17 @@ extension AppDatabase {
         }
     }
 
+    /// Keeps what was worked out of our file (see `OutgoingFileFacts`). The
+    /// size stays if the row has one.
+    func setOutgoingFacts(_ facts: OutgoingFileFacts, messageId: Int64) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE attachment SET sha256 = ?, ownThumbnail = ?, size = COALESCE(size, ?) WHERE messageId = ?",
+                arguments: [facts.sha256, facts.thumbnail, facts.size, messageId],
+            )
+        }
+    }
+
     /// Records where our upload went; the message's body becomes its URL,
     /// which is what goes on the wire.
     func setUploaded(messageId: Int64, url: String) throws -> Message? {

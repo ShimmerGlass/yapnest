@@ -588,6 +588,38 @@ struct FileTransferSendingTests {
         #expect(h.session.transfers.value.isEmpty)
     }
 
+    @Test func theOfferUsesTheHashStoredWithTheFile() async throws {
+        let h = try TransferHarness()
+        try h.advertiseFileTransfer()
+        let (_, data) = try await outgoing(h, bytes: 40_000)
+        let initiate = try await accept(h)
+        let file = try #require(initiate.firstChild(name: "jingle")?.firstChild(name: "content")?.firstChild(name: "description")?.firstChild(name: "file"))
+        #expect(file.firstChild(name: "hash")?.value == sha256Base64(data))
+        // Hashed once, when the file was stored, not again for the offer.
+        #expect(h.session.fileHasher.filesHashed == 1)
+    }
+
+    @Test func anOldRowIsHashedOnceForTheOfferAndKeepsTheHash() async throws {
+        let h = try TransferHarness()
+        try h.advertiseFileTransfer()
+        var conversation = try h.database.conversation(with: alice)
+        conversation.isEncrypted = false
+        try await h.database.writer.write { [conversation] in try conversation.update($0) }
+        let (url, data) = try makeFile(bytes: 5000)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = try await h.session.outgoingMessages.prepareFile(at: url, name: "report.bin")
+        let message = try h.session.outgoingMessages.stage([.file(file)], to: alice)[0]
+        // As an attachment stored before the hash was kept.
+        try await h.database.writer.write { try $0.execute(sql: "UPDATE attachment SET sha256 = NULL, ownThumbnail = NULL") }
+        let before = h.session.fileHasher.filesHashed
+        h.session.transmit(message, to: alice)
+        let initiate = try await accept(h)
+        let offered = try #require(initiate.firstChild(name: "jingle")?.firstChild(name: "content")?.firstChild(name: "description")?.firstChild(name: "file"))
+        #expect(offered.firstChild(name: "hash")?.value == sha256Base64(data))
+        #expect(h.session.fileHasher.filesHashed == before + 1)
+        #expect(h.attachment?.sha256 == Data(SHA256.hash(data: data)))
+    }
+
     @Test func aDeclineFailsTheMessageWithTheReason() async throws {
         let h = try TransferHarness()
         try h.advertiseFileTransfer()

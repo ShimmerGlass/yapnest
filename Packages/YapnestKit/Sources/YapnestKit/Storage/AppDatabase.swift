@@ -956,6 +956,16 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v59-attachment-own-file-facts") { db in
+            // What a file we send is, kept once (see `OutgoingFileFacts`)
+            // rather than found again after every relaunch. Attachments
+            // stored before this are filled in the first time they are sent.
+            try db.alter(table: "attachment") { t in
+                t.add(column: "sha256", .blob)
+                t.add(column: "ownThumbnail", .blob)
+            }
+        }
+
         return migrator
     }
 

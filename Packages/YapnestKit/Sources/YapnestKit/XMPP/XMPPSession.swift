@@ -111,7 +111,7 @@ public final class XMPPSession: @unchecked Sendable {
     public let videoCallablePeers = CurrentValueSubject<Set<JID>, Never>([])
     public let avatars: AvatarStore
     public let attachments: AttachmentStore
-    let outgoingFileMetadata = OutgoingFileMetadata()
+    let fileHasher = FileHasher()
     /// Development servers without TLS serve encrypted files over plain HTTP too.
     let allowsInsecureTransfers: Bool
     /// This client's XEP-0484 token, for signing in without the password.
@@ -2625,7 +2625,7 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     var outgoingMessages: OutgoingMessages {
-        OutgoingMessages(database: database, attachments: attachments, account: account)
+        OutgoingMessages(database: database, attachments: attachments, account: account, hasher: fileHasher)
     }
 
     /// Our nickname in the group chat `peer`; nil for 1:1 chats.
@@ -2641,6 +2641,13 @@ public final class XMPPSession: @unchecked Sendable {
             return Route.directReference(to: message)
         }
         return route(for: conversation).reference(to: message)
+    }
+
+    /// What to tell the recipient of our file, from its row; an old row is
+    /// filled in first. Reads the file in that case, so call it off the main
+    /// thread. Nil for a file that can't be described or read.
+    func outgoingMetadata(for attachment: Attachment) -> FileMetadata? {
+        (try? OutgoingFileFacts.completing(attachment, in: attachments, database: database, with: fileHasher)).flatMap(FileMetadata.outgoing(for:))
     }
 
     /// `resend` sends a message again that was claimed but never came back.
@@ -2693,7 +2700,7 @@ public final class XMPPSession: @unchecked Sendable {
             // Encrypted, the URL must only travel inside the OMEMO payload.
             if let attachment {
                 OutboundStanza.addFile(
-                    url: message.body, metadata: outgoingFileMetadata.metadata(for: attachment, in: attachments),
+                    url: message.body, metadata: outgoingMetadata(for: attachment),
                     encrypted: message.encryption != .none, to: stanza,
                 )
             }

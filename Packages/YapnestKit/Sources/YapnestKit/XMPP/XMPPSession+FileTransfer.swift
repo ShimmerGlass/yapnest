@@ -329,7 +329,8 @@ extension XMPPSession {
     /// message's transfer (`beginTransfer`).
     func sendOverJingle(_ message: Message, _ attachment: Attachment, to device: Martin.JID) async throws {
         guard let messageId = message.id, let file = attachments.url(for: attachment) else { throw AttachmentError.unreadable }
-        let (size, hash) = try FileCrypto.sizeAndHash(of: file)
+        let attachment = try OutgoingFileFacts.completing(attachment, in: attachments, database: database, with: fileHasher)
+        guard let size = attachment.size, let hash = attachment.sha256 else { throw AttachmentError.unreadable }
         let offer = JingleFileOffer(
             name: attachment.name, mediaType: attachment.mimeType, size: size, date: nil, sha256: hash,
             ibbSid: UUID().uuidString.lowercased(), blockSize: JingleFile.blockSize,
