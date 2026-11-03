@@ -188,11 +188,12 @@ final class FileHasher: Sendable {
     }
 }
 
-/// What a file we send is, worked out once: its hash, and for a picture the
-/// thumbnail we announce it with. They are kept on the attachment's row, as the
-/// stored file is written once under a fresh name and never changes, so a
-/// message sent again, after a relaunch too, and a Jingle offer don't read
-/// the file again.
+/// What a file we send is, worked out the first time something needs it (the
+/// metadata of an unencrypted message, a Jingle offer): its hash, and for a
+/// picture the thumbnail we announce it with. They are kept on the attachment's
+/// row, as the stored file is written once under a fresh name and never
+/// changes, so a message sent again, after a relaunch too, and a Jingle offer
+/// don't read the file again.
 struct OutgoingFileFacts: Sendable {
     var size: Int64
     var sha256: Data
@@ -205,8 +206,7 @@ struct OutgoingFileFacts: Sendable {
     }
 
     /// `attachment` with its hash and thumbnail: as it is if the row has them,
-    /// else (an attachment stored before they were kept) worked out and
-    /// stored now. Reads the file in that case, so call it off the main thread.
+    /// else worked out and stored now. Reads the file in that case, so call it off the main thread.
     static func completing(_ attachment: Attachment, in store: AttachmentStore, database: AppDatabase, with hasher: FileHasher) throws -> Attachment {
         if attachment.sha256 != nil, attachment.size != nil { return attachment }
         guard let file = store.url(for: attachment),
@@ -216,7 +216,8 @@ struct OutgoingFileFacts: Sendable {
         completed.sha256 = facts.sha256
         completed.ownThumbnail = facts.thumbnail
         completed.size = attachment.size ?? facts.size
-        try database.setOutgoingFacts(facts, messageId: attachment.messageId)
+        // Only a cache: if it isn't stored the next send reads the file again.
+        try? database.setOutgoingFacts(facts, messageId: attachment.messageId)
         return completed
     }
 }

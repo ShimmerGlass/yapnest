@@ -2625,7 +2625,7 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     var outgoingMessages: OutgoingMessages {
-        OutgoingMessages(database: database, attachments: attachments, account: account, hasher: fileHasher)
+        OutgoingMessages(database: database, attachments: attachments, account: account)
     }
 
     /// Our nickname in the group chat `peer`; nil for 1:1 chats.
@@ -2700,6 +2700,8 @@ public final class XMPPSession: @unchecked Sendable {
                                              mentions: attachment == nil ? mentions(in: text, route: route) : [],
                                              active: !route.isGroup && includesActiveState(to: peer))
             // Encrypted, the URL must only travel inside the OMEMO payload.
+            // The metadata is an autoclosure that addFile doesn't call then, so
+            // the file isn't hashed for a message that sends none of it.
             if let attachment {
                 OutboundStanza.addFile(
                     url: message.body, metadata: outgoingMetadata(for: attachment),

@@ -10,7 +10,6 @@ struct OutgoingMessages: Sendable {
     let database: AppDatabase
     let attachments: AttachmentStore
     let account: JID
-    var hasher = FileHasher()
 
     struct Reply: Sendable {
         var id: String
@@ -25,23 +24,15 @@ struct OutgoingMessages: Sendable {
     /// A file already in the attachment store.
     struct PreparedFile: Sendable {
         var imported: AttachmentStore.Imported
-        var facts: OutgoingFileFacts?
     }
 
     /// Takes the file into the store. Photos are scaled down and stripped of
-    /// metadata, unless animated; other files go as they are. The stored file
-    /// is final from here, so its hash and thumbnail are worked out now, once.
+    /// metadata, unless animated; other files go as they are. Nothing is
+    /// hashed here, as that would be a wait before the message shows: the hash
+    /// and thumbnail are worked out when a send first needs them
+    /// (`OutgoingFileFacts.completing`).
     func prepareFile(at url: URL, name: String? = nil, asPhoto: Bool = false) async throws -> PreparedFile {
-        let imported = try await attachments.importFile(at: url, name: name ?? url.lastPathComponent, asPhoto: asPhoto)
-        // Only pictures and sounds are described to the recipient, so only
-        // they are hashed now; any other file is hashed when something first
-        // needs it (a Jingle offer), and kept then. A file that can't be read
-        // back is left for the first send to fail on.
-        let mimeType = AttachmentStore.mimeType(for: imported.name)
-        let facts = Attachment.isDescribedWhenSent(name: imported.name, mimeType: mimeType) ? try? OutgoingFileFacts.read(
-            fileAt: attachments.directory.appending(path: imported.file), isImage: Attachment.isImage(name: imported.name, mimeType: mimeType), with: hasher,
-        ) : nil
-        return PreparedFile(imported: imported, facts: facts)
+        PreparedFile(imported: try await attachments.importFile(at: url, name: name ?? url.lastPathComponent, asPhoto: asPhoto))
     }
 
     /// Forgets files that were prepared but never made it into a message.
@@ -90,8 +81,6 @@ struct OutgoingMessages: Sendable {
                         width: imported.width.map(Double.init),
                         height: imported.height.map(Double.init),
                         duration: imported.duration,
-                        sha256: file.facts?.sha256,
-                        ownThumbnail: file.facts?.thumbnail,
                         localFile: imported.file,
                         state: .pendingUpload,
                     )

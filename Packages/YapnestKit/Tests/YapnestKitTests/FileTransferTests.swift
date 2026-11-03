@@ -613,6 +613,62 @@ struct FileTransferSendingTests {
         #expect(h.session.fileHasher.filesHashed == 0)
     }
 
+    /// A picture staged in the chat with Alice, as a message ready to go once it has a URL.
+    private func stagedPicture(_ h: TransferHarness, encrypted: Bool) async throws -> YapnestKit.Message {
+        var conversation = try h.database.conversation(with: alice)
+        conversation.isEncrypted = encrypted
+        try await h.database.writer.write { [conversation] in try conversation.update($0) }
+        let png = try AvatarImages.png(side: 120)
+        let url = FileManager.default.temporaryDirectory.appending(path: "pic-\(UUID().uuidString).png")
+        try png.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let outgoing = h.session.outgoingMessages
+        let file = try await outgoing.prepareFile(at: url)
+        return try outgoing.stage([.file(file)], to: alice)[0]
+    }
+
+    @Test func stagingAPictureOrSoundHashesNothing() async throws {
+        let h = try TransferHarness()
+        let picture = try await stagedPicture(h, encrypted: false)
+        let row = try #require(try h.database.attachment(messageId: picture.id!))
+        #expect(row.sha256 == nil && row.ownThumbnail == nil)
+
+        let sound = FileManager.default.temporaryDirectory.appending(path: "clip-\(UUID().uuidString).m4a")
+        try Data(repeating: 1, count: 3000).write(to: sound)
+        defer { try? FileManager.default.removeItem(at: sound) }
+        let file = try await h.session.outgoingMessages.prepareFile(at: sound)
+        let message = try h.session.outgoingMessages.stage([.file(file)], to: alice)[0]
+        #expect(try h.database.attachment(messageId: message.id!)?.sha256 == nil)
+        #expect(h.session.fileHasher.filesHashed == 0)
+    }
+
+    @Test func thePicturesFirstSendHashesItOnceAndAResendDoesNot() async throws {
+        let h = try TransferHarness()
+        let staged = try await stagedPicture(h, encrypted: false)
+        let message = try #require(try h.database.setUploaded(messageId: staged.id!, url: "https://up.example/x/cat.png"))
+        h.session.transmit(message, to: alice)
+        await eventually("the message on the wire") { !h.wire.messages.isEmpty }
+        #expect(h.session.fileHasher.filesHashed == 1)
+        let row = try #require(try h.database.attachment(messageId: staged.id!))
+        #expect(row.sha256 != nil && row.ownThumbnail != nil)
+
+        h.session.transmit(message, to: alice, resend: true)
+        await eventually("the message sent again") { h.wire.messages.count == 2 }
+        #expect(h.session.fileHasher.filesHashed == 1)
+    }
+
+    @Test func anEncryptedPictureIsNotHashedToSendIt() async throws {
+        let h = try TransferHarness()
+        let staged = try await stagedPicture(h, encrypted: true)
+        let message = try #require(try h.database.setUploaded(messageId: staged.id!, url: "aesgcm://up.example/x/cat.png#0123"))
+        #expect(message.encryption == .omemo)
+        h.session.transmit(message, to: alice)
+        // The send runs on the peer's queue; give it time to have reached the metadata.
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(h.session.fileHasher.filesHashed == 0)
+        #expect(try h.database.attachment(messageId: staged.id!)?.sha256 == nil)
+    }
+
     @Test func anOldRowIsHashedOnceForTheOfferAndKeepsTheHash() async throws {
         let h = try TransferHarness()
         try h.advertiseFileTransfer()

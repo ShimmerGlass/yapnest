@@ -267,7 +267,7 @@ struct VoiceMetadataTests {
         defer { try? FileManager.default.removeItem(at: sound.deletingLastPathComponent()) }
         let store = AttachmentStore(directory: sound.deletingLastPathComponent())
         let attachment = Attachment(
-            messageId: 1, url: "https://up.example/x/clip.caf", name: "Voice message.m4a", mimeType: "audio/mp4", size: 1,
+            messageId: 1, url: "https://up.example/x/clip.caf", name: "Voice message.m4a", mimeType: "audio/mp4", size: sound.fileSize,
             duration: 2.0, localFile: "clip.caf", state: .ready,
         )
         let metadata = try #require(outgoingMetadata(for: attachment, in: store))

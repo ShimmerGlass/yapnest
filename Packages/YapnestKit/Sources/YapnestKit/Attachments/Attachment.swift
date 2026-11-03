@@ -102,8 +102,8 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
     public var isVoiceClip: Bool { AudioFormat.isVoiceClip(mimeType: mimeType, name: name) }
 
     /// Whether a sent file gets XEP-0446 metadata (see `FileMetadata.outgoing`).
-    /// Only these are hashed up front, as hashing a large video before its
-    /// message shows would be a wait for nothing.
+    /// Only these are hashed to send their message, and then only in an
+    /// unencrypted chat, as hashing a large video would be a wait for nothing.
     var isDescribedWhenSent: Bool { Self.isDescribedWhenSent(name: name, mimeType: mimeType) }
 
     static func isDescribedWhenSent(name: String, mimeType: String?) -> Bool {

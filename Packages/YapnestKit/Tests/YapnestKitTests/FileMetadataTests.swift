@@ -369,7 +369,7 @@ struct FileMetadataSendingTests {
         #expect(outgoingMetadata(for: pdf, in: store) == nil)
     }
 
-    @Test func theFactsAreStoredWithTheFileAndNeverReadAgain() async throws {
+    @Test func stagingAPictureHashesNothing() async throws {
         let png = try AvatarImages.png(side: 120)
         let directory = FileManager.default.temporaryDirectory.appending(path: "facts-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -378,25 +378,47 @@ struct FileMetadataSendingTests {
         try png.write(to: source)
         let database = try AppDatabase.inMemory()
         let store = AttachmentStore(directory: directory.appending(path: "store"))
-        let hasher = FileHasher()
-        let outgoing = OutgoingMessages(database: database, attachments: store, account: me, hasher: hasher)
+        let outgoing = OutgoingMessages(database: database, attachments: store, account: me)
         let prepared = try await outgoing.prepareFile(at: source)
         let message = try outgoing.stage([.file(prepared)], to: alice)[0]
-        // Worked out once, when the file was stored.
-        #expect(hasher.filesHashed == 1)
         let row = try #require(try database.attachment(messageId: message.id!))
-        let stored = try #require(store.url(for: row))
-        #expect(row.sha256 == Data(SHA256.hash(data: try Data(contentsOf: stored))))
-        #expect(row.ownThumbnail != nil && row.thumbnail == nil)
+        #expect(row.sha256 == nil && row.ownThumbnail == nil)
+        #expect(row.size != nil)
 
-        // A relaunch: a hasher that has seen nothing, and the row from the database.
+        // The first need works the facts out, once; a relaunch finds them on the row.
+        let hasher = FileHasher()
+        let completed = try OutgoingFileFacts.completing(row, in: store, database: database, with: hasher)
+        #expect(hasher.filesHashed == 1)
+        let stored = try #require(store.url(for: row))
+        #expect(completed.sha256 == Data(SHA256.hash(data: try Data(contentsOf: stored))))
+        #expect(completed.ownThumbnail != nil && completed.thumbnail == nil)
+        let reread = try #require(try database.attachment(messageId: message.id!))
+        #expect(reread.sha256 == completed.sha256 && reread.ownThumbnail == completed.ownThumbnail)
         let relaunched = FileHasher()
-        let completed = try OutgoingFileFacts.completing(row, in: store, database: database, with: relaunched)
+        let again = try OutgoingFileFacts.completing(reread, in: store, database: database, with: relaunched)
         #expect(relaunched.filesHashed == 0)
-        #expect(completed == row)
-        let metadata = try #require(FileMetadata.outgoing(for: completed))
-        #expect(metadata.sha256 == row.sha256 && metadata.thumbnail == row.ownThumbnail)
+        #expect(again == reread)
+        let metadata = try #require(FileMetadata.outgoing(for: again))
+        #expect(metadata.sha256 == reread.sha256 && metadata.thumbnail == reread.ownThumbnail)
         #expect(metadata.size == Int64(try Data(contentsOf: stored).count))
+    }
+
+    @Test func aFailedWriteOfTheFactsStillReturnsThem() throws {
+        let png = try AvatarImages.png(side: 120)
+        let (store, attachment) = try store(with: png, named: "cat.png")
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let database = try AppDatabase.inMemory()
+        var message = YapnestKit.Message(conversationId: try database.conversation(with: alice).id!, direction: .outgoing, sender: me, body: "", remoteId: "m1")
+        message.isWrittenHere = true
+        let (stored, old) = try database.insert(message, attachment: attachment)
+        try database.writer.write { db in
+            try db.execute(sql: "CREATE TRIGGER refuse BEFORE UPDATE ON attachment BEGIN SELECT RAISE(ABORT, 'refused'); END")
+        }
+        #expect(throws: (any Error).self) { try database.setOutgoingFacts(OutgoingFileFacts(size: 1, sha256: Data(), thumbnail: nil), messageId: stored.id!) }
+
+        let completed = try OutgoingFileFacts.completing(old, in: store, database: database, with: FileHasher())
+        #expect(completed.sha256 == Data(SHA256.hash(data: png)) && completed.ownThumbnail != nil)
+        #expect(try database.attachment(messageId: stored.id!)?.sha256 == nil)
     }
 
     @Test func anOldRowGetsItsFactsOnceAndKeepsThem() async throws {
@@ -486,6 +508,6 @@ func outgoingMetadata(for attachment: YapnestKit.Attachment, in store: Attachmen
     var described = attachment
     described.sha256 = facts.sha256
     described.ownThumbnail = facts.thumbnail
-    described.size = facts.size
+    described.size = attachment.size ?? facts.size
     return FileMetadata.outgoing(for: described)
 }
