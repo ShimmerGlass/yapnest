@@ -1879,7 +1879,10 @@ public final class XMPPSession: @unchecked Sendable {
         }
         if let message = result.newMessage {
             events.send(.newMessage(message))
-            if !inbound.isOutgoing { askAvatarIfFirstContact(inbound.peer) }
+            // Asking tells their server we're online, and from which full
+            // address, so a stranger's message alone doesn't: as with
+            // receipts, only for people the user accepted.
+            if !inbound.isOutgoing, (try? database.hasConsented(inbound.peer)) == true { askAvatarIfFirstContact(inbound.peer) }
             // Fetching reveals our IP address to the sender's upload
             // server, so only for people we know.
             if let attachment = result.newAttachment, Self.trustsForAutoDownload(
@@ -2248,7 +2251,10 @@ public final class XMPPSession: @unchecked Sendable {
         guard let peers = try? database.conversationPeers(), let roster = try? database.roster() else { return }
         try? database.setDate(.lastAvatarRefresh, now)
         let notifying = Set(roster.filter(\.seesPresence).map(\.jid))
-        for peer in peers where !notifying.contains(peer) { fetchAvatar(of: peer) }
+        // Not strangers', whose chats are there because they wrote: asking
+        // tells their server we're online. Opening or answering such a chat
+        // still asks, as the user then chose to.
+        for peer in peers where !notifying.contains(peer) && (try? database.hasConsented(peer)) == true { fetchAvatar(of: peer) }
     }
 
     static let avatarRefreshInterval: TimeInterval = 24 * 3600

@@ -107,12 +107,17 @@ struct PresenceLimitTests {
         #expect(vCardRequests == 2)
     }
 
+    private func receiveMessage(from: String, body: String) {
+        session.handle(parseStanza("<message from='\(from)' to='me@example.org' type='chat' id='m1'><body>\(body)</body></message>"), source: .live)
+    }
+
     private var avatarRequests: Int {
         wire.written.filter { ($0 as? Iq)?.findChild(name: "pubsub")?.firstChild(name: "items")?.attribute("node") == "urn:xmpp:avatar:metadata" }.count
     }
 
     @Test func avatarsOfChatsWithoutPresenceAreAskedForOnceADay() throws {
         _ = try session.database.conversation(with: alice)
+        try session.database.markAddedByUser(alice)
         let start = Date(timeIntervalSince1970: 1_000_000)
         session.refreshAvatars(now: start)
         #expect(avatarRequests == 1)
@@ -145,6 +150,26 @@ struct PresenceLimitTests {
         session.askAvatarIfFirstContact(alice)
         #expect(avatarRequests == 1)
         try session.send("hello", to: alice)
+        #expect(avatarRequests == 1)
+    }
+
+    /// Asking tells their server we're online, and from which full address.
+    @Test func aStrangersChatIsLeftOutOfTheDailyRefresh() throws {
+        _ = try session.database.conversation(with: alice)
+        session.refreshAvatars(now: Date())
+        #expect(avatarRequests == 0)
+    }
+
+    @Test func aStrangersFirstMessageDoesNotAskForTheirAvatar() throws {
+        session.refreshAvatars(now: Date())
+        receiveMessage(from: "alice@example.org/phone", body: "hi")
+        #expect(avatarRequests == 0)
+    }
+
+    @Test func anAcceptedContactsFirstMessageAsksForTheirAvatar() throws {
+        session.refreshAvatars(now: Date())
+        try session.database.markAddedByUser(alice)
+        receiveMessage(from: "alice@example.org/phone", body: "hi")
         #expect(avatarRequests == 1)
     }
 
