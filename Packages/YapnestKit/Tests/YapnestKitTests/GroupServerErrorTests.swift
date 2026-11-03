@@ -812,6 +812,31 @@ struct ModerationRequestFailureTests {
         }
     }
 
+    @Test func aSubjectTheRoomDidNotEchoInTimeIsSentAgain() async throws {
+        let session = self.session
+        let wire = self.wire
+        session.lock.withLock { $0.subjectTimeout = 0.2 }
+        let changing = Task { try await session.setSubject("Hi", in: room) }
+        #expect(await eventually { wire.messages.filter { $0.subject != nil }.count == 2 })
+        session.handleRoomStanza(
+            parseStanza("<message type='groupchat' from='cake@rooms.example.org/me'><subject>Hi</subject></message>"),
+            source: .live,
+        )
+        try await changing.value
+    }
+
+    @Test func aSubjectNeverEchoedStillEndsAsATimeout() async throws {
+        session.lock.withLock { $0.subjectTimeout = 0.05 }
+        do {
+            try await session.setSubject("Hi", in: room)
+            Issue.record("the change should have failed")
+        } catch GroupError.timedOut {
+        } catch {
+            Issue.record("expected a timeout, got \(error)")
+        }
+        #expect(wire.messages.filter { $0.subject != nil }.count == ServerRetry.attempts)
+    }
+
     @Test func aSubjectTheRoomRefusesIsNotAllowed() async throws {
         let session = self.session
         let wire = self.wire

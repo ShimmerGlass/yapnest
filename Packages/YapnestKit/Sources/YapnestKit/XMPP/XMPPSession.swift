@@ -295,6 +295,8 @@ public final class XMPPSession: @unchecked Sendable {
         var bounceBackoff: TimeInterval = 5
         /// The wait before `retryingPassingErrors` makes a request again; tests lower it.
         var retryBackoff: TimeInterval = ServerRetry.backoff
+        /// How long `setSubject` waits for the room's echo; tests lower it.
+        var subjectTimeout: TimeInterval = XMPPSession.subjectTimeout
         /// A password that may be the account's now (see `Credentials.candidatePassword`).
         var candidatePassword: String?
         /// The candidate is in the connection's configuration, in place of the stored password.

@@ -2544,6 +2544,12 @@ extension XMPPSession {
             try await retryingPassingErrors { try await sendSubject(subject, in: room) }
         } catch let error as ServerError where ["forbidden", "not-allowed"].contains(error.condition) {
             throw GroupError.notAllowed
+        } catch is TimeoutError {
+            throw GroupError.timedOut
+        } catch let error as ServerError where error == Self.subjectNotHandedOver {
+            throw GroupError.notConnected
+        } catch {
+            throw Self.roomRequestError(error, isConnected: isConnected)
         }
     }
 
@@ -2557,23 +2563,27 @@ extension XMPPSession {
             subscription.cancel()
             continuation.finish()
         }
-        guard await writeAwaitingHandOver(message) else { throw GroupError.notConnected }
-        do {
-            try await withTimeout(Self.subjectTimeout) {
-                for await outcome in outcomes {
-                    switch outcome {
-                    case .changed(room, subject): return
-                    case .failed(room, id, let error): throw error
-                    default: continue
-                    }
+        // Errors that classify as passing, so the caller's retry sees them;
+        // `setSubject` turns what is left into a `GroupError`.
+        guard await writeAwaitingHandOver(message) else { throw Self.subjectNotHandedOver }
+        let timeout = lock.withLock { $0.subjectTimeout }
+        try await withTimeout(timeout) {
+            for await outcome in outcomes {
+                switch outcome {
+                case .changed(room, subject): return
+                case .failed(room, id, let error): throw error
+                default: continue
                 }
             }
-        } catch is TimeoutError {
-            throw GroupError.timedOut
         }
     }
 
     static let subjectTimeout: TimeInterval = 15
+
+    /// Raised when the stream wouldn't take the subject. Passing, like a
+    /// dropped connection, so that it is tried again; `setSubject` reports it
+    /// as `GroupError.notConnected`.
+    private static let subjectNotHandedOver = ServerError(condition: "service-unavailable", type: .wait, detail: "not-handed-over")
 
     private func waitForRoom(_ room: JID, timeout: TimeInterval = 30) async throws -> RoomStatus {
         switch await awaitRoom(room, timeout: timeout, until: { $0.isJoined }) {
