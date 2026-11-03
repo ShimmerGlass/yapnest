@@ -112,4 +112,19 @@ private let me = JID("me@example.org")!
         // milliseconds.
         #expect(thirdDone.timeIntervalSince(firstDone) < NotificationFetcher.maxLockWait)
     }
+
+    @Test func aCatchUpThatDidntFinishAndStoredNothingKeepsTheRelaysAlert() async {
+        let unreachable = NotificationFetcher(
+            credentials: .init(jid: JID("me@nowhere.invalid")!, password: "x"), directory: root.appending(path: "account"), resource: "push",
+            lock: ProcessLock(url: lockURL), appLock: ProcessLock(url: appLockURL), identityKeys: MemoryIdentityKeyStore(),
+        )
+
+        let outcome = await unreachable.fetch(timeout: 5)
+
+        guard case .incomplete(let edited, _) = outcome else {
+            Issue.record("expected the relay's alert to show, got \(outcome)")
+            return
+        }
+        #expect(edited.isEmpty)
+    }
 }

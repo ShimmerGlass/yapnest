@@ -69,6 +69,9 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         case .appIsRunning:
             // It has the connection, and notifies for what arrives itself.
             deliver(quiet: fallback, identifier)
+        case .incomplete(let edited, let badge):
+            await MessageNotification.replaceDelivered(edited, badge: badge, avatars: avatars)
+            deliver(fallback.withBadge(badge))
         case .busy, .failed:
             deliver(fallback)
         }

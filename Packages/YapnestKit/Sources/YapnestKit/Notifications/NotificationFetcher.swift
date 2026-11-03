@@ -17,6 +17,11 @@ public struct NotificationFetcher: Sendable {
         /// push: the share extension, or unknown. The relay's own content
         /// should show.
         case busy
+        /// The catch-up didn't finish and nothing it stored is new, so the
+        /// push may announce a message that isn't here yet: the relay's own
+        /// alert should show, with the badge, rather than nothing. The
+        /// corrected messages are the ones to update.
+        case incomplete(edited: [MessageNotification], badge: Int)
         case failed(String)
     }
 
@@ -128,7 +133,7 @@ public struct NotificationFetcher: Sendable {
                 Self.logger.warning("Catch-up didn't finish: \(session.state.value.caseName, privacy: .public)")
             }
             // What did arrive is worth showing even if the rest didn't.
-            return (try claimed(from: database), caughtUp)
+            return (try claimed(from: database, caughtUp: caughtUp), caughtUp)
         } catch {
             DiagLog.error(.notificationExtension, "Fetching failed", .error(error))
             Self.logger.error("Fetching for notifications failed: \(error)")
@@ -144,9 +149,18 @@ public struct NotificationFetcher: Sendable {
         }
     }
 
-    private func claimed(from database: AppDatabase) throws -> Outcome {
+    func claimed(from database: AppDatabase, caughtUp: Bool = true) throws -> Outcome {
         let claimed = try database.claimNotificationsAndEdits()
-        return .notifications(claimed.new, edited: claimed.edited, badge: try database.unreadCount())
+        return Self.outcome(new: claimed.new, edited: claimed.edited, badge: try database.unreadCount(), caughtUp: caughtUp)
+    }
+
+    /// A catch-up that didn't finish and stored nothing new says nothing about
+    /// whether the push announced a message: the password may have been
+    /// changed elsewhere, or the network too slow. Silencing it would leave
+    /// the user with no notification and no sign of why.
+    static func outcome(new: [MessageNotification], edited: [MessageNotification], badge: Int, caughtUp: Bool) -> Outcome {
+        if !caughtUp, new.isEmpty { return .incomplete(edited: edited, badge: badge) }
+        return .notifications(new, edited: edited, badge: badge)
     }
 }
 
@@ -274,13 +288,14 @@ extension UNUserNotificationCenter {
 
 /// How a fetch ended, for the diagnostics log.
 enum FetchResult: String, DiagEnum {
-    case notifications, appIsRunning, busy, failed
+    case notifications, appIsRunning, busy, incomplete, failed
 
     init(_ outcome: NotificationFetcher.Outcome) {
         switch outcome {
         case .notifications: self = .notifications
         case .appIsRunning: self = .appIsRunning
         case .busy: self = .busy
+        case .incomplete: self = .incomplete
         case .failed: self = .failed
         }
     }
