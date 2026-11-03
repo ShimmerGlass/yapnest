@@ -127,6 +127,17 @@ extension AppDatabase {
         }
     }
 
+    /// Records that a download someone asked for is over the download limit.
+    /// It shows as failed, with the size that explains it, because a tap
+    /// that seems to do nothing is worse than one that says why. `size` is
+    /// nil when the server didn't say; the file is then more than the limit.
+    func setTooLargeToDownload(messageId: Int64, size: Int64?) throws {
+        try writer.write { db in
+            try db.execute(sql: "UPDATE attachment SET state = 'downloadFailed', size = COALESCE(?, size, ?) WHERE messageId = ?",
+                           arguments: [size, XMPPSession.maxDownloadSize + 1, messageId])
+        }
+    }
+
     /// Received images that should have downloaded on their own but haven't,
     /// newest first: still remote, or failed (but not for being too big),
     /// from someone `XMPPSession.trustsForAutoDownload` allows. Only recent

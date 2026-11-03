@@ -120,7 +120,12 @@ enum AttachmentStatus {
         }
         switch display.attachment.state {
         case .remote, .offered: return remote
-        case .downloadFailed: return String(localized: "Couldn't download · Tap to retry")
+        case .downloadFailed:
+            if display.attachment.exceedsDownloadLimit {
+                let limit = ByteCountFormatter.string(fromByteCount: XMPPSession.maxDownloadSize, countStyle: .file)
+                return String(localized: "Too large to download (max \(limit))")
+            }
+            return String(localized: "Couldn't download · Tap to retry")
         case .unavailable: return String(localized: "No longer available")
         case .pendingUpload, .ready: return ready
         }

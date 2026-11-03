@@ -15,7 +15,7 @@ extension XMPPSession {
     static let transferSession = URLSession.privateEphemeral()
 
     /// Files larger than this are never downloaded.
-    static let maxDownloadSize: Int64 = 200 * 1024 * 1024
+    public static let maxDownloadSize: Int64 = 200 * 1024 * 1024
     /// Images from contacts download on their own up to this size.
     static let autoDownloadSize: Int64 = 15 * 1024 * 1024
 
@@ -312,7 +312,13 @@ extension XMPPSession {
 
     private func download(_ attachment: Attachment, limit: Int64, automatic: Bool) {
         let messageId = attachment.messageId
-        guard let string = attachment.url, let url = URL(string: string), beginTransfer(messageId) else { return }
+        guard let string = attachment.url, let url = URL(string: string) else { return }
+        // A tap on a file already known to be over the limit has nothing to fetch.
+        if !automatic, let size = attachment.size, size > limit {
+            try? database.setTooLargeToDownload(messageId: messageId, size: size)
+            return
+        }
+        guard beginTransfer(messageId) else { return }
         let transferId = Redacted.id(string)
         Task.detached { [self] in
             defer { endTransfer(messageId) }
@@ -347,9 +353,14 @@ extension XMPPSession {
                 )
                 DiagLog.info(.receive, "Download finished", .id("file", transferId), .int("status", http.statusCode), .size("bytes", data.count), .duration("took", since: started))
             } catch {
-                // Over the limit isn't a failure; a tap can still fetch it.
                 if let size = (error as? TooLarge)?.size {
-                    try? database.setTooLarge(messageId: messageId, size: size > 0 ? size : nil)
+                    // Over the automatic limit isn't a failure; a tap can still fetch it.
+                    // Over the limit of a tap, nothing can, and the user is told.
+                    if automatic {
+                        try? database.setTooLarge(messageId: messageId, size: size > 0 ? size : nil)
+                    } else {
+                        try? database.setTooLargeToDownload(messageId: messageId, size: size > 0 ? size : nil)
+                    }
                     return
                 }
                 if automatic, Self.isHeldBackByLowDataMode(error) { return }

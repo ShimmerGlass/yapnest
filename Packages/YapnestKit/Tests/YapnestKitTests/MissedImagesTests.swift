@@ -206,6 +206,33 @@ struct MissedImagesTests {
         #expect(try f.missed() == [small])
     }
 
+    @Test func tooLargeForATapShowsAsFailedWithTheSize() throws {
+        var f = Fixture()
+        let big = try f.add(in: alice, from: alice, size: nil)
+        try f.db.setTooLargeToDownload(messageId: big, size: XMPPSession.maxDownloadSize + 5)
+        var stored = try #require(try f.db.attachment(messageId: big))
+        #expect(stored.state == .downloadFailed)
+        #expect(stored.size == XMPPSession.maxDownloadSize + 5)
+        #expect(stored.exceedsDownloadLimit)
+
+        let unknown = try f.add(in: alice, from: alice, size: nil)
+        try f.db.setTooLargeToDownload(messageId: unknown, size: nil)
+        stored = try #require(try f.db.attachment(messageId: unknown))
+        #expect(stored.state == .downloadFailed)
+        #expect(stored.exceedsDownloadLimit)
+    }
+
+    @Test func aTapOnAFileKnownToBeOverTheLimitFailsWithoutFetching() async throws {
+        var f = Fixture()
+        let session = try makeSession(me, database: f.db)
+        let big = try f.add(in: alice, from: alice, size: XMPPSession.maxDownloadSize + 1)
+        session.download(try #require(try f.db.attachment(messageId: big)))
+        let stored = try #require(try f.db.attachment(messageId: big))
+        #expect(stored.state == .downloadFailed)
+        #expect(stored.exceedsDownloadLimit)
+        #expect(session.transfers.value.isEmpty)
+    }
+
     @Test func boundedByAgeAndCount() throws {
         var f = Fixture()
         try f.contact(alice, inRoster: true)

@@ -48,6 +48,9 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
     public var localFile: String?
     public var state: State
 
+    /// Whether the file is known to be more than a tap will download.
+    public var exceedsDownloadLimit: Bool { size.map { $0 > XMPPSession.maxDownloadSize } ?? false }
+
     public init(
         messageId: Int64,
         url: String?,
