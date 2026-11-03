@@ -3,12 +3,15 @@ import Testing
 @testable import YapnestKit
 
 struct MessageStylingTests {
-    private func styled(_ text: String) -> [String] {
-        MessageStyling.spans(in: text).map { span in
+    /// Each span as its style's letter and the text it covers.
+    private func describe(_ spans: [(range: NSRange, style: MessageStyling.SpanStyle)], in text: String) -> [String] {
+        spans.map { span in
             let style = switch span.style { case .bold: "b"; case .italic: "i"; case .code: "c"; case .strike: "s" }
             return style + ":" + (text as NSString).substring(with: span.range)
         }
     }
+
+    private func styled(_ text: String) -> [String] { describe(MessageStyling.spans(in: text), in: text) }
 
     @Test func marksBoldItalicAndCode() {
         #expect(styled("a *bold* _it_ `code`") == ["b:*bold*", "i:_it_", "c:`code`"])
@@ -206,12 +209,7 @@ struct MessageStylingTests {
 
     // MARK: Spans of text as it is typed
 
-    private func typed(_ text: String) -> [String] {
-        MessageStyling.composerSpans(in: text).map { span in
-            let style = switch span.style { case .bold: "b"; case .italic: "i"; case .code: "c"; case .strike: "s" }
-            return style + ":" + (text as NSString).substring(with: span.range)
-        }
-    }
+    private func typed(_ text: String) -> [String] { describe(MessageStyling.composerSpans(in: text), in: text) }
 
     @Test func typedSpansAreTheBubblesOnPlainText() {
         #expect(typed("a *bold* _it_ ~s~ `code`") == ["b:*bold*", "i:_it_", "s:~s~", "c:`code`"])
@@ -246,24 +244,18 @@ struct MessageStylingTests {
         #expect(typed("```code```\n*b*") == ["b:*b*"])
     }
 
+    @Test func aMessageOfOnlyEmptyBlocksIsStyledAsTheWholeTextTheBubbleShows() {
+        #expect(typed("```swift *x*") == ["b:*x*"])
+        #expect(typed("```\n```\n_y_") == ["i:_y_"])
+    }
+
     @Test func typedSpansMatchTheBubbleOnRandomMessages() {
         var generator = SeededGenerator(seed: 234)
         let pieces = ["```", "```swift", "> ", ">> ", ">", "*a*", " _b_ ", "x", "`c`", "~d~", " ", "😀", "*", "_", "\n", "\n", "\n"]
         for _ in 0..<2_000 {
             let text = (0..<Int.random(in: 0...16, using: &generator)).map { _ in pieces.randomElement(using: &generator)! }.joined()
-            let ns = text as NSString
-            var expected: [String] = []
-            let blocks = MessageStyling.blocks(in: text)
-            // A message of nothing but empty blocks is shown whole, fences and all.
-            // Typing one is brief (the next character fills the block), so it is left out.
-            if text.contains("```"), blocks == [MessageStyling.Block(text: text, depth: 0, isPreformatted: false)] { continue }
-            for block in blocks where !block.isPreformatted {
-                for span in MessageStyling.spans(in: block.text) {
-                    expected.append(String(describing: span.style) + ":" + (block.text as NSString).substring(with: span.range))
-                }
-            }
-            let got = MessageStyling.composerSpans(in: text).map { String(describing: $0.style) + ":" + ns.substring(with: $0.range) }
-            #expect(got == expected, "\(text.debugDescription)")
+            let expected = MessageStyling.blocks(in: text).filter { !$0.isPreformatted }.flatMap { describe(MessageStyling.spans(in: $0.text), in: $0.text) }
+            #expect(typed(text) == expected, "\(text.debugDescription)")
         }
     }
 

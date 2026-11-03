@@ -65,46 +65,30 @@ public enum MessageStyling {
     /// with the bubble: a line the bubble would show verbatim (a fence or
     /// what a fence holds) has no spans, and a quoted line is styled as it is
     /// after its markers. A block that is still open is verbatim to the end,
-    /// as it will be once sent.
+    /// as it will be once sent. Two cases differ: a message of more than
+    /// `maxBlocks` blocks, which the bubble merges into plain text, is styled
+    /// block by block here.
     public static func composerSpans(in text: String) -> [(range: NSRange, style: SpanStyle)] {
-        guard text.contains(where: { markers[$0] != nil }) else { return [] }
+        // The markers are ASCII, so UTF-16 units tell without building Characters.
+        guard text.utf16.contains(where: { $0 == 0x2A || $0 == 0x5F || $0 == 0x60 || $0 == 0x7E }) else { return [] }
+        guard text.utf16.contains(0x3E) || text.contains("```") else { return spans(in: text) }
         var result: [(NSRange, SpanStyle)] = []
-        // Mirrors the line rules of `blocks(in:)`; a test holds the two together.
-        var openDepth: Int?
-        var offset = 0
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            defer { offset += line.utf16.count + 1 }
-            let markerCount = line.prefix { $0 == ">" }.count
-            let depth = min(markerCount, maxQuoteDepth)
-            let isQuote = markerCount > 0 && (line.count == markerCount || line[line.index(line.startIndex, offsetBy: markerCount)] == " ")
-            let level = isQuote ? depth : 0
-            if let inBlock = openDepth {
-                if inBlock == 0 {
-                    if line == "```" { openDepth = nil }
-                    continue
+        var hasBlock = false
+        walkLines(of: text) { line in
+            switch line {
+            case .text(_, let shown, let offset):
+                hasBlock = true
+                for span in spans(in: String(shown)) {
+                    result.append((NSRange(location: span.range.location + offset, length: span.range.length), span.style))
                 }
-                if level >= inBlock {
-                    var inner = line.dropFirst(inBlock)
-                    if inner.first == " " { inner = inner.dropFirst() }
-                    if inner == "```" { openDepth = nil }
-                    continue
-                }
-                openDepth = nil
-            }
-            let dropped = isQuote ? min(line.count, markerCount > depth ? depth : depth + 1) : 0
-            let shown = line.dropFirst(dropped)
-            let closesItself = shown.count > 6 && shown.hasSuffix("```")
-            if shown.hasPrefix("```"), !closesItself {
-                openDepth = level
-                continue
-            }
-            // The dropped characters are ">" and a space, one UTF-16 unit each.
-            let shift = offset + dropped
-            for span in spans(in: String(shown)) {
-                result.append((NSRange(location: span.range.location + shift, length: span.range.length), span.style))
+            case .fenceBody:
+                hasBlock = true
+            case .fenceOpen, .fenceClose, .blockEnded:
+                break
             }
         }
-        return result
+        // With nothing but empty blocks the bubble shows the whole message as text.
+        return hasBlock ? result : spans(in: text)
     }
 
     /// A stretch of a message that is laid out on its own.
@@ -124,6 +108,68 @@ public enum MessageStyling {
     public static let maxQuoteDepth = 8
     public static let maxBlocks = 200
 
+    /// What `walkLines` makes of one line.
+    private enum Line {
+        /// A line opening a preformatted block, in a quote of that depth.
+        case fenceOpen(level: Int)
+        /// A line of an open block, as the block holds it.
+        case fenceBody(Substring)
+        case fenceClose
+        /// The quote an open block was in has ended, and so has the block. The
+        /// same line follows as text or as another fence.
+        case blockEnded
+        /// A line of text at a quote depth, past its quote markers, and where
+        /// `shown` starts in the message (UTF-16).
+        case text(level: Int, shown: Substring, offset: Int)
+    }
+
+    /// The line rules of a message, which `blocks(in:)` and `composerSpans(in:)`
+    /// both follow: what is quoted, what a fence opens and closes, and what a
+    /// block holds.
+    private static func walkLines(of body: String, _ visit: (Line) -> Void) {
+        var openLevel: Int?
+        var offset = 0
+        for line in body.split(separator: "\n", omittingEmptySubsequences: false) {
+            defer { offset += line.utf16.count + 1 }
+            let markerCount = line.prefix { $0 == ">" }.count
+            let depth = min(markerCount, maxQuoteDepth)
+            let afterMarkers = line.dropFirst(markerCount)
+            // The markers must be followed by a space, or end the line.
+            let isQuote = markerCount > 0 && (afterMarkers.isEmpty || afterMarkers.first == " ")
+            let level = isQuote ? depth : 0
+            if let inBlock = openLevel {
+                if inBlock == 0 {
+                    // Quote markers are just text in a block outside any quote.
+                    if line == "```" { openLevel = nil; visit(.fenceClose) } else { visit(.fenceBody(line)) }
+                    continue
+                }
+                if level >= inBlock {
+                    // Deeper markers belong to the block's text.
+                    var inner = line.dropFirst(inBlock)
+                    if inner.first == " " { inner = inner.dropFirst() }
+                    if inner == "```" { openLevel = nil; visit(.fenceClose) } else { visit(.fenceBody(inner)) }
+                    continue
+                }
+                openLevel = nil
+                visit(.blockEnded)
+            }
+            // Markers past the cap are text, and the space after them is too.
+            let dropped = !isQuote ? 0 : markerCount > depth ? depth : afterMarkers.isEmpty ? markerCount : depth + 1
+            let shown = line.dropFirst(dropped)
+            // A line that opens and closes on itself is inline code somebody typed,
+            // not a fence with a language hint: opening a block there would hide
+            // its text and turn the lines after it into code.
+            let closesItself = !shown.dropFirst(6).isEmpty && shown.hasSuffix("```")
+            if shown.hasPrefix("```"), !closesItself {
+                openLevel = level
+                visit(.fenceOpen(level: level))
+            } else {
+                // The dropped characters are ">" and a space, one UTF-16 unit each.
+                visit(.text(level: level, shown: shown, offset: offset + dropped))
+            }
+        }
+    }
+
     /// Splits a message into quotes and preformatted blocks. Quote markers
     /// and the lines holding a block's ``` directives are dropped, so the text
     /// is just what's shown. A block opens at a line starting with ```, whose
@@ -141,40 +187,20 @@ public enum MessageStyling {
             }
             open = nil
         }
-        for line in body.split(separator: "\n", omittingEmptySubsequences: false) {
-            let markerCount = line.prefix { $0 == ">" }.count
-            let depth = min(markerCount, maxQuoteDepth)
-            // The markers must be followed by a space, or end the line.
-            let isQuote = markerCount > 0 && (line.count == markerCount || line[line.index(line.startIndex, offsetBy: markerCount)] == " ")
-            let level = isQuote ? depth : 0
-            if let inBlock = open {
-                if inBlock.depth == 0 {
-                    // Quote markers are just text in a block outside any quote.
-                    if line == "```" { close() } else { open?.lines.append(String(line)) }
-                    continue
-                }
-                if level >= inBlock.depth {
-                    // Deeper markers belong to the block's text.
-                    var inner = line.dropFirst(inBlock.depth)
-                    if inner.first == " " { inner = inner.dropFirst() }
-                    if inner == "```" { close() } else { open?.lines.append(String(inner)) }
-                    continue
-                }
-                // The quote the block was in has ended, and so has the block.
-                close()
-            }
-            // Markers past the cap are text, and the space after them is too.
-            let shown = isQuote ? String(line.dropFirst(min(line.count, markerCount > depth ? depth : depth + 1))) : String(line)
-            // A line that opens and closes on itself is inline code somebody typed,
-            // not a fence with a language hint: opening a block there would hide
-            // its text and turn the lines after it into code.
-            let closesItself = shown.count > 6 && shown.hasSuffix("```")
-            if shown.hasPrefix("```"), !closesItself {
+        walkLines(of: body) { line in
+            switch line {
+            case .fenceOpen(let level):
                 open = (level, [])
-            } else if let last = blocks.last, !last.isPreformatted, last.depth == level {
-                blocks[blocks.count - 1].text += "\n" + shown
-            } else {
-                blocks.append(Block(text: shown, depth: level, isPreformatted: false))
+            case .fenceBody(let text):
+                open?.lines.append(String(text))
+            case .fenceClose, .blockEnded:
+                close()
+            case .text(let level, let shown, _):
+                if let last = blocks.last, !last.isPreformatted, last.depth == level {
+                    blocks[blocks.count - 1].text += "\n" + String(shown)
+                } else {
+                    blocks.append(Block(text: String(shown), depth: level, isPreformatted: false))
+                }
             }
         }
         close()
