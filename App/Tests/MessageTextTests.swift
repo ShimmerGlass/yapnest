@@ -196,6 +196,15 @@ struct MessageTextTests {
         #expect(found.map(\.text).joined() == "_see https://example.com/a_b_ now")
     }
 
+    @Test(arguments: ["ok *👍*🏽", "*🇫*🇷"])
+    func aSpanWhoseMarkerWouldFuseItsNeighboursKeepsItsMarkers(body: String) {
+        #expect(runs(body).flatMap { $0 }.map(\.text).joined() == body)
+    }
+
+    @Test func aSpanWhoseMarkersFuseNothingStillLosesThem() {
+        #expect(runs("*🇫* 🇷").flatMap { $0 }.map(\.text).joined() == "🇫 🇷")
+    }
+
     @Test func anUnclosedOpenerStaysLiteralBesideARealSpan() {
         #expect(runs("*open and _real_").flatMap { $0 }.map(\.text).joined() == "*open and real")
     }

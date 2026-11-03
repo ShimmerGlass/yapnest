@@ -236,7 +236,10 @@ enum MessageText {
             var markers: [Int] = []
             for span in MessageStyling.spans(in: block.text) where !linkRanges.contains(where: { NSIntersectionRange($0, span.range).length > 0 }) {
                 guard let attributed = attributedRange(span.range, in: block.text, of: text) else { continue }
-                markers += [span.range.location, NSMaxRange(span.range) - 1]
+                // Without the marker, a thumb and a skin tone, or two regional
+                // indicators, would fuse into one character that was never written.
+                let ends = [span.range.location, NSMaxRange(span.range) - 1]
+                if !ends.contains(where: { joinsNeighbours(ofCharacterAt: $0, in: block.text) }) { markers += ends }
                 // Nested spans add to the font their outer span gave the run.
                 for run in text[attributed].runs {
                     text[run.range].font = span.style.font(from: run.font ?? font.swiftUI)
@@ -262,6 +265,14 @@ enum MessageText {
             return segment
         }
         return RenderedText(segments: segments, links: found)
+    }
+
+    /// Whether the characters on both sides of the one at `offset` (UTF-16)
+    /// would be one Character if it were gone.
+    private static func joinsNeighbours(ofCharacterAt offset: Int, in string: String) -> Bool {
+        guard let range = Range(NSRange(location: offset, length: 1), in: string),
+              range.lowerBound > string.startIndex, range.upperBound < string.endIndex else { return false }
+        return String([string[string.index(before: range.lowerBound)], string[range.upperBound]]).count == 1
     }
 
     private static func attributedRange(_ range: NSRange, in string: String, of text: AttributedString) -> Range<AttributedString.Index>? {
