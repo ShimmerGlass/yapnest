@@ -957,6 +957,45 @@ struct CallSessionIncomingTests {
         #expect(try h.rows().isEmpty)
         #expect(h.phase == .incoming)
     }
+
+    @Test func anArchivedRetractFromThePeerEndsTheRinging() async throws {
+        let h = try CallSessionHarness()
+        h.receive(h.propose())
+        // The caller gave up while our stream was down; only the catch-up has it.
+        h.receive(h.jmi("retract"), source: .archive(serverId: "a2", timestamp: Date().addingTimeInterval(-5)))
+        await eventually("the ringing ends") { h.phase == .ended(.missed) }
+    }
+
+    @Test func anArchivedAcceptFromAnotherDeviceEndsTheRingingAsAnsweredElsewhere() async throws {
+        let h = try CallSessionHarness()
+        h.receive(h.propose())
+        h.receive(h.jmi("accept", from: "me@example.org/tablet", to: "me@example.org"), source: .archive(serverId: "a2", timestamp: Date().addingTimeInterval(-5)))
+        await eventually("the ringing ends") { h.phase == .ended(.answeredElsewhere) }
+    }
+
+    @Test func ourOwnAcceptReadBackFromTheArchiveIsNotAnotherDevice() async throws {
+        let h = try CallSessionHarness()
+        h.receive(h.propose())
+        h.session.answerCall()
+        #expect(h.phase == .accepted)
+        // What we sent when answering, read back by a catch-up after a reconnect.
+        h.receive(h.jmi("accept", from: "me@example.org/phone", to: "me@example.org"), source: .archive(serverId: "a2", timestamp: Date().addingTimeInterval(-5)))
+        h.receive(h.jmi("proceed", from: "me@example.org/phone", to: aliceDevice), source: .archive(serverId: "a3", timestamp: Date().addingTimeInterval(-5)))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(h.phase == .accepted)
+        // The setup never arrives, so the timer ends the call as failed, not as answered elsewhere.
+        for token in 0..<20 where h.phase == .accepted { h.session.callStep(.timer(token), sid: "s1") }
+        #expect(h.phase == .ended(.failed))
+    }
+
+    @Test func anArchivedSignalOfAnotherCallLeavesTheRingingAlone() async throws {
+        let h = try CallSessionHarness()
+        h.receive(h.propose())
+        h.receive(h.jmi("retract", sid: "old"), source: .archive(serverId: "a2", timestamp: Date().addingTimeInterval(-3600)))
+        h.receive(h.jmi("accept", sid: "old", from: "me@example.org/tablet", to: "me@example.org"), source: .archive(serverId: "a3", timestamp: Date().addingTimeInterval(-3600)))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(h.phase == .incoming)
+    }
 }
 
 struct CallSessionHistoryTests {

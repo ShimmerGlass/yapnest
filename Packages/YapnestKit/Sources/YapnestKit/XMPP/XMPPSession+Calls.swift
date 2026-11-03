@@ -446,14 +446,30 @@ extension XMPPSession {
         let ours = call(sid: signal.sid).map { $0.machine.phase != .ended(.dismissed) } ?? false
         if ours {
             // The archive tells of the call we are in, or just were: the row
-            // is written when it ends.
-            if !isArchive, !isHistory { callStep(.signal(signal), sid: signal.sid) }
+            // is written when it ends. What it holds that ends a call still
+            // ringing or being answered is news, though: the stream may have
+            // been new, and these were sent while it was down.
+            if (!isArchive && !isHistory) || (isArchive && Self.archivedSignalEndsRinging(signal, in: call(sid: signal.sid)?.machine.phase)) {
+                callStep(.signal(signal), sid: signal.sid)
+            }
             return true
         }
         guard isLivePropose,
               (try? database.hasConsented(signal.sender)) == true else { return false }
         ring(for: signal)
         return true
+    }
+
+    /// Whether a signal read back from the archive says that the call has
+    /// been answered or given up, which the machine hasn't been told when the
+    /// connection broke before it came. The proposes and the rest are only
+    /// the log's.
+    static func archivedSignalEndsRinging(_ signal: CallSignal, in phase: CallPhase?) -> Bool {
+        guard phase == .incoming || phase == .accepted else { return false }
+        return switch signal.action {
+        case .proceed, .accept, .reject, .retract: true
+        case .propose, .ringing, .finish: false
+        }
     }
 
     /// XEP-0353 §4.1: the peer proposed while our own propose to them has no
