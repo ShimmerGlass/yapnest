@@ -44,6 +44,22 @@ extension Platform {
     /// Posted when `isWindowVisible` may have changed. iOS never posts it.
     static let windowVisibilityDidChange = Notification.Name("NSApplicationDidChangeOcclusionStateNotification")
 
+    /// Whether the app is the one in front on the Mac, its window the one
+    /// that has focus. UIKit's scene doesn't resign active when another app
+    /// is clicked, so this asks AppKit. Always true elsewhere.
+    static var isAppFocused: Bool {
+        #if targetEnvironment(macCatalyst)
+        (AppKit.application?.value(forKey: "active") as? Bool) ?? true
+        #else
+        true
+        #endif
+    }
+
+    /// Posted by AppKit when the Mac app comes to the front, and when it
+    /// leaves it. iOS never posts them.
+    static let appDidGainFocus = Notification.Name("NSApplicationDidBecomeActiveNotification")
+    static let appDidLoseFocus = Notification.Name("NSApplicationDidResignActiveNotification")
+
     /// The page of the system's settings where `pane` ("Privacy_Microphone")
     /// is switched on or off. The Mac has panes of its own; elsewhere it is
     /// the app's page.

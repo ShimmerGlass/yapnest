@@ -119,12 +119,11 @@ final class AnimatedUIImageView: UIView {
         for name in [UIScene.didEnterBackgroundNotification, UIScene.willEnterForegroundNotification] {
             center.addObserver(self, selector: #selector(sceneStateChanged(_:)), name: name, object: nil)
         }
-        // On iOS a scene is inactive only for a moment, under Control Center
-        // or the app switcher, and stopping there would only stutter.
-        if Platform.isMac {
-            for name in [UIScene.willDeactivateNotification, UIScene.didActivateNotification] {
-                center.addObserver(self, selector: #selector(focusChanged(_:)), name: name, object: nil)
-            }
+        // iOS never posts these: an app is inactive there only for a moment,
+        // under Control Center or the app switcher, and stopping there would
+        // only stutter.
+        for name in [Platform.appDidGainFocus, Platform.appDidLoseFocus] {
+            center.addObserver(self, selector: #selector(focusChanged(_:)), name: name, object: nil)
         }
     }
 
@@ -135,7 +134,7 @@ final class AnimatedUIImageView: UIView {
         super.didMoveToWindow()
         gate.inWindow = window != nil
         gate.sceneInBackground = window?.windowScene?.activationState == .background
-        gate.windowUnfocused = Platform.isMac && window?.windowScene?.activationState == .foregroundInactive
+        gate.windowUnfocused = !Platform.isAppFocused
         gate.inTransition = false
         if window != nil, let transition = enclosingController?.transitionCoordinator {
             gate.inTransition = true
@@ -173,8 +172,7 @@ final class AnimatedUIImageView: UIView {
     }
 
     @objc private func focusChanged(_ notification: Notification) {
-        guard let scene = notification.object as? UIScene, scene === window?.windowScene else { return }
-        setWindowFocused(notification.name == UIScene.didActivateNotification)
+        setWindowFocused(notification.name == Platform.appDidGainFocus)
     }
 
     func setWindowFocused(_ focused: Bool) {

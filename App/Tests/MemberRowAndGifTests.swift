@@ -157,6 +157,21 @@ struct AnimatedImageViewTests {
         #expect(view.isAnimating)
     }
 
+    /// What AppKit posts when another app is clicked, and when Yapnest is
+    /// brought back. UIKit's scene says nothing of either on the Mac.
+    @Test func theAppLosingFocusHoldsItsGifs() async throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let view = AnimatedUIImageView(frame: window.bounds)
+        window.addSubview(view)
+        view.source = .data(try animatedGif())
+        await eventually("no frame shown", timeout: .seconds(1)) { view.image != nil }
+
+        NotificationCenter.default.post(name: Platform.appDidLoseFocus, object: nil)
+        #expect(!view.isAnimating)
+        NotificationCenter.default.post(name: Platform.appDidGainFocus, object: nil)
+        #expect(view.isAnimating)
+    }
+
     @Test func theOcclusionNotificationLeavesAVisibleGifPlaying() async throws {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         let view = AnimatedUIImageView(frame: window.bounds)
