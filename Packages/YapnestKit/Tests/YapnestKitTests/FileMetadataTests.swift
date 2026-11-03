@@ -482,7 +482,7 @@ struct FileMetadataSendingTests {
 /// row gets its facts.
 func outgoingMetadata(for attachment: YapnestKit.Attachment, in store: AttachmentStore) -> FileMetadata? {
     guard let file = store.url(for: attachment),
-          let facts = try? OutgoingFileFacts.read(fileAt: file, name: attachment.name, mimeType: attachment.mimeType, with: FileHasher()) else { return nil }
+          let facts = try? OutgoingFileFacts.read(fileAt: file, isImage: attachment.isImage, with: FileHasher()) else { return nil }
     var described = attachment
     described.sha256 = facts.sha256
     described.ownThumbnail = facts.thumbnail

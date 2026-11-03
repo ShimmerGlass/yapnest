@@ -38,9 +38,8 @@ struct OutgoingMessages: Sendable {
         // needs it (a Jingle offer), and kept then. A file that can't be read
         // back is left for the first send to fail on.
         let mimeType = AttachmentStore.mimeType(for: imported.name)
-        let describes = Attachment(messageId: 0, url: nil, name: imported.name, mimeType: mimeType, state: .pendingUpload).isDescribedWhenSent
-        let facts = describes ? try? OutgoingFileFacts.read(
-            fileAt: attachments.directory.appending(path: imported.file), name: imported.name, mimeType: mimeType, with: hasher,
+        let facts = Attachment.isDescribedWhenSent(name: imported.name, mimeType: mimeType) ? try? OutgoingFileFacts.read(
+            fileAt: attachments.directory.appending(path: imported.file), isImage: Attachment.isImage(name: imported.name, mimeType: mimeType), with: hasher,
         ) : nil
         return PreparedFile(imported: imported, facts: facts)
     }

@@ -199,9 +199,8 @@ struct OutgoingFileFacts: Sendable {
     var thumbnail: Data?
 
     /// Reads the file, so call it off the main thread.
-    static func read(fileAt file: URL, name: String, mimeType: String?, with hasher: FileHasher) throws -> OutgoingFileFacts {
+    static func read(fileAt file: URL, isImage: Bool, with hasher: FileHasher) throws -> OutgoingFileFacts {
         let (size, hash) = try hasher.sizeAndHash(of: file)
-        let isImage = Attachment(messageId: 0, url: nil, name: name, mimeType: mimeType, state: .pendingUpload).isImage
         return OutgoingFileFacts(size: size, sha256: hash, thumbnail: isImage ? FileMetadata.sentThumbnail(ofFileAt: file) : nil)
     }
 
@@ -210,13 +209,9 @@ struct OutgoingFileFacts: Sendable {
     /// stored now. Reads the file in that case, so call it off the main thread.
     static func completing(_ attachment: Attachment, in store: AttachmentStore, database: AppDatabase, with hasher: FileHasher) throws -> Attachment {
         if attachment.sha256 != nil, attachment.size != nil { return attachment }
-        guard let file = store.url(for: attachment) else { throw XMPPSession.AttachmentError.unreadable }
-        let facts: OutgoingFileFacts
-        do {
-            facts = try read(fileAt: file, name: attachment.name, mimeType: attachment.mimeType, with: hasher)
-        } catch {
-            throw XMPPSession.AttachmentError.unreadable
-        }
+        guard let file = store.url(for: attachment),
+              let facts = try? read(fileAt: file, isImage: attachment.isImage, with: hasher)
+        else { throw XMPPSession.AttachmentError.unreadable }
         var completed = attachment
         completed.sha256 = facts.sha256
         completed.ownThumbnail = facts.thumbnail
