@@ -89,7 +89,7 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
         UTTypeLookup.type(mimeType: mimeType, filenameExtension: (name as NSString).pathExtension)
     }
 
-    public var isImage: Bool { Self.isImage(name: name, mimeType: mimeType) }
+    public var isImage: Bool { type?.conforms(to: .image) ?? false }
     public var isVideo: Bool { type?.conforms(to: .movie) ?? false }
     public var isAudio: Bool { AudioFormat.isAudio(mimeType: mimeType, name: name) }
 
@@ -104,15 +104,7 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
     /// Whether a sent file gets XEP-0446 metadata (see `FileMetadata.outgoing`).
     /// Only these are hashed to send their message, and then only in an
     /// unencrypted chat, as hashing a large video would be a wait for nothing.
-    var isDescribedWhenSent: Bool { Self.isDescribedWhenSent(name: name, mimeType: mimeType) }
-
-    static func isDescribedWhenSent(name: String, mimeType: String?) -> Bool {
-        AudioFormat.isAudio(mimeType: mimeType, name: name) || isImage(name: name, mimeType: mimeType)
-    }
-
-    static func isImage(name: String, mimeType: String?) -> Bool {
-        UTTypeLookup.type(mimeType: mimeType, filenameExtension: (name as NSString).pathExtension)?.conforms(to: .image) ?? false
-    }
+    var isDescribedWhenSent: Bool { isAudio || isImage }
 
     public var isContact: Bool { type?.conforms(to: .vCard) ?? false }
 
