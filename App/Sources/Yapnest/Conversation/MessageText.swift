@@ -243,10 +243,7 @@ enum MessageText {
                 }
                 if span.style == .strike { text[attributed].strikethroughStyle = .single }
                 #if targetEnvironment(macCatalyst)
-                native.enumerateAttribute(.font, in: span.range) { value, range, _ in
-                    native.addAttribute(.font, value: span.style.uiFont(from: value as? UIFont ?? font.uiFont), range: range)
-                }
-                if span.style == .strike { native.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: span.range) }
+                native.applySpan(span.style, in: span.range, base: font.uiFont)
                 #endif
             }
             // Removed last so the ranges above still mean the raw text. Highest
@@ -308,6 +305,18 @@ extension MessageStyling.SpanStyle {
         case .code: UIFont(descriptor: font.fontDescriptor.withDesign(.monospaced) ?? font.fontDescriptor, size: 0)
         case .strike: font
         }
+    }
+}
+
+extension NSMutableAttributedString {
+    /// Styles a span's range. Nested spans add to the font their outer span
+    /// gave the run, so outer spans are applied first; `base` is the font of
+    /// a run that has none.
+    func applySpan(_ style: MessageStyling.SpanStyle, in range: NSRange, base: UIFont) {
+        enumerateAttribute(.font, in: range) { value, run, _ in
+            addAttribute(.font, value: style.uiFont(from: value as? UIFont ?? base), range: run)
+        }
+        if style == .strike { addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range) }
     }
 }
 
