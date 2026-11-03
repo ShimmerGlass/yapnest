@@ -33,11 +33,15 @@ struct OutgoingMessages: Sendable {
     /// is final from here, so its hash and thumbnail are worked out now, once.
     func prepareFile(at url: URL, name: String? = nil, asPhoto: Bool = false) async throws -> PreparedFile {
         let imported = try await attachments.importFile(at: url, name: name ?? url.lastPathComponent, asPhoto: asPhoto)
-        // A file that can't be read back is left for the first send to fail on.
-        let facts = try? OutgoingFileFacts.read(
-            fileAt: attachments.directory.appending(path: imported.file), name: imported.name,
-            mimeType: AttachmentStore.mimeType(for: imported.name), with: hasher,
-        )
+        // Only pictures and sounds are described to the recipient, so only
+        // they are hashed now; any other file is hashed when something first
+        // needs it (a Jingle offer), and kept then. A file that can't be read
+        // back is left for the first send to fail on.
+        let mimeType = AttachmentStore.mimeType(for: imported.name)
+        let describes = Attachment(messageId: 0, url: nil, name: imported.name, mimeType: mimeType, state: .pendingUpload).isDescribedWhenSent
+        let facts = describes ? try? OutgoingFileFacts.read(
+            fileAt: attachments.directory.appending(path: imported.file), name: imported.name, mimeType: mimeType, with: hasher,
+        ) : nil
         return PreparedFile(imported: imported, facts: facts)
     }
 

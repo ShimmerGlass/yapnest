@@ -595,8 +595,22 @@ struct FileTransferSendingTests {
         let initiate = try await accept(h)
         let file = try #require(initiate.firstChild(name: "jingle")?.firstChild(name: "content")?.firstChild(name: "description")?.firstChild(name: "file"))
         #expect(file.firstChild(name: "hash")?.value == sha256Base64(data))
-        // Hashed once, when the file was stored, not again for the offer.
+        // Not a picture or a sound, so hashed when the offer first needs it, once, and kept.
         #expect(h.session.fileHasher.filesHashed == 1)
+        #expect(h.attachment?.sha256 == Data(SHA256.hash(data: data)))
+    }
+
+    @Test func aFileThatIsNotDescribedIsNotHashedToSendItsMessage() async throws {
+        let h = try TransferHarness()
+        let (url, _) = try makeFile(bytes: 5000)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = try await h.session.outgoingMessages.prepareFile(at: url, name: "doc.pdf")
+        let message = try h.session.outgoingMessages.stage([.file(file)], to: alice)[0]
+        let row = try #require(try h.database.attachment(messageId: message.id!))
+        #expect(row.sha256 == nil)
+        // The metadata of an unencrypted chat's message is none, without reading the file.
+        #expect(h.session.outgoingMetadata(for: row) == nil)
+        #expect(h.session.fileHasher.filesHashed == 0)
     }
 
     @Test func anOldRowIsHashedOnceForTheOfferAndKeepsTheHash() async throws {

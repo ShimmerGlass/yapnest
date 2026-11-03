@@ -101,6 +101,11 @@ public struct Attachment: Codable, Hashable, Sendable, FetchableRecord, Persista
     /// A voice message, as opposed to music or some other sound; see `AudioFormat.isVoiceClip`.
     public var isVoiceClip: Bool { AudioFormat.isVoiceClip(mimeType: mimeType, name: name) }
 
+    /// Whether a sent file gets XEP-0446 metadata (see `FileMetadata.outgoing`).
+    /// Only these are hashed up front, as hashing a large video before its
+    /// message shows would be a wait for nothing.
+    var isDescribedWhenSent: Bool { isAudio || isImage }
+
     public var isContact: Bool { type?.conforms(to: .vCard) ?? false }
 
     /// A contact's name, which is its file name without the extension.

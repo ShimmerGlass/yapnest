@@ -2647,7 +2647,9 @@ public final class XMPPSession: @unchecked Sendable {
     /// filled in first. Reads the file in that case, so call it off the main
     /// thread. Nil for a file that can't be described or read.
     func outgoingMetadata(for attachment: Attachment) -> FileMetadata? {
-        (try? OutgoingFileFacts.completing(attachment, in: attachments, database: database, with: fileHasher)).flatMap(FileMetadata.outgoing(for:))
+        // Not touched at all if it wouldn't be described: hashing it would be for nothing.
+        guard attachment.isDescribedWhenSent else { return nil }
+        return (try? OutgoingFileFacts.completing(attachment, in: attachments, database: database, with: fileHasher)).flatMap(FileMetadata.outgoing(for:))
     }
 
     /// `resend` sends a message again that was claimed but never came back.
