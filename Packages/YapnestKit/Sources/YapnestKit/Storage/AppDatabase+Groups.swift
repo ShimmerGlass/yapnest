@@ -156,6 +156,25 @@ extension AppDatabase {
         }
     }
 
+    /// Fails the messages of ours in `peer` that are still waiting to be sent,
+    /// for a visit that is over: sent after a later join they would land
+    /// among stanzas the user never saw them against.
+    func failPendingOutgoing(in peer: JID, because reason: String) throws {
+        try writer.write { db in
+            guard let conversationId = try Self.existingConversation(db, peer: peer)?.id else { return }
+            let pending = try Message
+                .filter(Column("conversationId") == conversationId)
+                .outgoingOnly()
+                .filter(Column("isRetracted") == false && Column("status") == Message.Status.pending)
+                .fetchAll(db)
+            for var message in pending {
+                message.status = .failed
+                message.error = reason
+                try message.update(db)
+            }
+        }
+    }
+
     /// When the newest message from someone else in `peer` was sent, to ask a
     /// room without an archive for what came after. Our own don't count: one
     /// written offline carries the time it was written, and would skip what

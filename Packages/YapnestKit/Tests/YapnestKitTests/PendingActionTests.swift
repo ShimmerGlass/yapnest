@@ -291,3 +291,82 @@ struct PendingActionTests {
         #expect(try stored(mine).actionError == nil)
     }
 }
+
+/// A message still waiting for a room we're no longer in is for a visit that
+/// is over; it must not go out when we join again.
+struct PendingMessageInLeftRoomTests {
+    let database: AppDatabase
+    let session: XMPPSession
+    let wire = FakeWire()
+    let message: YapnestKit.Message
+
+    init() throws {
+        database = try AppDatabase.inMemory()
+        session = try makeSession(me, database: database)
+        session.connectForTesting(wire)
+        try database.joinGroupChat(room, nickname: "me")
+        session.reloadKnownRooms()
+        let id = try #require(try database.conversation(with: room).id)
+        message = try database.insert(YapnestKit.Message(
+            conversationId: id, direction: .outgoing, sender: me, body: "stuck", status: .pending, remoteId: "p1",
+        ))
+    }
+
+    private func stored() throws -> YapnestKit.Message {
+        try #require(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!) })
+    }
+
+    private func rejoin() throws {
+        try database.joinGroupChat(room, nickname: "me")
+        session.updateRoom(room) { $0 = RoomStatus(phase: .joined, nickname: "me") }
+        session.sendUnclaimedPending()
+        session.drainSendQueue(room)
+    }
+
+    private func expectFailedAndNotSent(_ reason: String) throws {
+        #expect(try stored().status == .failed)
+        #expect(try stored().error == reason)
+        #expect(try stored().deliveryProblem == .notSent)
+        try rejoin()
+        #expect(wire.messages.allSatisfy { $0.body != "stuck" })
+        #expect(try stored().status == .failed)
+    }
+
+    @Test func leavingFailsAMessageStillPending() throws {
+        session.leaveRoom(room)
+        try expectFailedAndNotSent("You left this group.")
+    }
+
+    @Test func aGroupDestroyedFailsAMessageStillPending() throws {
+        session.groupDestroyed(room)
+        try expectFailedAndNotSent("This group was deleted.")
+    }
+
+    @Test func beingRemovedFailsAMessageStillPending() throws {
+        session.updateRoom(room) { $0 = RoomStatus(phase: .joined, nickname: "me") }
+        session.roomPresence(
+            parseStanza("<presence from='\(room)/me' type='unavailable'><x xmlns='http://jabber.org/protocol/muc#user'><item affiliation='outcast' role='none'/><status code='110'/><status code='301'/></x></presence>"),
+            room: room,
+        )
+        try expectFailedAndNotSent("You were banned from this group.")
+    }
+
+    @Test func aMessageSentBeforeLeavingIsLeftAlone() throws {
+        let id = message.conversationId
+        let sent = try database.insert(YapnestKit.Message(
+            conversationId: id, direction: .outgoing, sender: me, body: "gone", status: .sent, remoteId: "s1",
+        ))
+        session.leaveRoom(room)
+        let status = try database.reader.read { try YapnestKit.Message.fetchOne($0, key: sent.id!)?.status }
+        #expect(status == .sent)
+    }
+
+    @Test func retryingAfterJoiningAgainSendsIt() throws {
+        session.leaveRoom(room)
+        try rejoin()
+        session.joinForFixture(room, occupants: [RoomOccupant(nick: "me", jid: me, affiliation: .member, role: "participant")])
+        try session.retry(try stored())
+        session.drainSendQueue(room)
+        #expect(wire.messages.contains { $0.body == "stuck" })
+    }
+}

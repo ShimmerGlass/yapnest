@@ -802,10 +802,14 @@ extension XMPPSession {
     /// `owingBookmark` is for leaving without having asked the server to drop
     /// our bookmark (a kick, a destroy): it is retracted once connected, and
     /// until it is, no catch-up may join the group again from it.
-    func markLeft(_ room: JID, owingBookmark: Bool = false) {
+    /// `reason` is shown on the messages that never went out.
+    func markLeft(_ room: JID, owingBookmark: Bool = false, because reason: String = XMPPSession.noLongerInGroup) {
         // Whatever waited for the room was for a visit that is over; sent
-        // after a later join it could replay over newer stanzas.
+        // after a later join it could replay over newer stanzas. The stored
+        // messages are failed for the same reason, so that joining again
+        // doesn't send them, and the user can retry the ones they still want.
         dropDeferred(in: room)
+        try? database.failPendingOutgoing(in: room, because: reason)
         try? database.updateGroupChat(room) {
             $0.hasLeft = true
             $0.bookmarkOwed = owingBookmark
@@ -813,6 +817,8 @@ extension XMPPSession {
         }
         rosterForget(room)
     }
+
+    static var noLongerInGroup: String { String(localized: "You're no longer in this group.") }
 
     /// The statuses that say an occupant was taken out of the room (XEP-0045 §8).
     static let removalStatuses: Set<Int> = [301, 307, 321, 322, 332, 333]
@@ -965,7 +971,7 @@ extension XMPPSession {
         if retryable { scheduleRejoin(room) }
         // Kicks and restarts end this visit; the rest end membership.
         if !statuses.isDisjoint(with: Self.membershipEndStatuses) {
-            markLeft(room, owingBookmark: true)
+            markLeft(room, owingBookmark: true, because: reason)
             sendOwedBookmarks()
         }
     }
@@ -997,7 +1003,7 @@ extension XMPPSession {
             $0?.canRetry = false
         }
         cancelRejoin(room, resettingBackoff: true)
-        markLeft(room, owingBookmark: true)
+        markLeft(room, owingBookmark: true, because: String(localized: "This group was deleted."))
         sendOwedBookmarks()
     }
 
@@ -2476,7 +2482,7 @@ extension XMPPSession {
         withdrawJoin(room)
         cancelRejoin(room, resettingBackoff: true)
         updateRoom(room) { $0 = nil }
-        markLeft(room, owingBookmark: owingBookmark)
+        markLeft(room, owingBookmark: owingBookmark, because: String(localized: "You left this group."))
         ShareSuggestions.remove([room])
         warnings.clear(room: room)
     }
