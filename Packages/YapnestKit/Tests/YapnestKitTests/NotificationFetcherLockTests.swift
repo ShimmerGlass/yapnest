@@ -127,4 +127,25 @@ private let me = JID("me@example.org")!
         }
         #expect(edited.isEmpty)
     }
+
+    @Test func nothingIsClaimedOnceTheExtensionHasExpired() async throws {
+        let fetcher = fetcher()
+        let database = try fetcher.account.files.openDatabase()
+        let chat = try database.conversation(with: JID("alice@example.org")!)
+        _ = try database.claimNotifications()
+        try database.insert(Message(conversationId: chat.id!, direction: .incoming, sender: chat.peer, body: "hi", remoteId: "1"))
+
+        let cancelled = Task {
+            while !Task.isCancelled { await Task.yield() }
+            return try fetcher.claimed(from: database)
+        }
+        cancelled.cancel()
+        #expect(try await cancelled.value == .failed("Cancelled"))
+
+        guard case .notifications(let new, _, _) = try fetcher.claimed(from: database) else {
+            Issue.record("expected the message to still be there")
+            return
+        }
+        #expect(new.map(\.body) == ["hi"])
+    }
 }

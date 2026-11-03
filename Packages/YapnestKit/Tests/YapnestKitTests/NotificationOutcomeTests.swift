@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UserNotifications
 @testable import YapnestKit
 
 struct NotificationOutcomeTests {
@@ -20,5 +21,17 @@ struct NotificationOutcomeTests {
     @Test func whatAnUnfinishedCatchUpStoredIsStillShown() {
         let outcome = NotificationFetcher.outcome(new: [note], edited: [], badge: 1, caughtUp: false)
         #expect(outcome == .notifications([note], edited: [], badge: 1))
+    }
+
+    @Test func theRelaysAlertIsMarkedAsAPlaceholderWithoutChangingTheOriginal() {
+        let relay = UNMutableNotificationContent()
+        relay.body = "New message"
+
+        let copy = relay.placeholderCopy(badge: 3)
+
+        #expect(copy.userInfo[MessageNotification.placeholderKey] as? Bool == true)
+        #expect(copy.body == "New message")
+        #expect(copy.badge == 3)
+        #expect(relay.userInfo[MessageNotification.placeholderKey] == nil)
     }
 }

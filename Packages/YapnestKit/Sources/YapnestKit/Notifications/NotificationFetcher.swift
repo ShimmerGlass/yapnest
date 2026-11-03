@@ -142,6 +142,7 @@ public struct NotificationFetcher: Sendable {
     }
 
     private func claim() -> Outcome {
+        if Task.isCancelled { return .failed("Cancelled") }
         do {
             return try claimed(from: account.files.openDatabase())
         } catch {
@@ -149,7 +150,11 @@ public struct NotificationFetcher: Sendable {
         }
     }
 
+    /// Claiming hands each message out once, so it mustn't happen after the
+    /// extension has delivered its fallback and gone: the messages would be
+    /// lost. Left unclaimed they're shown by the next push or the app.
     func claimed(from database: AppDatabase, caughtUp: Bool = true) throws -> Outcome {
+        if Task.isCancelled { return .failed("Cancelled") }
         let claimed = try database.claimNotificationsAndEdits()
         return Self.outcome(new: claimed.new, edited: claimed.edited, badge: try database.unreadCount(), caughtUp: caughtUp)
     }
@@ -198,6 +203,9 @@ extension MessageNotification {
     public static let messageIdKey = "messageId"
     /// Where a held group invitation's notification keeps the group's address.
     public static let invitationKey = "invitation"
+    /// Marks the relay's own alert, delivered loudly because the messages it
+    /// announces weren't fetched, so that it can be taken down once they are.
+    public static let placeholderKey = "placeholder"
     /// The thread of every invitation's notification, which groups them
     /// apart from the chats'.
     public static let invitationsThread = "invitations"
@@ -259,7 +267,19 @@ extension UNNotificationContent {
     }
 }
 
+extension UNNotificationContent {
+    /// A copy marked as standing in for messages that weren't fetched, with
+    /// the badge if it's known.
+    public func placeholderCopy(badge: Int? = nil) -> UNNotificationContent {
+        let copy = (mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+        copy.userInfo[MessageNotification.placeholderKey] = true
+        if let badge { copy.badge = badge as NSNumber }
+        return copy
+    }
+}
+
 extension UNNotification {
+    public var isPlaceholder: Bool { request.content.userInfo[MessageNotification.placeholderKey] as? Bool == true }
     public var isQuiet: Bool { request.content.userInfo[MessageNotification.quietKey] as? Bool == true }
 }
 
@@ -277,6 +297,13 @@ extension UNUserNotificationCenter {
     /// without a sound or a banner.
     func replaceSilently(_ identifier: String, with content: UNNotificationContent, fallback: @autoclosure () -> UNMutableNotificationContent) async {
         try? await add(UNNotificationRequest(identifier: identifier, content: content.silentCopy(fallback: fallback()), trigger: nil))
+    }
+
+    /// Takes down the relay's alerts that stood in for messages, once the real
+    /// notifications are shown or the app has the connection: left, they
+    /// outlive the messages they announced.
+    public func removePlaceholderNotifications() async {
+        removeDeliveredNotifications(withIdentifiers: await deliveredNotifications().filter(\.isPlaceholder).map(\.request.identifier))
     }
 
     /// Muted messages are shown silently by the notification extension, which

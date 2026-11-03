@@ -605,8 +605,13 @@ final class AppModel {
             // Seen here: no notification for any of it.
             let database = session.database
             Task { await offMain { _ = try? database.claimNotifications(notifies: false) } }
-            // The unread observation clears quiet notifications only when the counts change.
-            if environment.managesBadge { Task { await UNUserNotificationCenter.current().removeQuietNotifications() } }
+            // The unread observation clears quiet notifications and placeholders only when the counts change.
+            if environment.managesBadge {
+                Task {
+                    await UNUserNotificationCenter.current().removeQuietNotifications()
+                    await UNUserNotificationCenter.current().removePlaceholderNotifications()
+                }
+            }
         } else if background, !Platform.staysConnected {
             suspendSoon(session)
         }
@@ -892,8 +897,10 @@ final class AppModel {
                         (notification.request.content.userInfo[MessageNotification.peerKey] as? String).map { (notification.request.identifier, $0) }
                     },
                     unread: counts)
-                let quiet = delivered.filter(\.isQuiet).map(\.request.identifier)
-                center.removeDeliveredNotifications(withIdentifiers: stale + quiet)
+                // The relay's "New message" stands in for what the extension
+                // couldn't fetch, which this session has.
+                let standIns = delivered.filter { $0.isQuiet || $0.isPlaceholder }.map(\.request.identifier)
+                center.removeDeliveredNotifications(withIdentifiers: stale + standIns)
             }
         }
     }

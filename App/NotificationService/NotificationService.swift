@@ -31,7 +31,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
 
     override func serviceExtensionTimeWillExpire() {
         task?.cancel()
-        deliver(fallback)
+        deliver(placeholder())
     }
 
     private func handle(_ identifier: String) async {
@@ -40,7 +40,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             // read, which isn't being signed out: the relay's alert is what
             // the user gets, rather than silence.
             guard Self.isSignedOut() else {
-                deliver(fallback)
+                deliver(placeholder())
                 return
             }
             // Nothing of ours to show.
@@ -51,6 +51,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         case .notifications(let notifications, let edited, let badge):
             await MessageNotification.replaceDelivered(edited, badge: badge, avatars: avatars)
             await MessageNotification.replaceHeld(notifications, badge: badge, avatars: avatars)
+            if !notifications.isEmpty { await UNUserNotificationCenter.current().removePlaceholderNotifications() }
             let loud = notifications.filter { !$0.isQuiet }
             guard let first = loud.first else {
                 // Muted groups, or something without a message (a reaction, a
@@ -71,10 +72,16 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             deliver(quiet: fallback, identifier)
         case .incomplete(let edited, let badge):
             await MessageNotification.replaceDelivered(edited, badge: badge, avatars: avatars)
-            deliver(fallback.withBadge(badge))
+            deliver(placeholder(badge: badge))
         case .busy, .failed:
-            deliver(fallback)
+            deliver(placeholder())
         }
+    }
+
+    /// The relay's alert shown loudly, marked so the next real notification
+    /// or the app takes it down.
+    private func placeholder(badge: Int? = nil) -> UNNotificationContent {
+        fallback.placeholderCopy(badge: badge)
     }
 
     /// Whether the keychain has no account, as opposed to not being readable.
