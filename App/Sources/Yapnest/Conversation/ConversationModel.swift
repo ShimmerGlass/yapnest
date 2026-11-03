@@ -407,6 +407,9 @@ final class ConversationModel {
     @ObservationIgnored private var contactNames: [JID: String] = [:]
     /// The conversation's link preview choice; nil until the user makes it.
     @ObservationIgnored private var linkPreviewsAllowed: Bool?
+    /// Whether the chat is encrypted, which decides if a message sent in the
+    /// clear is worth announcing to VoiceOver.
+    @ObservationIgnored private var chatIsEncrypted = true
     /// The app-wide choice, which overrides the chat's.
     @ObservationIgnored private var linkPreviewSetting: LinkPreviewSetting = .askPerConversation
 
@@ -596,6 +599,7 @@ final class ConversationModel {
             let initial = await offMain { () -> Initial in
                 let database = session.database
                 var initial = Initial(
+                    chatIsEncrypted: (try? database.isEncrypted(with: peer)) ?? true,
                     linkPreviewsAllowed: (try? database.linkPreviews(peer: peer)) ?? nil,
                     linkPreviewSetting: database.linkPreviewSetting,
                     contactNames: (try? database.contactNames()) ?? [:],
@@ -621,6 +625,7 @@ final class ConversationModel {
 
     /// What `start` reads before it can open the observations.
     private struct Initial: Sendable {
+        var chatIsEncrypted: Bool
         var linkPreviewsAllowed: Bool?
         var linkPreviewSetting: LinkPreviewSetting
         var contactNames: [JID: String]
@@ -636,6 +641,7 @@ final class ConversationModel {
         isGroup = initial.group != nil
         // So the first menu on a message from the contact has their device.
         if !isGroup { loadDevices(of: peer) }
+        chatIsEncrypted = initial.chatIsEncrypted
         linkPreviewsAllowed = initial.linkPreviewsAllowed
         linkPreviewSetting = initial.linkPreviewSetting
         contactNames = initial.contactNames
@@ -669,6 +675,11 @@ final class ConversationModel {
         let linkPreviews = database.observeLinkPreviews(peer: peer)
         tasks["linkPreviews"] = Task { [weak self] in
             await database.forEachValue(of: linkPreviews, "Link preview setting") { self?.linkPreviewsChanged($0) }
+        }
+
+        let encrypted = database.observeEncrypted(peer: peer)
+        tasks["encrypted"] = Task { [weak self] in
+            await database.forEachValue(of: encrypted, "Chat encryption") { self?.chatEncryptionChanged($0) }
         }
 
         let linkPreviewSetting = database.observeLinkPreviewSetting()
@@ -1358,6 +1369,7 @@ final class ConversationModel {
         var contactNames: [JID: String]
         var linkPreviewSetting: LinkPreviewSetting
         var linkPreviewsAllowed: Bool?
+        var chatIsEncrypted: Bool
         var showsEveryBodyWhole: Bool
         var attachments: AttachmentStore
         var previews: LinkPreviewer?
@@ -1370,6 +1382,7 @@ final class ConversationModel {
         RowEnvironment(
             account: session.account, peer: peer, isGroup: isGroup, contactNames: contactNames,
             linkPreviewSetting: linkPreviewSetting, linkPreviewsAllowed: linkPreviewsAllowed,
+            chatIsEncrypted: chatIsEncrypted,
             showsEveryBodyWhole: showsEveryBodyWhole, attachments: session.attachments, previews: previews,
             now: now(), calendar: Calendar.current, locale: Locale.current,
         )
@@ -1773,7 +1786,7 @@ final class ConversationModel {
         // A failed set may have no reaction left, and is announced all the same.
         let reactionParts = item.reactions.map { "\($0.emoji) \($0.senders.count)" } + (item.reactionFailure == nil ? [] : [String(localized: "Not delivered")])
         let reactions: String? = reactionParts.isEmpty ? nil : String(localized: "Reactions: \(reactionParts.joined(separator: ", "))")
-        let words = [replying, spoken ?? attachmentSpoken, previewTitle, reactions, state, time, message.isRetracted ? nil : message.security.spoken].compactMap { $0 }.joined(separator: ", ")
+        let words = [replying, spoken ?? attachmentSpoken, previewTitle, reactions, state, time, message.isRetracted ? nil : message.security.spoken(inEncryptedChat: environment.chatIsEncrypted)].compactMap { $0 }.joined(separator: ", ")
         let showsName = environment.isGroup && !isOutgoing && startsRun
         let content = MessageRow.Content(
             item: item,
@@ -1883,6 +1896,13 @@ final class ConversationModel {
     private func contactNamesChanged(_ names: [JID: String]) {
         guard names != contactNames else { return }
         contactNames = names
+        inputsEpoch += 1
+        rebuildRows()
+    }
+
+    private func chatEncryptionChanged(_ encrypted: Bool) {
+        guard encrypted != chatIsEncrypted else { return }
+        chatIsEncrypted = encrypted
         inputsEpoch += 1
         rebuildRows()
     }

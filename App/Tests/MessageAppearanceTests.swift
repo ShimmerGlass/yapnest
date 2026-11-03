@@ -68,14 +68,15 @@ struct MessageAppearanceTests {
     }
 
     @Test func onlyWhatNeedsSayingIsSpokenAloud() {
-        #expect(message(.incoming, .omemo, trust: .verified).security.spoken == nil)
-        #expect(message(.outgoing, .omemo, trust: .trusted).security.spoken == nil)
-        #expect(message(.outgoing, .omemo, trust: .verified).security.spoken == nil)
-        #expect(message(.incoming, .none).security.spoken == "Not encrypted")
-        #expect(message(.incoming, .omemo, trust: .trusted).security.spoken == "Encrypted · Unverified device")
-        #expect(message(.incoming, .omemo, trust: .undecided).security.spoken == "Encrypted · Untrusted device")
-        #expect(message(.incoming, .omemo, trust: nil).security.spoken == "Encrypted · Unknown device")
-        #expect(message(.incoming, .omemoUndecryptable).security.spoken == "Couldn't decrypt")
+        #expect(message(.incoming, .omemo, trust: .verified).security.spoken(inEncryptedChat: true) == nil)
+        #expect(message(.outgoing, .omemo, trust: .trusted).security.spoken(inEncryptedChat: true) == nil)
+        #expect(message(.outgoing, .omemo, trust: .verified).security.spoken(inEncryptedChat: true) == nil)
+        #expect(message(.incoming, .none).security.spoken(inEncryptedChat: true) == "Not encrypted")
+        #expect(message(.incoming, .none).security.spoken(inEncryptedChat: false) == nil)
+        #expect(message(.incoming, .omemo, trust: .trusted).security.spoken(inEncryptedChat: true) == "Encrypted · Unverified device")
+        #expect(message(.incoming, .omemo, trust: .undecided).security.spoken(inEncryptedChat: true) == "Encrypted · Untrusted device")
+        #expect(message(.incoming, .omemo, trust: nil).security.spoken(inEncryptedChat: true) == "Encrypted · Unknown device")
+        #expect(message(.incoming, .omemoUndecryptable).security.spoken(inEncryptedChat: true) == "Couldn't decrypt")
     }
 }
 

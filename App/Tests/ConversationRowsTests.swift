@@ -105,8 +105,15 @@ struct ConversationRowsTests {
         #expect(f.model.rows[0].content.accessibilityLabel.contains(String(localized: "Edited")))
     }
 
-    @Test func aMessageSentInTheClearIsReadOutAsNotEncrypted() async throws {
+    @Test func aMessageSentInTheClearIsReadOutAsNotEncryptedOnlyInAnEncryptedChat() async throws {
+        let plain = try ConversationFixture()
+        try plain.database.setEncrypted(false, with: plain.peer)
+        try plain.add("hello", read: true)
+        await plain.start()
+        #expect(!plain.model.rows[0].content.accessibilityLabel.contains(String(localized: "Not encrypted")))
+
         let f = try ConversationFixture()
+        try f.database.setEncrypted(true, with: f.peer)
         try f.add("hello", read: true)
         await f.start()
         #expect(f.model.rows[0].content.accessibilityLabel.contains(String(localized: "Not encrypted")))

@@ -50,12 +50,20 @@ extension Message {
         /// Both, on one line.
         var fullTitle: String { detail.map { "\(title) · \($0)" } ?? title }
 
+        /// Sent in the clear.
+        var isClear = false
+        /// Encrypted by a sender's device nobody has verified.
+        var isUnverified = false
+
         /// What VoiceOver adds to a message, which the lock says to the eye
         /// alone. A message that was protected as it should be says nothing,
-        /// to stay short: anything in red or orange is spoken, as is a
-        /// sender's device that was never verified.
-        var spoken: String? {
-            color != nil || detail == String(localized: "Unverified device") ? fullTitle : nil
+        /// to stay short. Anything in red or orange is spoken, as is a
+        /// sender's device that was never verified. A clear message is the
+        /// exception only in an encrypted chat; in a plain one it would be
+        /// repeated after every message.
+        func spoken(inEncryptedChat: Bool) -> String? {
+            if isClear { return inEncryptedChat ? fullTitle : nil }
+            return color != nil || isUnverified ? fullTitle : nil
         }
     }
 
@@ -63,7 +71,7 @@ extension Message {
     var security: Security {
         switch encryption {
         case .none:
-            return Security(symbol: "lock.slash.fill", color: .red, title: String(localized: "Not encrypted"))
+            return Security(symbol: "lock.slash.fill", color: .red, title: String(localized: "Not encrypted"), isClear: true)
         case .omemoUndecryptable:
             return Security(symbol: "lock.trianglebadge.exclamationmark.fill", color: .red, title: undecryptableReason == .notForThisDevice ? String(localized: "Not encrypted for this device") : String(localized: "Couldn't decrypt"))
         case .omemo:
@@ -80,7 +88,7 @@ extension Message {
                 return Security(symbol: "lock.fill", color: .orange, title: String(localized: "Encrypted"), detail: String(localized: "Unknown device"))
             case .trusted, nil:
                 let detail = direction == .outgoing ? nil : String(localized: "Unverified device")
-                return Security(symbol: "lock.fill", color: nil, title: String(localized: "Encrypted"), detail: detail)
+                return Security(symbol: "lock.fill", color: nil, title: String(localized: "Encrypted"), detail: detail, isUnverified: direction != .outgoing)
             }
         }
     }
