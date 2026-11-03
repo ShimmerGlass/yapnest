@@ -11,6 +11,25 @@ struct MenuCommandTests {
         #expect(!AppModelFixture().model.acceptsMenuCommands)
     }
 
+    @Test func aSheetOfTheChatListTurnsTheCommandsOff() async throws {
+        let fixture = AppModelFixture()
+        let model = fixture.model!
+        try await model.signIn(fixture.credentialsToSignIn)
+        try await model.finishWelcome()
+        #expect(model.acceptsMenuCommands)
+
+        model.conversationSheetAppeared()
+        #expect(!model.acceptsMenuCommands)
+
+        model.requestSheet(.compose)
+        #expect(model.requestedSheet == nil)
+
+        model.conversationSheetDisappeared()
+        #expect(model.acceptsMenuCommands)
+        model.requestSheet(.compose)
+        #expect(model.requestedSheet == .compose)
+    }
+
     @Test func theWelcomeScreenDropsARequestNoChatListWouldRead() async throws {
         let fixture = AppModelFixture()
         let model = fixture.model!

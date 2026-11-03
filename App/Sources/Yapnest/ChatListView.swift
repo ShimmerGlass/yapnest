@@ -91,9 +91,11 @@ struct ChatListView: View {
             case .profile:
                 ProfileView(session: session)
                     .sheetSizedForMac(width: 520, height: 640)
+                    .countsAsConversationSheet()
             case .settings:
                 SettingsView(session: session)
                     .sheetSizedForMac(width: 600, height: 760)
+                    .countsAsConversationSheet()
             case .compose:
                 NewChatView(
                     session: session,
@@ -108,24 +110,28 @@ struct ChatListView: View {
                     onJoinGroup: { self.sheet = .joinGroup },
                 )
                 .sheetSizedForMac(width: 440, height: 520)
+                .countsAsConversationSheet()
             case .newGroup:
                 NewGroupView(session: session) { room in
                     self.sheet = nil
                     show(room)
                 }
                 .sheetSizedForMac(width: 440, height: 520)
+                .countsAsConversationSheet()
             case .link(let link):
                 LinkConfirmation(session: session, link: link) { peer, body in
                     self.sheet = nil
                     if let peer { openChat(peer, prefilling: body) }
                 }
                 .sheetSizedForMac(width: 440, height: 520)
+                .countsAsConversationSheet()
             case .joinGroup:
                 JoinGroupView(session: session) { room in
                     self.sheet = nil
                     show(room)
                 }
                 .sheetSizedForMac(width: 440, height: 520)
+                .countsAsConversationSheet()
             }
         }
         // From a tapped notification.
