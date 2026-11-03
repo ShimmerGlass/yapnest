@@ -567,30 +567,49 @@ extension View {
 }
 
 /// What the scroll edge effect does under the navigation bar, for the flipped
-/// list, where the system's isn't drawn: the messages blur and fade into the
-/// background going up. A material alone draws gray over the messages, where
-/// the system's darkens them towards the background in dark mode.
+/// list, where the system's isn't drawn. Each system draws its own: iOS 26
+/// blurs the messages and fades them into the background going up, and a
+/// material alone draws gray over them, where the system's darkens them
+/// towards the background in dark mode. iOS 27 blurs them evenly with a light
+/// tint and stops at the bar's bottom on a hairline.
 struct TopEdgeBlur: View {
     @State private var safeTop: CGFloat = 0
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         Color.clear
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { safeTop = $0 }
             .overlay(alignment: .top) {
-                ZStack {
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
-                    LinearGradient(stops: [
-                        .init(color: Color(.systemBackground).opacity(0.9), location: 0),
-                        .init(color: Color(.systemBackground).opacity(0.6), location: 0.55),
-                        .init(color: Color(.systemBackground).opacity(0), location: 1),
-                    ], startPoint: .top, endPoint: .bottom)
+                Group {
+                    if #available(iOS 27, *) { ios27 } else { ios26 }
                 }
-                    .frame(height: safeTop + 24)
                     .ignoresSafeArea(edges: .top)
                     .allowsHitTesting(false)
             }
             .allowsHitTesting(false)
+    }
+
+    private var ios26: some View {
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+            LinearGradient(stops: [
+                .init(color: Color(.systemBackground).opacity(0.9), location: 0),
+                .init(color: Color(.systemBackground).opacity(0.6), location: 0.55),
+                .init(color: Color(.systemBackground).opacity(0), location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+        }
+            .frame(height: safeTop + 24)
+    }
+
+    private var ios27: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .overlay(Color(.systemBackground).opacity(0.6))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 1 / displayScale)
+            }
+            .frame(height: safeTop)
     }
 }
