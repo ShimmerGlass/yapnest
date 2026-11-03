@@ -59,6 +59,54 @@ public enum MessageStyling {
         }
     }
 
+    /// The spans of text as it is typed, for styling the composer live. Ranges
+    /// are UTF-16 offsets into the raw text, quote markers and fences
+    /// included, so they can be applied to the text field as it is. It agrees
+    /// with the bubble: a line the bubble would show verbatim (a fence or
+    /// what a fence holds) has no spans, and a quoted line is styled as it is
+    /// after its markers. A block that is still open is verbatim to the end,
+    /// as it will be once sent.
+    public static func composerSpans(in text: String) -> [(range: NSRange, style: SpanStyle)] {
+        guard text.contains(where: { markers[$0] != nil }) else { return [] }
+        var result: [(NSRange, SpanStyle)] = []
+        // Mirrors the line rules of `blocks(in:)`; a test holds the two together.
+        var openDepth: Int?
+        var offset = 0
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            defer { offset += line.utf16.count + 1 }
+            let markerCount = line.prefix { $0 == ">" }.count
+            let depth = min(markerCount, maxQuoteDepth)
+            let isQuote = markerCount > 0 && (line.count == markerCount || line[line.index(line.startIndex, offsetBy: markerCount)] == " ")
+            let level = isQuote ? depth : 0
+            if let inBlock = openDepth {
+                if inBlock == 0 {
+                    if line == "```" { openDepth = nil }
+                    continue
+                }
+                if level >= inBlock {
+                    var inner = line.dropFirst(inBlock)
+                    if inner.first == " " { inner = inner.dropFirst() }
+                    if inner == "```" { openDepth = nil }
+                    continue
+                }
+                openDepth = nil
+            }
+            let dropped = isQuote ? min(line.count, markerCount > depth ? depth : depth + 1) : 0
+            let shown = line.dropFirst(dropped)
+            let closesItself = shown.count > 6 && shown.hasSuffix("```")
+            if shown.hasPrefix("```"), !closesItself {
+                openDepth = level
+                continue
+            }
+            // The dropped characters are ">" and a space, one UTF-16 unit each.
+            let shift = offset + dropped
+            for span in spans(in: String(shown)) {
+                result.append((NSRange(location: span.range.location + shift, length: span.range.length), span.style))
+            }
+        }
+        return result
+    }
+
     /// A stretch of a message that is laid out on its own.
     public struct Block: Equatable, Sendable {
         public var text: String

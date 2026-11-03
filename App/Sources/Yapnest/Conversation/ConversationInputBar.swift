@@ -49,7 +49,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         static let maxLines: CGFloat = 6
     }
 
-    private let textView = ComposerTextView()
+    let textView = ComposerTextView()
     /// Called after each layout, so the host can notice the bar's height changing.
     var onLayout: (() -> Void)?
     private let placeholder = UILabel()
@@ -875,7 +875,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     private func updateTextHeight() {
         // Before the first layout there is no width to wrap at.
         guard textView.bounds.width > 0 else { return }
-        let lineHeight = textView.font?.lineHeight ?? 20
+        let lineHeight = textView.baseFont.lineHeight
         let insets = textView.textContainerInset.top + textView.textContainerInset.bottom
         let maxHeight = lineHeight * Metrics.maxLines + insets
         let fitting = textView.sizeThatFits(CGSize(width: textView.bounds.width, height: .greatestFiniteMagnitude)).height
@@ -999,6 +999,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     }
 
     private func didChange(notify: Bool) {
+        textView.restyle()
         placeholder.isHidden = !textView.text.isEmpty
         updateControls(animated: true)
         // After the controls, as the send button appearing narrows the field.
@@ -1042,8 +1043,54 @@ final class ComposerTextView: UITextView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        guard fit.changed(width: bounds.width, pointSize: font?.pointSize ?? 0) else { return }
+        // A new text size replaces the field's font, and the styling with it.
+        if baseFont.pointSize != styledPointSize { restyle() }
+        guard fit.changed(width: bounds.width, pointSize: baseFont.pointSize) else { return }
         onWidthChange?()
+    }
+
+    /// The font of text that isn't styled. The field's own `font` can't be
+    /// asked, as it is nil or the first run's once runs differ.
+    var baseFont: UIFont { .preferredFont(forTextStyle: .body) }
+    private var styledPointSize: CGFloat = 0
+    private var isStyled = false
+
+    /// Shows the styles the message will have (`MessageStyling.composerSpans`)
+    /// while the markers stay in the text, dimmed. Only attributes change,
+    /// never characters, so what is sent, drafts and mention offsets are the
+    /// text as typed. Straight on the text storage, which unlike the text
+    /// input API registers nothing for undo and doesn't call the delegate.
+    func restyle() {
+        // Text being composed (IME) is the input method's until it's committed,
+        // which calls the delegate again.
+        guard markedTextRange == nil else { return }
+        let spans = MessageStyling.composerSpans(in: text ?? "")
+        let base = baseFont
+        // Nothing to draw, and nothing drawn before: typing plain text costs the scan only.
+        if spans.isEmpty, !isStyled, base.pointSize == styledPointSize { return }
+        isStyled = !spans.isEmpty
+        styledPointSize = base.pointSize
+        let selection = selectedRange
+        let full = NSRange(location: 0, length: textStorage.length)
+        textStorage.beginEditing()
+        textStorage.addAttributes([.font: base, .foregroundColor: UIColor.label], range: full)
+        textStorage.removeAttribute(.strikethroughStyle, range: full)
+        for span in spans {
+            // Nested spans add to the font their outer span gave the run.
+            textStorage.enumerateAttribute(.font, in: span.range) { value, range, _ in
+                textStorage.addAttribute(.font, value: span.style.uiFont(from: value as? UIFont ?? base), range: range)
+            }
+            if span.style == .strike { textStorage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: span.range) }
+            for marker in [span.range.location, NSMaxRange(span.range) - 1] {
+                textStorage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: NSRange(location: marker, length: 1))
+            }
+        }
+        textStorage.endEditing()
+        if selectedRange != selection { selectedRange = selection }
+        // What is typed next is plain until the parser says otherwise.
+        typingAttributes[.font] = base
+        typingAttributes[.foregroundColor] = UIColor.label
+        typingAttributes[.strikethroughStyle] = nil
     }
 
     /// Key commands, unlike watching presses, come before the text system
