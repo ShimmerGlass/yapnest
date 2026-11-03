@@ -53,6 +53,26 @@ struct AppModelSessionTests {
         }
     }
 
+    /// They are made from the account's files, encrypted chats' among them,
+    /// but kept outside its folder.
+    @Test func signingOutDeletesTheCopiesOfReceivedFiles() async throws {
+        let fixture = AppModelFixture()
+        let model = fixture.model!
+        try await model.signIn(fixture.credentialsToSignIn)
+        let gif = AnimatedImages.copyURL(for: URL(filePath: "/tmp/received.gif"))
+        let opened = MacFileActions.copiesFolder.appending(path: "x/report.pdf")
+        for file in [gif, opened] {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("x".utf8).write(to: file)
+        }
+
+        model.signOut()
+
+        await eventually("the copies are deleted") {
+            !FileManager.default.fileExists(atPath: gif.path) && !FileManager.default.fileExists(atPath: opened.path)
+        }
+    }
+
     @Test func signingOutDeletesTheDiagnosticLogLast() async throws {
         let fixture = AppModelFixture()
         let model = fixture.model!

@@ -561,6 +561,11 @@ final class AppModel {
             await offMain {
                 try? FileManager.default.removeItem(at: folder)
                 SnapshotDiskCache.standard.removeAll()
+                // Copies of received files kept outside the account's folder:
+                // smaller GIFs, from encrypted chats too, and the Mac's
+                // copies of opened files under their senders' names.
+                try? FileManager.default.removeItem(at: AnimatedImages.copiesFolder)
+                try? FileManager.default.removeItem(at: MacFileActions.copiesFolder)
             }
             if environment.managesBadge {
                 UNUserNotificationCenter.current().removeAllDeliveredNotifications()

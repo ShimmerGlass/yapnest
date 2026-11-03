@@ -225,9 +225,13 @@ public enum AnimatedImages {
     /// copy that is missing simply is made again in. `AttachmentStore.remove`
     /// deletes it with the attachment.
     public static func copyURL(for source: URL) -> URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appending(path: "AnimatedImages")
-            .appending(path: source.lastPathComponent + ".gif")
+        copiesFolder.appending(path: source.lastPathComponent + ".gif")
+    }
+
+    /// Where every smaller copy is kept. Outside the account's folder, so
+    /// signing out deletes it on its own.
+    public static var copiesFolder: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "AnimatedImages")
     }
 
     public enum TranscodeError: Error {
