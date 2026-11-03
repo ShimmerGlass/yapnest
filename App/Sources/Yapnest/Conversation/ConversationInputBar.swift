@@ -14,7 +14,9 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
 
     var onSend: ((String) -> Void)?
     var onTextChanged: ((String) -> Void)?
-    var onCancelReply: (() -> Void)?
+    var onCancelReply: (() -> Void)? {
+        didSet { textView.onCancelReply = onCancelReply }
+    }
     var onRemovePending: ((PendingAttachment.ID) -> Void)? {
         didSet { tray.onRemove = onRemovePending }
     }
@@ -155,6 +157,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         textView.addInteraction(UIDropInteraction(delegate: self))
         addInteraction(UIDropInteraction(delegate: self))
         textView.capturesSuggestionKeys = { [weak self] in self?.shownSuggestions.isEmpty == false }
+        textView.hasReplyToCancel = { [weak self] in self?.wantsReplyHidden == false }
         textView.onSuggestionKey = { [weak self] key in self?.handleSuggestionKey(key) }
 
         let content: UIView
@@ -1047,6 +1050,10 @@ final class ComposerTextView: UITextView {
     /// True while there are emoji or nicknames to pick, when the arrow, Tab,
     /// Return and Escape keys belong to them rather than to the text.
     var capturesSuggestionKeys: () -> Bool = { false }
+    /// Whether a reply or an edit is shown above the field, which Escape ends
+    /// when no suggestions want the key.
+    var hasReplyToCancel: () -> Bool = { false }
+    var onCancelReply: (() -> Void)?
     /// Called when the width or the font size actually changes, so the bar can
     /// re-measure. The bar's own layout runs before this view is given its
     /// frame, and a text size change can arrive before the new font is applied.
@@ -1199,6 +1206,9 @@ final class ComposerTextView: UITextView {
             // A hardware Return picks the suggestion instead of starting a line.
             commands.append(UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(sendFromKeyboard)))
         }
+        if !capturing, onCancelReply != nil, hasReplyToCancel() {
+            commands.append(UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(cancelReply)))
+        }
         if returnSends, !capturing, onEditLast != nil, text.isEmpty, markedTextRange == nil {
             commands.append(UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(editLastMessage)))
         }
@@ -1209,7 +1219,7 @@ final class ComposerTextView: UITextView {
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         // Not while composing with an input method: Return confirms that.
         let ours = [#selector(sendFromKeyboard), #selector(insertNewLine), #selector(suggestionPrevious),
-                    #selector(suggestionNext), #selector(suggestionAccept), #selector(suggestionDismiss), #selector(editLastMessage)]
+                    #selector(suggestionNext), #selector(suggestionAccept), #selector(suggestionDismiss), #selector(editLastMessage), #selector(cancelReply)]
         if ours.contains(action) {
             return markedTextRange == nil
         }
@@ -1273,6 +1283,7 @@ final class ComposerTextView: UITextView {
 
     @objc private func insertNewLine() { insertText("\n") }
     @objc private func editLastMessage() { onEditLast?() }
+    @objc private func cancelReply() { onCancelReply?() }
     @objc private func suggestionPrevious() { onSuggestionKey?(.previous) }
     @objc private func suggestionNext() { onSuggestionKey?(.next) }
     @objc private func suggestionAccept() { onSuggestionKey?(.accept) }

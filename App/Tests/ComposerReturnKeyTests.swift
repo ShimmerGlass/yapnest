@@ -23,3 +23,36 @@ struct ComposerReturnKeyTests {
         #expect(try returnAction(flags) == NSSelectorFromString("insertNewLine"))
     }
 }
+
+/// Escape ends a reply or an edit, once suggestions have had the key.
+@MainActor
+struct ComposerEscapeKeyTests {
+    private func escape(replying: Bool, suggesting: Bool) throws -> Selector? {
+        let field = ComposerTextView()
+        field.onCancelReply = {}
+        field.hasReplyToCancel = { replying }
+        field.capturesSuggestionKeys = { suggesting }
+        let commands = try #require(field.keyCommands)
+        return commands.first { $0.input == UIKeyCommand.inputEscape }?.action
+    }
+
+    @Test func escapeCancelsAReplyOrEdit() throws {
+        #expect(try escape(replying: true, suggesting: false) == NSSelectorFromString("cancelReply"))
+    }
+
+    @Test func suggestionsGetEscapeFirst() throws {
+        #expect(try escape(replying: true, suggesting: true) == NSSelectorFromString("suggestionDismiss"))
+    }
+
+    @Test func escapeIsLeftAloneWithNothingToCancel() throws {
+        #expect(try escape(replying: false, suggesting: false) == nil)
+    }
+
+    @Test func escapeCallsTheCancel() throws {
+        let field = ComposerTextView()
+        var cancelled = false
+        field.onCancelReply = { cancelled = true }
+        field.perform(NSSelectorFromString("cancelReply"))
+        #expect(cancelled)
+    }
+}
