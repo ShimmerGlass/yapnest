@@ -131,23 +131,11 @@ struct ChatSettingsView: View {
                             .padding(.top, 4)
                     }
                 }
-                HStack(spacing: 10) {
-                    if canCall {
-                        HeaderAction(title: "Call", systemImage: "phone", isBusy: isStartingCall(video: false)) {
-                            model.calls.startCall(to: peer)
-                        }
-                        .disabled(!model.calls.canStartCall)
-                    }
-                    if canCall, canVideoCall {
-                        HeaderAction(title: "Video", systemImage: "video", isBusy: isStartingCall(video: true)) {
-                            model.calls.startCall(to: peer, video: true)
-                        }
-                        .disabled(!model.calls.canStartCall)
-                    }
-                    HeaderAction(title: "Search", systemImage: "magnifyingglass") {
-                        onSearch()
-                        dismiss()
-                    }
+                // The tiles grow with the text, and stack once a row of them
+                // no longer fits.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { headerActions }
+                    VStack(spacing: 10) { headerActions }
                 }
                 .padding(.top, 8)
             }
@@ -158,6 +146,26 @@ struct ChatSettingsView: View {
         // The buttons belong with the header; the first section shouldn't sit
         // a full section's gap away from them.
         .listSectionSpacing(.compact)
+    }
+
+    @ViewBuilder
+    private var headerActions: some View {
+        if canCall {
+            HeaderAction(title: "Call", systemImage: "phone", isBusy: isStartingCall(video: false)) {
+                model.calls.startCall(to: peer)
+            }
+            .disabled(!model.calls.canStartCall)
+        }
+        if canCall, canVideoCall {
+            HeaderAction(title: "Video", systemImage: "video", isBusy: isStartingCall(video: true)) {
+                model.calls.startCall(to: peer, video: true)
+            }
+            .disabled(!model.calls.canStartCall)
+        }
+        HeaderAction(title: "Search", systemImage: "magnifyingglass") {
+            onSearch()
+            dismiss()
+        }
     }
 
     var body: some View {
@@ -790,8 +798,12 @@ private struct HeaderAction: View {
                 Image(systemName: systemImage).font(.title3)
                     .busyOverlay(isBusy)
                 Text(title).font(.caption)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(width: 84, height: 56)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(minWidth: 84, minHeight: 56)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
