@@ -66,4 +66,15 @@ struct MessageAppearanceTests {
         #expect(message(.incoming, .omemo, trust: .verified).security.fullTitle == "Encrypted · Verified device")
         #expect(message(.outgoing, .none).security.fullTitle == "Not encrypted")
     }
+
+    @Test func onlyWhatNeedsSayingIsSpokenAloud() {
+        #expect(message(.incoming, .omemo, trust: .verified).security.spoken == nil)
+        #expect(message(.outgoing, .omemo, trust: .trusted).security.spoken == nil)
+        #expect(message(.outgoing, .omemo, trust: .verified).security.spoken == nil)
+        #expect(message(.incoming, .none).security.spoken == "Not encrypted")
+        #expect(message(.incoming, .omemo, trust: .trusted).security.spoken == "Encrypted · Unverified device")
+        #expect(message(.incoming, .omemo, trust: .undecided).security.spoken == "Encrypted · Untrusted device")
+        #expect(message(.incoming, .omemo, trust: nil).security.spoken == "Encrypted · Unknown device")
+        #expect(message(.incoming, .omemoUndecryptable).security.spoken == "Couldn't decrypt")
+    }
 }

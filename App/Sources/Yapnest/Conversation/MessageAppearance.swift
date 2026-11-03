@@ -34,6 +34,13 @@ extension Message {
         /// Both, on one line.
         var fullTitle: String { detail.map { "\(title) · \($0)" } ?? title }
 
+        /// What VoiceOver adds to a message, which the lock says to the eye
+        /// alone. A message that was protected as it should be says nothing,
+        /// to stay short: anything in red or orange is spoken, as is a
+        /// sender's device that was never verified.
+        var spoken: String? {
+            color != nil || detail == String(localized: "Unverified device") ? fullTitle : nil
+        }
     }
 
     /// How a message was protected in transit.

@@ -105,6 +105,13 @@ struct ConversationRowsTests {
         #expect(f.model.rows[0].content.accessibilityLabel.contains(String(localized: "Edited")))
     }
 
+    @Test func aMessageSentInTheClearIsReadOutAsNotEncrypted() async throws {
+        let f = try ConversationFixture()
+        try f.add("hello", read: true)
+        await f.start()
+        #expect(f.model.rows[0].content.accessibilityLabel.contains(String(localized: "Not encrypted")))
+    }
+
     @Test func aFailedEmptyReactionSetStillShowsTheChipAndItsPrompt() async throws {
         let f = try ConversationFixture()
         let theirs = try f.add("hello", read: true)
