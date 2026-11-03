@@ -48,6 +48,18 @@ struct StorageTests {
         #expect(Set(bodies) == ["one", "two"])
     }
 
+    @Test func ourMessageArchivedTwiceUnderTwoStanzaIdsIsOneRow() throws {
+        let conversation = try db.conversation(with: alice)
+        let pending = try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "lunch?", remoteId: "out1", originId: "out1"))
+        _ = try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "lunch?", remoteId: "out1", originId: "out1", serverId: "s1"))
+        let second = try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "lunch?", remoteId: "out1", originId: "out1", serverId: "s2"))
+
+        #expect(second.id == pending.id)
+        let rows = try db.reader.read { try Message.fetchAll($0) }
+        #expect(rows.count == 1)
+        #expect(rows.first?.serverId == "s1")
+    }
+
     @Test func aPendingMessageStillMergesWithItsReflection() throws {
         let conversation = try db.conversation(with: alice)
         let pending = try db.insert(Message(conversationId: conversation.id!, direction: .outgoing, sender: me, body: "lunch?", remoteId: "out1", originId: "out1"))

@@ -145,10 +145,22 @@ extension AppDatabase {
         // sender gave them: a copied origin-id in an anonymous room, or a bot
         // that reuses one. Only a copy that has no stanza-id yet can be ours;
         // a row with this very stanza-id was found above.
-        if message.serverId != nil {
+        //
+        // Our own messages in a 1:1 chat are the exception: only our devices
+        // write them, and a resend after a failed catch-up reuses the id, so
+        // the archive can hold the message twice. Both are the one row.
+        var isOurOneToOne = false
+        if message.direction == .outgoing {
+            isOurOneToOne = try Self.isOneToOne(db, message.conversationId)
+        }
+        if message.serverId != nil, !isOurOneToOne {
             request = request.filter(Column("serverId") == nil)
         }
         return try request.fetchOne(db)
+    }
+
+    private static func isOneToOne(_ db: Database, _ conversationId: Int64) throws -> Bool {
+        try Conversation.fetchOne(db, key: conversationId)?.kind == .chat
     }
 
     /// Finds the message a XEP-0444 reaction or XEP-0461 reply refers to.
