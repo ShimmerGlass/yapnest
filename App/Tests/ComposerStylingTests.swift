@@ -206,6 +206,18 @@ struct ComposerStylingTests {
         #expect(drawn(bar) == drawn(fresh), "\(comment): \(bar.text.debugDescription)")
     }
 
+    private struct SplitMix: RandomNumberGenerator {
+        var state: UInt64
+        init(seed: UInt64) { state = seed }
+        mutating func next() -> UInt64 {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            return z ^ (z >> 31)
+        }
+    }
+
     private let draft = "plain *bold* and _it_ here\n> quoted ~gone~ `code`\nlast *line* ok\n```\n*raw*\n```\n_end_"
 
     @Test(arguments: [(0, 0, "x"), (3, 0, "*"), (8, 0, "x"), (7, 1, ""), (6, 0, " _a_ "), (22, 0, "\n"), (30, 4, "z")])
@@ -266,5 +278,84 @@ struct ComposerStylingTests {
         let after = text + "*"
         let dirty = ComposerTextView.dirtyRange(from: before, to: MessageStyling.composerSpans(in: after), edit: (NSRange(location: 16, length: 0), 1), delta: 1)
         #expect(dirty == NSRange(location: 14, length: 3))
+    }
+
+    @Test func pastingAfterASpanThatTheTextThenStretchesRestylesIt() {
+        let bar = makeBar()
+        bar.setText("*a*", notify: false)
+        type("b *a*", in: bar, replacing: NSRange(location: 3, length: 0))
+        #expect(bar.text == "*a*b *a*")
+        // The first closer is followed by a letter, so the span runs on to the last one.
+        #expect(isBold(font(bar, at: 6)) && isDimmed(bar, at: 7))
+        expectDrawnAsFresh(bar, "pasted after a span")
+    }
+
+    @Test func replacingTheSpaceBeforeASpanWithAnotherOneLeavesNoStaleStyle() {
+        let bar = makeBar()
+        bar.setText("y *a*", notify: false)
+        type(" *a* x", in: bar, replacing: NSRange(location: 1, length: 1))
+        #expect(bar.text == "y *a* x*a*")
+        expectDrawnAsFresh(bar, "span replaced in one edit")
+    }
+
+    @Test func randomEditsOfRandomStyledTextsDrawAsAFreshlyStyledField() {
+        var seeded = SplitMix(seed: 234)
+        let pieces = ["*", "_", "~", "`", " ", " ", "a", "b", "\n", "> ", "```", "https://x.com/a_b_", " *a* ", "*a*", " _b_ "]
+        func random(_ count: ClosedRange<Int>) -> String {
+            (0..<Int.random(in: count, using: &seeded)).map { _ in pieces.randomElement(using: &seeded)! }.joined()
+        }
+        for _ in 0..<300 {
+            let bar = makeBar()
+            bar.setText(random(0...14), notify: false)
+            for _ in 0..<3 {
+                let length = (bar.text as NSString).length
+                let location = Int.random(in: 0...length, using: &seeded)
+                let replaced = Int.random(in: 0...min(4, length - location), using: &seeded)
+                let typed = random(0...3)
+                if typed.isEmpty && replaced == 0 { continue }
+                type(typed, in: bar, replacing: NSRange(location: location, length: replaced))
+                expectDrawnAsFresh(bar, "edit \(typed.debugDescription) at \(location) over \(replaced)")
+            }
+        }
+    }
+
+    @Test func settingTheTextForgetsAnEditNotedBefore() {
+        let bar = makeBar()
+        bar.setText("ab *c* d", notify: false)
+        // Where a restyle after this edit alone would stop short of the new span.
+        bar.textView.noteEdit(NSRange(location: 7, length: 1), replacementLength: 1)
+        bar.setText("xy *z* w", notify: false)
+        #expect(isBold(font(bar, at: 4)) && isDimmed(bar, at: 3))
+    }
+
+    private func barSuggesting(_ nicks: [String]) -> ConversationInputBar {
+        let bar = makeBar()
+        bar.onMentionQuery = { [weak bar] query in
+            bar?.setSuggestions(query.map { typed in nicks.filter { $0.hasPrefix(typed) } } ?? [])
+        }
+        return bar
+    }
+
+    @Test func aCompletedMentionRestylesOnceAndOnlyNearIt() {
+        let text = "*b* @a plain tail words here"
+        let bar = barSuggesting(["anna"])
+        bar.setText(text, notify: true)
+        bar.textView.selectedRange = NSRange(location: 6, length: 0)
+        #expect(bar.mentionSuggestions == ["anna"])
+        let last = (text as NSString).length - 1
+        bar.textView.textStorage.addAttribute(.foregroundColor, value: UIColor.red, range: NSRange(location: last, length: 1))
+        bar.handleSuggestionKey(.accept)
+        #expect(bar.text == "*b* @anna  plain tail words here")
+        #expect(attributes(bar, at: last + 4)[.foregroundColor] as? UIColor == .red)
+        #expect(bar.textView.selectedRange == NSRange(location: 10, length: 0))
+        #expect(isBold(font(bar, at: 1)))
+    }
+
+    @Test func aSpanThatCrossesALinkIsNotStyled() {
+        let bar = makeBar()
+        bar.setText("_see https://example.com/a_b_ now", notify: false)
+        #expect(!isItalic(font(bar, at: 3)) && !isDimmed(bar, at: 0))
+        bar.setText("*https://x.com/a*", notify: false)
+        #expect(!isBold(font(bar, at: 3)) && !isDimmed(bar, at: 0))
     }
 }

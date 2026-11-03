@@ -50,6 +50,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     }
 
     let textView = ComposerTextView()
+    private var didChangeCount = 0
     /// Called after each layout, so the host can notice the bar's height changing.
     var onLayout: (() -> Void)?
     private let placeholder = UILabel()
@@ -540,9 +541,14 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         guard let start = textView.position(from: textView.beginningOfDocument, offset: range.location),
               let end = textView.position(from: start, offset: range.length),
               let textRange = textView.textRange(from: start, to: end) else { return }
+        // The delegate isn't asked about a programmatic change, so the edit is noted here.
+        textView.noteEdit(range, replacementLength: (replacement as NSString).length)
+        let changes = didChangeCount
         textView.replace(textRange, withText: replacement)
         textView.selectedRange = NSRange(location: range.location + (replacement as NSString).length, length: 0)
-        textViewDidChange(textView)
+        // UIKit may have told the delegate already, and a second pass would find
+        // no edit and restyle everything.
+        if didChangeCount == changes { textViewDidChange(textView) } else { notifyQueries() }
     }
 
     private struct MentionWord: Equatable {
@@ -975,6 +981,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     /// and mustn't be reported as such.
     func setText(_ text: String, notify: Bool = true) {
         textView.text = text
+        textView.forgetEdit()
         // Whatever could be undone refers to the text that was just replaced.
         textView.undoManager?.removeAllActions()
         didChange(notify: notify)
@@ -1001,6 +1008,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     }
 
     func textViewDidChange(_ textView: UITextView) {
+        didChangeCount += 1
         didChange(notify: true)
     }
 
@@ -1066,6 +1074,10 @@ final class ComposerTextView: UITextView {
     /// seen (text set by the model, undo), means restyling everything.
     private var edit: (range: NSRange, newLength: Int)?
     private var editsLost = false
+
+    /// Setting the text resets every attribute, so whatever edit was noted
+    /// says nothing about what needs restyling.
+    func forgetEdit() { edit = nil }
 
     /// Called as text is about to change, so the restyle can stay near it.
     func noteEdit(_ range: NSRange, replacementLength: Int) {
@@ -1133,13 +1145,18 @@ final class ComposerTextView: UITextView {
         func same(_ a: (range: NSRange, style: MessageStyling.SpanStyle), _ b: (range: NSRange, style: MessageStyling.SpanStyle), shift: Int) -> Bool {
             a.range.location + shift == b.range.location && a.range.length == b.range.length && a.style == b.style
         }
+        // A span the edit touched isn't the same one even where its range and
+        // style are: its markers or what it holds may have been replaced. So
+        // the unchanged ones before the edit end before it, and those after it
+        // start after what it replaced.
+        let oldEnd = edit.range.location + edit.range.length
         var prefix = 0
-        while prefix < old.count, prefix < new.count, same(old[prefix], new[prefix], shift: 0) { prefix += 1 }
+        while prefix < old.count, prefix < new.count, NSMaxRange(old[prefix].range) <= edit.range.location, same(old[prefix], new[prefix], shift: 0) { prefix += 1 }
         var suffix = 0
-        while suffix < old.count - prefix, suffix < new.count - prefix, same(old[old.count - 1 - suffix], new[new.count - 1 - suffix], shift: delta) { suffix += 1 }
+        while suffix < old.count - prefix, suffix < new.count - prefix, old[old.count - 1 - suffix].range.location >= oldEnd,
+              same(old[old.count - 1 - suffix], new[new.count - 1 - suffix], shift: delta) { suffix += 1 }
         var start = edit.range.location
         var end = edit.range.location + edit.newLength
-        let oldEnd = edit.range.location + edit.range.length
         for span in new[prefix..<(new.count - suffix)] {
             start = min(start, span.range.location)
             end = max(end, NSMaxRange(span.range))
