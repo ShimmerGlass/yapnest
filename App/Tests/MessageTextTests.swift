@@ -152,6 +152,114 @@ struct MessageTextTests {
         #expect(String(whole.segments[0].text.characters).contains("line 40"))
     }
 
+    // MARK: Spans across the cut
+
+    private let filler = String(repeating: "lorem ipsum ", count: 100)
+
+    private func drawn(_ body: String, collapsed: Bool) -> [Run] {
+        MessageText.render(body, kind: .normal, collapsed: collapsed).segments.flatMap { segment in
+            segment.text.runs.map { Run(text: String(segment.text[$0.range].characters), link: nil, font: $0.font) }
+        }
+    }
+
+    private func drawnText(_ body: String, collapsed: Bool) -> String {
+        drawn(body, collapsed: collapsed).map(\.text).joined()
+    }
+
+    /// The cut text draws what the full text does up to the cut, and ends in "…".
+    private func expectPrefix(of body: String, sourceLocation: SourceLocation = #_sourceLocation) throws {
+        let cut = drawnText(body, collapsed: true)
+        #expect(cut.hasSuffix("…"), sourceLocation: sourceLocation)
+        let full = drawnText(body, collapsed: false)
+        #expect(full.hasPrefix(cut.dropLast()), sourceLocation: sourceLocation)
+        #expect(cut.count < full.count, sourceLocation: sourceLocation)
+    }
+
+    @Test(arguments: [
+        ("*", Font.body.bold()), ("_", Font.body.italic()), ("`", Font.body.monospaced()),
+    ] as [(String, Font)])
+    func aSpanThroughTheCutIsStyledWithoutItsMarker(marker: String, font: Font) throws {
+        let body = "start \(marker)\(filler)end\(marker) tail"
+        #expect(MessageText.collapse(body)?.hasSuffix("\(marker)…") == true)
+        #expect(!drawnText(body, collapsed: true).contains(marker))
+        let styledText = drawn(body, collapsed: true).filter { $0.font == font }.map(\.text).joined()
+        #expect(styledText.hasPrefix("lorem ipsum") && !styledText.contains("…"))
+        try expectPrefix(of: body)
+    }
+
+    @Test func strikeThroughTheCutIsClosed() throws {
+        let body = "start ~\(filler)end~ tail"
+        #expect(!drawnText(body, collapsed: true).contains("~"))
+        try expectPrefix(of: body)
+    }
+
+    @Test func nestedSpansThroughTheCutAreClosedInnermostFirst() throws {
+        let body = "*bold _both \(filler)end_ and more*"
+        let start = try #require(MessageText.collapse(body))
+        #expect(start.hasSuffix("_*…"))
+        #expect(drawnText(body, collapsed: true).filter { "*_".contains($0) }.isEmpty)
+        try expectPrefix(of: body)
+    }
+
+    @Test func aSpanAlreadyClosedBeforeTheCutIsLeftAlone() throws {
+        let body = "*done* \(filler)"
+        let start = try #require(MessageText.collapse(body))
+        #expect(!start.hasSuffix("*…"))
+        #expect(drawnText(body, collapsed: true).hasPrefix("done lorem"))
+    }
+
+    @Test(arguments: [697, 698, 699])
+    func aCutAtTheCloserNeitherDoublesNorLosesIt(contentLength: Int) throws {
+        // The closer is the 699th, 700th or 701st character, with the cut after the 700th.
+        let content = String(repeating: "x", count: contentLength)
+        let body = "*\(content)* tail more words"
+        let start = try #require(MessageText.collapse(body))
+        #expect(start == "*\(content)*…")
+        #expect(drawnText(body, collapsed: true) == content + "…")
+    }
+
+    @Test func aSpanOnAQuotedLineIsClosed() throws {
+        let body = "> *quoted \(filler)end* tail"
+        let start = try #require(MessageText.collapse(body))
+        #expect(start.hasSuffix("*…"))
+        let rendered = MessageText.render(body, kind: .normal, collapsed: true)
+        #expect(rendered.segments.first?.depth == 1)
+        #expect(!drawnText(body, collapsed: true).contains("*"))
+    }
+
+    @Test func aSpanOnALaterLineIsClosedWhenTheCutIsInsideIt() throws {
+        let body = "first line\n" + "second *\(filler)end*\nthird"
+        let start = try #require(MessageText.collapse(body))
+        #expect(start.hasSuffix("*…"))
+        #expect(!drawnText(body, collapsed: true).contains("*"))
+    }
+
+    @Test func aSpanInsideAFenceIsNotClosed() throws {
+        let body = "```\n*" + filler + "end*\n```"
+        let start = try #require(MessageText.collapse(body))
+        #expect(!start.hasSuffix("*…"))
+    }
+
+    @Test func anOpenerWithNoCloserOnItsLineIsLeftAlone() throws {
+        let body = (1...20).map { "line \($0) *open" }.joined(separator: "\n")
+        let start = try #require(MessageText.collapse(body))
+        #expect(start.hasSuffix("*open…"))
+    }
+
+    @Test func aCutBodyStartingWithSpacesKeepsItsSpansRight() throws {
+        let body = "   *" + filler + "end* tail"
+        let start = try #require(MessageText.collapse(body))
+        #expect(start.hasSuffix("*…"))
+    }
+
+    @Test func aSpanThroughTheCutOfAnActionIsClosed() throws {
+        let body = "/me *" + filler + "end* tail"
+        let rendered = MessageText.render(body, kind: .action(name: "Alice"), collapsed: true)
+        #expect(rendered.isCollapsed)
+        let text = rendered.segments.map { String($0.text.characters) }.joined()
+        #expect(text.hasPrefix("Alice lorem") && !text.contains("*"))
+    }
+
     // MARK: Styling
 
     @Test func boldItalicAndCodeGetTheirFont() {

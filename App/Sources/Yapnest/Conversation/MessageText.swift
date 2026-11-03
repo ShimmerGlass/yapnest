@@ -132,11 +132,38 @@ enum MessageText {
             end = body.index(after: end)
         }
         guard end < body.endIndex else { return nil }
-        let kept = body[..<(characters == collapsedCharacterLimit ? cutAtWord ?? end : end)]
-        let start = String(kept).trimmingCharacters(in: .whitespacesAndNewlines)
+        let cut = characters == collapsedCharacterLimit ? cutAtWord ?? end : end
+        let kept = body[..<cut]
+        let start = closingSpans(of: String(kept).trimmingCharacters(in: .whitespacesAndNewlines),
+                                 cutting: body, at: cut,
+                                 leading: kept.utf16.count - kept.drop(while: { $0.isWhitespace }).utf16.count)
         // Beside a closing ``` the dots would be taken for a line of the block
         // that was never closed.
         return start + (endsOnFence(start) ? "\n…" : "…")
+    }
+
+    /// `start`, the trimmed text of `body` before `cut`, with the spans the cut
+    /// runs through closed. A span whose closer is cut away is no span at all,
+    /// so the opener would show as a literal marker and the text after it
+    /// would lose its style, then gain it when the rest is opened. Each gets
+    /// its own closer, innermost first. A closer needs a non-space before it,
+    /// and `start` ends in one; nor can the cut leave a span with nothing in
+    /// it, since an opener follows whitespace and the cut stops at the last
+    /// whitespace of the final 60 characters, or at a line break. The "…" after
+    /// a closer is neither a letter nor a digit, which a closer needs to
+    /// precede, and isn't a combining character, so it fuses with nothing.
+    /// `leading` is how much whitespace `start` lost from the front of `body`.
+    private static func closingSpans(of start: String, cutting body: String, at cut: String.Index, leading: Int) -> String {
+        let marker = Set("*_`~".utf16)
+        guard start.utf16.contains(where: marker.contains) else { return start }
+        // Spans stay on a line, and what a line is depends only on those
+        // before it, so the cut's line is as far as the full text needs reading.
+        let lineEnd = body[cut...].firstIndex(where: \.isNewline) ?? body.endIndex
+        let cutOffset = leading + start.utf16.count
+        let crossing = MessageStyling.composerSpans(in: String(body[..<lineEnd]))
+            .filter { $0.range.location < cutOffset && NSMaxRange($0.range) > cutOffset }
+            .sorted { $0.range.location > $1.range.location }
+        return start + String(crossing.map(\.style.marker))
     }
 
     /// Whether the last line is a bare ```, at any quote depth, as
@@ -298,6 +325,15 @@ enum MessageText {
 }
 
 extension MessageStyling.SpanStyle {
+    var marker: Character {
+        switch self {
+        case .bold: "*"
+        case .italic: "_"
+        case .code: "`"
+        case .strike: "~"
+        }
+    }
+
     func font(from font: Font) -> Font {
         switch self {
         case .bold: font.bold()
