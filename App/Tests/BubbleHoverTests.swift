@@ -107,6 +107,39 @@ struct BubbleHoverTests {
         #expect(model.hoveredBubble == 1)
     }
 
+    /// The phase can stay `.animating` after an animated scroll has ended,
+    /// which hid the bar until the user scrolled.
+    @Test func anAnimatedScrollThatNeverSettlesStopsHidingTheBar() async throws {
+        let fixture = try ConversationFixture(isFlipped: false)
+        let model = fixture.model!
+        model.hoverAnimationLimit = .milliseconds(50)
+        var told: [Bool] = []
+        model.scrollingChanged = { told.append($0) }
+        model.bubbleFrameChanged(first, for: 1)
+        model.scrollPhase = .animating
+        model.scrollPhaseChangedForHover(.animating)
+        model.pointerMoved(to: CGPoint(x: 150, y: 20))
+        #expect(model.hoveredBubble == nil)
+        await eventually("the bar is back") { model.hoveredBubble == 1 }
+        #expect(told == [true, false])
+        model.pointerMoved(to: CGPoint(x: 150, y: 45))
+        model.pointerMoved(to: CGPoint(x: 150, y: 20))
+        #expect(model.hoveredBubble == 1)
+    }
+
+    /// One that does settle in time is left to say so itself.
+    @Test func anAnimatedScrollThatSettlesKeepsItsOwnEnd() async throws {
+        let fixture = try ConversationFixture(isFlipped: false)
+        let model = fixture.model!
+        model.hoverAnimationLimit = .milliseconds(50)
+        var told: [Bool] = []
+        model.scrollingChanged = { told.append($0) }
+        model.scrollPhaseChangedForHover(.animating)
+        model.scrollPhaseChangedForHover(.interacting)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(told == [true])
+    }
+
     /// The Mac's tracker pauses SwiftUI's hover recognizers while the list
     /// moves, so it's told once when scrolling starts and once when it stops.
     @Test func theTrackerIsToldWhenScrollingStartsAndStops() throws {

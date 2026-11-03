@@ -191,12 +191,30 @@ final class ConversationModel {
     /// Told when the list starts and stops moving, by the Mac's pointer tracker.
     @ObservationIgnored var scrollingChanged: ((Bool) -> Void)?
     @ObservationIgnored private var isScrollingForHover = false
+    /// How long an animated scroll may hold the bar back. The phase can stay
+    /// `.animating` once an animated scroll has ended (see
+    /// `reanchorWhenStill`), and the bar then never came back until the user
+    /// scrolled, as seen after reacting from the character viewer. The
+    /// system's scroll animations are shorter than this.
+    @ObservationIgnored var hoverAnimationLimit: Duration = .milliseconds(600)
 
     /// The bar hides while the list moves. When it stops, the bubble under a
     /// pointer that didn't move is hovered again: a click there would
     /// otherwise land on text that can't be clicked until the pointer moves.
     func scrollPhaseChangedForHover(_ phase: ScrollPhase) {
-        let scrolling = phase != .idle
+        tasks.cancel("hoverAnimation")
+        if phase == .animating {
+            tasks["hoverAnimation"] = Task { [weak self, limit = hoverAnimationLimit] in
+                try? await Task.sleep(for: limit)
+                guard let self, !Task.isCancelled else { return }
+                tasks.finish("hoverAnimation")
+                setScrollingForHover(false)
+            }
+        }
+        setScrollingForHover(phase != .idle)
+    }
+
+    private func setScrollingForHover(_ scrolling: Bool) {
         if scrolling { setHoveredBubble(nil) }
         guard scrolling != isScrollingForHover else { return }
         isScrollingForHover = scrolling
@@ -220,7 +238,7 @@ final class ConversationModel {
     }
 
     private func updateHover(at point: CGPoint?) {
-        guard let point, scrollPhase == .idle else {
+        guard let point, !isScrollingForHover else {
             setHoveredBubble(nil)
             return
         }
