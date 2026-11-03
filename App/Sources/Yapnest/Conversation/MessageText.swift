@@ -233,8 +233,10 @@ enum MessageText {
                 #endif
             }
             let linkRanges = links.map(\.range)
+            var markers: [Int] = []
             for span in MessageStyling.spans(in: block.text) where !linkRanges.contains(where: { NSIntersectionRange($0, span.range).length > 0 }) {
                 guard let attributed = attributedRange(span.range, in: block.text, of: text) else { continue }
+                markers += [span.range.location, NSMaxRange(span.range) - 1]
                 // Nested spans add to the font their outer span gave the run.
                 for run in text[attributed].runs {
                     text[run.range].font = span.style.font(from: run.font ?? font.swiftUI)
@@ -245,6 +247,15 @@ enum MessageText {
                     native.addAttribute(.font, value: span.style.uiFont(from: value as? UIFont ?? font.uiFont), range: range)
                 }
                 if span.style == .strike { native.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: span.range) }
+                #endif
+            }
+            // Removed last so the ranges above still mean the raw text. Highest
+            // first, so each offset still points at its own character.
+            for offset in Set(markers).sorted(by: >) {
+                guard let marker = attributedRange(NSRange(location: offset, length: 1), in: block.text, of: text) else { continue }
+                text.removeSubrange(marker)
+                #if targetEnvironment(macCatalyst)
+                native.deleteCharacters(in: NSRange(location: offset, length: 1))
                 #endif
             }
             var segment = RenderedText.Segment(id: index, depth: block.depth, text: text)

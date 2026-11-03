@@ -96,7 +96,7 @@ struct MessageTextTests {
     @Test func eachQuoteDepthIsItsOwnSegmentWithStylingInside() {
         let rendered = MessageText.render("> a *bold* quote\nreply", kind: .normal)
         #expect(rendered.segments.map(\.depth) == [1, 0])
-        #expect(styled("> a *bold* quote\nreply", Font.body.bold()) == ["*bold*"])
+        #expect(styled("> a *bold* quote\nreply", Font.body.bold()) == ["bold"])
     }
 
     // MARK: Long bodies
@@ -155,9 +155,9 @@ struct MessageTextTests {
     // MARK: Styling
 
     @Test func boldItalicAndCodeGetTheirFont() {
-        #expect(styled("*b* and _i_ and `c`", Font.body.bold()) == ["*b*"])
-        #expect(styled("*b* and _i_ and `c`", Font.body.italic()) == ["_i_"])
-        #expect(styled("*b* and _i_ and `c`", Font.body.monospaced()) == ["`c`"])
+        #expect(styled("*b* and _i_ and `c`", Font.body.bold()) == ["b"])
+        #expect(styled("*b* and _i_ and `c`", Font.body.italic()) == ["i"])
+        #expect(styled("*b* and _i_ and `c`", Font.body.monospaced()) == ["c"])
     }
 
     @Test(arguments: [
@@ -175,15 +175,50 @@ struct MessageTextTests {
 
     @Test func aStyleInsideAnotherAddsToIt() {
         let found = runs("*bold _and more_ bold*").flatMap { $0 }
-        #expect(found.map(\.text) == ["*bold ", "_and more_", " bold*"])
+        #expect(found.map(\.text) == ["bold ", "and more", " bold"])
         #expect(found.map(\.font) == [Font.body.bold(), Font.body.bold().italic(), Font.body.bold()])
     }
 
     @Test func strikeKeepsTheFontAndCrossesTheTextOut() {
         let rendered = MessageText.render("a ~gone~ b", kind: .normal).segments[0].text
         let struck = rendered.runs.filter { $0.strikethroughStyle != nil }.map { String(rendered[$0.range].characters) }
-        #expect(struck == ["~gone~"])
+        #expect(struck == ["gone"])
         #expect(rendered.runs.allSatisfy { $0.font == Font.body })
+        #expect(String(rendered.characters) == "a gone b")
+    }
+
+    @Test func markersAreNotDrawn() {
+        #expect(runs("*b* and _i_ and ~s~ and `c`").flatMap { $0 }.map(\.text).joined() == "b and i and s and c")
+    }
+
+    @Test func aSpanThatCrossesALinkKeepsItsMarkers() {
+        let found = runs("_see https://example.com/a_b_ now").flatMap { $0 }
+        #expect(found.map(\.text).joined() == "_see https://example.com/a_b_ now")
+    }
+
+    @Test func anUnclosedOpenerStaysLiteralBesideARealSpan() {
+        #expect(runs("*open and _real_").flatMap { $0 }.map(\.text).joined() == "*open and real")
+    }
+
+    @Test func inWordMarkersStay() {
+        #expect(runs("snake_case and *bold*").flatMap { $0 }.map(\.text).joined() == "snake_case and bold")
+    }
+
+    @Test func offsetsAreRightAfterNonBMPCharacters() {
+        let found = runs("😀 *😀 b* 𝄞 _i_ ~😀~").flatMap { $0 }
+        #expect(found.map(\.text).joined() == "😀 😀 b 𝄞 i 😀")
+        #expect(styled("😀 *😀 b* 𝄞 _i_", Font.body.bold()) == ["😀 b"])
+        #expect(styled("😀 *😀 b* 𝄞 _i_", Font.body.italic()) == ["i"])
+    }
+
+    @Test func adjacentSpansEachLoseTheirMarkers() {
+        #expect(styled("*a* _b_", Font.body.bold()) == ["a"])
+        #expect(styled("*a* _b_", Font.body.italic()) == ["b"])
+        #expect(runs("*a* _b_").flatMap { $0 }.map(\.text).joined() == "a b")
+    }
+
+    @Test func codeLosesItsBackticksButKeepsWhatIsInside() {
+        #expect(styled("`a*b*`", Font.body.monospaced()) == ["a*b*"])
     }
 
     // MARK: Preformatted blocks
@@ -307,15 +342,15 @@ struct MessageTextTests {
     @Test func rightToLeftTextKeepsItsLinksAndStyles() {
         let body = "مرحبا *عالم* https://example.com/ar ثم _نص_"
         #expect(links(body) == ["https://example.com/ar"])
-        #expect(styled(body, Font.body.bold()) == ["*عالم*"])
-        #expect(styled(body, Font.body.italic()) == ["_نص_"])
+        #expect(styled(body, Font.body.bold()) == ["عالم"])
+        #expect(styled(body, Font.body.italic()) == ["نص"])
     }
 
-    @Test func mixedDirectionTextKeepsEveryCharacter() {
+    @Test func mixedDirectionTextKeepsEveryCharacterButMarkers() {
         let body = "שלום world `code` שלום"
         let shown = runs(body).flatMap { $0 }.map(\.text).joined()
-        #expect(shown == body)
-        #expect(styled(body, Font.body.monospaced()) == ["`code`"])
+        #expect(shown == "שלום world code שלום")
+        #expect(styled(body, Font.body.monospaced()) == ["code"])
     }
 
     @Test func aHugeMessageWithOnlyOpenersIsRenderedWithoutStyles() {
