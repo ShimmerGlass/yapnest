@@ -26,6 +26,8 @@ public enum SignalError: Int, Error {
     // custom error code, not from libsignal but required for internal use to mark that message was not encrypted
     case notEncrypted = -100000;
     case noDestination = -100001;
+    // A read of the store failed, which isn't the same as finding nothing.
+    case storageFailed = -100002;
 
     case noMemory = -12;
     case invalidArgument = -22;

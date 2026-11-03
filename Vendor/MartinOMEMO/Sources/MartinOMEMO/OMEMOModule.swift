@@ -204,7 +204,15 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
     public let activeDevicesPublisher = PassthroughSubject<AvailabilityChanged,Never>();
     
     public func isAvailable(for jid: BareJID) -> Bool {
-        return (!(self.devicesQueue.sync(execute: { self.devices[jid] })?.isEmpty ?? true)) || !self.storage.sessionStore.allDevices(for: jid.stringValue, activeAndTrusted: true).isEmpty;
+        if !(self.devicesQueue.sync(execute: { self.devices[jid] })?.isEmpty ?? true) {
+            return true;
+        }
+        // A failed read counts as available: leaving OMEMO because the store couldn't be read
+        // would send the message in the clear, where failing it and retrying costs nothing.
+        guard let known = try? self.storage.sessionStore.allDevices(for: jid.stringValue, activeAndTrusted: true) else {
+            return true;
+        }
+        return !known.isEmpty;
     }
     
     public init(aesGCMEngine: AES_GCM_Engine, signalContext: SignalContext, signalStorage: SignalStorage) {
@@ -378,6 +386,8 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                             }
                         }
                     default:
+                        // `.storageFailed` is ours, not the session's: a repair would replace a
+                        // session that is fine.
                         break;
                     }
                     return .failure(error);
@@ -507,7 +517,9 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 .filter { !(jid == context.userBareJid && UInt32(bitPattern: $0) == localId) }
                 .map { SignalAddress(name: jid.stringValue, deviceId: $0) };
             lock.withLock { addresses.append(contentsOf: found) };
-            for address in found where !storage.sessionStore.containsSessionRecord(forAddress: address) {
+            // A failed read counts as having a session: building one would replace a working
+            // session, and use up one of the device's one-time prekeys.
+            for address in found where !((try? storage.sessionStore.containsSessionRecord(forAddress: address)) ?? true) {
                 group.enter();
                 buildSession(forAddress: address, completionHandler: {
                     group.leave();
@@ -534,12 +546,15 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 let listedDevices: [Int32] = listEl.mapChildren(transform: { $0.getAttribute("id") }).compactMap({ Int32(omemoId: $0) });
                 let knownActiveDevices = self.limitDevices?(jid, listedDevices) ?? listedDevices;
                 self.activeDevicesPublisher.send(AvailabilityChanged(jid: jid, activeDevices: knownActiveDevices, readFromServer: true));
-                let allDevices = self.storage.sessionStore.allDevices(for: jid.stringValue, activeAndTrusted: true);
-                for deviceId in allDevices where !knownActiveDevices.contains(deviceId) {
-                    _ = self.storage.identityKeyStore.setStatus(active: false, forIdentity: SignalAddress(name: jid.stringValue, deviceId: deviceId));
-                }
-                for deviceId in knownActiveDevices where !allDevices.contains(deviceId) {
-                    _ = self.storage.identityKeyStore.setStatus(active: true, forIdentity: SignalAddress(name: jid.stringValue, deviceId: deviceId));
+                // Without the stored devices there is nothing to compare the list with; the next
+                // list does it, rather than marking everyone inactive or adding what is known.
+                if let allDevices = try? self.storage.sessionStore.allDevices(for: jid.stringValue, activeAndTrusted: true) {
+                    for deviceId in allDevices where !knownActiveDevices.contains(deviceId) {
+                        _ = self.storage.identityKeyStore.setStatus(active: false, forIdentity: SignalAddress(name: jid.stringValue, deviceId: deviceId));
+                    }
+                    for deviceId in knownActiveDevices where !allDevices.contains(deviceId) {
+                        _ = self.storage.identityKeyStore.setStatus(active: true, forIdentity: SignalAddress(name: jid.stringValue, deviceId: deviceId));
+                    }
                 }
                 // Remembered, or every message would wait for this round trip.
                 // A notification's list, which has no date, is left alone.
@@ -702,9 +717,15 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         header.setAttribute("sid", value: String(signalContext.storage.identityKeyStore.localRegistrationId()));
         encryptedEl.addChild(header);
         
-        let localAddresses = forSelf ? storage.sessionStore.allDevices(for: context.userBareJid.stringValue, activeAndTrusted: true).map({ (deviceId) -> SignalAddress in
-            return SignalAddress(name: context.userBareJid.stringValue, deviceId: deviceId);
-        }) : [];
+        var localAddresses: [SignalAddress] = [];
+        if forSelf {
+            // Sending without our other devices would leave them unable to read it, so a failed
+            // read fails the encryption.
+            guard let own = try? storage.sessionStore.allDevices(for: context.userBareJid.stringValue, activeAndTrusted: true) else {
+                return .failure(.storageFailed);
+            }
+            localAddresses = own.map({ SignalAddress(name: context.userBareJid.stringValue, deviceId: $0) });
+        }
         let destinations: Set<SignalAddress> = Set(remoteAddresses + localAddresses);
         header.addChildren(destinations.map({ (addr) -> Result<SignalSessionCipher.Key,SignalError> in
                 // TODO: maybe we should cache this session?
@@ -890,18 +911,21 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         });
         let knownActiveDevices = limitDevices?(jid, listedDevices) ?? listedDevices;
         
-        let allDevices = storage.sessionStore.allDevices(for: jid.stringValue, activeAndTrusted: true);
-        allDevices.filter { (id) -> Bool in
-            return !knownActiveDevices.contains(id);
-            }.forEach { (deviceId) in
-                _ = storage.identityKeyStore.setStatus(active: false, forIdentity: SignalAddress(name: jid.stringValue, deviceId: deviceId));
-        }
-        
-        knownActiveDevices.filter { (id) -> Bool in
-            return !allDevices.contains(id);
-            }.forEach { (deviceId) in
-                // TODO: we should enable this device key if we have its identity!
-                _ = storage.identityKeyStore.setStatus(active: true, forIdentity: SignalAddress(name: jid.stringValue, deviceId: deviceId));
+        // Without the stored devices there is nothing to compare the list with; the next list
+        // does it, rather than marking everyone inactive or adding what is known.
+        if let allDevices = try? storage.sessionStore.allDevices(for: jid.stringValue, activeAndTrusted: true) {
+            allDevices.filter { (id) -> Bool in
+                return !knownActiveDevices.contains(id);
+                }.forEach { (deviceId) in
+                    _ = storage.identityKeyStore.setStatus(active: false, forIdentity: SignalAddress(name: jid.stringValue, deviceId: deviceId));
+            }
+            
+            knownActiveDevices.filter { (id) -> Bool in
+                return !allDevices.contains(id);
+                }.forEach { (deviceId) in
+                    // TODO: we should enable this device key if we have its identity!
+                    _ = storage.identityKeyStore.setStatus(active: true, forIdentity: SignalAddress(name: jid.stringValue, deviceId: deviceId));
+            }
         }
         
         if me {
@@ -912,7 +936,8 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                     return;
                 }
                 let address = SignalAddress(name: jid.stringValue, deviceId: deviceId);
-                if !self.storage.sessionStore.containsSessionRecord(forAddress: address) {
+                // A failed read counts as having a session, as when encrypting.
+                if !((try? self.storage.sessionStore.containsSessionRecord(forAddress: address)) ?? true) {
                     // we do not have a session, so we need to build one!
                     group.enter();
                     self.buildSession(forAddress: address, completionHandler: {
@@ -991,7 +1016,8 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
         let group = DispatchGroup();
         // A session made during the wait means the device is alive. Building
         // again would replace it and use up one of its one-time prekeys.
-        let alive = Set(ids.filter { storage.sessionStore.containsSessionRecord(forAddress: SignalAddress(name: account.stringValue, deviceId: $0)) });
+        // A failed read counts as alive for the same reason.
+        let alive = Set(ids.filter { (try? storage.sessionStore.containsSessionRecord(forAddress: SignalAddress(name: account.stringValue, deviceId: $0))) ?? true });
         ids.filter { !alive.contains($0) }.forEach { id in
             group.enter();
             // Off `devicesQueue`: a fetch records its outcome on it, and one
@@ -1539,18 +1565,27 @@ open class OMEMOModule: AbstractPEPModule, XmppModule, Resetable {
                 return UInt32(preKeyId);
             });
             
-            var validKeys = currentKeys?.map({ (preKeyId) -> SignalPreKey? in
+            var validKeys: [SignalPreKey] = [];
+            for preKeyId in currentKeys ?? [] {
                 // A used one stays readable until the flush, for others who picked it too, but is
                 // never offered again.
-                guard !self.storage.preKeyStore.isPreKeyDeleted(withId: preKeyId), let key = self.storage.preKeyStore.loadPreKey(withId: preKeyId) else {
-                    return nil;
+                guard !self.storage.preKeyStore.isPreKeyDeleted(withId: preKeyId) else {
+                    continue;
                 }
-                return SignalPreKey(fromSerializedData: key);
-            }).filter({ (preKey) -> Bool in
-                return preKey != nil;
-            }).map({ preKey -> SignalPreKey in
-                return preKey!;
-            }) ?? [];
+                let stored: Data?;
+                do {
+                    stored = try self.storage.preKeyStore.loadPreKey(withId: preKeyId);
+                } catch {
+                    // A key we couldn't read is still ours; leaving it out would publish a
+                    // bundle with fewer keys than the one on the server.
+                    logger.error("Couldn't read prekey \(preKeyId, privacy: .private(mask: .hash)), not publishing the bundle");
+                    failure?();
+                    return;
+                }
+                if let stored, let preKey = SignalPreKey(fromSerializedData: stored) {
+                    validKeys.append(preKey);
+                }
+            }
             let needKeys = 100 - validKeys.count;
             if needKeys > 0 {
                 changed = true;

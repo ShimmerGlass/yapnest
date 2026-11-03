@@ -38,7 +38,7 @@ struct OMEMOStoreTests {
         #expect(store.setStatus(.compromisedActive, forIdentity: own))
 
         store.forget(deviceIds: [2], of: me.description)
-        #expect(!store.containsSessionRecord(forAddress: own))
+        #expect(try !store.containsSessionRecord(forAddress: own))
         _ = store.save(identity: own, publicKeyData: key(2))
 
         #expect(!store.isTrusted(identity: own, publicKeyData: key(2)))
@@ -65,8 +65,8 @@ struct OMEMOStoreTests {
         }
         #expect(store.setStatus(active: false, forIdentity: SignalAddress(name: bob, deviceId: 2)))
         #expect(store.setStatus(.undecidedActive, forIdentity: SignalAddress(name: bob, deviceId: 3)))
-        #expect(store.allDevices(for: bob, activeAndTrusted: true) == [1])
-        #expect(Set(store.allDevices(for: bob, activeAndTrusted: false)) == [1, 2, 3])
+        #expect(try store.allDevices(for: bob, activeAndTrusted: true) == [1])
+        #expect(try Set(store.allDevices(for: bob, activeAndTrusted: false)) == [1, 2, 3])
     }
 
     /// Another sender may have picked the same key, so it stays readable until the flush, but isn't offered again.
@@ -77,12 +77,12 @@ struct OMEMOStoreTests {
         #expect(store.currentPreKeyId() == 2)
 
         #expect(store.deletePreKey(withId: 1))
-        #expect(store.loadPreKey(withId: 1) == Data([1]))
+        #expect(try store.loadPreKey(withId: 1) == Data([1]))
         #expect(store.isPreKeyDeleted(withId: 1))
         #expect(!store.isPreKeyDeleted(withId: 2))
-        #expect(store.loadPreKey(withId: 2) == Data([2]))
+        #expect(try store.loadPreKey(withId: 2) == Data([2]))
         #expect(store.flushDeletedPreKeys())
-        #expect(store.loadPreKey(withId: 1) == nil)
+        #expect(try store.loadPreKey(withId: 1) == nil)
         #expect(!store.containsPreKey(withId: 1))
         #expect(!store.isPreKeyDeleted(withId: 1))
         #expect(!store.flushDeletedPreKeys())
@@ -125,7 +125,7 @@ struct OMEMOStoreTests {
         #expect(store.currentPreKeyId() == 0)
         try database.writer.write { try $0.execute(sql: "ALTER TABLE omemoPreKeyAside RENAME TO omemoPreKey") }
         #expect(!store.storePreKey(Data([9]), withId: 1), "1 may be in use")
-        #expect(store.loadPreKey(withId: 1) == nil)
+        #expect(try store.loadPreKey(withId: 1) == nil)
         #expect(store.currentPreKeyId() == 7)
         #expect(store.storePreKey(Data([9]), withId: 8))
     }
@@ -199,7 +199,7 @@ struct OMEMOStoreTests {
         #expect(upgraded.store.keyPair()?.publicKey == old.store.keyPair()?.publicKey)
         #expect(try keys.load() == StoredIdentity(registrationId: old.deviceId, keyPair: pair))
         #expect(try database.setting(.omemoIdentityKeyPair) == nil)
-        #expect(upgraded.store.sessionRecord(forAddress: SignalAddress(name: bob, deviceId: 7)) == Data([1]), "a move isn't a restore")
+        #expect(try upgraded.store.sessionRecord(forAddress: SignalAddress(name: bob, deviceId: 7)) == Data([1]), "a move isn't a restore")
     }
 
     /// The moved key leaves no copy in the files a backup takes: its page is
@@ -250,7 +250,7 @@ struct OMEMOStoreTests {
         #expect(try keys.load()?.registrationId == kept.deviceId)
         #expect(try database.setting(.omemoRegistrationId) == String(kept.deviceId))
         #expect(try database.setting(.omemoIdentityKeyPair) == nil)
-        #expect(upgraded.store.sessionRecord(forAddress: bobsDevice) == Data([1]), "the kept device's sessions stay")
+        #expect(try upgraded.store.sessionRecord(forAddress: bobsDevice) == Data([1]), "the kept device's sessions stay")
         #expect(upgraded.store.loadSignedPreKey(withId: 1) == keptSigned, "for sessions started from the kept device's bundle")
         // The older build's, signed with its key, is no longer the newest,
         // which is what the bundle publishes.
@@ -372,7 +372,7 @@ struct OMEMOStoreTests {
         let omemo = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
         let own = SignalAddress(name: me.description, deviceId: Int32(bitPattern: omemo.deviceId))
         #expect(!omemo.store.storeSessionRecord(Data([1]), forAddress: own))
-        #expect(!omemo.store.containsSessionRecord(forAddress: own))
+        #expect(try !omemo.store.containsSessionRecord(forAddress: own))
         #expect(try ownRows(of: omemo.deviceId, in: database) == 0)
     }
 
@@ -384,7 +384,7 @@ struct OMEMOStoreTests {
         let other = SignalAddress(name: me.description, deviceId: Int32(bitPattern: omemo.deviceId) &+ 1)
         #expect(omemo.store.save(identity: other, publicKeyData: key(2)))
         #expect(omemo.store.storeSessionRecord(Data([1]), forAddress: other))
-        #expect(omemo.store.ownDevicesToEncryptTo() == [other.deviceId])
+        #expect(try omemo.store.ownDevicesToEncryptTo() == [other.deviceId])
     }
 
     @Test func launchRemovesWhatAnOlderBuildSavedForOurOwnDevice() throws {
@@ -452,8 +452,8 @@ struct OMEMOStoreTests {
         let restored = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
         #expect(restored.deviceId != old.deviceId)
         #expect(restored.store.keyPair()?.publicKey != old.store.keyPair()?.publicKey)
-        #expect(restored.store.sessionRecord(forAddress: bobsDevice) == nil)
-        #expect(restored.store.loadPreKey(withId: 1) == nil)
+        #expect(try restored.store.sessionRecord(forAddress: bobsDevice) == nil)
+        #expect(try restored.store.loadPreKey(withId: 1) == nil)
         #expect(restored.store.loadSignedPreKey(withId: 1) == nil)
         #expect(restored.store.isTrusted(identity: bobsDevice, publicKeyData: key(0x07)))
     }
@@ -478,8 +478,8 @@ struct OMEMOStoreTests {
         #expect(new.store.keyPair()?.publicKey != oldKey)
         #expect(try keys.load()?.registrationId == new.deviceId)
         #expect(try database.setting(.omemoRegistrationId) == String(new.deviceId))
-        #expect(new.store.sessionRecord(forAddress: bobsDevice) == nil)
-        #expect(new.store.loadPreKey(withId: 1) == nil)
+        #expect(try new.store.sessionRecord(forAddress: bobsDevice) == nil)
+        #expect(try new.store.loadPreKey(withId: 1) == nil)
         #expect(new.store.loadSignedPreKey(withId: 1) == nil)
         #expect(new.store.isTrusted(identity: bobsDevice, publicKeyData: key(0x07)), "what the user decided about contacts stays")
         #expect(new.store.replacedDeviceIds() == [Int32(bitPattern: oldId)])
@@ -497,7 +497,7 @@ struct OMEMOStoreTests {
 
         let again = try OMEMOEncryption(database: database, account: me, identityKeys: keys)
         #expect(again.deviceId == old.deviceId)
-        #expect(again.store.sessionRecord(forAddress: bobsDevice) == Data([1]))
+        #expect(try again.store.sessionRecord(forAddress: bobsDevice) == Data([1]))
         #expect(again.store.replacedDeviceIds().isEmpty)
     }
 
@@ -673,7 +673,7 @@ struct OMEMOStoreTests {
 
         #expect(throws: KeychainError.self) { try OMEMOEncryption(database: database, account: me, identityKeys: LockedIdentityKeyStore()) }
         #expect(try database.setting(.omemoRegistrationId) == String(omemo.deviceId))
-        #expect(omemo.store.sessionRecord(forAddress: bobsDevice) == Data([1]))
+        #expect(try omemo.store.sessionRecord(forAddress: bobsDevice) == Data([1]))
         #expect(try keys.load() == identity)
     }
 
@@ -749,8 +749,8 @@ struct TrustTests {
             _ = store.storeSessionRecord(Data([1]), forAddress: address)
         }
         session.setTrust(.compromised, for: try #require(session.devices(of: bob).first { $0.id == 1 }))
-        #expect(!store.containsSessionRecord(forAddress: SignalAddress(name: bob.description, deviceId: 1)))
-        #expect(store.containsSessionRecord(forAddress: SignalAddress(name: bob.description, deviceId: 2)))
+        #expect(try !store.containsSessionRecord(forAddress: SignalAddress(name: bob.description, deviceId: 1)))
+        #expect(try store.containsSessionRecord(forAddress: SignalAddress(name: bob.description, deviceId: 2)))
     }
 }
 

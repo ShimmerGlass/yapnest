@@ -173,7 +173,9 @@ final class OMEMOEncryption: @unchecked Sendable {
         // sender could otherwise keep a lost device looking active with
         // messages it never wrote. Recorded on the way out, after decoding,
         // which is where a new device's identity is first stored.
-        let hadSession = device.map { store.containsSessionRecord(forAddress: SignalAddress(name: sender.description, deviceId: $0)) } ?? false
+        // A failed read isn't taken to be a session: not noting a use is the safe side, since
+        // a use noted for a device we may not know would keep a lost one looking active.
+        let hadSession = device.flatMap { try? store.containsSessionRecord(forAddress: SignalAddress(name: sender.description, deviceId: $0)) } ?? false
         var decrypted = false
         defer {
             if let device, decrypted || hadSession { store.noteUsed(name: sender.description, deviceId: device, at: sentAt) }
@@ -275,7 +277,8 @@ final class OMEMOEncryption: @unchecked Sendable {
     /// the other devices of the account.
     func keyHolders(in stanza: Martin.Message) -> (forThisDevice: Bool, forOtherOwnDevices: Bool) {
         let ours = Int32(bitPattern: deviceId).omemoId
-        let others = Set(store.ownDevicesToEncryptTo().map(\.omemoId)).subtracting([ours])
+        // Only explains a failure that is already decided, so unreadable devices count as none.
+        let others = Set(((try? store.ownDevicesToEncryptTo()) ?? []).map(\.omemoId)).subtracting([ours])
         let rids = Self.keyRids(in: stanza)
         return (rids.contains(ours), rids.contains { others.contains($0) })
     }
@@ -493,7 +496,14 @@ final class OMEMOEncryption: @unchecked Sendable {
             allVerified = allVerified && trusted.allSatisfy { identities[$0.deviceId]?.trust == .verified }
         }
         if skippingUnreachable, reached.isEmpty { return .failure(firstFailure ?? .setupFailed(account)) }
-        let own = store.ownDevicesToEncryptTo().map { SignalAddress(name: account.description, deviceId: $0) }
+        let own: [SignalAddress]
+        do {
+            own = try store.ownDevicesToEncryptTo().map { SignalAddress(name: account.description, deviceId: $0) }
+        } catch {
+            // Sent without them, the message would never be readable on our other devices. It
+            // fails like any setup failure, and the user can try again.
+            return .failure(.setupFailed(account))
+        }
         DiagLog.info(.omemo, "Encrypting", .int("recipients", reached.count), .int("recipientDevices", usable.count), .int("ownDevices", own.count), .int("skipped", skipped))
         // MartinOMEMO drops a device it fails to encrypt for, so a key
         // transport counts who got a key rather than fail for one session.
@@ -531,7 +541,11 @@ final class OMEMOEncryption: @unchecked Sendable {
         // The peer's own list, from which sessions are built: a device the
         // peer's caller names that isn't on it is not theirs to vouch with.
         let address = SignalAddress(name: name, deviceId: device)
-        guard listed?.contains(device) == true, store.containsSessionRecord(forAddress: address) else { return .failure(.noSession) }
+        guard listed?.contains(device) == true else { return .failure(.noSession) }
+        // Not noSession, which says the device can't be used: the read failed, the session may be fine.
+        let hasSession: Bool
+        do { hasSession = try store.containsSessionRecord(forAddress: address) } catch { return .failure(.setupFailed) }
+        guard hasSession else { return .failure(.noSession) }
         guard let status = store.status(forName: address.name, deviceId: device), status.isActive else { return .failure(.noSession) }
         if status.trust == .compromised { return .failure(.compromisedDevice) }
 

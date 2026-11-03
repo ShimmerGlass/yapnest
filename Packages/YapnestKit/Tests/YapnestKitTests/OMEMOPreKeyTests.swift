@@ -207,6 +207,39 @@ struct OMEMOPreKeyTests {
         bob.module.mamSyncFinished(for: nil)
     }
 
+    /// A key that can't be read is still ours. Left out, it would be replaced by
+    /// a new one and a bundle published with it, though the old key may well be
+    /// fine. Only one key's read fails here, through a view over the table, so
+    /// that the replacement could be stored and the publish would go through.
+    @Test func aPreKeyThatCantBeReadAbortsTheBundlePublishInsteadOfDroppingIt() async throws {
+        let (bob, server, client, database) = try await setUp()
+        defer { withExtendedLifetime(client) {} }
+        let unreadable = try #require(server.publishedPreKeyIds.first)
+        let before = server.bundlePublishes
+        try await database.writer.write { db in
+            try db.execute(sql: "ALTER TABLE omemoPreKey RENAME TO omemoPreKeyAside")
+            // abs() of the smallest integer is an overflow error.
+            try db.execute(sql: """
+                CREATE VIEW omemoPreKey AS SELECT id, isDeleted,
+                CASE WHEN id = \(unreadable) THEN abs(-9223372036854775807 - 1) ELSE data END AS data
+                FROM omemoPreKeyAside
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER omemoPreKeyInsert INSTEAD OF INSERT ON omemoPreKey BEGIN
+                INSERT OR REPLACE INTO omemoPreKeyAside (id, data, isDeleted) VALUES (NEW.id, NEW.data, NEW.isDeleted);
+                END
+                """)
+        }
+        #expect(throws: (any Error).self) { try bob.store.loadPreKey(withId: unreadable) }
+
+        nonisolated(unsafe) var finished = false
+        bob.module.publishDeviceBundleIfNeeded(completionHandler: { finished = true })
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(!finished)
+        #expect(server.bundlePublishes == before, "a bundle was published without the key it couldn't read")
+        #expect(server.publishedPreKeyIds.contains(unreadable))
+    }
+
     @Test func aResetStillTakesTheUsedPreKeyOutOfTheBundle() async throws {
         let (bob, server, client, database) = try await setUp()
         defer { withExtendedLifetime(client) {} }

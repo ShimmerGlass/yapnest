@@ -65,6 +65,12 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         do { return try database.reader.read(body) } catch { return nil }
     }
 
+    /// For the reads whose failure must not pass for finding nothing: a session
+    /// read as missing is rebuilt, which burns one of the device's prekeys.
+    private func readThrowing<T>(_ body: (Database) throws -> T) throws -> T {
+        try database.reader.read(body)
+    }
+
     private func write(_ body: (Database) throws -> Void) -> Bool {
         do {
             try database.writer.write(body)
@@ -381,17 +387,17 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
             """, arguments: [address.name, address.deviceId, data])
     }
 
-    func sessionRecord(forAddress address: SignalAddress) -> Data? {
+    func sessionRecord(forAddress address: SignalAddress) throws -> Data? {
         if let record = batchedRecord(for: address) { return record }
-        return read { db in
+        return try readThrowing { db in
             try Data.fetchOne(db, sql: "SELECT data FROM omemoSession WHERE name = ? AND deviceId = ?", arguments: [address.name, address.deviceId])
-        } ?? nil
+        }
     }
 
     /// The devices of `name` we hold a session with. Never this install's own,
     /// which has none: see `storeSessionRecord` and `dropRowsOfOwnDevice`.
-    func allDevices(for name: String, activeAndTrusted: Bool) -> [Int32] {
-        let devices: [Int32]? = read { db in
+    func allDevices(for name: String, activeAndTrusted: Bool) throws -> [Int32] {
+        try readThrowing { db in
             if activeAndTrusted {
                 let usable = [IdentityStatus.trustedActive, .verifiedActive].map(\.rawValue)
                 return try Int32.fetchAll(db, sql: """
@@ -402,7 +408,6 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
             }
             return try Int32.fetchAll(db, sql: "SELECT deviceId FROM omemoSession WHERE name = ?", arguments: [name])
         }
-        return devices ?? []
     }
 
     /// A send's batch stores through here too, so refusing our own device
@@ -413,9 +418,9 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
         return write { db in try Self.storeSession(data, for: address, in: db) }
     }
 
-    func containsSessionRecord(forAddress address: SignalAddress) -> Bool {
+    func containsSessionRecord(forAddress address: SignalAddress) throws -> Bool {
         if batchedRecord(for: address) != nil { return true }
-        return read { db in
+        return try readThrowing { db in
             try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM omemoSession WHERE name = ? AND deviceId = ?)", arguments: [address.name, address.deviceId])
         } == true
     }
@@ -474,8 +479,8 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
     /// extension left. Two people who fetched the same bundle can pick the
     /// same prekey, and the second's messages would otherwise never decrypt.
     /// It is never published again meanwhile (`isPreKeyDeleted`).
-    func loadPreKey(withId id: UInt32) -> Data? {
-        read { db in try Data.fetchOne(db, sql: "SELECT data FROM omemoPreKey WHERE id = ?", arguments: [id]) } ?? nil
+    func loadPreKey(withId id: UInt32) throws -> Data? {
+        try readThrowing { db in try Data.fetchOne(db, sql: "SELECT data FROM omemoPreKey WHERE id = ?", arguments: [id]) }
     }
 
     func isPreKeyDeleted(withId id: UInt32) -> Bool {
@@ -870,9 +875,10 @@ final class OMEMOStore: SignalSessionStoreProtocol, SignalPreKeyStoreProtocol, S
 
     /// Our own devices to encrypt to: the usable ones that haven't gone
     /// quiet. Unlike a contact's, they may all be left out, since we hold
-    /// the plaintext ourselves.
-    func ownDevicesToEncryptTo() -> [Int32] {
-        withoutInactive(allDevices(for: account, activeAndTrusted: true), usage: usage(forName: account))
+    /// the plaintext ourselves. Throws when the devices can't be read, as
+    /// leaving them out would send a message they can't read.
+    func ownDevicesToEncryptTo() throws -> [Int32] {
+        try withoutInactive(allDevices(for: account, activeAndTrusted: true), usage: usage(forName: account))
     }
 
     func identityFingerprint(forAddress address: SignalAddress) -> String? {

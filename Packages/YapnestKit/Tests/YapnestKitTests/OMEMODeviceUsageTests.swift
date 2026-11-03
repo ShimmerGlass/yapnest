@@ -140,12 +140,12 @@ struct OMEMODeviceUsageTests {
     @Test func ourOwnQuietDevicesAreLeftOutEvenIfAllAre() throws {
         let store = try store()
         add([1, 2], of: me.description, to: store)
-        #expect(Set(store.ownDevicesToEncryptTo()) == [1, 2])
+        #expect(try Set(store.ownDevicesToEncryptTo()) == [1, 2])
         store.noteUsed(name: me.description, deviceId: 1, at: clock.now)
         clock.advance(days: 100)
-        #expect(store.ownDevicesToEncryptTo().isEmpty, "we have the plaintext ourselves, so no fallback")
+        #expect(try store.ownDevicesToEncryptTo().isEmpty, "we have the plaintext ourselves, so no fallback")
         store.noteUsed(name: me.description, deviceId: 2, at: clock.now)
-        #expect(store.ownDevicesToEncryptTo() == [2])
+        #expect(try store.ownDevicesToEncryptTo() == [2])
     }
 
     @Test func ourOwnDevicesStayUntrustedOrRemovedWhenFresh() throws {
@@ -153,7 +153,7 @@ struct OMEMODeviceUsageTests {
         add([1, 2, 3], of: me.description, to: store)
         #expect(store.setStatus(.undecidedActive, forIdentity: SignalAddress(name: me.description, deviceId: 2)))
         #expect(store.setStatus(active: false, forIdentity: SignalAddress(name: me.description, deviceId: 3)))
-        #expect(store.ownDevicesToEncryptTo() == [1])
+        #expect(try store.ownDevicesToEncryptTo() == [1])
     }
 
     @Test func forgettingDevicesDropsTheirSessionsAndIdentities() throws {
@@ -161,7 +161,7 @@ struct OMEMODeviceUsageTests {
         add([1, 2], of: me.description, to: store)
         store.forget(deviceIds: [1], of: me.description)
         #expect(store.identities(forName: me.description).map(\.address.deviceId) == [2])
-        #expect(store.allDevices(for: me.description, activeAndTrusted: false) == [2])
+        #expect(try store.allDevices(for: me.description, activeAndTrusted: false) == [2])
     }
 
     // MARK: Migration

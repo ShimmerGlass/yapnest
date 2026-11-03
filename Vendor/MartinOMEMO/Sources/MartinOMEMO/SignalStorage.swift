@@ -108,13 +108,15 @@ open class SignalStorage {
 
 public protocol SignalSessionStoreProtocol: AnyObject {
 
-    func sessionRecord(forAddress address: SignalAddress) -> Data?;
+    // The reads throw when the store can't be read, so that a failed read isn't taken for
+    // nothing there: they return nil, false or [] only when the read worked and found nothing.
+    func sessionRecord(forAddress address: SignalAddress) throws -> Data?;
  
-    func allDevices(for: String, activeAndTrusted: Bool) -> [Int32];
+    func allDevices(for: String, activeAndTrusted: Bool) throws -> [Int32];
     
     func storeSessionRecord(_ data: Data, forAddress: SignalAddress) -> Bool;
     
-    func containsSessionRecord(forAddress: SignalAddress) -> Bool;
+    func containsSessionRecord(forAddress: SignalAddress) throws -> Bool;
     
     func deleteSessionRecord(forAddress: SignalAddress) -> Bool;
     
@@ -125,7 +127,7 @@ public protocol SignalPreKeyStoreProtocol: AnyObject {
     
     func currentPreKeyId() -> UInt32;
     
-    func loadPreKey(withId: UInt32) -> Data?;
+    func loadPreKey(withId: UInt32) throws -> Data?;
     
     func storePreKey(_ data: Data, withId: UInt32) -> Bool;
     
@@ -200,7 +202,13 @@ fileprivate func load_session_func(record: UnsafeMutablePointer<OpaquePointer?>?
         return -1;
     }
     
-    guard let data = sessionStore.sessionRecord(forAddress: addr) else {
+    let found: Data?;
+    do {
+        found = try sessionStore.sessionRecord(forAddress: addr);
+    } catch {
+        return CInt(SignalError.storageFailed.rawValue);
+    }
+    guard let data = found else {
         return 0;
     }
     
@@ -215,7 +223,12 @@ fileprivate func get_sub_device_sessions_func(sessions: UnsafeMutablePointer<Opa
     guard let name = String(validatingUTF8: namePtr!) else {
         return -1;
     }
-    let devices = sessionStore.allDevices(for: name, activeAndTrusted: false);
+    let devices: [Int32];
+    do {
+        devices = try sessionStore.allDevices(for: name, activeAndTrusted: false);
+    } catch {
+        return CInt(SignalError.storageFailed.rawValue);
+    }
     guard let list = signal_int_list_alloc() else {
         return -1;
     }
@@ -240,7 +253,11 @@ fileprivate func contains_session_func(address: UnsafePointer<signal_protocol_ad
     guard let addr = SignalAddress(from: address) else {
         return -1;
     }
-    return sessionStore.containsSessionRecord(forAddress: addr) ? 1 : 0;
+    do {
+        return try sessionStore.containsSessionRecord(forAddress: addr) ? 1 : 0;
+    } catch {
+        return CInt(SignalError.storageFailed.rawValue);
+    }
 }
 
 fileprivate func delete_session_func(address: UnsafePointer<signal_protocol_address>?, userData: UnsafeMutableRawPointer?) -> CInt {
@@ -266,7 +283,14 @@ fileprivate func destroy_func(userData: UnsafeMutableRawPointer?) {
 
 fileprivate func load_pre_key(record: UnsafeMutablePointer<OpaquePointer?>?, preKeyId: UInt32, userData: UnsafeMutableRawPointer?) -> CInt {
     let preKeyStore: SignalPreKeyStoreProtocol = SignalContext.bridge(fromPointer: userData!) as! SignalPreKeyStoreProtocol;
-    guard let preKey = preKeyStore.loadPreKey(withId: preKeyId) else {
+    let found: Data?;
+    do {
+        found = try preKeyStore.loadPreKey(withId: preKeyId);
+    } catch {
+        // Not "invalid key id": the key may well be there, and libsignal passes the code on.
+        return CInt(SignalError.storageFailed.rawValue);
+    }
+    guard let preKey = found else {
         return SG_ERR_INVALID_KEY_ID;
     }
     

@@ -1,0 +1,246 @@
+import Foundation
+import GRDB
+@preconcurrency import Martin
+@preconcurrency @testable import MartinOMEMO
+import Testing
+@testable import YapnestKit
+
+/// A read of the key store that fails (a full disk, a locked file) is not the
+/// same as one that finds nothing. Taken for nothing, a working session is
+/// rebuilt over, which uses up one of the device's prekeys; a device list is
+/// reconciled against devices that seem gone; a prekey message fails as if its
+/// key were invalid. The failure is forced by renaming the table away.
+struct OMEMOReadFailureTests {
+    let me = YapnestKit.JID("me@example.org")!
+    let alice = YapnestKit.JID("alice@example.org")!
+    let bob = "bob@example.org"
+
+    private func key(_ byte: UInt8) -> Data { Data([0x05] + Array(repeating: byte, count: 32)) }
+
+    /// Runs `body` with `table` unreadable.
+    private func without<T>(_ table: String, in database: AppDatabase, _ body: () async throws -> T) async throws -> T {
+        try await database.writer.write { try $0.execute(sql: "ALTER TABLE \(table) RENAME TO \(table)Aside") }
+        do {
+            let value = try await body()
+            try await database.writer.write { try $0.execute(sql: "ALTER TABLE \(table)Aside RENAME TO \(table)") }
+            return value
+        } catch {
+            try await database.writer.write { try $0.execute(sql: "ALTER TABLE \(table)Aside RENAME TO \(table)") }
+            throw error
+        }
+    }
+
+    private func count(_ table: String, in database: AppDatabase) throws -> Int {
+        try database.reader.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM \(table)") ?? 0 }
+    }
+
+    // MARK: The store
+
+    @Test func eachReadThrowsWhenTheDatabaseCantBeRead() async throws {
+        let database = try AppDatabase.inMemory()
+        let store = OMEMOStore(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        let address = SignalAddress(name: bob, deviceId: 1)
+        #expect(store.save(identity: address, publicKeyData: key(1)))
+        #expect(store.storeSessionRecord(Data([1]), forAddress: address))
+        #expect(store.storePreKey(Data([2]), withId: 1))
+
+        try await without("omemoSession", in: database) {
+            #expect(throws: (any Error).self) { try store.sessionRecord(forAddress: address) }
+            #expect(throws: (any Error).self) { try store.containsSessionRecord(forAddress: address) }
+            #expect(throws: (any Error).self) { try store.allDevices(for: bob, activeAndTrusted: false) }
+            #expect(throws: (any Error).self) { try store.allDevices(for: bob, activeAndTrusted: true) }
+            #expect(throws: (any Error).self) { try store.ownDevicesToEncryptTo() }
+        }
+        try await without("omemoPreKey", in: database) {
+            #expect(throws: (any Error).self) { try store.loadPreKey(withId: 1) }
+        }
+        #expect(try store.sessionRecord(forAddress: address) == Data([1]))
+        #expect(try store.loadPreKey(withId: 1) == Data([2]))
+    }
+
+    @Test func eachReadReturnsNoneWhenThereIsNothingStored() throws {
+        let store = OMEMOStore(database: try AppDatabase.inMemory(), account: me, identityKeys: MemoryIdentityKeyStore())
+        let address = SignalAddress(name: bob, deviceId: 1)
+        #expect(try store.sessionRecord(forAddress: address) == nil)
+        #expect(try !store.containsSessionRecord(forAddress: address))
+        #expect(try store.allDevices(for: bob, activeAndTrusted: true).isEmpty)
+        #expect(try store.allDevices(for: bob, activeAndTrusted: false).isEmpty)
+        #expect(try store.loadPreKey(withId: 1) == nil)
+    }
+
+    // MARK: Decrypting
+
+    /// A and B past the prekey stage.
+    private func established(keyId: UInt32) throws -> (a: OMEMOPeer, b: OMEMOPeer) {
+        let a = try OMEMOPeer("a@example.org"), b = try OMEMOPeer("b@example.org")
+        try startSession(from: b.omemo, to: a.omemo, named: a.account.description, keyId: keyId)
+        #expect(a.receive(try #require(b.send("hello", to: a)), from: b) == .init(outcome: "decrypted", body: "hello"))
+        #expect(b.receive(try #require(a.send("hello back", to: b)), from: a) == .init(outcome: "decrypted", body: "hello back"))
+        return (a, b)
+    }
+
+    private func sessionRecord(_ a: OMEMOPeer, with b: OMEMOPeer) throws -> Data? {
+        try a.omemo.store.sessionRecord(forAddress: b.address)
+    }
+
+    @Test func aMessageWhileTheSessionCantBeReadFailsAndRepairsNothing() async throws {
+        let (a, b) = try established(keyId: 5101)
+        let before = try #require(try sessionRecord(a, with: b))
+        let message = try #require(b.send("while unreadable", to: a))
+        let writes = a.wire.written.count
+
+        let received = try await without("omemoSession", in: a.database) { a.receive(message, from: b) }
+        #expect(received.outcome == "failed")
+        #expect(received.body == "storageFailed")
+        // A repair starts with the fetch of the device's bundle.
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(a.wire.written.count == writes, "a repair was started")
+        #expect(try sessionRecord(a, with: b) == before)
+        #expect(a.receive(message, from: b) == .init(outcome: "decrypted", body: "while unreadable"), "the ratchet wasn't touched")
+    }
+
+    @Test func aPreKeyMessageWhileTheSessionCantBeReadDoesntReplaceTheSession() async throws {
+        let (a, b) = try established(keyId: 5201)
+        let before = try #require(try sessionRecord(a, with: b))
+        // B starts over from a new bundle of A's, as after losing its session.
+        try startSession(from: b.omemo, to: a.omemo, named: a.account.description, keyId: 5202)
+        let message = try #require(b.send("fresh", to: a))
+        let preKeys = try count("omemoPreKey", in: a.database)
+
+        let received = try await without("omemoSession", in: a.database) { a.receive(message, from: b) }
+        #expect(received.outcome == "failed")
+        #expect(received.body == "storageFailed")
+        #expect(try sessionRecord(a, with: b) == before, "the session was replaced")
+        #expect(try count("omemoPreKey", in: a.database) == preKeys)
+        #expect(try a.omemo.store.loadPreKey(withId: 5202) != nil, "the prekey was used up")
+        #expect(a.receive(message, from: b) == .init(outcome: "decrypted", body: "fresh"))
+    }
+
+    @Test func aPreKeyMessageWhileThePreKeyCantBeReadFailsAsStorageNotAsAnInvalidKey() async throws {
+        let a = try OMEMOPeer("a@example.org"), b = try OMEMOPeer("b@example.org")
+        try startSession(from: b.omemo, to: a.omemo, named: a.account.description, keyId: 5301)
+        let message = try #require(b.send("first", to: a))
+
+        let received = try await without("omemoPreKey", in: a.database) { a.receive(message, from: b) }
+        #expect(received.outcome == "failed")
+        #expect(received.body == "storageFailed", "taken for an invalid key id")
+        #expect(try a.omemo.store.loadPreKey(withId: 5301) != nil, "the prekey is gone")
+        #expect(a.receive(message, from: b) == .init(outcome: "decrypted", body: "first"))
+    }
+
+    // MARK: Device lists
+
+    private func listFixture() throws -> (encryption: OMEMOEncryption, client: XMPPClient, wire: FakeWire, database: AppDatabase) {
+        let wire = FakeWire()
+        wire.answer { [alice] iq in
+            iq.to?.bareJid.stringValue == alice.description
+                && iq.firstChild(name: "pubsub")?.firstChild(name: "items")?.getAttribute("node") == OMEMOModule.DEVICES_LIST_NODE
+                ? OMEMODeviceListTests.list([4, 9], to: iq) : FakeWire.error(to: iq)
+        }
+        let database = try AppDatabase.inMemory()
+        let encryption = try OMEMOEncryption(database: database, account: me, identityKeys: MemoryIdentityKeyStore())
+        let client = XMPPClient()
+        client.connectionConfiguration.userJid = BareJID(me.description)
+        client.writer = wire
+        _ = client.modulesManager.register(DiscoveryModule(identity: .init(category: "client", type: "pc", name: "Test")))
+        _ = client.modulesManager.register(PubSubModule())
+        _ = client.modulesManager.register(encryption.module)
+        // Device 1 is in use but not listed; device 4 is listed but was set inactive.
+        for (id, active) in [(Int32(1), true), (4, false)] {
+            let address = SignalAddress(name: alice.description, deviceId: id)
+            #expect(encryption.store.save(identity: address, publicKeyData: key(UInt8(id))))
+            #expect(encryption.store.storeSessionRecord(Data([UInt8(id)]), forAddress: address))
+            #expect(encryption.store.setStatus(active: active, forIdentity: address))
+        }
+        return (encryption, client, wire, database)
+    }
+
+    private func isActive(_ id: Int32, in encryption: OMEMOEncryption) -> Bool? {
+        encryption.store.status(forName: alice.description, deviceId: id)?.isActive
+    }
+
+    private func bundleFetches(_ wire: FakeWire) -> [String] {
+        wire.written.compactMap { $0 as? Iq }
+            .compactMap { $0.firstChild(name: "pubsub")?.firstChild(name: "items")?.getAttribute("node") }
+            .filter { $0.contains(".bundles:") }
+    }
+
+    @Test func aListFetchedWhileTheStoredDevicesCantBeReadChangesNoDeviceAndBuildsNoSession() async throws {
+        let (encryption, client, wire, database) = try listFixture()
+        defer { withExtendedLifetime(client) {} }
+        let module = encryption.module, jid = BareJID(alice.description)
+
+        let found = try await without("omemoSession", in: database) {
+            await withCheckedContinuation { (continuation: CheckedContinuation<[Int32], Never>) in
+                module.addresses(for: [jid]) { continuation.resume(returning: ((try? $0.get()) ?? []).map(\.deviceId).sorted()) }
+            }
+        }
+        #expect(found == [4, 9])
+        #expect(isActive(1, in: encryption) == true, "marked inactive on a list it wasn't compared with")
+        #expect(isActive(4, in: encryption) == false, "marked active on a list it wasn't compared with")
+        #expect(bundleFetches(wire).isEmpty, "a session was built over one that may exist: \(bundleFetches(wire))")
+    }
+
+    @Test func aListNotifiedWhileTheStoredDevicesCantBeReadChangesNoDeviceAndTheNextOneDoes() async throws {
+        let (encryption, client, _, database) = try listFixture()
+        defer { withExtendedLifetime(client) {} }
+        let module = encryption.module, jid = BareJID(alice.description)
+        func notify() async {
+            let element = Element(name: "list", xmlns: OMEMOModule.XMLNS)
+            for id in [4, 9] { element.addChild(Element(name: "device", attributes: ["id": String(id)])) }
+            let message = Martin.Message()
+            message.from = Martin.JID(alice.description)
+            module.onItemNotification(notification: .init(
+                message: message, node: OMEMOModule.DEVICES_LIST_NODE, timestamp: Date(),
+                action: .published(.init(id: "current", payload: element))))
+            await eventually("the notified list to be kept") { module.devices(for: jid) == [4, 9] }
+        }
+
+        try await without("omemoSession", in: database) { await notify() }
+        #expect(isActive(1, in: encryption) == true)
+        #expect(isActive(4, in: encryption) == false)
+
+        await notify()
+        #expect(isActive(1, in: encryption) == false, "a list with the devices readable reconciles them")
+        #expect(isActive(4, in: encryption) == true)
+    }
+
+    @Test func aContactWhoseDevicesCantBeReadStaysAvailable() async throws {
+        let (encryption, client, _, database) = try listFixture()
+        defer { withExtendedLifetime(client) {} }
+        let module = encryption.module
+        let known = BareJID(alice.description), stranger = BareJID("carol@example.org")
+        #expect(module.isAvailable(for: known))
+        #expect(!module.isAvailable(for: stranger))
+
+        try await without("omemoSession", in: database) {
+            // Falling back to a message in the clear because of a failed read would be worse than a send that fails.
+            #expect(module.isAvailable(for: known))
+            #expect(module.isAvailable(for: stranger))
+        }
+    }
+
+    // MARK: Encrypting
+
+    @Test func encryptingWhileOurOwnDevicesCantBeReadFailsInsteadOfLeavingThemOut() async throws {
+        let (a, b) = try established(keyId: 5401)
+        let message = Martin.Message()
+        message.body = "for everyone"
+        func encode() -> EncryptionResult<Martin.Message, SignalError> {
+            nonisolated(unsafe) var result: EncryptionResult<Martin.Message, SignalError> = .failure(.unknown)
+            a.omemo.module.encode(message: message, forAddresses: [b.address], withStoreHint: false, forSelf: true) { result = $0 }
+            return result
+        }
+
+        let failed = try await without("omemoSession", in: a.database) { encode() }
+        guard case .failure(let error) = failed else {
+            Issue.record("sent without our other devices: \(failed)")
+            return
+        }
+        #expect(error == .storageFailed)
+        guard case .successMessage = encode() else {
+            Issue.record("a send with the devices readable should work")
+            return
+        }
+    }
+}

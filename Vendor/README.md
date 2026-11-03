@@ -1098,6 +1098,29 @@ Each entry gives what went wrong for users, why, and what changed.
   gets its own callback data. Pinned by `OMEMOSignalMemoryTests`, which
   reads libsignal's reference counts.
 
+**A failed read of the key store was taken for nothing there**
+(`SignalSessionStoreProtocol`, `SignalPreKeyStoreProtocol`, `SignalError.storageFailed`)
+- *Symptom:* on a full disk or a locked database, a working session read as
+  missing and was rebuilt, which uses up one of the contact's one-time
+  prekeys; a prekey message was answered as if its prekey were invalid; a
+  device list was compared against devices that seemed gone.
+- *Cause:* the store's reads (`sessionRecord`, `containsSessionRecord`,
+  `allDevices`, `loadPreKey`) couldn't fail, so a store had to answer a
+  failed read with nil, false or an empty list, which is also what finding
+  nothing looks like.
+- *Change:* the four reads throw. A thrown read gives libsignal the new
+  `SignalError.storageFailed` (-100002) from `load_session_func`,
+  `contains_session_func`, `get_sub_device_sessions_func` and `load_pre_key`;
+  libsignal passes a negative return from these on unchanged. Decoding
+  starts no repair for it, as it does for `noSession` and `invalidMessage`.
+  Elsewhere in `OMEMOModule` a failed read is taken the way that does the
+  least harm: OMEMO stays on for the chat (`isAvailable`), a device counts
+  as having a session, so none is built over it, and a device list is not
+  compared with the stored devices for that round. Encrypting fails with
+  `storageFailed` rather than leave out our own devices, and publishing the
+  bundle stops rather than drop a prekey it couldn't read. Pinned by
+  `OMEMOReadFailureTests` and `OMEMOPreKeyTests`.
+
 ## How the bugs were found and how the fixes are checked
 
 They surfaced in YapnestKit's integration tests, which run real sessions

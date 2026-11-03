@@ -257,14 +257,14 @@ extension LiveServer {
             // delivers them live on his next sign-in, ahead of the archive.
             try await Task.sleep(for: .seconds(2))
             let aDevice = SignalAddress(name: alice.description, deviceId: Int32(bitPattern: a.omemoDeviceId))
-            #expect(b.omemoStoreForTesting.containsSessionRecord(forAddress: aDevice))
+            #expect(try b.omemoStoreForTesting.containsSessionRecord(forAddress: aDevice))
             #expect(b.omemoStoreForTesting.deleteSessionRecord(forAddress: aDevice))
 
             let missed = (1...5).map { "missed \($0) \(UUID().uuidString.prefix(6))" }
             for body in missed { try a.send(body, to: bob) }
             try await LiveServer.waitUntil("alice's messages to be sent") { try missed.allSatisfy { (try message($0, in: a)?.status ?? .pending) >= .sent } }
             let incoming = try incomingCount(in: b)
-            let sessionAfterSending = a.omemoStoreForTesting.sessionRecord(forAddress: SignalAddress(name: bob.description, deviceId: Int32(bitPattern: b.omemoDeviceId)))
+            let sessionAfterSending = try a.omemoStoreForTesting.sessionRecord(forAddress: SignalAddress(name: bob.description, deviceId: Int32(bitPattern: b.omemoDeviceId)))
             let repairsBefore = Self.keyTransports(sentBy: proxy)
 
             try await LiveServer.connected(b, encryptionReady: true, timeout: 60)
@@ -272,7 +272,7 @@ extension LiveServer {
             try await LiveServer.waitUntil("bob to have the messages") { try incomingCount(in: b) >= incoming + missed.count }
             // The repair is a key transport to alice's device, which replaces her session.
             try await LiveServer.waitUntil("alice to take the repaired session", timeout: 40) {
-                a.omemoStoreForTesting.sessionRecord(forAddress: SignalAddress(name: bob.description, deviceId: Int32(bitPattern: b.omemoDeviceId))) != sessionAfterSending
+                try a.omemoStoreForTesting.sessionRecord(forAddress: SignalAddress(name: bob.description, deviceId: Int32(bitPattern: b.omemoDeviceId))) != sessionAfterSending
             }
 
             let later = "after the repair \(UUID().uuidString.prefix(8))"

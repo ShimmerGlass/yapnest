@@ -75,7 +75,7 @@ extension LiveServer {
             let bobDevice = SignalAddress(name: bob.description, deviceId: Int32(bitPattern: b.omemoDeviceId))
             let state = """
                 alice's copy: \(String(describing: mine?.status)); bob's last: \(String(describing: theirs?.encryption)); \
-                alice has a session with bob's device \(bobDevice.deviceId): \(a.omemoStoreForTesting.containsSessionRecord(forAddress: bobDevice)); \
+                alice has a session with bob's device \(bobDevice.deviceId): \(try a.omemoStoreForTesting.containsSessionRecord(forAddress: bobDevice)); \
                 alice knows bob's devices: \(a.announcedDevices(of: bob))
                 """
             let original = try #require(received, "\(state)")
@@ -394,7 +394,7 @@ extension LiveServer {
             try await a1.removeOwnDevices([device])
 
             #expect(a1.devices(of: alice).allSatisfy { $0.id != removed }, "it's still listed here")
-            #expect(!a1.omemoStoreForTesting.allDevices(for: alice.description, activeAndTrusted: true).contains(removed))
+            #expect(try !a1.omemoStoreForTesting.allDevices(for: alice.description, activeAndTrusted: true).contains(removed))
             try await waitUntil("bob to hear the new list") {
                 let known = b.announcedDevices(of: alice)
                 return !known.isEmpty && !known.contains(removed) && known.contains(own)
@@ -427,7 +427,7 @@ extension LiveServer {
             // this device can only start a session with it from that.
             let address = SignalAddress(name: alice.description, deviceId: removed)
             try await waitUntil("alice-2 to list itself again with its bundle") {
-                a1.announcedDevices(of: alice).contains(removed) && a1.omemoStoreForTesting.containsSessionRecord(forAddress: address)
+                try a1.announcedDevices(of: alice).contains(removed) && a1.omemoStoreForTesting.containsSessionRecord(forAddress: address)
             }
 
             // And nobody fights over it afterwards.

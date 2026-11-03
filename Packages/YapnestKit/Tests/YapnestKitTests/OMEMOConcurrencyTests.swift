@@ -14,6 +14,7 @@ final class OMEMOPeer: @unchecked Sendable {
     let database: AppDatabase
     let identityKeys: any IdentityKeyStore
     private let client = XMPPClient()
+    let wire = FakeWire()
 
     /// A file-backed database when `url` is given, which is also how a device
     /// is reopened: the same file and identity keys again.
@@ -23,7 +24,7 @@ final class OMEMOPeer: @unchecked Sendable {
         database = try url.map { try AppDatabase.open(at: $0) } ?? AppDatabase.inMemory()
         omemo = try OMEMOEncryption(database: database, account: self.account, identityKeys: identityKeys)
         client.connectionConfiguration.userJid = BareJID(account)
-        client.writer = FakeWire()
+        client.writer = wire
         _ = client.modulesManager.register(DiscoveryModule(identity: .init(category: "client", type: "pc", name: "Test")))
         _ = client.modulesManager.register(PubSubModule())
         _ = client.modulesManager.register(omemo.module)
@@ -226,7 +227,7 @@ struct OMEMOConcurrencyTests {
         // The first message creates A's session; A is reopened before it goes on.
         #expect(a.receive(try #require(b.send("first", to: a)), from: b) == .init(outcome: "decrypted", body: "first"))
         try reopen()
-        #expect(a.sessionRecord(of: b) != nil)
+        #expect(try a.sessionRecord(of: b) != nil)
 
         for round in 0..<8 {
             // The send's state must be on disk: B reads it, the reopened A sends on from it.
@@ -467,7 +468,7 @@ struct OMEMOConcurrencyTests {
         // when that fails the message isn't returned, as its keys weren't kept.
         try install()
         #expect(a.send("lost", to: b) == nil, "a message came out though its session didn't store")
-        #expect(a.sessionRecord(of: b) == before, "the session moved")
+        #expect(try a.sessionRecord(of: b) == before, "the session moved")
         try drop()
 
         let next = try #require(a.send("after", to: b))
@@ -481,7 +482,7 @@ struct OMEMOConcurrencyTests {
         try install()
         let refused = a.receive(lost, from: b)
         #expect(refused == .init(outcome: "failed", body: "unknown"), "\(refused)")
-        #expect(a.sessionRecord(of: b) == beforeReceive, "the session moved")
+        #expect(try a.sessionRecord(of: b) == beforeReceive, "the session moved")
         try drop()
 
         // The same message is read once the write works, and B's next ones after it.
@@ -512,7 +513,7 @@ struct OMEMOConcurrencyTests {
         let before = try #require(a.sessionRecord(of: b))
         let garbled = a.receive(garbage, from: b)
         #expect(garbled.outcome == "failed", "\(garbled)")
-        #expect(a.sessionRecord(of: b) == before)
+        #expect(try a.sessionRecord(of: b) == before)
         try check("after garbage")
 
         // The same, claiming to be a prekey message.
@@ -523,7 +524,7 @@ struct OMEMOConcurrencyTests {
         claimedKey.setAttribute("prekey", value: "true")
         let claimedResult = a.receive(claimed, from: b)
         #expect(claimedResult.outcome == "failed", "\(claimedResult)")
-        #expect(a.sessionRecord(of: b) == beforeClaimed)
+        #expect(try a.sessionRecord(of: b) == beforeClaimed)
         try check("after a false prekey")
 
         // A replay of a message already read is ignored as a duplicate.
@@ -532,7 +533,7 @@ struct OMEMOConcurrencyTests {
         let afterOnce = try #require(a.sessionRecord(of: b))
         let replay = a.receive(once, from: b)
         #expect(replay == .init(outcome: "ignore", body: nil), "\(replay)")
-        #expect(a.sessionRecord(of: b) == afterOnce, "a replay moved the session")
+        #expect(try a.sessionRecord(of: b) == afterOnce, "a replay moved the session")
         try check("after a replay")
 
         // A message with no key for this device.
@@ -542,7 +543,7 @@ struct OMEMOConcurrencyTests {
         let beforeOthers = try #require(a.sessionRecord(of: b))
         let wrongDevice = a.receive(forOther, from: b)
         #expect(wrongDevice.outcome == "failed", "\(wrongDevice)")
-        #expect(a.sessionRecord(of: b) == beforeOthers, "a message for another device moved the session")
+        #expect(try a.sessionRecord(of: b) == beforeOthers, "a message for another device moved the session")
         try check("after a message for someone else")
     }
 
@@ -628,7 +629,7 @@ struct OMEMOConcurrencyTests {
                 },
             ])
             #expect(finished, "didn't finish")
-            #expect(a.sessionRecord(of: b) == nil, "round \(round): the deleted session came back")
+            #expect(try a.sessionRecord(of: b) == nil, "round \(round): the deleted session came back")
             for (i, encrypted) in sent.all.sorted(by: { $0.0 < $1.0 }) {
                 #expect(c.receive(encrypted, from: a) == .init(outcome: "decrypted", body: "a \(i)"), "round \(round), message \(i)")
             }
