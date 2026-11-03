@@ -155,10 +155,6 @@ final class ConversationModel {
     /// The bubble the pointer is on now, on the Mac. Unlike `hoveredRow` it
     /// clears when the pointer leaves, and while the list scrolls.
     @ObservationIgnored private(set) var hoveredBubble: Int64?
-    /// Where across the row the pointer came into the bubble, which the hover
-    /// bar is centred on. Set on entering only: a bar that followed the
-    /// pointer would move away from the button it was heading for.
-    @ObservationIgnored private(set) var hoverBarX: CGFloat = 0
     @ObservationIgnored private var bubbleHover = BubbleHover()
     /// The rows' hover state, made when a row first asks and dropped when the
     /// row leaves the window.
@@ -173,6 +169,11 @@ final class ConversationModel {
 
     func bubbleFrameChanged(_ frame: BubbleHover.Frame?, for id: Int64) {
         bubbleHover.set(frame, for: id)
+        // The shown bar follows its bubble, which a reaction or an edit can
+        // widen. Only when it moved: setting the box redraws the row.
+        if id == hoveredRow, let frame, let box = rowHovers[id], box.bubbleSpan != frame.span {
+            box.bubbleSpan = frame.span
+        }
     }
 
     /// The row's hover state. Not observed, so asking in a row's body costs
@@ -182,7 +183,7 @@ final class ConversationModel {
         let made = RowHover()
         made.isBubbleHovered = hoveredBubble == id
         made.isRowHovered = hoveredRow == id
-        made.barX = hoverBarX
+        if hoveredRow == id, let frame = bubbleHover.frame(of: id) { made.bubbleSpan = frame.span }
         rowHovers[id] = made
         return made
     }
@@ -224,20 +225,19 @@ final class ConversationModel {
             return
         }
         let hit = bubbleHover.hit(at: point)
-        guard hit?.id != hoveredBubble else { return }
-        setHoveredBubble(hit?.id, barX: hit?.barX ?? 0)
+        guard hit != hoveredBubble else { return }
+        setHoveredBubble(hit)
     }
 
-    private func setHoveredBubble(_ id: Int64?, barX: CGFloat = 0) {
+    private func setHoveredBubble(_ id: Int64?) {
         guard id != hoveredBubble else { return }
         if let old = hoveredBubble { rowHovers[old]?.isBubbleHovered = false }
         hoveredBubble = id
         guard let id else { return }
         if let old = hoveredRow, old != id { rowHovers[old]?.isRowHovered = false }
         hoveredRow = id
-        hoverBarX = barX
         let box = hoverState(for: id)
-        box.barX = barX
+        if let frame = bubbleHover.frame(of: id), box.bubbleSpan != frame.span { box.bubbleSpan = frame.span }
         box.isRowHovered = true
         box.isBubbleHovered = true
     }

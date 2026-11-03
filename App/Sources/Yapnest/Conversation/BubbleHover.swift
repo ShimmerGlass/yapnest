@@ -12,6 +12,9 @@ struct BubbleHover {
         /// Where the row's full-width container starts in that space, which
         /// the hover bar is laid out in.
         var rowMinX: CGFloat
+
+        /// The bubble's left and right edges across its row.
+        var span: ClosedRange<CGFloat> { (bubble.minX - rowMinX)...(bubble.maxX - rowMinX) }
     }
 
     /// The name of the list stack's coordinate space.
@@ -23,12 +26,21 @@ struct BubbleHover {
         frames[id] = frame
     }
 
-    /// The row whose bubble holds the point, and the point's x across that row.
-    func hit(at point: CGPoint) -> (id: Int64, barX: CGFloat)? {
-        for (id, frame) in frames where frame.bubble.contains(point) {
-            return (id, point.x - frame.rowMinX)
-        }
-        return nil
+    func frame(of id: Int64) -> Frame? { frames[id] }
+
+    /// The row whose bubble holds the point.
+    func hit(at point: CGPoint) -> Int64? {
+        frames.first { $0.value.bubble.contains(point) }?.key
+    }
+
+    /// Where the hover bar's left edge goes across a row `rowWidth` wide. It
+    /// lines up with the bubble's side that faces the middle of the list, so
+    /// it stands in the same place on every message from that side whatever
+    /// the pointer did, and sticks out past it by `hang` so its corner clears
+    /// the bubble's rounded one. It stays `margin` inside the row.
+    static func barMinX(width: CGFloat, rowWidth: CGFloat, bubble: ClosedRange<CGFloat>, isOutgoing: Bool, hang: CGFloat, margin: CGFloat) -> CGFloat {
+        let x = isOutgoing ? bubble.lowerBound - hang : bubble.upperBound + hang - width
+        return min(max(x, margin), rowWidth - margin - width)
     }
 }
 
@@ -41,7 +53,7 @@ final class RowHover {
     var isBubbleHovered = false
     /// This row was the last one entered, which is the only one to show its bar.
     var isRowHovered = false
-    /// Where across the row the pointer came into the bubble, which the bar
-    /// is centred on.
-    var barX: CGFloat = 0
+    /// The bubble's left and right edges across the row, which the bar is
+    /// placed by. Kept only for the row that shows its bar.
+    var bubbleSpan: ClosedRange<CGFloat> = 0...0
 }

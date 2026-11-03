@@ -14,10 +14,9 @@ struct BubbleHoverTests {
         var hover = BubbleHover()
         hover.set(first, for: 1)
         hover.set(second, for: 2)
-        let hit = hover.hit(at: CGPoint(x: 150, y: 20))
-        #expect(hit?.id == 1)
-        #expect(hit?.barX == 50)
-        #expect(hover.hit(at: CGPoint(x: 30, y: 60))?.id == 2)
+        #expect(hover.hit(at: CGPoint(x: 150, y: 20)) == 1)
+        #expect(hover.hit(at: CGPoint(x: 30, y: 60)) == 2)
+        #expect(first.span == 12...212)
     }
 
     @Test func aPointBetweenBubblesHitsNothing() {
@@ -34,19 +33,48 @@ struct BubbleHoverTests {
         #expect(hover.hit(at: CGPoint(x: 150, y: 20)) == nil)
     }
 
-    @Test func enteringABubbleShowsTheBarAtTheEntryPoint() throws {
+    /// A sent bubble sits on the right, so its bar starts at the bubble's left
+    /// edge and sticks out past it by the corner's radius; a received one's
+    /// ends that far past its right edge. Where the pointer came in doesn't
+    /// move it.
+    @Test func theBarLinesUpWithTheBubblesSideFacingTheMiddle() {
+        let sent = BubbleHover.barMinX(width: 200, rowWidth: 800, bubble: 400...788, isOutgoing: true, hang: 14, margin: 12)
+        #expect(sent == 386)
+        let received = BubbleHover.barMinX(width: 200, rowWidth: 800, bubble: 12...400, isOutgoing: false, hang: 14, margin: 12)
+        #expect(received == 214)
+    }
+
+    /// A bubble narrower than the bar pushes it back inside the row, past
+    /// the bubble's outer side.
+    @Test func theBarOfANarrowBubbleStaysInsideTheRow() {
+        let sent = BubbleHover.barMinX(width: 200, rowWidth: 800, bubble: 700...788, isOutgoing: true, hang: 14, margin: 12)
+        #expect(sent == 588)
+        let received = BubbleHover.barMinX(width: 200, rowWidth: 800, bubble: 12...100, isOutgoing: false, hang: 14, margin: 12)
+        #expect(received == 12)
+    }
+
+    @Test func enteringABubbleShowsTheBarByItsEdges() throws {
         let fixture = try ConversationFixture(isFlipped: false)
         let model = fixture.model!
         model.bubbleFrameChanged(first, for: 1)
         model.pointerMoved(to: CGPoint(x: 150, y: 20))
         #expect(model.hoveredBubble == 1)
         #expect(model.hoveredRow == 1)
-        #expect(model.hoverBarX == 50)
-        model.pointerMoved(to: CGPoint(x: 200, y: 25))
-        #expect(model.hoverBarX == 50)
+        #expect(model.hoverState(for: 1).bubbleSpan == 12...212)
         model.pointerMoved(to: CGPoint(x: 150, y: 45))
         #expect(model.hoveredBubble == nil)
         #expect(model.hoveredRow == 1)
+    }
+
+    /// A reaction or an edit can widen the bubble under a shown bar, which
+    /// has to keep to its edge.
+    @Test func theShownBarFollowsItsBubbleWidening() throws {
+        let fixture = try ConversationFixture(isFlipped: false)
+        let model = fixture.model!
+        model.bubbleFrameChanged(first, for: 1)
+        model.pointerMoved(to: CGPoint(x: 150, y: 20))
+        model.bubbleFrameChanged(BubbleHover.Frame(bubble: CGRect(x: 112, y: 0, width: 300, height: 40), rowMinX: 100), for: 1)
+        #expect(model.hoverState(for: 1).bubbleSpan == 12...312)
     }
 
     @Test func aMoveAfterTheMenuOpenedSaysItClosed() throws {

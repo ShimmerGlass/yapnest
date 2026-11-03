@@ -29,13 +29,13 @@ struct RowHoverTests {
         let one = model.hoverState(for: 1), two = model.hoverState(for: 2), three = model.hoverState(for: 3)
         model.pointerMoved(to: CGPoint(x: 150, y: 20))
         #expect(one.isBubbleHovered && one.isRowHovered)
-        #expect(one.barX == 50)
+        #expect(one.bubbleSpan == 12...212)
 
         let thirdChanged = Flag()
         withObservationTracking {
             _ = three.isBubbleHovered
             _ = three.isRowHovered
-            _ = three.barX
+            _ = three.bubbleSpan
         } onChange: { thirdChanged.value = true }
 
         model.pointerMoved(to: CGPoint(x: 30, y: 60))

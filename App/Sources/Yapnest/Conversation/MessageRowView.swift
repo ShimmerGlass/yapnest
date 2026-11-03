@@ -76,9 +76,10 @@ struct MessageRowView: View, Equatable {
         .zIndex(showsHoverBar ? 1 : 0)
     }
 
-    /// The Mac's hover bar, on the bubble's top edge under the pointer.
+    /// The Mac's hover bar, on the bubble's top edge at its side facing the
+    /// middle of the list.
     private var hoverBar: some View {
-        HoverBarLayout(centerX: hover.barX, overlap: Self.barOverlap, margin: 12) {
+        HoverBarLayout(bubble: hover.bubbleSpan, isOutgoing: row.isOutgoing, overlap: Self.barOverlap, margin: 12) {
             MessageHoverBar(row: row, model: model, onHover: { barHovered = $0 }, onMenuOpen: {
                 menuOpen = true
                 model.hoverMenuOpen = true
@@ -401,11 +402,12 @@ private struct HostedView<Content: View>: UIViewControllerRepresentable {
     }
 }
 
-/// Places the hover bar centred on the pointer, kept inside the row, and
-/// above the row's top edge but for `overlap`. It takes no room itself, so
-/// the row's height doesn't change with the pointer.
+/// Places the hover bar by the bubble (`BubbleHover.barMinX`), and above the
+/// row's top edge but for `overlap`. It takes no room itself, so the row's
+/// height doesn't change with the pointer.
 private struct HoverBarLayout: Layout {
-    let centerX: CGFloat
+    let bubble: ClosedRange<CGFloat>
+    let isOutgoing: Bool
     let overlap: CGFloat
     let margin: CGFloat
 
@@ -416,7 +418,7 @@ private struct HoverBarLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard let bar = subviews.first else { return }
         let size = bar.sizeThatFits(.unspecified)
-        let x = min(max(bounds.minX + centerX - size.width / 2, bounds.minX + margin), bounds.maxX - margin - size.width)
+        let x = bounds.minX + BubbleHover.barMinX(width: size.width, rowWidth: bounds.width, bubble: bubble, isOutgoing: isOutgoing, hang: MessageBubble.roundCorner, margin: margin)
         bar.place(at: CGPoint(x: x, y: bounds.minY - size.height + overlap), anchor: .topLeading, proposal: ProposedViewSize(size))
     }
 }

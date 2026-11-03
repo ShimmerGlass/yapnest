@@ -184,8 +184,13 @@ struct MessageBubble: View {
     }
 
     /// The tighter corners on their sender's side for grouped messages, as in Signal.
+    /// The radius of a bubble's rounded corners, as opposed to the tight ones
+    /// where it joins its neighbours. The corners facing the middle of the
+    /// list are always this round.
+    static let roundCorner: CGFloat = 14
+
     static func corners(isOutgoing: Bool, layout: MessageRow.Layout) -> RectangleCornerRadii {
-        let round: CGFloat = 14, tight: CGFloat = 4
+        let round = roundCorner, tight: CGFloat = 4
         if isOutgoing {
             return .init(topLeading: round, bottomLeading: round, bottomTrailing: layout.joinsNext ? tight : round, topTrailing: layout.joinsPrevious ? tight : round)
         }
