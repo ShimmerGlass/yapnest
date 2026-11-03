@@ -8,8 +8,8 @@ public enum MessageStyling {
 
     private static let markers: [Character: SpanStyle] = ["*": .bold, "_": .italic, "`": .code, "~": .strike]
 
-    /// `*bold*`, `_italic_`, `` `code` `` and `~strike~`. The ranges
-    /// include the markers, which are one ASCII character each. A span opens after
+    /// `*bold*`, `_italic_`, `` `code` `` and `~strike~`. The ranges include
+    /// the markers, one ASCII character at each end. A span opens after
     /// whitespace (so `snake_case` is left alone), holds no line break and
     /// closes after a non-space. Bold, italic and strike may nest, so the
     /// ranges can overlap, the outer one first; code is verbatim inside.
