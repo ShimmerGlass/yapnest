@@ -69,7 +69,7 @@ struct YapnestApp: App {
         }
         .commands {
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { delegate.model.requestedSheet = .settings }
+                Button("Settings…") { delegate.model.requestSheet(.settings) }
                     .keyboardShortcut(",")
                     .disabled(!delegate.model.acceptsMenuCommands)
             }
@@ -86,7 +86,7 @@ struct YapnestApp: App {
                     .disabled(!delegate.model.acceptsMenuCommands)
             }
             CommandGroup(replacing: .newItem) {
-                Button("New Chat") { delegate.model.requestedSheet = .compose }
+                Button("New Chat") { delegate.model.requestSheet(.compose) }
                     .keyboardShortcut("n")
                     .disabled(!delegate.model.acceptsMenuCommands)
             }

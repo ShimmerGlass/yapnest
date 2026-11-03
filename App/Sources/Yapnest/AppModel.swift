@@ -94,15 +94,26 @@ final class AppModel {
     /// Bumped by Edit Last Message in the Mac's menu; the open chat answers it.
     var editLastRequests = 0
 
-    /// How many of a chat's own sheets (settings, GIF and location pickers)
-    /// are up. The menu bar's commands are off meanwhile, as SwiftUI would
-    /// queue their sheet until the first closes.
+    /// How many sheets are up, a chat's own (settings, GIF and location
+    /// pickers) or the chat list's (profile, settings, new chat, a link's
+    /// confirmation). The menu bar's commands are off meanwhile: SwiftUI would
+    /// queue a sheet until the first closes, and swapping the chat list's
+    /// sheet item would tear down one that is busy or has input in it.
     private(set) var conversationSheets = SheetCounter()
     var hasConversationSheet: Bool { conversationSheets.isPresenting }
 
-    /// Whether the Mac's menu commands act: a session is open and no sheet
-    /// of a conversation is up.
-    var acceptsMenuCommands: Bool { session != nil && !hasConversationSheet }
+    /// Whether the Mac's menu commands act: a session is open, the chat list
+    /// is there to answer (not the welcome screen, which leaves a request
+    /// sitting unread) and no sheet is up.
+    var acceptsMenuCommands: Bool { session != nil && !showsWelcome && !hasConversationSheet }
+
+    /// The menu bar's request for a sheet of the chat list, dropped when the
+    /// commands are off: a request nobody reads would sit there, and one made
+    /// over another sheet would replace it.
+    func requestSheet(_ sheet: ChatListSheet) {
+        guard acceptsMenuCommands else { return }
+        requestedSheet = sheet
+    }
 
     func conversationSheetAppeared() { conversationSheets.presented() }
     func conversationSheetDisappeared() { conversationSheets.dismissed() }
