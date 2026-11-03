@@ -233,7 +233,7 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         buildSuggestions()
         tray.isHidden = true
 
-        textView.font = .preferredFont(forTextStyle: .body)
+        textView.font = textView.baseFont
         textView.adjustsFontForContentSizeCategory = true
         textView.backgroundColor = .clear
         textView.isScrollEnabled = false
@@ -988,9 +988,15 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
     /// and corrections insert far less.
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
         guard voice?.isRecording != true else { return false }
-        guard LongText.isLong(text) else { return true }
+        guard LongText.isLong(text) else {
+            self.textView.noteEdit(range, replacementLength: (text as NSString).length)
+            return true
+        }
         // Undo and redo put back what was there, however long.
-        if let undo = textView.undoManager, undo.isUndoing || undo.isRedoing { return true }
+        if let undo = textView.undoManager, undo.isUndoing || undo.isRedoing {
+            self.textView.noteEdit(range, replacementLength: (text as NSString).length)
+            return true
+        }
         return onLongText?(text) != true
     }
 
@@ -1053,35 +1059,56 @@ final class ComposerTextView: UITextView {
     /// asked, as it is nil or the first run's once runs differ.
     var baseFont: UIFont { .preferredFont(forTextStyle: .body) }
     private var styledPointSize: CGFloat = 0
-    private var isStyled = false
+    private var styledSpans: [(range: NSRange, style: MessageStyling.SpanStyle)] = []
+    private var styledLength = 0
+    /// The one edit seen since the last restyle, as the range it replaced and
+    /// the length of what replaced it. More than one, or a change that wasn't
+    /// seen (text set by the model, undo), means restyling everything.
+    private var edit: (range: NSRange, newLength: Int)?
+    private var editsLost = false
+
+    /// Called as text is about to change, so the restyle can stay near it.
+    func noteEdit(_ range: NSRange, replacementLength: Int) {
+        if edit == nil, !editsLost { edit = (range, replacementLength) } else { editsLost = true }
+    }
 
     /// Shows the styles the message will have (`MessageStyling.composerSpans`)
     /// while the markers stay in the text, dimmed. Only attributes change,
     /// never characters, so what is sent, drafts and mention offsets are the
     /// text as typed. Straight on the text storage, which unlike the text
     /// input API registers nothing for undo and doesn't call the delegate.
+    /// After an edit only the stretch whose spans changed is redone: a
+    /// keystroke in a long draft otherwise restyled all of it.
     func restyle() {
         // Text being composed (IME) is the input method's until it's committed,
         // which calls the delegate again.
-        guard markedTextRange == nil else { return }
+        guard markedTextRange == nil else { editsLost = true; return }
         let spans = MessageStyling.composerSpans(in: text ?? "")
         let base = baseFont
-        // Nothing to draw, and nothing drawn before: typing plain text costs the scan only.
-        if spans.isEmpty, !isStyled, base.pointSize == styledPointSize { return }
-        isStyled = !spans.isEmpty
+        let length = textStorage.length
+        let previous = styledSpans
+        var dirty = NSRange(location: 0, length: length)
+        if let edit, !editsLost, base.pointSize == styledPointSize, length == styledLength - edit.range.length + edit.newLength {
+            dirty = Self.dirtyRange(from: previous, to: spans, edit: edit, delta: length - styledLength)
+            dirty = NSIntersectionRange(dirty, NSRange(location: 0, length: length))
+        }
+        let pointSizeChanged = base.pointSize != styledPointSize
+        styledSpans = spans
+        styledLength = length
         styledPointSize = base.pointSize
+        edit = nil
+        editsLost = false
+        // Nothing to draw, and nothing drawn before: typing plain text costs the scan only.
+        if spans.isEmpty, previous.isEmpty, !pointSizeChanged { return }
         let selection = selectedRange
-        let full = NSRange(location: 0, length: textStorage.length)
         textStorage.beginEditing()
-        textStorage.addAttributes([.font: base, .foregroundColor: UIColor.label], range: full)
-        textStorage.removeAttribute(.strikethroughStyle, range: full)
+        textStorage.addAttributes([.font: base, .foregroundColor: UIColor.label], range: dirty)
+        textStorage.removeAttribute(.strikethroughStyle, range: dirty)
         for span in spans {
-            // Nested spans add to the font their outer span gave the run.
-            textStorage.enumerateAttribute(.font, in: span.range) { value, range, _ in
-                textStorage.addAttribute(.font, value: span.style.uiFont(from: value as? UIFont ?? base), range: range)
-            }
-            if span.style == .strike { textStorage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: span.range) }
-            for marker in [span.range.location, NSMaxRange(span.range) - 1] {
+            let covered = NSIntersectionRange(span.range, dirty)
+            guard covered.length > 0 else { continue }
+            textStorage.applySpan(span.style, in: covered, base: base)
+            for marker in [span.range.location, NSMaxRange(span.range) - 1] where NSLocationInRange(marker, dirty) {
                 textStorage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: NSRange(location: marker, length: 1))
             }
         }
@@ -1091,6 +1118,40 @@ final class ComposerTextView: UITextView {
         typingAttributes[.font] = base
         typingAttributes[.foregroundColor] = UIColor.label
         typingAttributes[.strikethroughStyle] = nil
+    }
+
+    /// Where the drawn styles can differ from the new spans after an edit: the
+    /// edit itself and every span that was added, dropped or moved. The spans
+    /// before the first and after the last difference are the same ones, the
+    /// later ones compared relative to the end of the text.
+    static func dirtyRange(
+        from old: [(range: NSRange, style: MessageStyling.SpanStyle)],
+        to new: [(range: NSRange, style: MessageStyling.SpanStyle)],
+        edit: (range: NSRange, newLength: Int),
+        delta: Int
+    ) -> NSRange {
+        func same(_ a: (range: NSRange, style: MessageStyling.SpanStyle), _ b: (range: NSRange, style: MessageStyling.SpanStyle), shift: Int) -> Bool {
+            a.range.location + shift == b.range.location && a.range.length == b.range.length && a.style == b.style
+        }
+        var prefix = 0
+        while prefix < old.count, prefix < new.count, same(old[prefix], new[prefix], shift: 0) { prefix += 1 }
+        var suffix = 0
+        while suffix < old.count - prefix, suffix < new.count - prefix, same(old[old.count - 1 - suffix], new[new.count - 1 - suffix], shift: delta) { suffix += 1 }
+        var start = edit.range.location
+        var end = edit.range.location + edit.newLength
+        let oldEnd = edit.range.location + edit.range.length
+        for span in new[prefix..<(new.count - suffix)] {
+            start = min(start, span.range.location)
+            end = max(end, NSMaxRange(span.range))
+        }
+        // Spans that are gone, in the new text's offsets. A position inside what
+        // the edit replaced is in the edit's own range, which is dirty already.
+        for span in old[prefix..<(old.count - suffix)] {
+            let lower = span.range.location, upper = NSMaxRange(span.range)
+            start = min(start, lower < edit.range.location ? lower : lower >= oldEnd ? lower + delta : edit.range.location)
+            end = max(end, upper <= edit.range.location ? upper : upper >= oldEnd ? upper + delta : edit.range.location + edit.newLength)
+        }
+        return NSRange(location: start, length: max(0, end - start))
     }
 
     /// Key commands, unlike watching presses, come before the text system

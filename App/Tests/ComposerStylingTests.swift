@@ -148,7 +148,7 @@ struct ComposerStylingTests {
         let mine = try f.add("an *edit* here", .outgoing)
         try f.database.setDraft("draft with _it_", peer: f.peer)
         await f.start()
-        let bar = ConversationInputBar(frame: CGRect(x: 0, y: 0, width: 400, height: 100))
+        let bar = makeBar()
         bar.onTextChanged = { [weak model = f.model] text in model?.textChanged(text) }
         f.model.composer.bar = bar
         f.model.composerAttached()
@@ -178,5 +178,93 @@ struct ComposerStylingTests {
         let clock = ContinuousClock()
         let time = (0..<3).map { _ in clock.measure { bar.textView.restyle() } }.min()!
         #expect(time < .milliseconds(50), "\(time)")
+    }
+
+    // MARK: Restyling only what an edit changed
+
+    /// Types as the keyboard does: the delegate hears of the change first, which
+    /// a programmatic `insertText` doesn't do.
+    private func type(_ text: String, in bar: ConversationInputBar, replacing range: NSRange) {
+        let field = bar.textView
+        field.selectedRange = range
+        #expect(bar.textView(field, shouldChangeTextIn: range, replacementText: text))
+        if text.isEmpty { field.deleteBackward() } else { field.insertText(text) }
+    }
+
+    /// What is drawn at each character, to compare with a field styled in one go.
+    private func drawn(_ bar: ConversationInputBar) -> [String] {
+        (0..<bar.textView.textStorage.length).map { index in
+            let attributes = attributes(bar, at: index)
+            let font = attributes[.font] as! UIFont
+            return "\(font.fontName) \(font.pointSize) \(attributes[.foregroundColor] as? UIColor == .secondaryLabel) \(attributes[.strikethroughStyle] as? Int ?? 0)"
+        }
+    }
+
+    private func expectDrawnAsFresh(_ bar: ConversationInputBar, _ comment: String) {
+        let fresh = makeBar()
+        fresh.setText(bar.text, notify: false)
+        #expect(drawn(bar) == drawn(fresh), "\(comment): \(bar.text.debugDescription)")
+    }
+
+    private let draft = "plain *bold* and _it_ here\n> quoted ~gone~ `code`\nlast *line* ok\n```\n*raw*\n```\n_end_"
+
+    @Test(arguments: [(0, 0, "x"), (3, 0, "*"), (8, 0, "x"), (7, 1, ""), (6, 0, " _a_ "), (22, 0, "\n"), (30, 4, "z")])
+    func typingInTheMiddleOfAStyledDraftKeepsEverySpanRight(location: Int, length: Int, typed: String) {
+        let bar = makeBar()
+        bar.setText(draft, notify: false)
+        type(typed, in: bar, replacing: NSRange(location: location, length: length))
+        expectDrawnAsFresh(bar, "after \(typed.debugDescription) at \(location)")
+    }
+
+    @Test func aSameLengthReplacementInsideASpanKeepsItsStyle() {
+        let bar = makeBar()
+        bar.setText(draft, notify: false)
+        type("OL", in: bar, replacing: NSRange(location: 8, length: 2))
+        #expect(bar.text.hasPrefix("plain *bOLd*"))
+        #expect(isBold(font(bar, at: 8)) && isBold(font(bar, at: 9)))
+        expectDrawnAsFresh(bar, "same length")
+    }
+
+    @Test func openingAFenceRestylesTheLinesAfterIt() {
+        let bar = makeBar()
+        bar.setText("*a*\n_b_ c\n~d~", notify: false)
+        #expect(isItalic(font(bar, at: 5)))
+        type("```\n", in: bar, replacing: NSRange(location: 4, length: 0))
+        #expect(!isItalic(font(bar, at: 10)) && !isDimmed(bar, at: 9))
+        expectDrawnAsFresh(bar, "fence opened")
+        type("", in: bar, replacing: NSRange(location: 4, length: 4))
+        #expect(isItalic(font(bar, at: 5)))
+        expectDrawnAsFresh(bar, "fence removed")
+    }
+
+    @Test func aKeystrokeInALongDraftRedrawsOnlyNearIt() {
+        let line = "word *bold* _it_ ~s~ `c` plain text here\n"
+        let text = String(repeating: line, count: 190)
+        let before = MessageStyling.composerSpans(in: text)
+        let at = (line as NSString).length * 95 + 3
+        let after = (text as NSString).replacingCharacters(in: NSRange(location: at, length: 0), with: "x")
+        let dirty = ComposerTextView.dirtyRange(from: before, to: MessageStyling.composerSpans(in: after), edit: (NSRange(location: at, length: 0), 1), delta: 1)
+        #expect(dirty.length < 200 && NSLocationInRange(at, dirty))
+    }
+
+    @Test func aKeystrokeLeavesTheTextFarFromItAsItWasAndOtherChangesRestyleAll() {
+        let bar = makeBar()
+        let text = String(repeating: "word *bold* plain text here\n", count: 100)
+        bar.setText(text, notify: false)
+        let last = (text as NSString).length - 3
+        // A mark that only a pass over this stretch would clear.
+        bar.textView.textStorage.addAttribute(.foregroundColor, value: UIColor.red, range: NSRange(location: last, length: 1))
+        type("x", in: bar, replacing: NSRange(location: 0, length: 0))
+        #expect(attributes(bar, at: last + 1)[.foregroundColor] as? UIColor == .red)
+        bar.textView.restyle()
+        #expect(attributes(bar, at: last + 1)[.foregroundColor] as? UIColor == .label)
+    }
+
+    @Test func aMarkerTypedReachesOnlyTheSpansItChanges() {
+        let text = "a *b* c\n_d_ e *f"
+        let before = MessageStyling.composerSpans(in: text)
+        let after = text + "*"
+        let dirty = ComposerTextView.dirtyRange(from: before, to: MessageStyling.composerSpans(in: after), edit: (NSRange(location: 16, length: 0), 1), delta: 1)
+        #expect(dirty == NSRange(location: 14, length: 3))
     }
 }
