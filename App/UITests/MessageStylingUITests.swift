@@ -18,9 +18,9 @@ final class MessageStylingUITests: InteractionsTestCase {
         for _ in 0..<12 {
             for words in expected where driver.text(containing: words).exists { seen.insert(words) }
             XCTAssertFalse(driver.text(containing: "```").exists, "a fence is on screen")
-        for marked in ["*bold", "~struck", "~_struck"] {
-            XCTAssertFalse(driver.text(containing: marked).exists, "\(marked) shows a style marker")
-        }
+            for marked in ["*bold", "~struck", "~_struck"] {
+                XCTAssertFalse(driver.text(containing: marked).exists, "\(marked) shows a style marker")
+            }
             driver.assertNotBlank("while scrolling up")
             if seen.count == expected.count { break }
             driver.flickTowardsOlder()
