@@ -347,10 +347,10 @@ extension XMPPSession {
                 let stored = attachments.directory.appending(path: localFile)
                 let size = await AttachmentStore.displaySize(of: data, savedAs: stored, name: attachment.name)
                 let duration = attachment.isAudio ? AudioWaveform.duration(of: stored) : nil
-                try database.setDownloaded(
+                guard try recordDownloaded(
                     messageId: messageId, localFile: localFile, size: Int64(data.count),
                     mimeType: mimeType, width: size?.width, height: size?.height, duration: duration,
-                )
+                ) else { return }
                 DiagLog.info(.receive, "Download finished", .id("file", transferId), .int("status", http.statusCode), .size("bytes", data.count), .duration("took", since: started))
             } catch {
                 if let size = (error as? TooLarge)?.size {
@@ -367,6 +367,21 @@ extension XMPPSession {
                 DiagLog.error(.receive, "Download failed", .id("file", transferId), .error(error), .duration("took", since: started))
                 try? database.setDownloadFailed(messageId: messageId, automatic: automatic, isFinal: Self.isFinalDownloadFailure(error))
             }
+        }
+    }
+
+    /// Records a received file that is saved. When the message is gone, or
+    /// the write fails, the file is deleted: nothing would ever point to it.
+    func recordDownloaded(messageId: Int64, localFile: String, size: Int64, mimeType: String?, width: Int?, height: Int?, duration: TimeInterval?) throws -> Bool {
+        do {
+            let recorded = try database.setDownloaded(
+                messageId: messageId, localFile: localFile, size: size, mimeType: mimeType, width: width, height: height, duration: duration,
+            )
+            if !recorded { attachments.remove(file: localFile) }
+            return recorded
+        } catch {
+            attachments.remove(file: localFile)
+            throw error
         }
     }
 

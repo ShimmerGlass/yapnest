@@ -239,7 +239,7 @@ extension XMPPSession {
             let dimensions = await AttachmentStore.displaySize(ofFileAt: stored, name: name)
             let duration = AudioFormat.isAudio(mimeType: mimeType, name: name) ? AudioWaveform.duration(of: stored) : nil
             do {
-                try database.setDownloaded(
+                _ = try recordDownloaded(
                     messageId: messageId, localFile: localFile, size: size, mimeType: mimeType,
                     width: dimensions?.width, height: dimensions?.height, duration: duration,
                 )

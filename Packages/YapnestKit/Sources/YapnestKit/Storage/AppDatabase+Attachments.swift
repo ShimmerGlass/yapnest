@@ -70,10 +70,13 @@ extension AppDatabase {
     }
 
     /// `duration` is what measuring a sound gave; a file that can't be
-    /// measured keeps the length its sender announced.
-    func setDownloaded(messageId: Int64, localFile: String, size: Int64, mimeType: String?, width: Int?, height: Int?, duration: TimeInterval? = nil) throws {
+    /// measured keeps the length its sender announced. False if the message
+    /// is gone (retracted, or its chat deleted, while the file arrived), in
+    /// which case the file belongs to no one.
+    @discardableResult
+    func setDownloaded(messageId: Int64, localFile: String, size: Int64, mimeType: String?, width: Int?, height: Int?, duration: TimeInterval? = nil) throws -> Bool {
         try writer.write { db in
-            guard var attachment = try Attachment.fetchOne(db, key: messageId) else { return }
+            guard var attachment = try Attachment.fetchOne(db, key: messageId) else { return false }
             attachment.localFile = localFile
             attachment.size = size
             attachment.mimeType = attachment.mimeType ?? mimeType
@@ -87,6 +90,7 @@ extension AppDatabase {
             attachment.thumbnail = nil
             attachment.state = .ready
             try attachment.update(db)
+            return true
         }
     }
 

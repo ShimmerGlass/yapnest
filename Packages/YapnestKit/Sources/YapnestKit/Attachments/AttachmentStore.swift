@@ -27,7 +27,13 @@ public final class AttachmentStore: Sendable {
 
     /// Deletes the file of an attachment that's gone, if we had it.
     func remove(_ attachment: Attachment) {
-        guard let url = url(for: attachment) else { return }
+        guard let file = attachment.localFile else { return }
+        remove(file: file)
+    }
+
+    /// Deletes a stored file and what was made from it.
+    func remove(file: String) {
+        let url = directory.appending(path: file)
         try? FileManager.default.removeItem(at: url)
         try? FileManager.default.removeItem(at: AnimatedImages.copyURL(for: url))
         try? FileManager.default.removeItem(at: AudioWaveform.cacheURL(for: url))
