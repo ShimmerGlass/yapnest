@@ -99,6 +99,19 @@ struct BubbleLayoutTests {
         #expect(abs(hosted - rule) < 0.5)
     }
 
+    /// The Mac makes a short message wide enough for its hover bar, but no
+    /// wider than the row allows.
+    @Test func aShortBubbleTakesTheMinimumWidthItIsGivenWhenThereIsRoom() {
+        func drawn(minimum: CGFloat?, listWidth: CGFloat) -> CGFloat {
+            let inner = listWidth - 24
+            let host = UIHostingController(rootView: BubbleLayout(fillsWidth: false, offeredWidth: nil, minimumBubbleWidth: minimum) { Text("ok") })
+            return host.sizeThatFits(in: CGSize(width: inner - 24, height: 10_000)).width + 24
+        }
+        #expect(abs(drawn(minimum: nil, listWidth: 800) - 100) < 0.5)
+        #expect(abs(drawn(minimum: 226, listWidth: 800) - 226) < 0.5)
+        #expect(abs(drawn(minimum: 226, listWidth: 260) - 200) < 0.5)
+    }
+
     @Test(arguments: [375.0, 393.0, 402.0, 430.0]) func aPhotoBubbleFollowsTheSameRule(listWidth: CGFloat) {
         let rule = min(listWidth * 0.78, listWidth - 60, MediaLimits.maxBubbleWidth)
         let hosted = drawnWidth(listWidth: listWidth, hosted: true, fillsWidth: true)

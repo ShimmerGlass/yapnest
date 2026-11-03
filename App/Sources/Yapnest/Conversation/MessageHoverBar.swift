@@ -28,12 +28,24 @@ struct MessageHoverBar: View {
         var frame: CGRect?
     }
 
+    private static let buttonSize: CGFloat = 28
+    private static let spacing: CGFloat = 2
+    private static let inset: CGFloat = 2
+    private static let quickReactionCount = 3
+
+    /// How wide the bar is with all its quick reactions, which the Mac's
+    /// bubbles are made wide enough to carry (`BubbleLayout.minimumBubbleWidth`).
+    static func width(canEdit: Bool) -> CGFloat {
+        let buttons = CGFloat(quickReactionCount + 3 + (canEdit ? 1 : 0))
+        return buttons * buttonSize + (buttons - 1) * spacing + 2 * inset
+    }
+
     init(row: MessageRow, model: ConversationModel, onHover: @escaping (Bool) -> Void, onMenuOpen: @escaping () -> Void) {
         self.row = row
         self.model = model
         self.onHover = onHover
         self.onMenuOpen = onMenuOpen
-        _quickReactions = State(initialValue: Array(model.quickReactions.prefix(3)))
+        _quickReactions = State(initialValue: Array(model.quickReactions.prefix(Self.quickReactionCount)))
     }
 
     var body: some View {
@@ -44,11 +56,11 @@ struct MessageHoverBar: View {
     }
 
     private func bar(mine: Set<String>) -> some View {
-        HStack(spacing: 2) {
+        HStack(spacing: Self.spacing) {
             ForEach(quickReactions, id: \.self) { emoji in
                 Button { model.react(emoji, to: row.id) } label: {
                     Text(emoji)
-                        .frame(width: 28, height: 28)
+                        .frame(width: Self.buttonSize, height: Self.buttonSize)
                         .background(mine.contains(emoji) ? Color.accentColor.opacity(0.25) : .clear, in: .rect(cornerRadius: 6))
                 }
                 .help(mine.contains(emoji) ? "Remove \(emoji)" : "React with \(emoji)")
@@ -67,7 +79,7 @@ struct MessageHoverBar: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .rotationEffect(.degrees(90))
-                    .frame(width: 28, height: 28)
+                    .frame(width: Self.buttonSize, height: Self.buttonSize)
                     .contentShape(Rectangle())
             }
             .menuStyle(.button)
@@ -75,7 +87,7 @@ struct MessageHoverBar: View {
             .help("More")
         }
         .buttonStyle(.plain)
-        .padding(2)
+        .padding(Self.inset)
         .background(.regularMaterial, in: .rect(cornerRadius: 8))
         .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color(.separator), lineWidth: 0.5) }
         .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
@@ -84,7 +96,7 @@ struct MessageHoverBar: View {
     private func icon(_ symbol: String, help: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .frame(width: 28, height: 28)
+                .frame(width: Self.buttonSize, height: Self.buttonSize)
         }
         .help(help)
     }

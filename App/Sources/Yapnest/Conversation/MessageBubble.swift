@@ -12,6 +12,14 @@ struct MessageBubble: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var content: MessageRow.Content { row.content }
+    /// On the Mac, the hover bar's width and a corner's radius, so the bar,
+    /// which lines up with the bubble's inner edge and sticks out past it by
+    /// that radius, ends well inside the bubble rather than past its far
+    /// side.
+    private var minimumWidth: CGFloat? {
+        guard Platform.isMac, !message.isRetracted else { return nil }
+        return MessageHoverBar.width(canEdit: model.canEdit(row.item)) + Self.roundCorner
+    }
     private var message: Message { row.message }
     private var isOutgoing: Bool { row.isOutgoing }
     private var isFailed: Bool { isOutgoing && message.status == .failed }
@@ -53,7 +61,7 @@ struct MessageBubble: View {
     private var bubble: some View {
         let foreground: Color = isOutgoing ? .white : .primary
         let showsMedia = content.location != nil || (content.attachment.map { $0.attachment.isImage || $0.attachment.isVideo } ?? false)
-        BubbleLayout(fillsWidth: content.preview.hasCard || showsMedia, offeredWidth: offeredWidth) {
+        BubbleLayout(fillsWidth: content.preview.hasCard || showsMedia, offeredWidth: offeredWidth, minimumBubbleWidth: minimumWidth) {
             if let name = content.senderName {
                 Text(name)
                     .font(.footnote.bold())
@@ -501,6 +509,9 @@ fileprivate struct BubbleSpacingKey: LayoutValueKey {
 struct BubbleLayout: Layout {
     var fillsWidth: Bool
     var offeredWidth: CGFloat?
+    /// The narrowest the drawn bubble may be, padding included, when the
+    /// row has room for it.
+    var minimumBubbleWidth: CGFloat?
 
     /// A bubble's content is never narrower than this, so "ok" and a lone
     /// emoji with their time make a comfortable rounded shape rather than a
@@ -555,7 +566,8 @@ struct BubbleLayout: Layout {
             width = limit
         } else {
             let widest = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
-            width = min(limit, max(Self.minimumContentWidth, widest))
+            let minimum = max(Self.minimumContentWidth, (minimumBubbleWidth ?? 0) - 24)
+            width = min(limit, max(minimum, widest))
         }
         cache.width = (limit, width)
         return width

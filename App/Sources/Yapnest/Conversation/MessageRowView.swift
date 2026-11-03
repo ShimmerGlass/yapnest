@@ -116,8 +116,17 @@ struct MessageRowView: View, Equatable {
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, alignment: row.isOutgoing ? .trailing : .leading)
             .overlay(alignment: .top) {
-                if showsHoverBar, !row.message.isRetracted {
-                    hoverBar
+                // Not on iOS, where there is no bar: every row would carry
+                // the empty stack.
+                if Platform.isMac {
+                    ZStack {
+                        if showsHoverBar, !row.message.isRetracted {
+                            hoverBar.transition(.opacity)
+                        }
+                    }
+                    // Only the bar's coming and going: the row's own changes
+                    // aren't animated.
+                    .animation(.easeInOut(duration: 0.15), value: showsHoverBar)
                 }
             }
             .coordinateSpace(.named(rowSpace))
