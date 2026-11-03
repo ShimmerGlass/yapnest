@@ -542,11 +542,12 @@ private struct ChatListContent: View {
                 Button {
                     open(.conversation(item.conversation.peer), item)
                 } label: {
+                    // The row reads the contact's box itself: read here, one
+                    // contact's typing or presence redrew the whole list.
                     ChatListRow(
                         item: item,
-                        isTyping: item.groupChat == nil && model.live.peer(item.conversation.peer).isTyping,
+                        peer: item.groupChat == nil ? model.live.peer(item.conversation.peer) : nil,
                         avatarURL: session.avatars.url(for: item.contact),
-                        presence: model.presence(of: item.conversation.peer, contact: item.contact, isGroup: item.groupChat != nil),
                     )
                     .contentShape(Rectangle())
                 }
@@ -1013,9 +1014,14 @@ private struct ConnectionBanner: View {
 /// One conversation, laid out like Signal's chat list cell.
 private struct ChatListRow: View {
     let item: ChatListItem
-    let isTyping: Bool
+    /// The contact's live state, nil for a group.
+    let peer: PeerState?
     let avatarURL: URL?
-    let presence: ContactPresence?
+
+    private var isTyping: Bool { peer?.isTyping ?? false }
+    private var presence: ContactPresence? {
+        item.contact?.seesPresence == true ? peer?.shownPresence : nil
+    }
 
     var body: some View {
         HStack(spacing: 12) {

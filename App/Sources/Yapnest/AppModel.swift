@@ -67,7 +67,7 @@ final class AppModel {
     /// The dot to show for `peer`: only contacts whose presence we receive have
     /// one, since for anyone else "offline" would just mean unknown.
     func presence(of peer: JID, contact: Contact?, isGroup: Bool) -> ContactPresence? {
-        !isGroup && contact?.seesPresence == true ? live.peer(peer).presence ?? .offline : nil
+        !isGroup && contact?.seesPresence == true ? live.peer(peer).shownPresence : nil
     }
     /// A conversation to show, from a tapped notification.
     var requestedConversation: JID?

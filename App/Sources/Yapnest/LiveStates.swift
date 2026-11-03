@@ -12,6 +12,9 @@ final class PeerState {
     /// Nil when the session has none for them: not the same as offline.
     fileprivate(set) var presence: ContactPresence?
     fileprivate(set) var status: String?
+
+    /// What an avatar shows for them: offline when the session has nothing.
+    var shownPresence: ContactPresence { presence ?? .offline }
 }
 
 /// The same for one group chat. `phase` and `memberCount` are kept apart
