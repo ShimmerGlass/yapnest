@@ -65,7 +65,7 @@ public enum MessageStyling {
     /// with the bubble: a line the bubble would show verbatim (a fence or
     /// what a fence holds) has no spans, and a quoted line is styled as it is
     /// after its markers. A block that is still open is verbatim to the end,
-    /// as it will be once sent. Two cases differ: a message of more than
+    /// as it will be once sent. One case differs: a message of more than
     /// `maxBlocks` blocks, which the bubble merges into plain text, is styled
     /// block by block here.
     public static func composerSpans(in text: String) -> [(range: NSRange, style: SpanStyle)] {
