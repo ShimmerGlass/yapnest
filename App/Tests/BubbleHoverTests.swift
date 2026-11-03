@@ -26,6 +26,33 @@ struct BubbleHoverTests {
         #expect(hover.hit(at: CGPoint(x: 150, y: 45)) == nil)
     }
 
+    /// The bar sticks up over the row above. On its way to a button the
+    /// pointer crosses that row's bubble, which mustn't take the hover.
+    @Test func theShownBarWinsOverTheBubbleUnderIt() {
+        var hover = BubbleHover()
+        hover.set(first, for: 1)
+        hover.set(second, for: 2)
+        hover.setBar(CGRect(x: 20, y: 30, width: 200, height: 32), for: 2)
+        #expect(hover.hit(at: CGPoint(x: 150, y: 35)) == 2)
+        #expect(hover.hit(at: CGPoint(x: 150, y: 20)) == 1)
+        hover.setBar(nil, for: 1)
+        #expect(hover.hit(at: CGPoint(x: 150, y: 35)) == 2)
+        hover.setBar(nil, for: 2)
+        #expect(hover.hit(at: CGPoint(x: 150, y: 35)) == 1)
+    }
+
+    @Test func movingOntoTheBarKeepsItsRowHovered() throws {
+        let fixture = try ConversationFixture(isFlipped: false)
+        let model = fixture.model!
+        model.bubbleFrameChanged(first, for: 1)
+        model.bubbleFrameChanged(second, for: 2)
+        model.pointerMoved(to: CGPoint(x: 30, y: 60))
+        model.hoverBarFrameChanged(CGRect(x: 20, y: 30, width: 200, height: 32), for: 2)
+        model.pointerMoved(to: CGPoint(x: 150, y: 35))
+        #expect(model.hoveredBubble == 2)
+        #expect(model.hoveredRow == 2)
+    }
+
     @Test func aRemovedFrameStopsMatching() {
         var hover = BubbleHover()
         hover.set(first, for: 1)

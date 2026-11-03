@@ -84,6 +84,10 @@ struct MessageRowView: View, Equatable {
                 menuOpen = true
                 model.hoverMenuOpen = true
             })
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(BubbleHover.space)) } action: { [id = row.id] in
+                model.hoverBarFrameChanged($0, for: id)
+            }
+            .onDisappear { [id = row.id] in model.hoverBarFrameChanged(nil, for: id) }
         }
     }
 

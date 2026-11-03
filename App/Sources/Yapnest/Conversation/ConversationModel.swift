@@ -176,6 +176,10 @@ final class ConversationModel {
         }
     }
 
+    func hoverBarFrameChanged(_ frame: CGRect?, for id: Int64) {
+        bubbleHover.setBar(frame, for: id)
+    }
+
     /// The row's hover state. Not observed, so asking in a row's body costs
     /// it nothing; the row observes the box it gets.
     func hoverState(for id: Int64) -> RowHover {
