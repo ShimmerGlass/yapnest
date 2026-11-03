@@ -71,14 +71,15 @@ public enum MessageStyling {
     public static func composerSpans(in text: String) -> [(range: NSRange, style: SpanStyle)] {
         // The markers are ASCII, so UTF-16 units tell without building Characters.
         guard text.utf16.contains(where: { $0 == 0x2A || $0 == 0x5F || $0 == 0x60 || $0 == 0x7E }) else { return [] }
-        guard text.utf16.contains(0x3E) || text.contains("```") else { return spans(in: text) }
+        guard text.utf16.contains(0x3E) || text.contains("```") else { return unlinked(spans(in: text), in: text) }
         var result: [(NSRange, SpanStyle)] = []
         var hasBlock = false
         walkLines(of: text) { line in
             switch line {
             case .text(_, let shown, let offset):
                 hasBlock = true
-                for span in spans(in: String(shown)) {
+                let line = String(shown)
+                for span in unlinked(spans(in: line), in: line) {
                     result.append((NSRange(location: span.range.location + offset, length: span.range.length), span.style))
                 }
             case .fenceBody:
@@ -88,7 +89,18 @@ public enum MessageStyling {
             }
         }
         // With nothing but empty blocks the bubble shows the whole message as text.
-        return hasBlock ? result : spans(in: text)
+        return hasBlock ? result : unlinked(spans(in: text), in: text)
+    }
+
+    /// Without the spans that cross a link, which the bubble leaves as written
+    /// so the address stays whole. A link doesn't run over a line break, so
+    /// finding them a line at a time gives what finding them in a block does,
+    /// and only lines that have spans are searched.
+    private static func unlinked(_ spans: [(range: NSRange, style: SpanStyle)], in text: String) -> [(range: NSRange, style: SpanStyle)] {
+        guard !spans.isEmpty else { return spans }
+        let links = LinkDetector.links(in: text).map(\.range)
+        guard !links.isEmpty else { return spans }
+        return spans.filter { span in !links.contains { NSIntersectionRange($0, span.range).length > 0 } }
     }
 
     /// A stretch of a message that is laid out on its own.

@@ -244,6 +244,13 @@ struct MessageStylingTests {
         #expect(typed("```code```\n*b*") == ["b:*b*"])
     }
 
+    @Test func aSpanThatCrossesALinkIsLeftAsWritten() {
+        #expect(typed("_see https://example.com/a_b_ now").isEmpty)
+        #expect(typed("*https://x.com/a*").isEmpty)
+        #expect(typed("> _see https://example.com/a_b_ now\n*ok*") == ["b:*ok*"])
+        #expect(typed("*a* https://x.com/b _c_") == ["b:*a*", "i:_c_"])
+    }
+
     @Test func aMessageOfOnlyEmptyBlocksIsStyledAsTheWholeTextTheBubbleShows() {
         #expect(typed("```swift *x*") == ["b:*x*"])
         #expect(typed("```\n```\n_y_") == ["i:_y_"])
@@ -251,10 +258,15 @@ struct MessageStylingTests {
 
     @Test func typedSpansMatchTheBubbleOnRandomMessages() {
         var generator = SeededGenerator(seed: 234)
-        let pieces = ["```", "```swift", "> ", ">> ", ">", "*a*", " _b_ ", "x", "`c`", "~d~", " ", "😀", "*", "_", "\n", "\n", "\n"]
+        let pieces = ["```", "```swift", "> ", ">> ", ">", "*a*", " _b_ ", "x", "`c`", "~d~", " ", "😀", "*", "_", " https://x.com/a_b_ ", "https://x.com/a*", "\n", "\n", "\n"]
         for _ in 0..<2_000 {
             let text = (0..<Int.random(in: 0...16, using: &generator)).map { _ in pieces.randomElement(using: &generator)! }.joined()
-            let expected = MessageStyling.blocks(in: text).filter { !$0.isPreformatted }.flatMap { describe(MessageStyling.spans(in: $0.text), in: $0.text) }
+            // As the bubble draws a block: spans that cross a link stay as written.
+            let expected = MessageStyling.blocks(in: text).filter { !$0.isPreformatted }.flatMap { block in
+                let links = LinkDetector.links(in: block.text).map(\.range)
+                let kept = MessageStyling.spans(in: block.text).filter { span in !links.contains { NSIntersectionRange($0, span.range).length > 0 } }
+                return describe(kept, in: block.text)
+            }
             #expect(typed(text) == expected, "\(text.debugDescription)")
         }
     }
