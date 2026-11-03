@@ -486,6 +486,18 @@ struct RoomManagementSessionTests {
         #expect(try database.conversation(id: group().conversationId)?.isEncrypted == false)
     }
 
+    @Test func aNoticeThatAddressesAreShownReadsTheRoomInfoWithoutA104() async throws {
+        join(as: .owner)
+        info.value = (["muc_membersonly"], "Cake")
+        session.refreshRoomInfo(room)
+        #expect(await eventually { (try? group().isPrivate) == false })
+        #expect(try !group().isNonAnonymous)
+        info.value = (["muc_membersonly", "muc_nonanonymous"], "Cake")
+        let notice: Martin.Message = parseStanza("<message from='cake@rooms.example.org' type='groupchat' id='n'><x xmlns='http://jabber.org/protocol/muc#user'><status code='172'/></x></message>")
+        session.handleRoomStanza(notice, source: .live)
+        #expect(await eventually { (try? group().isNonAnonymous) == true })
+    }
+
     @Test func theRoomInfoSaysWhetherParticipantsChangeTheSubject() async throws {
         join(as: .member, role: "participant")
         let x = Element(name: "x", xmlns: "jabber:x:data")

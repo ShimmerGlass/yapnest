@@ -1575,8 +1575,10 @@ extension XMPPSession {
         if case .live = source, group.hasLeft { return }
         reportSubjectOutcome(of: stanza, in: room)
         if stanza.type == .groupchat, stanza.from?.resource == nil {
-            // The room itself: status code 104 announces a configuration change.
-            if Self.statusCodes(in: stanza.firstChild(name: "x", xmlns: NS.mucUser)).contains(104) { refreshRoomInfo(room) }
+            // The room itself: 104 announces a configuration change, and 170-174
+            // the change of logging or of who sees addresses, which servers
+            // such as Prosody and ejabberd send without 104.
+            if !Self.statusCodes(in: stanza.firstChild(name: "x", xmlns: NS.mucUser)).isDisjoint(with: [104, 170, 171, 172, 173, 174]) { refreshRoomInfo(room) }
             if let target = Self.moderatedRetraction(in: stanza) {
                 // Only the room itself can speak for its moderators: its
                 // bare address, which no occupant's stanza can carry.
