@@ -15,6 +15,22 @@ extension Message.Status {
         }
     }
 
+    /// What the indicator shows, for VoiceOver.
+    var spokenName: String {
+        switch self {
+        case .pending: String(localized: "Sending")
+        case .sent, .received: String(localized: "Sent")
+        case .delivered: String(localized: "Delivered")
+        case .displayed: String(localized: "Read")
+        case .failed: String(localized: "Not sent")
+        }
+    }
+
+    /// Our own message's state, with who it is from.
+    var spokenNameFromYou: String {
+        String(localized: "You: \(spokenName)")
+    }
+
     private static let sending = UIImage(named: "message_status_sending")
     private static let sent = UIImage(named: "message_status_sent")
     private static let delivered = UIImage(named: "message_status_delivered")

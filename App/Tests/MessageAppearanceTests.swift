@@ -78,3 +78,17 @@ struct MessageAppearanceTests {
         #expect(message(.incoming, .omemoUndecryptable).security.spoken == "Couldn't decrypt")
     }
 }
+
+struct MessageStatusSpeechTests {
+    @Test func everyStatusHasWordsAndFailureSaysNotSent() {
+        let all: [Message.Status] = [.pending, .sent, .received, .delivered, .displayed, .failed]
+        #expect(Set(all.map(\.spokenName)).count == 5)
+        #expect(Message.Status.failed.spokenName == "Not sent")
+        #expect(Message.Status.displayed.spokenName == "Read")
+    }
+
+    @Test func theGlyphInPlaceOfYouSaysItIsOurs() {
+        #expect(Message.Status.delivered.spokenNameFromYou == "You: Delivered")
+        #expect(Message.Status.failed.spokenNameFromYou == "You: Not sent")
+    }
+}

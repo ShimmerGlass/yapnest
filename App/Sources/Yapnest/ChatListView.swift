@@ -1086,6 +1086,8 @@ private struct ChatListRow: View {
                             Image(uiImage: image)
                                 .renderingMode(.template)
                                 .foregroundStyle(status == .failed ? Color.red : .secondary)
+                                // The glyph stands where "You:" would, so it says that too.
+                                .accessibilityLabel(status.spokenNameFromYou)
                         }
                         if item.notifyingUnreadCount > 0 {
                             Text(item.notifyingUnreadCount, format: .number)
