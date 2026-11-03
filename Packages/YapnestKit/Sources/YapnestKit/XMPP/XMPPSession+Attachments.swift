@@ -37,6 +37,9 @@ extension XMPPSession {
         case noUploadService
         /// `max` is what the server said it takes, if it did.
         case tooLarge(max: Int?)
+        /// An encrypted file is sealed whole in memory, and a recipient's
+        /// Yapnest can't download more than `maxDownloadSize` anyway.
+        case tooLargeToEncrypt(max: Int64)
         case uploadFailed(String)
 
         public var errorDescription: String? {
@@ -47,6 +50,8 @@ extension XMPPSession {
             case .tooLarge(let max?):
                 String(localized: "The file is too large. Your server accepts up to \(ByteCountFormatter.string(fromByteCount: Int64(max), countStyle: .file)).")
             case .tooLarge(nil): String(localized: "The file is too large for your server.")
+            case .tooLargeToEncrypt(let max):
+                String(localized: "Too large to send encrypted (max \(ByteCountFormatter.string(fromByteCount: max, countStyle: .file))).")
             case .uploadFailed(let reason): String(localized: "Upload failed: \(reason)")
             }
         }
@@ -81,6 +86,14 @@ extension XMPPSession {
             do {
                 guard let file = attachments.url(for: attachment), (try? file.checkResourceIsReachable()) == true else {
                     throw AttachmentError.unreadable
+                }
+                // Refused before anything is read or sealed, and for good: the
+                // message fails at once, offline too, and no connect retries it.
+                if message.encryption == .omemo, file.fileSize > Self.maxDownloadSize {
+                    let failure = AttachmentError.tooLargeToEncrypt(max: Self.maxDownloadSize)
+                    DiagLog.notice(.upload, "Upload refused, too large to encrypt", .id("msg", transferId), .size("bytes", Int(file.fileSize)))
+                    try? database.markFailed(conversationId: message.conversationId, remoteId: id, error: failure.errorDescription ?? "")
+                    return
                 }
                 phase = .service
                 let service = try await retryingPassingErrors { try await uploadService() }
