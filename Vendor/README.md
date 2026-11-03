@@ -1112,7 +1112,8 @@ Each entry gives what went wrong for users, why, and what changed.
   `SignalError.storageFailed` (-100002) from `load_session_func`,
   `contains_session_func`, `get_sub_device_sessions_func` and `load_pre_key`;
   libsignal passes a negative return from these on unchanged. Decoding
-  starts no repair for it, as it does for `noSession` and `invalidMessage`.
+  starts no repair for it, unlike `noSession` and `invalidMessage`, which
+  start one.
   Elsewhere in `OMEMOModule` a failed read is taken the way that does the
   least harm: OMEMO stays on for the chat (`isAvailable`), a device counts
   as having a session, so none is built over it, and a device list is not

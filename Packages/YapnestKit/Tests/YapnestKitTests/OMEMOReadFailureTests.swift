@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import SQLite3
 @preconcurrency import Martin
 @preconcurrency @testable import MartinOMEMO
 import Testing
@@ -26,6 +27,64 @@ struct OMEMOReadFailureTests {
             return value
         } catch {
             try await database.writer.write { try $0.execute(sql: "ALTER TABLE \(table)Aside RENAME TO \(table)") }
+            throw error
+        }
+    }
+
+    /// Runs `body` with reads of `column` failing for the rows where `condition` holds, while every
+    /// write still goes through to the table. Reads that don't touch the column, or those rows, work.
+    private func failingReads<T>(of column: String, in table: String, where condition: String, database: AppDatabase, _ body: () async throws -> T) async throws -> T {
+        try await database.writer.write { db in
+            try db.execute(sql: "ALTER TABLE \(table) RENAME TO \(table)Aside")
+            let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(\(table)Aside)").map { $0["name"] as String }
+            let selected = columns.map { $0 == column ? "CASE WHEN \(condition) THEN abs(-9223372036854775807 - 1) ELSE \($0) END AS \($0)" : $0 }
+            try db.execute(sql: "CREATE VIEW \(table) AS SELECT \(selected.joined(separator: ", ")) FROM \(table)Aside")
+            let list = columns.joined(separator: ", "), new = columns.map { "NEW.\($0)" }.joined(separator: ", ")
+            let key = "name = OLD.name AND deviceId = OLD.deviceId"
+            try db.execute(sql: "CREATE TRIGGER \(table)Insert INSTEAD OF INSERT ON \(table) BEGIN INSERT OR REPLACE INTO \(table)Aside (\(list)) VALUES (\(new)); END")
+            try db.execute(sql: "CREATE TRIGGER \(table)Update INSTEAD OF UPDATE ON \(table) BEGIN UPDATE \(table)Aside SET \(columns.map { "\($0) = NEW.\($0)" }.joined(separator: ", ")) WHERE \(key); END")
+            try db.execute(sql: "CREATE TRIGGER \(table)Delete INSTEAD OF DELETE ON \(table) BEGIN DELETE FROM \(table)Aside WHERE \(key); END")
+        }
+        func restore() async throws {
+            try await database.writer.write { db in
+                try db.execute(sql: "DROP VIEW \(table)")
+                try db.execute(sql: "ALTER TABLE \(table)Aside RENAME TO \(table)")
+            }
+        }
+        do {
+            let value = try await body()
+            try await restore()
+            return value
+        } catch {
+            try await restore()
+            throw error
+        }
+    }
+
+    /// Runs `body` with the database refusing to read `omemoSession.data`, which makes the read throw
+    /// and leaves writes alone. A view can't do that: the app upserts into the table.
+    private func refusingReadsOfSessionData<T>(in database: AppDatabase, _ body: () async throws -> T) async throws -> T {
+        func set(_ refuse: Bool) async throws {
+            try await database.writer.write { db in
+                guard let connection = db.sqliteConnection else { return }
+                if refuse {
+                    sqlite3_set_authorizer(connection, { _, action, table, column, _, _ in
+                        action == SQLITE_READ && table.map(String.init(cString:)) == "omemoSession" && column.map(String.init(cString:)) == "data" ? SQLITE_DENY : SQLITE_OK
+                    }, nil)
+                } else {
+                    sqlite3_set_authorizer(connection, nil, nil)
+                }
+                // Statements prepared before are kept, and were authorized then.
+                db.releaseMemory()
+            }
+        }
+        try await set(true)
+        do {
+            let value = try await body()
+            try await set(false)
+            return value
+        } catch {
+            try await set(false)
             throw error
         }
     }
@@ -107,12 +166,14 @@ struct OMEMOReadFailureTests {
         let message = try #require(b.send("fresh", to: a))
         let preKeys = try count("omemoPreKey", in: a.database)
 
-        let received = try await without("omemoSession", in: a.database) { a.receive(message, from: b) }
+        // Reading the session's data is refused while writes still work, so a session built from
+        // nothing would be stored over the working one.
+        let received = try await refusingReadsOfSessionData(in: a.database) { a.receive(message, from: b) }
         #expect(received.outcome == "failed")
         #expect(received.body == "storageFailed")
         #expect(try sessionRecord(a, with: b) == before, "the session was replaced")
         #expect(try count("omemoPreKey", in: a.database) == preKeys)
-        #expect(try a.omemo.store.loadPreKey(withId: 5202) != nil, "the prekey was used up")
+        #expect(!a.omemo.store.isPreKeyDeleted(withId: 5202), "the prekey was used up")
         #expect(a.receive(message, from: b) == .init(outcome: "decrypted", body: "fresh"))
     }
 
@@ -221,6 +282,44 @@ struct OMEMOReadFailureTests {
     }
 
     // MARK: Encrypting
+
+    private func sendOffMain(_ send: @escaping @Sendable () -> Result<(Martin.Message, OMEMODevice.Trust), OMEMOEncryption.EncryptError>) async -> Result<(Martin.Message, OMEMODevice.Trust), OMEMOEncryption.EncryptError> {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { continuation.resume(returning: send()) }
+        }
+    }
+
+    @Test func encryptingWhileOnlyOurOwnDevicesCantBeReadFailsInsteadOfLeavingThemOut() async throws {
+        let (a, b) = try established(keyId: 5501)
+        // The recipient's list is answered, so the send has everything but our other device's status.
+        let device = b.device
+        a.wire.answer { iq in
+            iq.firstChild(name: "pubsub")?.firstChild(name: "items")?.getAttribute("node") == OMEMOModule.DEVICES_LIST_NODE
+                ? OMEMODeviceListTests.list([device], to: iq) : FakeWire.error(to: iq)
+        }
+        let other = SignalAddress(name: a.account.description, deviceId: 77)
+        #expect(a.omemo.store.save(identity: other, publicKeyData: key(7)))
+        #expect(a.omemo.store.storeSessionRecord(Data([7]), forAddress: other))
+        @Sendable func send() -> Result<(Martin.Message, OMEMODevice.Trust), OMEMOEncryption.EncryptError> {
+            let message = Martin.Message()
+            message.type = .chat
+            message.body = "for everyone"
+            return a.omemo.encrypt(message, for: [b.account])
+        }
+        // Reading the recipient's devices works; the status of our own can't be read.
+        let failed = try await failingReads(of: "status", in: "omemoIdentity", where: "name = '\(a.account.description)'", database: a.database) {
+            await sendOffMain(send)
+        }
+        guard case .failure(.setupFailed(let who)) = failed else {
+            Issue.record("sent without our other devices, or failed otherwise: \(failed)")
+            return
+        }
+        #expect(who == a.account)
+        guard case .success = await sendOffMain(send) else {
+            Issue.record("a send with the devices readable should work")
+            return
+        }
+    }
 
     @Test func encryptingWhileOurOwnDevicesCantBeReadFailsInsteadOfLeavingThemOut() async throws {
         let (a, b) = try established(keyId: 5401)
