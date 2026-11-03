@@ -858,7 +858,7 @@ final class ConversationModel {
         // A bounded window leaves out unread messages below it: those are
         // counted in the database, not in the rows.
         if bounded, let observedUnread { unreadCount = observedUnread }
-        if !bounded || !hasLoaded { unreadCount = newItems.count { $0.message.direction == .incoming && !$0.message.isRead } }
+        if !bounded || !hasLoaded { unreadCount = prebuilt?.unread ?? newItems.count { $0.message.direction == .incoming && !$0.message.isRead } }
         // Only what is new or whose link or preview changed can need a fetch;
         // anything else was looked at on an earlier emission.
         fetchMissingPreviews(in: changedItems.lazy.filter { before, item in
@@ -1367,6 +1367,9 @@ final class ConversationModel {
         var rows: [Int64: Row]
         var calendar: Calendar
         var locale: Locale
+        /// The unread incoming messages among the items, counted here as it
+        /// walks every one of them, which `apply` on the main actor would too.
+        var unread: Int
     }
 
     private struct PrebuildSnapshot: Sendable {
@@ -1413,7 +1416,8 @@ final class ConversationModel {
             let (content, text) = makeContent(input, cached: snapshot.texts[id], environment: snapshot.environment)
             rows[id] = Prebuilt.Row(inputs: input, content: content, text: text)
         }
-        return Prebuilt(rows: rows, calendar: snapshot.environment.calendar, locale: snapshot.environment.locale)
+        let unread = snapshot.items.count { $0.message.direction == .incoming && !$0.message.isRead }
+        return Prebuilt(rows: rows, calendar: snapshot.environment.calendar, locale: snapshot.environment.locale, unread: unread)
     }
 
     private nonisolated static func rowInputs(
