@@ -98,7 +98,7 @@ public struct Contact: Codable, Hashable, Sendable, FetchableRecord, Persistable
     /// ringing phone, receipts, automatic downloads, being told our presence
     /// or last seen) hangs on this, never on `isInRoster`.
     /// This is for what the UI shows; whether to act for them is `mayReceive`.
-    /// `AppDatabase.missedImages` repeats `mayReceive` in SQL.
+    /// `AppDatabase.missedImages` and `consentedContacts` repeat `mayReceive` in SQL.
     public var hasConsent: Bool {
         isAddedByUser || isSubscriptionPending || subscription != .none
     }
