@@ -91,6 +91,7 @@ private struct AddContactLinkView: View {
         // Cancel is disabled meanwhile, but a swipe would still close the
         // sheet, and the late answer would close whatever is up by then.
         .interactiveDismissDisabled(add.isBusy)
+        .reportsBusy(add.isBusy)
     }
 
     private func addContact() {

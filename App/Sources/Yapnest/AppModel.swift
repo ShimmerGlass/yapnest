@@ -115,6 +115,35 @@ final class AppModel {
         requestedSheet = sheet
     }
 
+    /// Whether the chat list's sheet is waiting on the server. Replacing it
+    /// then would tear down the view its answer, or its failure's alert, is
+    /// meant for, so a tapped notification or a link waits in
+    /// `requestedConversation` and `pendingLink` until it is done.
+    var sheetIsBusy = false
+
+    /// The chat a notification asked for, unless the sheet is busy; it is
+    /// then kept for when the sheet is done.
+    func takeRequestedConversation() -> JID? {
+        guard !sheetIsBusy, let peer = requestedConversation else { return nil }
+        requestedConversation = nil
+        return peer
+    }
+
+    /// The link waiting for the chat list, unless the sheet is busy.
+    func takePendingLink() -> XMPPURI? {
+        guard !sheetIsBusy, let link = pendingLink else { return nil }
+        pendingLink = nil
+        return link
+    }
+
+    /// Whether the invitation notification's request to show the list may be
+    /// acted on, consuming it.
+    func takeRequestsChatList() -> Bool {
+        guard !sheetIsBusy, requestsChatList else { return false }
+        requestsChatList = false
+        return true
+    }
+
     func conversationSheetAppeared() { conversationSheets.presented() }
     func conversationSheetDisappeared() { conversationSheets.dismissed() }
 
@@ -1174,6 +1203,21 @@ struct SignInError: LocalizedError {
 extension View {
     /// Marks a sheet presented by a conversation, so `AppModel` knows one is up.
     func countsAsConversationSheet() -> some View { modifier(ConversationSheetCounter()) }
+
+    /// Tells the chat list that this sheet is waiting on the server, so it
+    /// doesn't replace the sheet meanwhile.
+    func reportsBusy(_ isBusy: Bool) -> some View { modifier(SheetBusyReporter(isBusy: isBusy)) }
+}
+
+private struct SheetBusyReporter: ViewModifier {
+    let isBusy: Bool
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: isBusy, initial: true) { _, busy in if busy { model.sheetIsBusy = true } else if model.sheetIsBusy { model.sheetIsBusy = false } }
+            .onDisappear { model.sheetIsBusy = false }
+    }
 }
 
 private struct ConversationSheetCounter: ViewModifier {

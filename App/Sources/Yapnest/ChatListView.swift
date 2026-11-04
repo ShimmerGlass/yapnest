@@ -113,21 +113,21 @@ struct ChatListView: View {
                 .countsAsConversationSheet()
             case .newGroup:
                 NewGroupView(session: session) { room in
-                    self.sheet = nil
+                    guard ChatListSheet.close(&self.sheet, ifShowing: .newGroup) else { return }
                     show(room)
                 }
                 .sheetSizedForMac(width: 440, height: 520)
                 .countsAsConversationSheet()
             case .link(let link):
                 LinkConfirmation(session: session, link: link) { peer, body in
-                    self.sheet = nil
+                    guard ChatListSheet.close(&self.sheet, ifShowing: .link(link)) else { return }
                     if let peer { openChat(peer, prefilling: body) }
                 }
                 .sheetSizedForMac(width: 440, height: 520)
                 .countsAsConversationSheet()
             case .joinGroup:
                 JoinGroupView(session: session) { room in
-                    self.sheet = nil
+                    guard ChatListSheet.close(&self.sheet, ifShowing: .joinGroup) else { return }
                     show(room)
                 }
                 .sheetSizedForMac(width: 440, height: 520)
@@ -135,29 +135,13 @@ struct ChatListView: View {
             }
         }
         // From a tapped notification.
-        .onChange(of: model.requestedConversation, initial: true) { _, peer in
-            guard let peer else { return }
-            model.requestedConversation = nil
-            // The stack and its destinations exist by now: this view is only
-            // made once a session is, and a cold launch seeded its state in
-            // `init`. Opening the chat in the same update as closing the
-            // sheet is fine for the stack.
-            sheet = nil
-            show(peer)
-        }
-        // From a tapped invitation notification: the list has its row.
-        .onChange(of: model.requestsChatList, initial: true) { _, requested in
-            guard requested else { return }
-            model.requestsChatList = false
-            sheet = nil
-            path = []
-        }
+        .onChange(of: model.requestedConversation, initial: true) { applyRequests() }
+        // From an invitation notification: the list has its row.
+        .onChange(of: model.requestsChatList, initial: true) { applyRequests() }
         // From an `xmpp:` link, which may have arrived before sign-in.
-        .onChange(of: model.pendingLink, initial: true) { _, link in
-            guard let link else { return }
-            model.pendingLink = nil
-            Task { await handle(link) }
-        }
+        .onChange(of: model.pendingLink, initial: true) { applyRequests() }
+        // What waited for a busy sheet is acted on once it is done.
+        .onChange(of: model.sheetIsBusy) { applyRequests() }
         // From the menu bar's Settings and New Chat.
         .onChange(of: model.requestedSheet) { _, requested in
             guard let requested else { return }
@@ -388,6 +372,26 @@ struct ChatListView: View {
         if isSplit { sidebarPath.append(route) } else { path.append(route) }
     }
 
+    /// Acts on what a tapped notification or a link asked for, unless the
+    /// sheet is busy, which `AppModel` then keeps for later.
+    private func applyRequests() {
+        if let peer = model.takeRequestedConversation() {
+            // The stack and its destinations exist by now: this view is only
+            // made once a session is, and a cold launch seeded its state in
+            // `init`. Opening the chat in the same update as closing the
+            // sheet is fine for the stack.
+            sheet = nil
+            show(peer)
+        }
+        if model.takeRequestsChatList() {
+            sheet = nil
+            path = []
+        }
+        if let link = model.takePendingLink() {
+            Task { await handle(link) }
+        }
+    }
+
     /// Opens what a link asks for, or asks the user first when it would send
     /// something: adding someone we don't know, or joining a group.
     private func handle(_ link: XMPPURI) async {
@@ -399,6 +403,11 @@ struct ChatListView: View {
             let contact = try? database.contact(link.jid)
             let group = (try? database.groupChat(link.jid)) ?? nil
             return (contact?.hasConsent == true || contact?.hasContactRequest == true || group != nil, group?.hasLeft == false)
+        }
+        // A sheet may have begun waiting on the server meanwhile.
+        if model.sheetIsBusy {
+            model.pendingLink = link
+            return
         }
         switch link.action {
         case .join:
@@ -1202,6 +1211,15 @@ enum ChatListSheet: Identifiable, Hashable {
     case link(XMPPURI)
 
     var id: Self { self }
+
+    /// Closes the sheet for the action it started, if that sheet is still the
+    /// one up. A late answer from a sheet that has since been replaced must
+    /// not close the one that replaced it.
+    static func close(_ current: inout ChatListSheet?, ifShowing sheet: ChatListSheet) -> Bool {
+        guard current == sheet else { return false }
+        current = nil
+        return true
+    }
 }
 
 #if DEBUG

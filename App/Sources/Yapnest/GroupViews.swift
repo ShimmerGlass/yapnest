@@ -36,6 +36,7 @@ struct NewGroupView: View {
             }
             .actionAlert("Couldn't create the group", creation)
         }
+        .reportsBusy(creation.isBusy)
     }
 
     private func create() {
@@ -112,6 +113,7 @@ struct JoinGroupView: View {
         .presentationDetents([.medium])
         // The answer opens the chat, which a user who left no longer wants.
         .interactiveDismissDisabled(joining.isBusy)
+        .reportsBusy(joining.isBusy)
     }
 
     private func join() {
