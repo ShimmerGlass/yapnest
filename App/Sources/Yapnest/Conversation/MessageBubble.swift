@@ -83,12 +83,10 @@ struct MessageBubble: View {
             }
             if let location = content.location {
                 LocationCard(
-                    location: location, display: { model.mapDisplay(for: message) }, showMap: { model.showMap(of: row.id) },
-                    agree: { model.agreeToMaps() }, notNow: { model.turnOffMaps() },
+                    location: location, display: { model.mapDisplay(for: message) }, showMap: { model.showMap(of: message) },
+                    agree: { model.agreeToMaps(on: message) }, notNow: { model.turnOffMaps() },
                 )
-                    .onTapGesture { location.openInMaps() }
-                    .linkPointer()
-                    .bubbleSpacingAfter(6)
+                .bubbleSpacingAfter(6)
             }
             if content.preview.hasCard {
                 LinkPreviewCard(display: content.preview, isOutgoing: isOutgoing)

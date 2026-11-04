@@ -416,8 +416,19 @@ final class ConversationModel {
     /// redraws them and not the rows. Until the first read nothing is
     /// consented, so no card asks Apple for a map.
     private(set) var mapSettings = MapPreview.Settings()
-    /// The locations the user tapped to show, for the stranger rule.
-    private(set) var shownMaps: Set<Int64> = []
+    /// The locations the user tapped to show, for the stranger rule. A
+    /// message is named with its body, so a correction that moves the pin
+    /// needs a tap of its own.
+    private(set) var shownMaps: Set<ShownMap> = []
+    struct ShownMap: Hashable {
+        let id: Int64
+        let body: String
+        init?(_ message: Message) {
+            guard let id = message.id else { return nil }
+            self.id = id
+            body = message.body
+        }
+    }
     /// Who the stranger rule trusts, and whether the room is private: nil
     /// outside a group. Observed by the cards alone, as `mapDisplay` is
     /// worked out when one is drawn, so none of it rebuilds a row.
@@ -1972,15 +1983,17 @@ final class ConversationModel {
     func mapDisplay(for message: Message) -> MapPreview.Display {
         mapSettings.display(
             trusted: mapTrust.trusts(message, groupIsPrivate: groupIsPrivate),
-            tappedToShow: message.id.map(shownMaps.contains) ?? false,
+            tappedToShow: ShownMap(message).map(shownMaps.contains) ?? false,
         )
     }
 
-    func showMap(of id: Int64) {
-        shownMaps.insert(id)
+    func showMap(of message: Message) {
+        if let shown = ShownMap(message) { shownMaps.insert(shown) }
     }
 
-    func agreeToMaps() {
+    /// Agreeing on a card shows that card's map too: the user asked for it there.
+    func agreeToMaps(on message: Message) {
+        showMap(of: message)
         write { [database = session.database] in try database.agreeToMapPreviews() }
     }
 

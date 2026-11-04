@@ -145,12 +145,39 @@ struct ConversationRegressionTests {
         try f.database.agreeToMapPreviews()
         await eventually("the consent never reached the model") { display(mine) == .map }
         #expect(display(place) == .tapToShow)
-        f.model.showMap(of: place.id!)
+        f.model.showMap(of: place)
         #expect(display(place) == .map)
 
         try f.database.setMapPreviews(false)
         await eventually("the setting never reached the model") { display(place) == .off }
         #expect(display(mine) == .off)
+    }
+
+    @Test func agreeingOnAStrangersCardShowsItsMapWithoutASecondTap() async throws {
+        let f = try ConversationFixture()
+        let place = try f.add("geo:48.85,2.35", read: true)
+        let other = try f.add("geo:1.5,2.5", read: true)
+        try f.database.agreeToMapPreviews()
+        await f.start()
+        #expect(f.model.mapDisplay(for: place) == .tapToShow)
+        f.model.agreeToMaps(on: place)
+        #expect(f.model.mapDisplay(for: place) == .map)
+        #expect(f.model.mapDisplay(for: other) == .tapToShow)
+    }
+
+    @Test func aStrangersCorrectionToATappedLocationNeedsANewTap() async throws {
+        let f = try ConversationFixture()
+        let place = try f.add("geo:48.85,2.35", read: true)
+        try f.database.agreeToMapPreviews()
+        await f.start()
+        f.model.showMap(of: place)
+        #expect(f.model.mapDisplay(for: place) == .map)
+
+        var moved = place
+        moved.body = "geo:10.0,20.0"
+        #expect(f.model.mapDisplay(for: moved) == .tapToShow)
+        f.model.showMap(of: moved)
+        #expect(f.model.mapDisplay(for: moved) == .map)
     }
 
     @Test func aContactTheUserAddedIsTrustedWithoutATap() async throws {

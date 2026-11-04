@@ -36,40 +36,74 @@ struct LocationCard: View {
     var body: some View {
         let display = display()
         let drawsMap = display == .map
+        // The tap that opens Maps would let a stray touch beside the buttons
+        // reach Apple before the user has answered, so only the buttons act then.
+        if drawsMap || display == .off {
+            card(display)
+                .onTapGesture { location.openInMaps() }
+                .linkPointer()
+        } else {
+            card(display)
+        }
+    }
+
+    private func card(_ display: MapPreview.Display) -> some View {
+        let drawsMap = display == .map
+        let opensMaps = drawsMap || display == .off
         let key = LocationSnapshotCache.key(location, dark: colorScheme == .dark, scale: scale)
-        Color(.tertiarySystemFill)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay {
-                if drawsMap, let shown = loaded.flatMap({ $0.key == key ? $0.image : nil }) ?? LocationSnapshotCache.cached(key, display: display) {
+        // The aspect ratio is the least the card takes. A map is drawn over
+        // it, so the picture arriving changes nothing. The notice and its
+        // buttons sit in the stack beside it instead and may make the card
+        // taller, as larger text or a narrow bubble would otherwise clip them.
+        return ZStack {
+            Color.clear
+                .aspectRatio(LocationSnapshotCache.size.width / LocationSnapshotCache.size.height, contentMode: .fit)
+            if !drawsMap {
+                placeholder(display)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            if drawsMap {
+                if let shown = loaded.flatMap({ $0.key == key ? $0.image : nil }) ?? LocationSnapshotCache.cached(key) {
+                    // Clipped on the snapshot itself rather than on the card: a clip on a
+                    // stack of layers is an offscreen render pass.
                     FilledImage(image: Image(uiImage: shown), shape: RoundedRectangle(cornerRadius: 10))
                 } else {
                     placeholder(display)
                 }
             }
-            .aspectRatio(LocationSnapshotCache.size.width / LocationSnapshotCache.size.height, contentMode: .fit)
-            .frame(maxWidth: .infinity)
-            // Clipped on the snapshot itself rather than here: a clip on a
-            // stack of layers is an offscreen render pass.
-            .contentShape(RoundedRectangle(cornerRadius: 10))
-            .task(id: drawsMap ? key : nil) {
-                guard drawsMap else { return }
-                if let cached = LocationSnapshotCache.cached(key, display: display) {
-                    // Kept here too, so evicting it from the cache can't blank the view.
-                    loaded = (key, cached)
-                    return
-                }
-                loaded = nil
-                if let image = await LocationSnapshotCache.load(location, dark: colorScheme == .dark, scale: scale, key: key, display: display) {
-                    loaded = (key, image)
-                }
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .task(id: drawsMap ? key : nil) {
+            guard drawsMap else { return }
+            if let cached = LocationSnapshotCache.cached(key) {
+                // Kept here too, so evicting it from the cache can't blank the view.
+                loaded = (key, cached)
+                return
             }
-            .accessibilityElement(children: display == .map || display == .off ? .ignore : .contain)
-            .accessibilityLabel(GeoLocation.summary)
-            .accessibilityAddTraits(display == .map || display == .off ? .isButton : [])
+            loaded = nil
+            if let image = await LocationSnapshotCache.load(location, dark: colorScheme == .dark, scale: scale, key: key) {
+                loaded = (key, image)
+            }
+        }
+        .accessibilityElement(children: opensMaps ? .ignore : .contain)
+        .accessibilityLabel(opensMaps ? GeoLocation.summary : "\(GeoLocation.summary), \(coordinates)")
+        .accessibilityAddTraits(opensMaps ? .isButton : [])
     }
 
     private var coordinates: String {
         String(format: "%.5f, %.5f", location.latitude, location.longitude)
+    }
+
+    @ViewBuilder
+    private var consentButtons: some View {
+        Button("Show Maps", action: agree)
+            .buttonStyle(.borderedProminent)
+        Button("Not Now", action: notNow)
+            .buttonStyle(.bordered)
     }
 
     private func placeholder(_ display: MapPreview.Display) -> some View {
@@ -84,6 +118,7 @@ struct LocationCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                    .accessibilityHidden(true)
             }
             switch display {
             case .askConsent:
@@ -91,13 +126,9 @@ struct LocationCard: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .lineLimit(3)
-                    .minimumScaleFactor(0.7)
-                HStack(spacing: 8) {
-                    Button("Show Maps", action: agree)
-                        .buttonStyle(.borderedProminent)
-                    Button("Not Now", action: notNow)
-                        .buttonStyle(.bordered)
+                ViewThatFits {
+                    HStack(spacing: 8) { consentButtons }
+                    VStack(spacing: 8) { consentButtons }
                 }
                 .controlSize(.small)
                 .font(.caption)
@@ -213,17 +244,12 @@ enum LocationSnapshotCache {
         cache.removeAllObjects()
     }
 
-    /// Nothing is returned unless `display` is `.map`: the card's own check
-    /// is for speed, and this is what keeps a map from being shown or asked
-    /// for when the user hasn't allowed it.
-    static func cached(_ key: String, display: MapPreview.Display) -> UIImage? {
-        guard display == .map else { return nil }
-        return cache.object(forKey: key as NSString)
+    static func cached(_ key: String) -> UIImage? {
+        cache.object(forKey: key as NSString)
     }
 
-    static func load(_ location: GeoLocation, dark: Bool, scale: CGFloat, key: String, display: MapPreview.Display, disk: SnapshotDiskCache = .standard) async -> UIImage? {
-        guard display == .map else { return nil }
-        if let image = cached(key, display: display) { return image }
+    static func load(_ location: GeoLocation, dark: Bool, scale: CGFloat, key: String, disk: SnapshotDiskCache = .standard) async -> UIImage? {
+        if let image = cached(key) { return image }
         let generation = disk.generation.withLock { $0 }
         // The cache was emptied for a sign-out while this waited: what it holds is the old account's.
         func current() -> Bool { disk.generation.withLock { $0 } == generation }
