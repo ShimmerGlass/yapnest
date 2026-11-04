@@ -14,9 +14,11 @@ struct ConversationView: View {
     /// The chat list's chats started on a tap, of which this screen takes
     /// its own if there is one.
     var prepared: PreparedChats?
+    /// Whether the bar counts what's unread in the other chats: when back
+    /// leads to the chat list, which shows them.
+    var countsOtherChats = false
 
     @Environment(AppModel.self) private var model
-    @Environment(\.horizontalSizeClass) private var sizeClass
     /// SwiftUI makes this struct again whenever the parent updates, and
     /// keeps only the first holder. Everything costly is made through it,
     /// once, when the body first needs it.
@@ -124,11 +126,6 @@ struct ConversationView: View {
         return Text(presence.title)
     }
 
-    /// What the badge counts in every chat but this one.
-    private var otherChatsUnread: Int {
-        model.unreadCounts.values.reduce(0, +) - (model.unreadCounts[peer] ?? 0)
-    }
-
     var body: some View {
         messages
             // Not on the Mac, whose header isn't in the bar, so resizing the
@@ -147,13 +144,9 @@ struct ConversationView: View {
                             .frame(width: headerWidth)
                     }
                 }
-                let otherUnread = Platform.usesChatHeader || sizeClass != .compact ? 0 : otherChatsUnread
-                if otherUnread > 0 {
+                if countsOtherChats, !Platform.usesChatHeader, model.chatsWithUnread.contains(where: { $0 != peer }) {
                     ToolbarItem(placement: .topBarLeading) {
-                        UnreadCountBadge(count: otherUnread)
-                            .accessibilityElement(children: .ignore)
-                            .accessibilityLabel("\(otherUnread) unread in other chats")
-                            .accessibilityIdentifier("otherChatsUnread")
+                        OtherChatsUnreadCount(peer: peer)
                     }
                 }
                 if canCall, !Platform.usesChatHeader {
@@ -760,5 +753,20 @@ private struct MacArrival: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// The bar's count of what's unread in every chat but `peer`. Its own view, so
+/// that only it, not the chat's screen, updates as the counts change.
+private struct OtherChatsUnreadCount: View {
+    let peer: JID
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let count = model.unreadCounts.values.reduce(0, +) - (model.unreadCounts[peer] ?? 0)
+        UnreadCountBadge(count: count)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(count) unread in other chats")
+            .accessibilityIdentifier("otherChatsUnread")
     }
 }

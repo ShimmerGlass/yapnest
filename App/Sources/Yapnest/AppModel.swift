@@ -223,21 +223,12 @@ final class AppModel {
         appLock.unlock()
     }
     @ObservationIgnored private(set) var isActive = true
-    /// The chat that is the only screen in front, with the chat list out of
-    /// sight (a pushed chat on a compact layout). Set by the chat list.
-    @ObservationIgnored var chatInFront: JID?
+    /// What hides the chat list, if anything. Set by the chat list.
+    @ObservationIgnored var inFront = ScreenInFront.chatList
 
-    /// Whether a notification for `peer` is shown: always while the app isn't
-    /// active, and while it is, for what the user can't see, which is every
-    /// chat but the one in front once the list is hidden behind it. A nil
-    /// `peer` is a group invitation, which only the list shows.
-    func showsNotification(for peer: JID?) -> Bool {
-        !isActive || (chatInFront != nil && peer != chatInFront)
-    }
+    var notificationScope: NotificationScope { NotificationScope(isActive: isActive, inFront: inFront) }
 
-    func showsNotification(_ notification: MessageNotification) -> Bool {
-        showsNotification(for: notification.isInvitation ? nil : notification.peer)
-    }
+    func showsNotification(for peer: JID?) -> Bool { notificationScope.shows(peer) }
 
     /// For a notification as delivered. One with neither a peer nor an
     /// invitation is the extension's stand-in for messages it didn't fetch;
@@ -248,16 +239,12 @@ final class AppModel {
         return showsNotification(for: peer)
     }
 
-    /// How the next claim treats what it claims: whether its notifications are
-    /// shown at all (which starts a group's interval), and the chat whose
-    /// aren't. Only while active: in the background the chat left open is out
-    /// of sight like any other, and keeps its interval.
-    var claimScope: (notifies: Bool, silencing: JID?) {
-        isActive ? (chatInFront != nil, chatInFront) : (true, nil)
-    }
-
     /// Unread messages per chat, as the badge counts them.
     private(set) var unreadCounts: [JID: Int] = [:]
+    /// The chats with a count above 0, changed only when one gains its first
+    /// unread message or loses its last, for views that only show whether
+    /// there are any: reading the counts would update them on every message.
+    private(set) var chatsWithUnread: Set<JID> = []
     /// Kept for a session that appears while the app is already away.
     @ObservationIgnored private var isBackground = false
     @ObservationIgnored private var suspension: Task<Void, Never>?
@@ -935,13 +922,16 @@ final class AppModel {
         claim = Task {
             repeat {
                 claimsAgain = false
-                let database = session.database, scope = claimScope
+                // What's shown follows the scope the claim started intervals
+                // by, even if the user has moved on meanwhile: a group whose
+                // interval started for a notification left unshown would stay
+                // quiet for that long.
+                let database = session.database, scope = notificationScope
                 let (claimed, badge) = await Task.detached(priority: .utility) {
                     ((try? database.claimNotificationsAndEdits(notifies: scope.notifies, silencing: scope.silencing)) ?? ([], []), try? database.unreadCount())
                 }.value
                 guard self.session === session else { continue }
-                // Asked again now: the user may have moved on while it was claimed.
-                let notifications = claimed.0.filter { showsNotification($0) }, edited = claimed.1.filter { showsNotification($0) }
+                let notifications = claimed.0.filter { scope.shows($0) }, edited = claimed.1.filter { scope.shows($0) }
                 guard !notifications.isEmpty || !edited.isEmpty else { continue }
                 await MessageNotification.replaceDelivered(edited, badge: badge, avatars: session.avatars)
                 await MessageNotification.replaceHeld(notifications, badge: badge, avatars: session.avatars)
@@ -958,6 +948,7 @@ final class AppModel {
     private func observeUnread(_ session: XMPPSession) {
         unreadObservation?.cancel()
         unreadCounts = [:]
+        chatsWithUnread = []
         guard environment.managesBadge else { return }
         badgeSync.forget()
         let badgeSync = badgeSync
@@ -975,6 +966,8 @@ final class AppModel {
                 guard counts != last else { return }
                 last = counts
                 self.unreadCounts = counts
+                let chats = Set(counts.filter { $0.value > 0 }.keys)
+                if chats != self.chatsWithUnread { self.chatsWithUnread = chats }
                 // Archived and deleted chats aren't in the counts at all, so
                 // it's what's unread that stays, not what's read that goes.
                 let delivered = await center.deliveredNotifications()
@@ -1335,5 +1328,50 @@ private final class BackgroundTaskBox {
             UIApplication.shared.endBackgroundTask(id)
             id = .invalid
         }
+    }
+}
+
+/// What is in front of the user, as far as it hides the chat list.
+enum ScreenInFront: Equatable {
+    /// The chat list, or a split layout, where its rows stay in sight.
+    case chatList
+    /// A chat pushed over the list.
+    case chat(JID)
+    /// Something else over the list: the archive, or a sheet.
+    case elsewhere
+}
+
+/// What decides which notifications are shown, taken at one moment.
+struct NotificationScope: Equatable {
+    var isActive: Bool
+    var inFront: ScreenInFront
+
+    /// Whether a notification for `peer` is shown: always while the app isn't
+    /// active, and while it is, for what the user can't see, which is every
+    /// chat but the one in front once the list is hidden. A nil `peer` is a
+    /// group invitation, which only the list shows.
+    func shows(_ peer: JID?) -> Bool {
+        guard isActive else { return true }
+        switch inFront {
+        case .chatList: return false
+        case .chat(let front): return peer != front
+        case .elsewhere: return true
+        }
+    }
+
+    func shows(_ notification: MessageNotification) -> Bool {
+        shows(notification.isInvitation ? nil : notification.peer)
+    }
+
+    /// Whether a claim's notifications are shown at all, which starts a
+    /// group's notification interval.
+    var notifies: Bool { !isActive || inFront != .chatList }
+
+    /// The chat whose messages a claim doesn't show, so they don't start its
+    /// interval. Only while active: in the background the chat left open is
+    /// out of sight like any other, and keeps its interval.
+    var silencing: JID? {
+        guard isActive, case .chat(let peer) = inFront else { return nil }
+        return peer
     }
 }

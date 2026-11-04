@@ -249,20 +249,29 @@ struct AppModelSessionTests {
         #expect(!model.showsNotification(for: other), "the list is in front, with every row")
         #expect(!model.showsNotification(for: nil))
 
-        model.chatInFront = front
+        model.inFront = .chat(front)
         #expect(!model.showsNotification(for: front))
         #expect(model.showsNotification(for: other))
         #expect(model.showsNotification(for: nil), "an invitation is on the list, behind the chat")
 
-        model.chatInFront = nil
+        model.inFront = .chatList
         model.scenePhaseChanged(active: false, background: false)
         #expect(model.showsNotification(for: front))
         #expect(model.showsNotification(for: nil))
     }
 
+    @Test func theArchiveOrASheetOverTheListHidesEveryChat() {
+        let model = AppModelFixture().model!
+        model.inFront = .elsewhere
+        #expect(model.showsNotification(for: JID("other@example.com")!))
+        #expect(model.showsNotification(for: nil))
+        #expect(model.notificationScope.notifies)
+        #expect(model.notificationScope.silencing == nil)
+    }
+
     @Test func theExtensionsStandInIsHiddenWhileTheAppIsActive() {
         let model = AppModelFixture().model!
-        model.chatInFront = JID("front@example.com")!
+        model.inFront = .chat(JID("front@example.com")!)
         let other: [AnyHashable: Any] = [MessageNotification.peerKey: "other@example.com"]
         let invitation: [AnyHashable: Any] = [MessageNotification.invitationKey: "room@example.com"]
         let standIn: [AnyHashable: Any] = [MessageNotification.placeholderKey: true]
@@ -279,12 +288,14 @@ struct AppModelSessionTests {
     @Test func aChatLeftOpenInTheBackgroundKeepsItsInterval() {
         let model = AppModelFixture().model!
         let front = JID("front@example.com")!
-        #expect(model.claimScope == (false, nil), "the list shows everything")
-        model.chatInFront = front
-        #expect(model.claimScope == (true, front))
+        #expect(!model.notificationScope.notifies, "the list shows everything")
+        model.inFront = .chat(front)
+        #expect(model.notificationScope.notifies)
+        #expect(model.notificationScope.silencing == front)
 
         model.scenePhaseChanged(active: false, background: true)
-        #expect(model.claimScope == (true, nil), "out of sight like every other chat")
+        #expect(model.notificationScope.notifies)
+        #expect(model.notificationScope.silencing == nil, "out of sight like every other chat")
     }
 
     @Test func aSignInThatFinishesInTheBackgroundSuspendsTheSession() async throws {

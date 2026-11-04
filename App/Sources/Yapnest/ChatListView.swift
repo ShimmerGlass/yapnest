@@ -38,11 +38,16 @@ struct ChatListView: View {
 
     private var isSplit: Bool { sizeClass == .regular }
 
-    /// The chat that hides the list: a pushed one on the compact layout. Beside
-    /// the list, as in the split layout, the user still sees both.
-    private var chatInFront: JID? {
-        guard !isSplit, case .conversation(let peer, _)? = path.last else { return nil }
-        return peer
+    /// What hides the list on the compact layout: a pushed screen, or a sheet.
+    /// Beside the list, as in the split layout, the user still sees its rows.
+    private var inFront: ScreenInFront {
+        guard !isSplit else { return .chatList }
+        guard sheet == nil else { return .elsewhere }
+        switch path.last {
+        case nil: return .chatList
+        case .conversation(let peer, _)?: return .chat(peer)
+        case .archive?: return .elsewhere
+        }
     }
 
     /// `opening` is a chat a notification asked for before this view existed,
@@ -85,7 +90,8 @@ struct ChatListView: View {
                         .navigationDestination(for: ChatRoute.self) { route in
                             switch route {
                             case .conversation(let peer, let message):
-                                conversation(peer, at: message)
+                                // Back leads to the list only from the first screen.
+                                conversation(peer, at: message, countsOtherChats: path.first == route)
                             case .archive:
                                 archive
                             }
@@ -140,8 +146,8 @@ struct ChatListView: View {
         }
         // Told to the model, which shows other chats' notifications while
         // this one is the only screen in front.
-        .onChange(of: chatInFront, initial: true) { model.chatInFront = chatInFront }
-        .onDisappear { model.chatInFront = nil }
+        .onChange(of: inFront, initial: true) { model.inFront = inFront }
+        .onDisappear { model.inFront = .chatList }
         // From a tapped notification.
         .onChange(of: model.requestedConversation, initial: true) { applyRequests() }
         // From an invitation notification: the list has its row.
@@ -230,8 +236,8 @@ struct ChatListView: View {
     /// swap the peer under an open chat. Asking for the same chat at another
     /// message keeps the screen and moves its list (`reopen`), as a new one
     /// would lose what's staged in it.
-    private func conversation(_ peer: JID, at message: Int64?) -> some View {
-        ConversationView(session: session, peer: peer, openingAt: message, initial: openedItems[peer], prepared: prepared)
+    private func conversation(_ peer: JID, at message: Int64?, countsOtherChats: Bool = false) -> some View {
+        ConversationView(session: session, peer: peer, openingAt: message, initial: openedItems[peer], prepared: prepared, countsOtherChats: countsOtherChats)
             .id(peer)
     }
 
