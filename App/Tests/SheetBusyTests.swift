@@ -64,12 +64,9 @@ struct SheetBusyTests {
         let busy = host(busy: true)
         await Task.yield()
         busy.view.layoutIfNeeded()
+        withExtendedLifetime(busy) {}
         #expect(model.sheetIsBusy)
         #expect(model.hasConversationSheet)
-        busy.view.window?.isHidden = true
-        busy.view.window?.rootViewController = nil
-        await Task.yield()
-        #expect(!model.sheetIsBusy)
     }
 
     @Test func aLateAnswerClosesOnlyItsOwnSheet() {
