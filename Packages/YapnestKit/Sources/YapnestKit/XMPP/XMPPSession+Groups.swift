@@ -2418,13 +2418,31 @@ extension XMPPSession {
     static let inviteGrace: TimeInterval = 3
 
     func invite(_ invitees: [JID], to room: JID, grace: TimeInterval) async throws {
+        var invited = invitees
+        var failure: Error?
         if try await joinedStatus(room).isOwnerOrAdmin {
+            invited = []
             // One request each: Prosody only applies the first item of a request.
             for invitee in invitees {
-                _ = try await roomRequest(OutboundStanza.affiliation(.member, of: invitee, in: room))
-            }
-            updateRoom(room) { status in
-                for invitee in invitees { status?.setAffiliation(.member, of: invitee) }
+                // Making an admin or owner a member would demote them, and a
+                // banned contact's ban is for an admin to lift, not an invite.
+                switch roomStatus(room)?.affiliation(of: invitee) ?? .none {
+                case .owner, .admin, .member:
+                    invited.append(invitee)
+                    continue
+                case .outcast:
+                    failure = failure ?? GroupError.refused(String(localized: "\(invitee.description) is banned from this group. Lift the ban to invite them."))
+                    continue
+                case .none:
+                    break
+                }
+                do {
+                    _ = try await roomRequest(OutboundStanza.affiliation(.member, of: invitee, in: room))
+                    updateRoom(room) { $0?.setAffiliation(.member, of: invitee) }
+                    invited.append(invitee)
+                } catch {
+                    failure = failure ?? error
+                }
             }
         } else {
             try await askRoomToInvite(invitees, to: room, grace: grace)
@@ -2433,7 +2451,8 @@ extension XMPPSession {
         // one names us only on the room's word, which clients like ours trust
         // only from a room on our own server. Ours goes out after it, so the
         // room lets them in.
-        for invitee in invitees { write(OutboundStanza.invitation(to: invitee, room: room)) }
+        for invitee in invited { write(OutboundStanza.invitation(to: invitee, room: room)) }
+        if let failure { throw failure }
     }
 
     /// Sends the room's own kind of invitation, and returns once it has taken

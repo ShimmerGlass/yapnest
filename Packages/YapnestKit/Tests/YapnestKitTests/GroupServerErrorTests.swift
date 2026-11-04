@@ -494,6 +494,79 @@ struct InviteBounceTests {
     }
 }
 
+/// An owner inviting: who is made a member, and who is invited anyway.
+struct OwnerInviteTests {
+    let database: AppDatabase
+    let session: XMPPSession
+    let wire = FakeWire()
+    let bob = YapnestKit.JID("bob@example.org")!
+    let carol = YapnestKit.JID("carol@example.org")!
+    let refused = Locked<Set<String>>([])
+
+    init() throws {
+        database = try AppDatabase.inMemory()
+        session = try makeSession(me, database: database)
+        session.connectForTesting(wire)
+        try database.joinGroupChat(room, nickname: "me")
+        session.reloadKnownRooms()
+        session.updateRoom(room) { $0 = RoomStatus(phase: .joined, affiliation: .owner, nickname: "me") }
+        let refused = refused
+        wire.answer { iq in
+            guard let item = iq.firstChild(name: "query", xmlns: "http://jabber.org/protocol/muc#admin")?.firstChild(name: "item") else { return nil }
+            if refused.value.contains(item.getAttribute("jid") ?? "") { return FakeWire.error(to: iq, condition: "forbidden", type: "auth") }
+            return FakeWire.result(to: iq)
+        }
+    }
+
+    private var affiliationRequests: [String] {
+        wire.written.compactMap { $0 as? Iq }.compactMap {
+            $0.firstChild(name: "query", xmlns: "http://jabber.org/protocol/muc#admin")?.firstChild(name: "item")?.getAttribute("jid")
+        }
+    }
+
+    private var directInvitations: [Martin.Message] {
+        wire.messages.filter { $0.firstChild(name: "x", xmlns: "jabber:x:conference") != nil }
+    }
+
+    @Test func anAdminOrMemberIsInvitedWithoutChangingTheirAffiliation() async throws {
+        session.updateRoom(room) {
+            $0?.setAffiliation(.admin, of: alice)
+            $0?.setAffiliation(.member, of: bob)
+        }
+        try await session.invite([alice, bob, carol], to: room, grace: 0)
+
+        #expect(affiliationRequests == ["carol@example.org"])
+        #expect(directInvitations.compactMap { $0.to?.stringValue }.sorted() == [alice, bob, carol].map(\.description))
+        #expect(session.roomStatus(room)?.affiliation(of: alice) == .admin)
+    }
+
+    @Test func aBannedContactStaysBannedAndTheErrorSaysSo() async throws {
+        session.updateRoom(room) { $0?.setAffiliation(.outcast, of: alice) }
+        do {
+            try await session.invite([alice, bob], to: room, grace: 0)
+            Issue.record("inviting someone banned should have failed")
+        } catch GroupError.refused(let reason) {
+            #expect(reason.contains(alice.description))
+        }
+        #expect(affiliationRequests == ["bob@example.org"])
+        #expect(session.roomStatus(room)?.affiliation(of: alice) == .outcast)
+        #expect(directInvitations.compactMap { $0.to?.stringValue } == [bob.description])
+    }
+
+    @Test func oneRefusalDoesNotStopTheOthersInvitationsAndIsStillReported() async throws {
+        refused.value = [alice.description]
+        do {
+            try await session.invite([alice, bob], to: room, grace: 0)
+            Issue.record("the refusal should have been reported")
+        } catch {
+            #expect(!(error is GroupError))
+        }
+        #expect(directInvitations.compactMap { $0.to?.stringValue } == [bob.description])
+        #expect(session.roomStatus(room)?.affiliation(of: bob) == .member)
+        #expect(session.roomStatus(room)?.affiliation(of: alice) == RoomAffiliation.none)
+    }
+}
+
 // MARK: Members
 
 struct MemberListFailureTests {
