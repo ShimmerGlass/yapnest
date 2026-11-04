@@ -130,6 +130,42 @@ struct SessionSendTests {
         #expect(stored.writtenAt == nil)
     }
 
+    @Test func aMessageWrittenJustBeforeLeavingAGroupIsSentOnceTheServerAcknowledgesIt() throws {
+        let room = YapnestKit.JID("cake@rooms.example.org")!
+        try database.joinGroupChat(room, nickname: "me", name: "Cake")
+        session.reloadKnownRooms()
+        session.updateRoom(room) { $0 = RoomStatus(phase: .joined, nickname: "me") }
+        session.enableAcknowledgementsForTesting()
+        let message = try session.send("bye", to: room)
+        session.drainSendQueue(room)
+        #expect(try status(of: message) == .pending)
+        let written = try #require(wire.messages.first { $0.id == message.remoteId })
+
+        session.markLeft(room, because: XMPPSession.noLongerInGroup)
+        // Failed, but it may be out there: not sent again on rejoining, and an edit goes as a correction.
+        let conversation = message.conversationId
+        #expect(try database.pendingOutgoing(conversationId: conversation).isEmpty)
+        #expect(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!)?.writtenAt } != nil)
+        session.acknowledged(written)
+
+        let stored = try #require(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!) })
+        #expect(stored.status == .sent)
+        #expect(stored.error == nil)
+    }
+
+    @Test func aMessageNeverWrittenIsStillFailedByLeavingAGroup() throws {
+        let room = YapnestKit.JID("cake@rooms.example.org")!
+        try database.joinGroupChat(room, nickname: "me", name: "Cake")
+        let conversation = try #require(try database.conversation(with: room).id)
+        let queued = try database.insert(YapnestKit.Message(conversationId: conversation, direction: .outgoing, sender: me, body: "later", status: .pending, remoteId: "q1"))
+
+        session.markLeft(room, because: XMPPSession.noLongerInGroup)
+
+        let stored = try #require(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: queued.id!) })
+        #expect(stored.status == .failed)
+        #expect(stored.error == XMPPSession.noLongerInGroup)
+    }
+
     @Test func aWrittenMessageIsMarkedUntilItFails() throws {
         let message = try sentAndAwaitingAcknowledgement()
         let id = try #require(message.id)

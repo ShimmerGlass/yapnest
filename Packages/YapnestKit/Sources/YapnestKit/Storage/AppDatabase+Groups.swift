@@ -161,12 +161,15 @@ extension AppDatabase {
 
     /// Fails the messages of ours in `peer` that are still waiting to be sent,
     /// for a visit that is over: sent after a later join they would land
-    /// among stanzas the user never saw them against.
+    /// among stanzas the user never saw them against. The written mark stays,
+    /// as one written just before leaving may still be on its way: the
+    /// server's acknowledgement then makes it sent, and until it comes an edit
+    /// or retraction goes out as a correction.
     func failPendingOutgoing(in peer: JID, because reason: String) throws {
         try writer.write { db in
             guard let conversationId = try Self.existingConversation(db, peer: peer)?.id else { return }
             try Self.pendingOutgoingRequest(conversationId: conversationId).updateAll(
-                db, Column("status").set(to: Message.Status.failed), Column("error").set(to: reason), Column("writtenAt").set(to: nil),
+                db, Column("status").set(to: Message.Status.failed), Column("error").set(to: reason),
             )
         }
     }

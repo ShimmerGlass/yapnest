@@ -338,6 +338,8 @@ extension AppDatabase {
         try updateOutgoing(db, conversationId: conversationId, remoteId: remoteId) { message in
             let allowed = force || status > message.status || (status == .failed && message.status == .pending)
             guard allowed, status != message.status else { return false }
+            // The reason it failed no longer holds once the server has it.
+            if message.status == .failed, status > .failed { message.error = nil }
             message.status = status
             return true
         }
