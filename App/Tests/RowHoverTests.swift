@@ -137,7 +137,7 @@ struct RowHoverTests {
             #expect(plain[.foregroundColor] as? UIColor == (outgoing ? .white : .label))
             #expect(plain[.underlineStyle] == nil)
             let link = display.attributes(at: 5, effectiveRange: nil)
-            #expect(link[.foregroundColor] as? UIColor == (outgoing ? .white : UIColor(Color.accentColor)))
+            #expect(link[.foregroundColor] as? UIColor == (outgoing ? .white : SelectableTextStyle.receivedAccent))
             #expect(link[.underlineStyle] as? Int == NSUnderlineStyle.single.rawValue)
             #expect(link[.font] as? UIFont == UIFont.systemFont(ofSize: 14))
             // Drawn, a link run would be the system's blue whatever its colour.
