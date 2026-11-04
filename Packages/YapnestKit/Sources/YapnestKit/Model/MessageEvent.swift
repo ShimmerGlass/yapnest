@@ -13,12 +13,16 @@ public enum MessageEvent: Codable, Hashable, Sendable {
     /// Someone stopped being one of a group's people: they left, were
     /// removed or lost their membership. The author is who it is about.
     case leftGroup
+    /// The group stopped being private (anyone can join, or members can't
+    /// see each other's addresses), so new messages there go out unencrypted.
+    /// The author is the group.
+    case stoppedEncrypting
 
     /// Whether this is about someone joining or leaving a group.
     public var isGroupPeople: Bool {
         switch self {
         case .joinedGroup, .leftGroup: true
-        case .newDevice: false
+        case .newDevice, .stoppedEncrypting: false
         }
     }
 }

@@ -8,6 +8,7 @@ extension MessageEvent {
         case .newDevice: String(localized: "\(name) has a new device. Check that it's theirs.")
         case .joinedGroup: String(localized: "\(name) joined the group")
         case .leftGroup: String(localized: "\(name) left the group")
+        case .stoppedEncrypting: String(localized: "This group is no longer private, so new messages here aren't encrypted.")
         }
     }
 }
@@ -34,7 +35,7 @@ struct EventRowView: View {
             .accessibilityLabel(row.content.accessibilityLabel)
             .accessibilityHint("Opens their devices")
             .accessibilityIdentifier("newDeviceEvent")
-        case .joinedGroup, .leftGroup:
+        case .joinedGroup, .leftGroup, .stoppedEncrypting:
             Text(event.words(of: name))
                 .eventLineStyle()
                 .accessibilityElement(children: .ignore)

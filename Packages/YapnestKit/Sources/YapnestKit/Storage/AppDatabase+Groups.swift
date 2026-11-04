@@ -117,6 +117,12 @@ extension AppDatabase {
             }
 
             if !group.isPrivate {
+                // The lock on each bubble was the only sign before, and a
+                // message typed meanwhile would go out in plaintext unseen.
+                if wasPrivate, conversation.isEncrypted {
+                    var line = Message.eventLine(conversationId: group.conversationId, sender: jid, event: .stoppedEncrypting, at: Date())
+                    try line.insert(db)
+                }
                 conversation.isEncrypted = false
             } else if !wasPrivate {
                 if try Message

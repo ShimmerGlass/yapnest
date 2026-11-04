@@ -265,6 +265,31 @@ struct GroupChatParsingTests {
         #expect(try db.chatList()[0].conversation.isEncrypted == false)
     }
 
+    @Test func aGroupThatStopsBeingPrivateSaysEncryptionStoppedOnce() throws {
+        // Another owner opening the room turned encryption off with only each
+        // bubble's lock to say so.
+        try db.setRoomInfo(room, name: nil, isMembersOnly: true, isNonAnonymous: true)
+        #expect(try messages().isEmpty)
+
+        try db.setRoomInfo(room, name: nil, isMembersOnly: true, isNonAnonymous: false)
+        try db.setRoomInfo(room, name: nil, isMembersOnly: false, isNonAnonymous: false)
+
+        let lines = try messages()
+        #expect(lines.map(\.event) == [.stoppedEncrypting])
+        #expect(lines.first?.direction == .event)
+        #expect(lines.first?.sender == room)
+    }
+
+    @Test func noEncryptionLineWhereNothingWasEncrypted() throws {
+        // A room that was never private, or one where the user had turned
+        // encryption off, loses nothing.
+        try db.setRoomInfo(room, name: nil, isMembersOnly: false, isNonAnonymous: true)
+        try db.setRoomInfo(room, name: nil, isMembersOnly: true, isNonAnonymous: true)
+        try db.setEncrypted(false, with: room)
+        try db.setRoomInfo(room, name: nil, isMembersOnly: false, isNonAnonymous: true)
+        #expect(try messages().isEmpty)
+    }
+
     @Test func rejoiningKeepsHistory() throws {
         try ingest("<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>hi</body></message>")
         try db.updateGroupChat(room) { $0.hasLeft = true }
