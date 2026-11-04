@@ -175,6 +175,20 @@ extension AppDatabase {
             .fetchOne(db)
     }
 
+    /// Whether we sent an encrypted message to the group under `nick` with
+    /// one of `ids`. Its text isn't in a copy we can't decrypt, so the nick
+    /// and ids are all there is to go by.
+    func hasOwnEncryptedMessage(conversationId: Int64, nick: String, ids: [String]) throws -> Bool {
+        guard !ids.isEmpty else { return false }
+        return try reader.read { db in
+            try Message
+                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.outgoing
+                        && Column("encryption") == Message.Encryption.omemo && Column("nick") == nick)
+                .filter(ids.contains(Column("originId")) || ids.contains(Column("remoteId")))
+                .isEmpty(db) == false
+        }
+    }
+
     private static func isOneToOne(_ db: Database, _ conversationId: Int64) throws -> Bool {
         try Conversation.fetchOne(db, key: conversationId)?.kind == .chat
     }

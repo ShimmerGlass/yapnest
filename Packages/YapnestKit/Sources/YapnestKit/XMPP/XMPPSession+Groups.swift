@@ -1646,6 +1646,11 @@ extension XMPPSession {
             } else {
                 // Keys alone (a device introducing itself) have nothing to show, with or without a sender.
                 if OMEMOEncryption.isKeyTransport(stanza), stanza.body?.isEmpty ?? true { return }
+                // History a room replays on joining says nothing about who
+                // wrote it, but may be a message of ours that we hold, which
+                // this device can't read and has no need to.
+                if InboundMessage.isReplayed(stanza, source: source),
+                   (try? database.hasOwnEncryptedMessage(conversationId: group.conversationId, nick: nick, ids: [stanza.originId, stanza.id].compactMap { $0 })) == true { return }
                 // Without the sender's address there's no session to use.
                 let archived = source.isArchived
                 DiagLog.notice(.omemo, "Couldn't decrypt", .value("error", DecryptFailure.noSender), .bool("archived", archived), .bool("nonAnonymous", context.isNonAnonymous))

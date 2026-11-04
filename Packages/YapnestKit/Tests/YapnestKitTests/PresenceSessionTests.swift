@@ -91,6 +91,25 @@ struct PresenceSessionTests {
         #expect(try stored("g1").presenceSession == nil)
     }
 
+    /// A non-anonymous room's join history names nobody's address, so an
+    /// encrypted message of ours in it has no known sender to read it as.
+    @Test func ourEncryptedMessageInAJoinHistoryIsntStoredAgain() throws {
+        try database.setRoomInfo(room, name: nil, isMembersOnly: true, isNonAnonymous: true)
+        let conversationId = try #require(try database.groupChat(room)).conversationId
+        let sent = try database.insert(YapnestKit.Message(conversationId: conversationId, direction: .outgoing, sender: me, nick: "me", body: "secret", status: .sent, encryption: .omemo, remoteId: "x1", originId: "orig1"))
+        session.handleRoomStanza(
+            parseStanza("""
+                <message from='\(room)/me' type='groupchat' id='x1'><encrypted xmlns='eu.siacs.conversations.axolotl'>\
+                <header sid='777'><key rid='999'>AAAA</key><iv>AAAAAAAAAAAAAAAA</iv></header><payload>AAAA</payload></encrypted>\
+                <body>I sent you an OMEMO encrypted message</body><origin-id xmlns='urn:xmpp:sid:0' id='orig1'/>\
+                <delay xmlns='urn:xmpp:delay' from='\(room)' stamp='2020-01-01T00:00:00Z'/></message>
+                """),
+            source: .live,
+        )
+        let rows = try database.reader.read { try YapnestKit.Message.fetchAll($0) }
+        #expect(rows.map(\.id) == [sent.id])
+    }
+
     @Test func aReplayedMessageIsNotPlacedInAStay() throws {
         session.roomPresence(presence("Alice"), room: room)
         session.handleRoomStanza(
