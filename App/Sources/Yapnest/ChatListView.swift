@@ -38,18 +38,6 @@ struct ChatListView: View {
 
     private var isSplit: Bool { sizeClass == .regular }
 
-    /// What hides the list on the compact layout: a pushed screen, or a sheet.
-    /// Beside the list, as in the split layout, the user still sees its rows.
-    private var inFront: ScreenInFront {
-        guard !isSplit else { return .chatList }
-        guard sheet == nil else { return .elsewhere }
-        switch path.last {
-        case nil: return .chatList
-        case .conversation(let peer, _)?: return .chat(peer)
-        case .archive?: return .elsewhere
-        }
-    }
-
     /// `opening` is a chat a notification asked for before this view existed,
     /// as on a cold launch. The stack is created with it already pushed, so
     /// nothing has to wait for the destinations to register. The size class
@@ -146,8 +134,7 @@ struct ChatListView: View {
         }
         // Told to the model, which shows other chats' notifications while
         // this one is the only screen in front.
-        .onChange(of: inFront, initial: true) { model.inFront = inFront }
-        .onDisappear { model.inFront = .chatList }
+        .background(InFrontReporter(path: $path, sheet: $sheet, isSplit: isSplit))
         // From a tapped notification.
         .onChange(of: model.requestedConversation, initial: true) { applyRequests() }
         // From an invitation notification: the list has its row.
@@ -1283,5 +1270,34 @@ struct UnreadCountBadge: View {
             .padding(.horizontal, 6)
             .frame(minWidth: 20, minHeight: 20)
             .background(Capsule().fill(Color.accentColor))
+    }
+}
+
+/// Tells the model what hides the chat list. Its own view, so that reading
+/// the path and the sheet updates only it: the list's body evaluated again
+/// in the middle of a push, as a sheet closed, left iOS 26 with the sheet
+/// drawn half closed and the push lost (`XMPPLinkUITests`).
+private struct InFrontReporter: View {
+    @Binding var path: [ChatRoute]
+    @Binding var sheet: ChatListSheet?
+    let isSplit: Bool
+    @Environment(AppModel.self) private var model
+
+    /// What hides the list on the compact layout: a pushed screen, or a sheet.
+    /// Beside the list, as in the split layout, the user still sees its rows.
+    private var inFront: ScreenInFront {
+        guard !isSplit else { return .chatList }
+        guard sheet == nil else { return .elsewhere }
+        switch path.last {
+        case nil: return .chatList
+        case .conversation(let peer, _)?: return .chat(peer)
+        case .archive?: return .elsewhere
+        }
+    }
+
+    var body: some View {
+        Color.clear
+            .onChange(of: inFront, initial: true) { model.inFront = inFront }
+            .onDisappear { model.inFront = .chatList }
     }
 }
