@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var mapPreviewsEnabled = false
     @State private var encryptsNewChats = true
     @AppStorage(AppSwitcherCoverSetting.key) private var hidesScreenInAppSwitcher = false
+    @AppStorage(NotificationSound.offKey, store: SharedContainer.defaults) private var notificationSoundsOff = false
     @State private var privacyError: String?
     @State private var saves = SettingsWrites()
     @State private var diagnostics = DiagnosticsExporter()
@@ -95,6 +96,14 @@ struct SettingsView: View {
                     Text(MapPreview.disclosure) + Text(" With this off, a location shows only a pin and its coordinates, and opens in Maps when tapped. Maps from people you haven't added wait until you tap them.")
                 }
                 .disabled(!isLoaded)
+
+                Section {
+                    Toggle("Notification Sounds", isOn: Binding(get: { !notificationSoundsOff }, set: { notificationSoundsOff = !$0 }))
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("Off, notifications on this device arrive without a sound. Calls still ring.")
+                }
 
                 #if targetEnvironment(macCatalyst)
                 Section {

@@ -211,12 +211,12 @@ extension MessageNotification {
     /// apart from the chats'.
     public static let invitationsThread = "invitations"
 
-    public func content(badge: Int?) -> UNMutableNotificationContent {
+    public func content(badge: Int?, soundsOff: Bool = NotificationSound.areOff) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = title
         if let subtitle { content.subtitle = subtitle }
         content.body = body
-        content.sound = NotificationSound.choice(kind: isGroup ? .groupchat : .chat, stored: sound, isQuiet: isQuiet).unSound
+        content.sound = soundsOff ? nil : NotificationSound.choice(kind: isGroup ? .groupchat : .chat, stored: sound, isQuiet: isQuiet).unSound
         if isInvitation {
             // No peer: it isn't a chat to open, and the chat list shows the invitation.
             content.threadIdentifier = Self.invitationsThread
@@ -278,9 +278,12 @@ extension UNNotificationContent {
 
     /// A copy marked as standing in for messages that weren't fetched, with
     /// the badge if it's known.
-    public func placeholderCopy(badge: Int? = nil) -> UNNotificationContent {
+    /// The relay's alert comes with a sound of its own, so it loses it when
+    /// sounds are off here.
+    public func placeholderCopy(badge: Int? = nil, soundsOff: Bool = NotificationSound.areOff) -> UNNotificationContent {
         let copy = copy(withBadge: badge)
         copy.userInfo[MessageNotification.placeholderKey] = true
+        if soundsOff { copy.sound = nil }
         return copy
     }
 }

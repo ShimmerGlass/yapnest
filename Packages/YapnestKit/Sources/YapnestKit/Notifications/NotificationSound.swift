@@ -12,6 +12,13 @@ public enum NotificationSound {
         public var id: String { file }
     }
 
+    /// Settings' switch for every notification sound on this device. Not
+    /// synced, as a Mac on a desk and a phone in a pocket want different
+    /// things. In the group's defaults, so the notification extension reads
+    /// it without the database.
+    public static let offKey = "yapnest.notificationSoundsOff"
+    public static var areOff: Bool { SharedContainer.defaults.bool(forKey: offKey) }
+
     /// Stored for "None", which no file name can be.
     public static let silent = "none"
 

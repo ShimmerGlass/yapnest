@@ -32,6 +32,22 @@ struct NotificationSoundTests {
         #expect(NotificationSound.Choice.systemDefault.played(onMac: true) == .systemDefault)
     }
 
+    @Test func withSoundsOffNoNotificationMakesASound() {
+        let chat = MessageNotification(messageId: 1, peer: alice, title: "Alice", body: "hi", timestamp: Date(), sound: "chime.caf")
+        #expect(chat.content(badge: nil, soundsOff: false).sound != nil)
+        #expect(chat.content(badge: nil, soundsOff: true).sound == nil)
+        let group = MessageNotification(messageId: 2, peer: alice, title: "Group", body: "hi", timestamp: Date(), isGroup: true)
+        #expect(group.content(badge: nil, soundsOff: true).sound == nil)
+    }
+
+    @Test func withSoundsOffTheRelaysAlertStandsInSilently() {
+        let relay = UNMutableNotificationContent()
+        relay.body = "New message"
+        relay.sound = .default
+        #expect(relay.placeholderCopy(soundsOff: false).sound != nil)
+        #expect(relay.placeholderCopy(soundsOff: true).sound == nil)
+    }
+
     @Test func anUnknownNameFallsBackToTheSystemSound() {
         #expect(NotificationSound.choice(kind: .chat, stored: "gone.caf", isQuiet: false) == .systemDefault)
     }
