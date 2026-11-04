@@ -57,6 +57,12 @@ struct ChatSettingsView: View {
     @State private var saveError: String?
     @State private var saves = SettingsWrites()
 
+    /// Whether a server action started here is running. The sheet stays until
+    /// they are done, or a failure's alert would go with it.
+    private var isBusy: Bool {
+        [unblock, remove, rename, leave, destroy, changeNotify].contains { $0.isBusy }
+    }
+
     /// The call buttons stay in the sheet and spin while the call waits for
     /// the connection, so a failure can be shown here: an alert on the screen
     /// below can't appear over a sheet.
@@ -337,6 +343,7 @@ struct ChatSettingsView: View {
                 }
             }
             .dismissesKeyboardOnTap()
+            .interactiveDismissDisabled(isBusy)
             .opacity(isLoaded ? 1 : 0)
             .overlay {
                 if !isLoaded { ProgressView() }
@@ -346,6 +353,7 @@ struct ChatSettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     SheetDoneButton()
+                        .disabled(isBusy)
                 }
                 if group != nil, room?.canEditAnything == true {
                     ToolbarItem(placement: .topBarLeading) {

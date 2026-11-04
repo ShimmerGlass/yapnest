@@ -123,11 +123,13 @@ struct EditGroupView: View {
             }
             .dismissesKeyboardOnTap()
             .disabled(isSaving)
+            .interactiveDismissDisabled(isSaving)
             .navigationTitle("Edit Group")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     SheetCancelButton { dismiss() }
+                        .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     SheetConfirmButton("Save", isBusy: isSaving, action: save).disabled(!canSave)

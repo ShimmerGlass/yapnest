@@ -28,6 +28,7 @@ struct NewGroupView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     SheetCancelButton { dismiss() }
+                        .disabled(creation.isBusy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     SheetConfirmButton("Create", isBusy: creation.isBusy, action: create)
@@ -36,6 +37,8 @@ struct NewGroupView: View {
             }
             .actionAlert("Couldn't create the group", creation)
         }
+        // Closed meanwhile, the sheet would take the failure's alert with it.
+        .interactiveDismissDisabled(creation.isBusy)
         .reportsBusy(creation.isBusy)
     }
 
@@ -272,6 +275,7 @@ struct InviteView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     SheetCancelButton { dismiss() }
+                        .disabled(invitation.isBusy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     SheetConfirmButton("Add", isBusy: invitation.isBusy, action: invite).disabled(selected.isEmpty)
@@ -279,6 +283,7 @@ struct InviteView: View {
             }
             .actionAlert("Couldn't add them", invitation)
         }
+        .interactiveDismissDisabled(invitation.isBusy)
     }
 
     private func invite() {
