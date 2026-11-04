@@ -7,7 +7,8 @@ import YapnestKit
 /// system's deadline race to deliver; the lock lets only the first through.
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
     private let contentHandler = OSAllocatedUnfairLock<(@Sendable (UNNotificationContent) -> Void)?>(initialState: nil)
-    /// The relay's own "New message", for when there's nothing better.
+    /// The relay's own "New message", for when there's nothing better. Kept as
+    /// it came, as a placeholder copy of it would mark a quiet one too.
     private var fallback: UNNotificationContent = UNNotificationContent()
     private var task: Task<Void, Never>?
 
@@ -31,7 +32,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
 
     override func serviceExtensionTimeWillExpire() {
         task?.cancel()
-        deliver(placeholder())
+        deliver(fallback.placeholderCopy())
     }
 
     private func handle(_ identifier: String) async {
@@ -40,7 +41,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             // read, which isn't being signed out: the relay's alert is what
             // the user gets, rather than silence.
             guard Self.isSignedOut() else {
-                deliver(placeholder())
+                deliver(fallback.placeholderCopy())
                 return
             }
             // Nothing of ours to show.
@@ -59,7 +60,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
                 // loud alert, so show the first muted message silently.
                 guard let quiet = notifications.first else {
                     // The claim still worked out the badge, which the relay's content lacks.
-                    return deliver(quiet: fallback.withBadge(badge), identifier)
+                    return deliver(quiet: fallback.copy(withBadge: badge), identifier)
                 }
                 return deliver(quiet: await quiet.content(badge: badge, avatars: avatars), identifier)
             }
@@ -72,16 +73,10 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             deliver(quiet: fallback, identifier)
         case .incomplete(let edited, let badge):
             await MessageNotification.replaceDelivered(edited, badge: badge, avatars: avatars)
-            deliver(placeholder(badge: badge))
+            deliver(fallback.placeholderCopy(badge: badge))
         case .busy, .failed:
-            deliver(placeholder())
+            deliver(fallback.placeholderCopy())
         }
-    }
-
-    /// The relay's alert shown loudly, marked so the next real notification
-    /// or the app takes it down.
-    private func placeholder(badge: Int? = nil) -> UNNotificationContent {
-        fallback.placeholderCopy(badge: badge)
     }
 
     /// Whether the keychain has no account, as opposed to not being readable.
@@ -115,13 +110,5 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         DiagLog.flush()
         handler?(content)
         return handler != nil
-    }
-}
-
-private extension UNNotificationContent {
-    func withBadge(_ badge: Int) -> UNNotificationContent {
-        let copy = (mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
-        copy.badge = badge as NSNumber
-        return copy
     }
 }

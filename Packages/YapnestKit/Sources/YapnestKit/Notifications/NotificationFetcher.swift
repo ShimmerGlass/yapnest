@@ -142,7 +142,6 @@ public struct NotificationFetcher: Sendable {
     }
 
     private func claim() -> Outcome {
-        if Task.isCancelled { return .failed("Cancelled") }
         do {
             return try claimed(from: account.files.openDatabase())
         } catch {
@@ -268,12 +267,18 @@ extension UNNotificationContent {
 }
 
 extension UNNotificationContent {
+    /// A mutable copy, with the badge if it's known.
+    public func copy(withBadge badge: Int?) -> UNMutableNotificationContent {
+        let copy = (mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+        if let badge { copy.badge = badge as NSNumber }
+        return copy
+    }
+
     /// A copy marked as standing in for messages that weren't fetched, with
     /// the badge if it's known.
     public func placeholderCopy(badge: Int? = nil) -> UNNotificationContent {
-        let copy = (mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+        let copy = copy(withBadge: badge)
         copy.userInfo[MessageNotification.placeholderKey] = true
-        if let badge { copy.badge = badge as NSNumber }
         return copy
     }
 }
@@ -281,6 +286,9 @@ extension UNNotificationContent {
 extension UNNotification {
     public var isPlaceholder: Bool { request.content.userInfo[MessageNotification.placeholderKey] as? Bool == true }
     public var isQuiet: Bool { request.content.userInfo[MessageNotification.quietKey] as? Bool == true }
+    /// Shown for something the app has since fetched or muted, so it has no
+    /// message of its own to keep.
+    public var isStandIn: Bool { isQuiet || isPlaceholder }
 }
 
 extension UNUserNotificationCenter {
@@ -310,6 +318,13 @@ extension UNUserNotificationCenter {
     /// takes them down again if it lives long enough. This clears the rest.
     public func removeQuietNotifications() async {
         removeDeliveredNotifications(withIdentifiers: await deliveredNotifications().filter(\.isQuiet).map(\.request.identifier))
+    }
+
+    /// Both kinds, for the app, which has the connection and the messages.
+    /// The extension removes each kind alone, at its own moment: placeholders
+    /// only once real notifications replace them, and quiet ones only at the start.
+    public func removeStandInNotifications() async {
+        removeDeliveredNotifications(withIdentifiers: await deliveredNotifications().filter(\.isStandIn).map(\.request.identifier))
     }
 }
 
