@@ -2,12 +2,15 @@ import Foundation
 import GRDB
 
 extension AppDatabase {
-    /// A newer invitation to the same room replaces the older one.
+    /// A newer invitation to the same room replaces the older one. One that
+    /// names no password keeps the older one's: a member's direct invitation
+    /// follows the room's relayed one, which is the one that carries it.
     func recordGroupInvitation(room: JID, inviter: JID, reason: String?, password: String? = nil, isDirect: Bool = false, at date: Date = Date()) throws {
         try writer.write { db in
             // A replacement is the same invitation again: the user was told once.
-            let isNotified = try GroupInvitation.fetchOne(db, key: room)?.isNotified ?? false
-            try GroupInvitation(room: room, inviter: inviter, reason: reason, password: password, receivedAt: date, isDirect: isDirect, isNotified: isNotified).save(db)
+            let existing = try GroupInvitation.fetchOne(db, key: room)
+            let isNotified = existing?.isNotified ?? false
+            try GroupInvitation(room: room, inviter: inviter, reason: reason, password: password ?? existing?.password, receivedAt: date, isDirect: isDirect, isNotified: isNotified).save(db)
         }
     }
 

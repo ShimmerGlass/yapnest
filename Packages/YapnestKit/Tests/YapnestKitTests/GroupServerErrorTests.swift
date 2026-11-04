@@ -565,6 +565,12 @@ struct OwnerInviteTests {
         #expect(session.roomStatus(room)?.affiliation(of: bob) == .member)
         #expect(session.roomStatus(room)?.affiliation(of: alice) == RoomAffiliation.none)
     }
+
+    @Test func theDirectInvitationCarriesTheRoomsPassword() async throws {
+        try database.updateGroupChat(room) { $0.password = "s3cret" }
+        try await session.invite([bob], to: room, grace: 0)
+        #expect(directInvitations.first?.firstChild(name: "x", xmlns: "jabber:x:conference")?.getAttribute("password") == "s3cret")
+    }
 }
 
 // MARK: Members

@@ -2450,8 +2450,10 @@ extension XMPPSession {
         // For the relayed branch this is a direct invitation too: the relayed
         // one names us only on the room's word, which clients like ours trust
         // only from a room on our own server. Ours goes out after it, so the
-        // room lets them in.
-        for invitee in invited { write(OutboundStanza.invitation(to: invitee, room: room)) }
+        // room lets them in. It carries the password, as a receiver keeps the
+        // newest invitation for a room, and one without would drop the relayed one's.
+        let password = (try? database.groupChat(room))??.password
+        for invitee in invited { write(OutboundStanza.invitation(to: invitee, room: room, password: password)) }
         if let failure { throw failure }
     }
 

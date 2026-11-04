@@ -45,6 +45,19 @@ struct GroupInvitationTests {
         #expect(all.first?.receivedAt == later)
     }
 
+    @Test func aDirectInvitationWithoutAPasswordKeepsTheOneTheRoomRelayed() throws {
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, password: "s3cret")
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, isDirect: true)
+        #expect(try db.groupInvitation(room)?.password == "s3cret")
+        #expect(try db.groupInvitation(room)?.isDirect == true)
+    }
+
+    @Test func aNewPasswordReplacesTheOldOne() throws {
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, password: "old")
+        try db.recordGroupInvitation(room: room, inviter: alice, reason: nil, password: "new")
+        #expect(try db.groupInvitation(room)?.password == "new")
+    }
+
     @Test func removingOneLeavesTheRest() throws {
         try db.recordGroupInvitation(room: room, inviter: alice, reason: nil)
         try db.recordGroupInvitation(room: other, inviter: alice, reason: nil)

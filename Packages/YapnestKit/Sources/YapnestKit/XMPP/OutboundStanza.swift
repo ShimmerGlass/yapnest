@@ -155,13 +155,14 @@ enum OutboundStanza {
     }
 
     /// XEP-0249 direct invitation to a group chat.
-    static func invitation(to invitee: JID, room: JID, reason: String? = nil) -> Martin.Message {
+    static func invitation(to invitee: JID, room: JID, reason: String? = nil, password: String? = nil) -> Martin.Message {
         let message = Martin.Message()
         message.to = Martin.JID(invitee.martin)
         message.id = newId()
         let x = Element(name: "x", xmlns: NS.conference)
         x.setAttribute("jid", value: room.description)
         if let reason { x.setAttribute("reason", value: reason) }
+        if let password { x.setAttribute("password", value: password) }
         message.addChild(x)
         return message
     }
