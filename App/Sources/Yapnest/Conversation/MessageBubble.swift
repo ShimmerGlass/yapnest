@@ -105,7 +105,7 @@ struct MessageBubble: View {
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 6, trailing: 12))
         .foregroundStyle(foreground)
-        .tint(isOutgoing ? .white : .accentColor)
+        .tint(isOutgoing ? .white : Color(SelectableTextStyle.receivedAccent))
         .background {
             let shape = UnevenRoundedRectangle(cornerRadii: Self.corners(isOutgoing: isOutgoing, layout: content.layout))
             // A faint light from above: the fill darkens a little towards the
@@ -335,7 +335,7 @@ struct BubbleFooter: View {
     }
 
     private var onAccent: Bool { isOutgoing && !isBare }
-    private var secondary: Color { isBare ? .secondary : (onAccent ? Color.white : Color.primary).opacity(0.7) }
+    private var secondary: Color { isBare ? .secondary : onAccent ? Color(SelectableTextStyle.footerOnAccent) : Color.primary.opacity(0.7) }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -386,7 +386,7 @@ struct BubbleFooter: View {
         } else if let image = message.status.indicator {
             Image(uiImage: image)
                 .renderingMode(.template)
-                .foregroundStyle(isBare ? Color.secondary : Color.white.opacity(0.7))
+                .foregroundStyle(isBare ? Color.secondary : Color(SelectableTextStyle.footerOnAccent))
         }
     }
 }

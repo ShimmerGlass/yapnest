@@ -5,9 +5,20 @@ import SwiftUI
 enum SelectableTextStyle {
     static func textColor(isOutgoing: Bool) -> UIColor { isOutgoing ? .white : .label }
 
+    /// The accent's text in a received bubble, as links. The accent itself is
+    /// 3.2:1 on the grey bubble in dark mode, under WCAG AA's 4.5:1, so this
+    /// keeps it in light mode, lightens it in dark, and goes further for
+    /// Increase Contrast. Our own bubbles are filled with the accent, which
+    /// stays as it is.
+    static let receivedAccent = UIColor(named: "ReceivedBubbleAccent") ?? UIColor(Color.accentColor)
+
+    /// The footer's time, ticks and "Not sent" on our own bubbles. Full white:
+    /// at 70% it was 3.5:1 on the accent.
+    static let footerOnAccent = UIColor.white
+
     static func linkAttributes(isOutgoing: Bool) -> [NSAttributedString.Key: Any] {
         [
-            .foregroundColor: isOutgoing ? UIColor.white : UIColor(Color.accentColor),
+            .foregroundColor: isOutgoing ? UIColor.white : receivedAccent,
             .underlineStyle: NSUnderlineStyle.single.rawValue,
         ]
     }
