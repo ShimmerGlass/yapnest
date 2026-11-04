@@ -166,6 +166,18 @@ struct SessionSendTests {
         #expect(stored.error == XMPPSession.noLongerInGroup)
     }
 
+    @Test func aDroppedResendKeepsTheMarkAnEarlierProcessLeft() throws {
+        let message = try sentAndAwaitingAcknowledgement()
+        let id = try #require(message.id)
+        let (later, laterWire) = try relaunched()
+        laterWire.failsWrites = true
+
+        later.sendUnclaimedPending()
+        later.drainSendQueue(alice)
+
+        #expect(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: id)?.writtenAt } != nil)
+    }
+
     @Test func aWrittenMessageIsMarkedUntilItFails() throws {
         let message = try sentAndAwaitingAcknowledgement()
         let id = try #require(message.id)

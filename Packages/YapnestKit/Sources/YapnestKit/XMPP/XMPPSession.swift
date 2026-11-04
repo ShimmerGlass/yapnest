@@ -2720,16 +2720,20 @@ public final class XMPPSession: @unchecked Sendable {
             }
             // A write the session drops comes back after deliver has returned.
             let conversationId = message.conversationId
+            // A mark an earlier process left is about its write, which may have
+            // gone out; only a mark this attempt made is taken back when it drops.
+            let marked = OSAllocatedUnfairLock(initialState: false)
             let dropped: @Sendable () -> Void = { [weak self] in
                 guard let self, let token else { return }
                 DiagLog.notice(.send, "Write dropped by the session", .id("msg", sendId))
                 lock.withLock { $0.sends.releaseDropped(id, token: token) }
-                try? database.setWritten(nil, conversationId: conversationId, remoteId: id)
+                if marked.withLock({ $0 }) { try? database.setWritten(nil, conversationId: conversationId, remoteId: id) }
             }
             // Before the write rather than after: a process killed in between
             // must still know the stanza may have gone out.
             let willWrite: @Sendable () -> Void = { [weak self] in
-                try? self?.database.setWritten(Date(), conversationId: conversationId, remoteId: id)
+                guard let wasUnmarked = try? self?.database.setWritten(Date(), conversationId: conversationId, remoteId: id) else { return }
+                marked.withLock { $0 = $0 || wasUnmarked }
             }
             expectBounce(
                 of: id, key: .message(id), peer: peer,

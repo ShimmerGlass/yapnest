@@ -477,13 +477,19 @@ extension AppDatabase {
 
     /// Records that the stanza of our pending message `remoteId` is being
     /// written, or, with `nil`, that it turned out not to have been.
-    func setWritten(_ date: Date?, conversationId: Int64, remoteId: String) throws {
+    /// Returns whether the message had no mark before, so that a caller can
+    /// take back only the mark it put there.
+    @discardableResult
+    func setWritten(_ date: Date?, conversationId: Int64, remoteId: String) throws -> Bool {
         try writer.write { db in
+            var wasUnmarked = false
             try Self.updateOutgoing(db, conversationId: conversationId, remoteId: remoteId) { message in
                 guard message.status == .pending, message.writtenAt != date else { return false }
+                wasUnmarked = message.writtenAt == nil
                 message.writtenAt = date
                 return true
             }
+            return wasUnmarked
         }
     }
 
