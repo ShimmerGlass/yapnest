@@ -1873,6 +1873,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// What follows storing a 1:1 stanza.
     private func stored(_ inbound: InboundMessage, _ result: IngestResult, source: InboundMessage.Source) {
         publishReadStateAwaiting(inbound)
+        let consented = (try? database.hasConsented(inbound.peer)) == true
         if let message = result.editedMessage { events.send(.editedMessage(message)) }
         // Connecting sent what was pending already, so this one waits for no one else.
         if result.repended, let id = inbound.id {
@@ -1884,12 +1885,12 @@ public final class XMPPSession: @unchecked Sendable {
             // Asking tells their server we're online, and from which full
             // address, so a stranger's message alone doesn't: as with
             // receipts, only for people the user accepted.
-            if !inbound.isOutgoing, (try? database.hasConsented(inbound.peer)) == true { askAvatarIfFirstContact(inbound.peer) }
+            if !inbound.isOutgoing, consented { askAvatarIfFirstContact(inbound.peer) }
             // Fetching reveals our IP address to the sender's upload
             // server, so only for people we know.
             if let attachment = result.newAttachment, Self.trustsForAutoDownload(
                 isOutgoing: inbound.isOutgoing, isPrivateGroup: false, trustsGroupMembers: false,
-                isTrusted: (try? database.hasConsented(inbound.peer)) ?? false,
+                isTrusted: consented,
             ) {
                 autoDownload(attachment)
             }
@@ -1899,7 +1900,7 @@ public final class XMPPSession: @unchecked Sendable {
         // receipts aren't due, and the server hands the app its live copy
         // when it comes back. This is the one to acknowledge (XEP-0184).
         if source == .live, !inbound.isOutgoing, !inbound.isError, inbound.requestsReceipt, inbound.body != nil,
-           result.conversationId != nil, let id = inbound.id, (try? database.hasConsented(inbound.peer)) == true {
+           result.conversationId != nil, let id = inbound.id, consented {
             write(OutboundStanza.receipt(to: inbound.peer, for: id))
         }
         if let chatState = result.chatState, Self.isCurrentChatState(inbound, source: source) {
@@ -2250,13 +2251,14 @@ public final class XMPPSession: @unchecked Sendable {
     /// once a day, as a change in between arrives as an event.
     func refreshAvatars(now: Date = Date()) {
         if let last = database.date(.lastAvatarRefresh), abs(now.timeIntervalSince(last)) < Self.avatarRefreshInterval { return }
-        guard let peers = try? database.conversationPeers(), let roster = try? database.roster() else { return }
+        guard let peers = try? database.conversationPeers(), let roster = try? database.roster(),
+              let consented = try? database.consented(among: peers) else { return }
         try? database.setDate(.lastAvatarRefresh, now)
         let notifying = Set(roster.filter(\.seesPresence).map(\.jid))
         // Not strangers', whose chats are there because they wrote: asking
         // tells their server we're online. Opening or answering such a chat
         // still asks, as the user then chose to.
-        for peer in peers where !notifying.contains(peer) && (try? database.hasConsented(peer)) == true { fetchAvatar(of: peer) }
+        for peer in peers where !notifying.contains(peer) && consented.contains(peer) { fetchAvatar(of: peer) }
     }
 
     static let avatarRefreshInterval: TimeInterval = 24 * 3600
@@ -2897,9 +2899,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// process or an earlier one (the mark outlives the claims). Read fresh,
     /// as `message` may be old.
     private func mayBeOnTheWire(_ message: Message, id messageId: Int64) -> Bool {
-        guard let current = try? database.reader.read({ try Message.fetchOne($0, key: messageId) }) else {
-            return message.status >= .sent || message.writtenAt != nil
-        }
+        let current = (try? database.reader.read { try Message.fetchOne($0, key: messageId) }) ?? message
         return current.status >= .sent || current.writtenAt != nil
     }
 
@@ -2924,14 +2924,11 @@ public final class XMPPSession: @unchecked Sendable {
         // Half the server's limit in bytes as well: a short text can be large (joined emoji), and
         // the stanza around it and the encryption of an encrypted chat add to it.
         guard !LongText.isLong(text), text.utf8.count <= client.context.module(.streamFeatures).maxStanzaBytes / 2 else { throw MessageActionError.editTooLong }
-        // One that was never written goes out with the new text. The status
-        // can't tell: a written message is pending until acknowledged, so the
-        // stored write mark says too, as this session's claims don't reach back.
-        // The status is read before the lock, and fresh, as `message` may be
-        // old. Claims last for the session and a status only moves forward
-        // once sent, so a message going out meanwhile isn't missed: if the
-        // queue claimed it after this read, the claim is seen, and if it
-        // hasn't yet, the change recorded here is consumed by its claim.
+        // One that was never written goes out with the new text. Claims last
+        // for the session and a status only moves forward once sent, so a
+        // message going out meanwhile isn't missed: if the queue claimed it
+        // after this read, the claim is seen, and if it hasn't yet, the change
+        // recorded here is consumed by its claim.
         let alreadySent = mayBeOnTheWire(message, id: messageId)
         let onTheWire = lock.withLock { $0.sends.apply(.edited(text), to: original, alreadySent: alreadySent) }
         if !onTheWire {

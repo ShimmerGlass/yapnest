@@ -115,7 +115,7 @@ struct RouteTests {
         #expect(sent.withLock { $0 } == 0)
 
         session.whenReady(.room(room, status: nil)) { sent.withLock { $0 += 1 } }
-        session.markLeft(room, owingBookmark: true)
+        session.markLeft(room, owingBookmark: true, because: XMPPSession.noLongerInGroup)
         session.sendDeferred(in: room)
         #expect(sent.withLock { $0 } == 0)
     }

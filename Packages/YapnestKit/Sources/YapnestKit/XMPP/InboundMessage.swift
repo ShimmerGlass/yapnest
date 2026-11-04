@@ -278,7 +278,7 @@ extension InboundMessage {
     /// live one is always history. Any delay counts, as in `XMPPSession.isDelayed`:
     /// treating a live message as a replay only withholds an author.
     static func isReplayed(_ stanza: Martin.Message, source: Source) -> Bool {
-        source.isArchived || (source == .live && !stanza.element.filterChildren(name: "delay", xmlns: NS.delay).isEmpty)
+        source.isArchived || (source == .live && XMPPSession.isDelayed(stanza))
     }
 
     var author: Author { Author(jid: sender, nick: nick, occupantId: occupantId, presenceSession: presenceSession) }

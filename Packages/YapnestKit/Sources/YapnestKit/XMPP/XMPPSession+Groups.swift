@@ -341,19 +341,19 @@ struct Bookmark: Sendable, Equatable {
                 settings?.addChild(Element(name: notify.rawValue, attributes: applied.attributes))
             }
         } else if notify != .always {
-            let settings = settings ?? {
-                let created = Element(name: "notify", xmlns: NS.notificationSettings)
-                let extensions = extensions ?? {
-                    let created = Element(name: "extensions")
-                    conference.addChild(created)
-                    return created
-                }()
-                extensions.addChild(created)
-                return created
-            }()
+            let extensions = extensions ?? conference.addingChild(Element(name: "extensions"))
+            let settings = settings ?? extensions.addingChild(Element(name: "notify", xmlns: NS.notificationSettings))
             settings.addChild(Element(name: notify.rawValue))
         }
         return conference
+    }
+}
+
+private extension Element {
+    /// Adds `child` and returns it, so a missing node is made where it's needed.
+    func addingChild(_ child: Element) -> Element {
+        addChild(child)
+        return child
     }
 }
 
@@ -834,7 +834,7 @@ extension XMPPSession {
     /// our bookmark (a kick, a destroy): it is retracted once connected, and
     /// until it is, no catch-up may join the group again from it.
     /// `reason` is shown on the messages that never went out.
-    func markLeft(_ room: JID, owingBookmark: Bool = false, because reason: String = XMPPSession.noLongerInGroup) {
+    func markLeft(_ room: JID, owingBookmark: Bool = false, because reason: String) {
         // Whatever waited for the room was for a visit that is over; sent
         // after a later join it could replay over newer stanzas. The stored
         // messages are failed for the same reason, so that joining again
@@ -2070,7 +2070,7 @@ extension XMPPSession {
             if bookmark?.autojoin == true { continue }
             if group.isBookmarked {
                 // Left on another device, which wins over what we owe.
-                markLeft(group.jid)
+                markLeft(group.jid, because: Self.noLongerInGroup)
             } else if !group.bookmarkOwed {
                 owed.append(group.jid)
             }
@@ -2211,11 +2211,14 @@ extension XMPPSession {
     }
 
     /// The conference the server holds for `room`, if any. A read that fails
-    /// is thrown, as writing without it would drop what it holds.
+    /// is thrown, as writing without it would drop what it holds. Only the
+    /// room's item is asked for, as the rest of the node isn't needed.
+    /// The wait is bounded by hand: `withTimeout` would wait on the read after
+    /// the timeout, as a pending request can't be cancelled.
     private func heldBookmark(_ room: JID) async throws -> Element? {
         let read: NodeRead = try await withCheckedThrowingContinuation { continuation in
             let once = Once()
-            readNode(NS.bookmarks, as: "Bookmarks") { read in
+            readNode(NS.bookmarks, as: "Bookmarks", limit: .items(withIds: [room.description])) { read in
                 if once.first() { continuation.resume(returning: read) }
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + Self.bookmarkTimeout) {

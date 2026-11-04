@@ -356,10 +356,11 @@ extension XMPPSession {
                 if let size = (error as? TooLarge)?.size {
                     // Over the automatic limit isn't a failure; a tap can still fetch it.
                     // Over the limit of a tap, nothing can, and the user is told.
+                    let known = size > 0 ? size : nil
                     if automatic {
-                        try? database.setTooLarge(messageId: messageId, size: size > 0 ? size : nil)
+                        try? database.setTooLarge(messageId: messageId, size: known)
                     } else {
-                        try? database.setTooLargeToDownload(messageId: messageId, size: size > 0 ? size : nil)
+                        try? database.setTooLargeToDownload(messageId: messageId, size: known)
                     }
                     return
                 }
