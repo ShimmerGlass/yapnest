@@ -58,10 +58,11 @@ private let me = JID("me@example.org")!
         _ = await first.value
 
         // By the time it's its turn, 2.5 seconds of its 5 are left: too few to
-        // connect, so it only hands out what's stored. Counting from when its
+        // connect, so it only hands out what's stored, and as no catch-up looked
+        // into its push, an empty claim isn't quiet. Counting from when its
         // turn came it would wait for the lock again and run past its deadline.
-        guard case .notifications = second else {
-            Issue.record("expected only the stored notifications, got \(second)")
+        guard case .incomplete = second else {
+            Issue.record("expected only the stored notifications, as incomplete, got \(second)")
             return
         }
         #expect(waited < 5)
