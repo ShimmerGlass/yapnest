@@ -222,6 +222,15 @@ struct MissedImagesTests {
         #expect(stored.exceedsDownloadLimit)
     }
 
+    @Test func aSmallerAnnouncedSizeDoesNotHideAFileTheServerRefusedForSize() throws {
+        var f = Fixture()
+        let announced = try f.add(in: alice, from: alice, size: 1000)
+        try f.db.setTooLargeToDownload(messageId: announced, size: nil)
+        let stored = try #require(try f.db.attachment(messageId: announced))
+        #expect(stored.state == .downloadFailed)
+        #expect(stored.exceedsDownloadLimit)
+    }
+
     @Test func aTapOnAFileKnownToBeOverTheLimitFailsWithoutFetching() async throws {
         var f = Fixture()
         let session = try makeSession(me, database: f.db)

@@ -134,10 +134,11 @@ extension AppDatabase {
     /// Records that a download someone asked for is over the download limit.
     /// It shows as failed, with the size that explains it, because a tap
     /// that seems to do nothing is worse than one that says why. `size` is
-    /// nil when the server didn't say; the file is then more than the limit.
+    /// nil when the server didn't say; the file is then more than the limit,
+    /// whatever smaller size was announced.
     func setTooLargeToDownload(messageId: Int64, size: Int64?) throws {
         try writer.write { db in
-            try db.execute(sql: "UPDATE attachment SET state = 'downloadFailed', size = COALESCE(?, size, ?) WHERE messageId = ?",
+            try db.execute(sql: "UPDATE attachment SET state = 'downloadFailed', size = COALESCE(?, MAX(COALESCE(size, 0), ?)) WHERE messageId = ?",
                            arguments: [size, XMPPSession.maxDownloadSize + 1, messageId])
         }
     }
