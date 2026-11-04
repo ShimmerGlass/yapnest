@@ -123,17 +123,15 @@ final class AppModel {
 
     /// The chat a notification asked for, unless the sheet is busy; it is
     /// then kept for when the sheet is done.
-    func takeRequestedConversation() -> JID? {
-        guard !sheetIsBusy, let peer = requestedConversation else { return nil }
-        requestedConversation = nil
-        return peer
-    }
+    func takeRequestedConversation() -> JID? { take(\.requestedConversation) }
 
     /// The link waiting for the chat list, unless the sheet is busy.
-    func takePendingLink() -> XMPPURI? {
-        guard !sheetIsBusy, let link = pendingLink else { return nil }
-        pendingLink = nil
-        return link
+    func takePendingLink() -> XMPPURI? { take(\.pendingLink) }
+
+    private func take<T>(_ request: ReferenceWritableKeyPath<AppModel, T?>) -> T? {
+        guard !sheetIsBusy, let value = self[keyPath: request] else { return nil }
+        self[keyPath: request] = nil
+        return value
     }
 
     /// Whether the invitation notification's request to show the list may be
@@ -605,7 +603,7 @@ final class AppModel {
                 // smaller GIFs, from encrypted chats too, and the Mac's
                 // copies of opened files under their senders' names.
                 try? FileManager.default.removeItem(at: AnimatedImages.copiesFolder)
-                try? FileManager.default.removeItem(at: MacFileActions.copiesFolder)
+                MacFileActions.removeAllCopies()
             }
             if environment.managesBadge {
                 UNUserNotificationCenter.current().removeAllDeliveredNotifications()
@@ -647,10 +645,7 @@ final class AppModel {
             Task { await offMain { _ = try? database.claimNotifications(notifies: false) } }
             // The unread observation clears quiet notifications and placeholders only when the counts change.
             if environment.managesBadge {
-                Task {
-                    await UNUserNotificationCenter.current().removeQuietNotifications()
-                    await UNUserNotificationCenter.current().removePlaceholderNotifications()
-                }
+                Task { await UNUserNotificationCenter.current().removeStandInNotifications() }
             }
         } else if background, !Platform.staysConnected {
             suspendSoon(session)
@@ -939,7 +934,7 @@ final class AppModel {
                     unread: counts)
                 // The relay's "New message" stands in for what the extension
                 // couldn't fetch, which this session has.
-                let standIns = delivered.filter { $0.isQuiet || $0.isPlaceholder }.map(\.request.identifier)
+                let standIns = delivered.filter(\.isStandIn).map(\.request.identifier)
                 center.removeDeliveredNotifications(withIdentifiers: stale + standIns)
             }
         }
@@ -1215,7 +1210,7 @@ private struct SheetBusyReporter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: isBusy, initial: true) { _, busy in if busy { model.sheetIsBusy = true } else if model.sheetIsBusy { model.sheetIsBusy = false } }
+            .onChange(of: isBusy, initial: true) { _, busy in model.sheetIsBusy = busy }
             .onDisappear { model.sheetIsBusy = false }
     }
 }

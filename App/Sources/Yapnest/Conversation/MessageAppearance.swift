@@ -50,10 +50,13 @@ extension Message {
         /// Both, on one line.
         var fullTitle: String { detail.map { "\(title) · \($0)" } ?? title }
 
+        fileprivate static let clearSymbol = "lock.slash.fill"
+        fileprivate static var unverifiedDetail: String { String(localized: "Unverified device") }
+
         /// Sent in the clear.
-        var isClear = false
+        private var isClear: Bool { symbol == Self.clearSymbol }
         /// Encrypted by a sender's device nobody has verified.
-        var isUnverified = false
+        private var isUnverified: Bool { detail == Self.unverifiedDetail }
 
         /// What VoiceOver adds to a message, which the lock says to the eye
         /// alone. A message that was protected as it should be says nothing,
@@ -71,7 +74,7 @@ extension Message {
     var security: Security {
         switch encryption {
         case .none:
-            return Security(symbol: "lock.slash.fill", color: .red, title: String(localized: "Not encrypted"), isClear: true)
+            return Security(symbol: Security.clearSymbol, color: .red, title: String(localized: "Not encrypted"))
         case .omemoUndecryptable:
             return Security(symbol: "lock.trianglebadge.exclamationmark.fill", color: .red, title: undecryptableReason == .notForThisDevice ? String(localized: "Not encrypted for this device") : String(localized: "Couldn't decrypt"))
         case .omemo:
@@ -87,8 +90,8 @@ extension Message {
                 // The sending device wasn't known, so nothing vouches for it.
                 return Security(symbol: "lock.fill", color: .orange, title: String(localized: "Encrypted"), detail: String(localized: "Unknown device"))
             case .trusted, nil:
-                let detail = direction == .outgoing ? nil : String(localized: "Unverified device")
-                return Security(symbol: "lock.fill", color: nil, title: String(localized: "Encrypted"), detail: detail, isUnverified: direction != .outgoing)
+                let detail = direction == .outgoing ? nil : Security.unverifiedDetail
+                return Security(symbol: "lock.fill", color: nil, title: String(localized: "Encrypted"), detail: detail)
             }
         }
     }

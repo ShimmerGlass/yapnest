@@ -87,52 +87,49 @@ struct ChatListView: View {
             }
         }
         .sheet(item: $sheet) { sheet in
-            switch sheet {
-            case .profile:
-                ProfileView(session: session)
-                    .sheetSizedForMac(width: 520, height: 640)
-                    .countsAsConversationSheet()
-            case .settings:
-                SettingsView(session: session)
-                    .sheetSizedForMac(width: 600, height: 760)
-                    .countsAsConversationSheet()
-            case .compose:
-                NewChatView(
-                    session: session,
-                    onStart: { peer in
-                        self.sheet = nil
-                        // Ask to see their presence and avatar. Offline, the
-                        // chat's banner offers this once connected.
-                        Task { [session] in await session.befriendForNewChat(peer) }
-                        show(peer)
-                    },
-                    onNewGroup: { self.sheet = .newGroup },
-                    onJoinGroup: { self.sheet = .joinGroup },
-                )
-                .sheetSizedForMac(width: 440, height: 520)
-                .countsAsConversationSheet()
-            case .newGroup:
-                NewGroupView(session: session) { room in
-                    guard ChatListSheet.close(&self.sheet, ifShowing: .newGroup) else { return }
-                    show(room)
+            Group {
+                switch sheet {
+                case .profile:
+                    ProfileView(session: session)
+                        .sheetSizedForMac(width: 520, height: 640)
+                case .settings:
+                    SettingsView(session: session)
+                        .sheetSizedForMac(width: 600, height: 760)
+                case .compose:
+                    NewChatView(
+                        session: session,
+                        onStart: { peer in
+                            self.sheet = nil
+                            // Ask to see their presence and avatar. Offline, the
+                            // chat's banner offers this once connected.
+                            Task { [session] in await session.befriendForNewChat(peer) }
+                            show(peer)
+                        },
+                        onNewGroup: { self.sheet = .newGroup },
+                        onJoinGroup: { self.sheet = .joinGroup },
+                    )
+                    .sheetSizedForMac(width: 440, height: 520)
+                case .newGroup:
+                    NewGroupView(session: session) { room in
+                        guard ChatListSheet.close(&self.sheet, ifShowing: .newGroup) else { return }
+                        show(room)
+                    }
+                    .sheetSizedForMac(width: 440, height: 520)
+                case .link(let link):
+                    LinkConfirmation(session: session, link: link) { peer, body in
+                        guard ChatListSheet.close(&self.sheet, ifShowing: .link(link)) else { return }
+                        if let peer { openChat(peer, prefilling: body) }
+                    }
+                    .sheetSizedForMac(width: 440, height: 520)
+                case .joinGroup:
+                    JoinGroupView(session: session) { room in
+                        guard ChatListSheet.close(&self.sheet, ifShowing: .joinGroup) else { return }
+                        show(room)
+                    }
+                    .sheetSizedForMac(width: 440, height: 520)
                 }
-                .sheetSizedForMac(width: 440, height: 520)
-                .countsAsConversationSheet()
-            case .link(let link):
-                LinkConfirmation(session: session, link: link) { peer, body in
-                    guard ChatListSheet.close(&self.sheet, ifShowing: .link(link)) else { return }
-                    if let peer { openChat(peer, prefilling: body) }
-                }
-                .sheetSizedForMac(width: 440, height: 520)
-                .countsAsConversationSheet()
-            case .joinGroup:
-                JoinGroupView(session: session) { room in
-                    guard ChatListSheet.close(&self.sheet, ifShowing: .joinGroup) else { return }
-                    show(room)
-                }
-                .sheetSizedForMac(width: 440, height: 520)
-                .countsAsConversationSheet()
             }
+            .countsAsConversationSheet()
         }
         // From a tapped notification.
         .onChange(of: model.requestedConversation, initial: true) { applyRequests() }
@@ -382,13 +379,8 @@ struct ChatListView: View {
                 return
             }
             prepared.open(session: session, peer: peer, openingAt: message, initial: item, previews: model.linkPreviews, waits: !isSplit) {
-                if isSplit {
-                    selection = peer
-                    selectedMessage = message
-                } else {
-                    selectedMessage = message
-                    path.append(route)
-                }
+                selectedMessage = message
+                if isSplit { selection = peer } else { path.append(route) }
             }
             return
         }
@@ -484,13 +476,8 @@ struct ChatListView: View {
             if selectedMessage != nil { reopen(at: nil) }
             return
         }
-        if isSplit {
-            selection = peer
-            selectedMessage = nil
-        } else {
-            selectedMessage = nil
-            path = [.conversation(peer)]
-        }
+        selectedMessage = nil
+        if isSplit { selection = peer } else { path = [.conversation(peer)] }
     }
 }
 

@@ -1786,7 +1786,8 @@ final class ConversationModel {
         // A failed set may have no reaction left, and is announced all the same.
         let reactionParts = item.reactions.map { "\($0.emoji) \($0.senders.count)" } + (item.reactionFailure == nil ? [] : [String(localized: "Not delivered")])
         let reactions: String? = reactionParts.isEmpty ? nil : String(localized: "Reactions: \(reactionParts.joined(separator: ", "))")
-        let words = [replying, spoken ?? attachmentSpoken, previewTitle, reactions, state, time, message.isRetracted ? nil : message.security.spoken(inEncryptedChat: environment.chatIsEncrypted)].compactMap { $0 }.joined(separator: ", ")
+        let security = message.security
+        let words = [replying, spoken ?? attachmentSpoken, previewTitle, reactions, state, time, message.isRetracted ? nil : security.spoken(inEncryptedChat: environment.chatIsEncrypted)].compactMap { $0 }.joined(separator: ", ")
         let showsName = environment.isGroup && !isOutgoing && startsRun
         let content = MessageRow.Content(
             item: item,
@@ -1796,7 +1797,7 @@ final class ConversationModel {
             quoteText: quoteText ?? "",
             senderColor: showsName ? SenderColor.color(for: message.author) : nil,
             time: time,
-            security: message.security,
+            security: security,
             text: text,
             preview: preview,
             attachment: attachment,

@@ -357,6 +357,11 @@ enum MacFileActions {
         }
     }
 
+    /// Removes every copy, as signing out does.
+    nonisolated static func removeAllCopies() {
+        try? FileManager.default.removeItem(at: copiesFolder)
+    }
+
     /// Off the main thread: a file can be a large video.
     private static func named(_ file: URL, _ name: String) async -> URL? {
         await offMain {
