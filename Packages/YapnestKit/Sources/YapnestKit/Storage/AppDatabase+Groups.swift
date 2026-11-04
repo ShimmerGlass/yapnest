@@ -147,13 +147,16 @@ extension AppDatabase {
     /// written after the room's catch-up began.
     func pendingOutgoing(conversationId: Int64) throws -> [Message] {
         try reader.read { db in
-            try Message
-                .filter(Column("conversationId") == conversationId)
-                .outgoingOnly()
-                .filter(Column("isRetracted") == false && Column("status") == Message.Status.pending)
-                .order(Column("timestamp"))
-                .fetchAll(db)
+            try Self.pendingOutgoingRequest(conversationId: conversationId).fetchAll(db)
         }
+    }
+
+    private static func pendingOutgoingRequest(conversationId: Int64) -> QueryInterfaceRequest<Message> {
+        Message
+            .filter(Column("conversationId") == conversationId)
+            .outgoingOnly()
+            .filter(Column("isRetracted") == false && Column("status") == Message.Status.pending)
+            .order(Column("timestamp"))
     }
 
     /// Fails the messages of ours in `peer` that are still waiting to be sent,
@@ -162,16 +165,9 @@ extension AppDatabase {
     func failPendingOutgoing(in peer: JID, because reason: String) throws {
         try writer.write { db in
             guard let conversationId = try Self.existingConversation(db, peer: peer)?.id else { return }
-            let pending = try Message
-                .filter(Column("conversationId") == conversationId)
-                .outgoingOnly()
-                .filter(Column("isRetracted") == false && Column("status") == Message.Status.pending)
-                .fetchAll(db)
-            for var message in pending {
-                message.status = .failed
-                message.error = reason
-                try message.update(db)
-            }
+            try Self.pendingOutgoingRequest(conversationId: conversationId).updateAll(
+                db, Column("status").set(to: Message.Status.failed), Column("error").set(to: reason), Column("writtenAt").set(to: nil),
+            )
         }
     }
 

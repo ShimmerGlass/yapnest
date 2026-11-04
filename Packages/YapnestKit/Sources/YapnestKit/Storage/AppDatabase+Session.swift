@@ -24,6 +24,11 @@ extension AppDatabase {
         try reader.read { db in try Contact.fetchOne(db, key: jid).map { $0.mayReceive } ?? false }
     }
 
+    /// Those of `peers` who have consented, in one read.
+    func consented(among peers: [JID]) throws -> Set<JID> {
+        try reader.read { db in Set(try Contact.fetchAll(db, keys: peers).filter(\.mayReceive).map(\.jid)) }
+    }
+
     /// Applies `change` to the stored contact, or a new one, and saves only
     /// if it changed anything. Whether it did.
     @discardableResult

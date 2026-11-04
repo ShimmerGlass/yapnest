@@ -135,12 +135,9 @@ extension AppDatabase {
         }
         let ids = [message.originId, message.remoteId].compactMap { $0 }
         guard !ids.isEmpty else { return nil }
-        // The conversation is in each branch of the OR: SQLite doesn't carry
-        // it in from outside, and would scan the whole conversation.
-        let conversation = Column("conversationId") == message.conversationId
         var request = Message
             .filter(Column("sender") == message.sender)
-            .filter((conversation && ids.contains(Column("originId"))) || (conversation && ids.contains(Column("remoteId"))))
+            .filter(namedBy(ids, in: message.conversationId))
         // Two stanza-ids from the server are two messages, whatever ids the
         // sender gave them: a copied origin-id in an anonymous room, or a bot
         // that reuses one. Only a copy that has no stanza-id yet can be ours;
@@ -149,12 +146,9 @@ extension AppDatabase {
         // Our own messages in a 1:1 chat are the exception: only our devices
         // write them, and a resend after a failed catch-up reuses the id, so
         // the archive can hold the message twice. Both are the one row.
-        var isOurOneToOne = false
-        if message.direction == .outgoing {
-            isOurOneToOne = try Self.isOneToOne(db, message.conversationId)
-        }
-        if message.serverId != nil, !isOurOneToOne {
-            request = request.filter(Column("serverId") == nil)
+        if message.serverId != nil {
+            let isOurOneToOne = try message.direction == .outgoing && Self.isOneToOne(db, message.conversationId)
+            if !isOurOneToOne { request = request.filter(Column("serverId") == nil) }
         }
         if let found = try request.fetchOne(db) { return found }
         return try storedWithRealAddress(unaddressed: message, ids: ids, db)
@@ -168,11 +162,18 @@ extension AppDatabase {
     private static func storedWithRealAddress(unaddressed message: Message, ids: [String], _ db: Database) throws -> Message? {
         guard message.direction == .incoming, message.serverId == nil, let nick = message.nick,
               try Conversation.fetchOne(db, key: message.conversationId)?.peer == message.sender else { return nil }
-        let conversation = Column("conversationId") == message.conversationId
         return try Message
             .filter(Column("direction") == Message.Direction.incoming && Column("nick") == nick && Column("body") == message.body && Column("serverId") == nil)
-            .filter((conversation && ids.contains(Column("originId"))) || (conversation && ids.contains(Column("remoteId"))))
+            .filter(namedBy(ids, in: message.conversationId))
             .fetchOne(db)
+    }
+
+    /// The messages of the conversation that any of `ids` is the origin or stanza id of.
+    /// The conversation is in each branch of the OR: SQLite doesn't carry it
+    /// in from outside, and would scan the whole conversation.
+    private static func namedBy(_ ids: [String], in conversationId: Int64) -> SQLExpression {
+        let conversation = Column("conversationId") == conversationId
+        return (conversation && ids.contains(Column("originId"))) || (conversation && ids.contains(Column("remoteId")))
     }
 
     /// Whether we sent an encrypted message to the group under `nick` with
@@ -182,9 +183,9 @@ extension AppDatabase {
         guard !ids.isEmpty else { return false }
         return try reader.read { db in
             try Message
-                .filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.outgoing
+                .filter(Column("direction") == Message.Direction.outgoing
                         && Column("encryption") == Message.Encryption.omemo && Column("nick") == nick)
-                .filter(ids.contains(Column("originId")) || ids.contains(Column("remoteId")))
+                .filter(Self.namedBy(ids, in: conversationId))
                 .isEmpty(db) == false
         }
     }
@@ -514,9 +515,11 @@ extension AppDatabase {
     }
 
     public func isEncrypted(with peer: JID) throws -> Bool {
-        try reader.read { db in
-            try Self.existingConversation(db, peer: peer)?.isEncrypted ?? Self.encryptsByDefault(db, with: peer)
-        }
+        try reader.read { db in try Self.isEncrypted(db, peer: peer) }
+    }
+
+    static func isEncrypted(_ db: Database, peer: JID) throws -> Bool {
+        try existingConversation(db, peer: peer)?.isEncrypted ?? encryptsByDefault(db, with: peer)
     }
 
     /// Notes that the user chose the action `actionId` offered by `messageId`.

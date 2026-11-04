@@ -447,9 +447,7 @@ extension AppDatabase {
 
     /// Whether the conversation is encrypted, as `isEncrypted(with:)` says.
     public func observeEncrypted(peer: JID) -> ValueObservation<ValueReducers.Fetch<Bool>> {
-        ValueObservation.trackingConstantRegion { db in
-            try Self.existingConversation(db, peer: peer)?.isEncrypted ?? Self.encryptsByDefault(db, with: peer)
-        }
+        ValueObservation.trackingConstantRegion { db in try Self.isEncrypted(db, peer: peer) }
     }
 
     public func linkPreviews(peer: JID) throws -> Bool? {
