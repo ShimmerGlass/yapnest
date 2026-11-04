@@ -14,7 +14,7 @@ struct SettingsView: View {
     @State private var relaysCalls = false
     @State private var includesMessagesInBackups = true
     @State private var gifsEnabled = true
-    @State private var mapPreviewsEnabled = true
+    @State private var mapPreviewsEnabled = false
     @State private var encryptsNewChats = true
     @AppStorage(AppSwitcherCoverSetting.key) private var hidesScreenInAppSwitcher = false
     @State private var privacyError: String?
@@ -186,7 +186,7 @@ struct SettingsView: View {
                         relaysCalls: session.relaysCalls,
                         includesMessagesInBackups: BackupPolicy.includesMessages(),
                         gifsEnabled: session.database.flag(.gifs, default: true),
-                        mapPreviewsEnabled: session.database.flag(.mapPreviews, default: true),
+                        mapPreviewsEnabled: session.database.mapPreviewSettings.switchIsOn,
                         encryptsNewChats: session.database.flag(.encryptsNewChats, default: true),
                     )
                 }

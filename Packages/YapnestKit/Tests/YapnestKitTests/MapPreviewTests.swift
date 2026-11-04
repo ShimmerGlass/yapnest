@@ -36,6 +36,17 @@ struct MapPreviewTests {
         #expect(db.mapPreviewSettings == MapPreview.Settings())
     }
 
+    @Test func theSettingsSwitchIsOnOnlyOnceMapsAreAllowedAndConsentedTo() throws {
+        let db = try AppDatabase.inMemory()
+        #expect(!db.mapPreviewSettings.switchIsOn)
+        try db.agreeToMapPreviews()
+        #expect(db.mapPreviewSettings.switchIsOn)
+        try db.turnOffMapPreviews()
+        #expect(!db.mapPreviewSettings.switchIsOn)
+        try db.setMapPreviews(true)
+        #expect(db.mapPreviewSettings.switchIsOn)
+    }
+
     @Test func theFlagSyncsAndTheConsentDoesNot() throws {
         let synced = AppDatabase.syncedGlobalKeys
         #expect(synced[.mapPreviews] != nil)

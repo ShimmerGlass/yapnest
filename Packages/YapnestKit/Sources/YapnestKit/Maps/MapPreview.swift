@@ -27,6 +27,11 @@ public enum MapPreview {
             self.consented = consented
         }
 
+        /// What Settings' switch shows. Maps are on by default but wait for
+        /// consent, so a switch that read only the flag would say on while
+        /// every card still asks.
+        public var switchIsOn: Bool { enabled && consented }
+
         /// The order matters: the setting beats everything, consent comes
         /// before the stranger rule, and a tap only lifts the stranger rule.
         public func display(trusted: Bool, tappedToShow: Bool) -> Display {
