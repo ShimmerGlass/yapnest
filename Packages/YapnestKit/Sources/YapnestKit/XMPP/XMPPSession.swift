@@ -2717,12 +2717,18 @@ public final class XMPPSession: @unchecked Sendable {
                 )
             }
             // A write the session drops comes back after deliver has returned.
+            let conversationId = message.conversationId
             let dropped: @Sendable () -> Void = { [weak self] in
                 guard let self, let token else { return }
                 DiagLog.notice(.send, "Write dropped by the session", .id("msg", sendId))
                 lock.withLock { $0.sends.releaseDropped(id, token: token) }
+                try? database.setWritten(nil, conversationId: conversationId, remoteId: id)
             }
-            let conversationId = message.conversationId
+            // Before the write rather than after: a process killed in between
+            // must still know the stanza may have gone out.
+            let willWrite: @Sendable () -> Void = { [weak self] in
+                try? self?.database.setWritten(Date(), conversationId: conversationId, remoteId: id)
+            }
             expectBounce(
                 of: id, key: .message(id), peer: peer,
                 release: { [weak self] in self?.lock.withLock { $0.sends.release(id) } },
@@ -2733,7 +2739,7 @@ public final class XMPPSession: @unchecked Sendable {
                     )
                 },
             )
-            switch deliver(stanza, to: peer, encrypted: message.encryption == .omemo, onDropped: dropped) {
+            switch deliver(stanza, to: peer, encrypted: message.encryption == .omemo, willWrite: willWrite, onDropped: dropped) {
             case .success(let (trust, acknowledged)):
                 DiagLog.info(.send, "Written to the stream", .id("msg", sendId), .bool("streamAcknowledges", acknowledged))
                 if let trust { try? database.setTrust(trust, conversationId: message.conversationId, remoteId: id) }
@@ -2825,7 +2831,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// writes it. Returns how far the recipients' devices were trusted, and
     /// whether the stream acknowledges it (XEP-0198).
     /// Runs on `peer`'s send queue, as encrypting may wait on the network.
-    private func deliver(_ stanza: Martin.Message, to peer: JID, encrypted: Bool, onDropped: @escaping @Sendable () -> Void = {}) -> Result<(OMEMODevice.Trust?, acknowledged: Bool), DeliveryError> {
+    private func deliver(_ stanza: Martin.Message, to peer: JID, encrypted: Bool, willWrite: @Sendable () -> Void = {}, onDropped: @escaping @Sendable () -> Void = {}) -> Result<(OMEMODevice.Trust?, acknowledged: Bool), DeliveryError> {
         var outgoing = stanza
         var trust: OMEMODevice.Trust?
         if encrypted {
@@ -2852,6 +2858,7 @@ public final class XMPPSession: @unchecked Sendable {
             return .failure(.failed(String(localized: "This message is too large for your server."), .tooLarge))
         }
         let acknowledged = streamAcknowledges
+        willWrite()
         client.context.writer.write(outgoing) { result in
             if case .failure = result { onDropped() }
         }
@@ -2886,8 +2893,14 @@ public final class XMPPSession: @unchecked Sendable {
         }
     }
 
-    private func currentStatus(of messageId: Int64, fallback: Message.Status) -> Message.Status {
-        (try? database.reader.read { try Message.fetchOne($0, key: messageId)?.status }) ?? fallback
+    /// Whether `message` may be out there: acknowledged, or written by this
+    /// process or an earlier one (the mark outlives the claims). Read fresh,
+    /// as `message` may be old.
+    private func mayBeOnTheWire(_ message: Message, id messageId: Int64) -> Bool {
+        guard let current = try? database.reader.read({ try Message.fetchOne($0, key: messageId) }) else {
+            return message.status >= .sent || message.writtenAt != nil
+        }
+        return current.status >= .sent || current.writtenAt != nil
     }
 
     /// Whether `message` is ours to edit: a text we sent that's still there.
@@ -2911,14 +2924,15 @@ public final class XMPPSession: @unchecked Sendable {
         // Half the server's limit in bytes as well: a short text can be large (joined emoji), and
         // the stanza around it and the encryption of an encrypted chat add to it.
         guard !LongText.isLong(text), text.utf8.count <= client.context.module(.streamFeatures).maxStanzaBytes / 2 else { throw MessageActionError.editTooLong }
-        // One the send queue hasn't taken up goes out with the new text. The
-        // status can't tell: a written message is pending until acknowledged.
+        // One that was never written goes out with the new text. The status
+        // can't tell: a written message is pending until acknowledged, so the
+        // stored write mark says too, as this session's claims don't reach back.
         // The status is read before the lock, and fresh, as `message` may be
         // old. Claims last for the session and a status only moves forward
         // once sent, so a message going out meanwhile isn't missed: if the
         // queue claimed it after this read, the claim is seen, and if it
         // hasn't yet, the change recorded here is consumed by its claim.
-        let alreadySent = currentStatus(of: messageId, fallback: message.status) >= .sent
+        let alreadySent = mayBeOnTheWire(message, id: messageId)
         let onTheWire = lock.withLock { $0.sends.apply(.edited(text), to: original, alreadySent: alreadySent) }
         if !onTheWire {
             _ = try database.applyEdit(text, to: messageId, marksEdited: false)
@@ -2937,7 +2951,7 @@ public final class XMPPSession: @unchecked Sendable {
         guard message.direction == .outgoing, !message.isRetracted, let messageId = message.id,
               let peer = try database.conversation(id: message.conversationId)?.peer else { return }
         // Read before the lock, as in `edit`.
-        let alreadySent = currentStatus(of: messageId, fallback: message.status) >= .sent
+        let alreadySent = mayBeOnTheWire(message, id: messageId)
         let onTheWire = message.remoteId.map { id in
             lock.withLock { $0.sends.apply(.retracted, to: id, alreadySent: alreadySent) }
         } ?? alreadySent

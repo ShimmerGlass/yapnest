@@ -135,6 +135,11 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
     /// server hasn't acknowledged. A later one replaces it, as only the latest
     /// state needs to reach the peer.
     public var actionPendingId: String?
+    /// When the stanza of this outgoing message was handed to the stream, kept
+    /// until the server acknowledges it. A new process has no send claims, and
+    /// a pending message may have been delivered all the same, so this is what
+    /// tells an edit or a retraction that the original may be out there.
+    public var writtenAt: Date?
     /// Why our latest correction or retraction of this message was not
     /// delivered, for good. Cleared when the user tries again or changes it.
     public var actionError: String?

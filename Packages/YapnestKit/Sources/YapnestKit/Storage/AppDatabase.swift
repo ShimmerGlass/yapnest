@@ -966,6 +966,16 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v60-message-written-at") { db in
+            // Whether a pending message was written to the stream. Claims
+            // only live as long as a process, so without this an unacknowledged
+            // message looks never sent after a relaunch, and an edit or
+            // retraction of it would stay on this device.
+            try db.alter(table: "message") { t in
+                t.add(column: "writtenAt", .datetime)
+            }
+        }
+
         return migrator
     }
 

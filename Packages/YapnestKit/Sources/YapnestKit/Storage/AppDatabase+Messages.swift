@@ -240,6 +240,7 @@ extension AppDatabase {
             guard message.status == .pending || message.status == .sent else { return false }
             message.status = status
             message.error = error
+            message.writtenAt = nil
             return true
         }
     }
@@ -465,6 +466,19 @@ extension AppDatabase {
             try Self.updateOutgoing(db, conversationId: conversationId, remoteId: remoteId) { message in
                 message.status = .failed
                 message.error = error
+                message.writtenAt = nil
+                return true
+            }
+        }
+    }
+
+    /// Records that the stanza of our pending message `remoteId` is being
+    /// written, or, with `nil`, that it turned out not to have been.
+    func setWritten(_ date: Date?, conversationId: Int64, remoteId: String) throws {
+        try writer.write { db in
+            try Self.updateOutgoing(db, conversationId: conversationId, remoteId: remoteId) { message in
+                guard message.status == .pending, message.writtenAt != date else { return false }
+                message.writtenAt = date
                 return true
             }
         }

@@ -64,6 +64,81 @@ struct SessionSendTests {
         #expect(stored.isRetracted)
     }
 
+    // MARK: A message written by an earlier process
+
+    /// A session of a later process on the same database: it has no claims.
+    private func relaunched() throws -> (XMPPSession, FakeWire) {
+        let later = try makeSession(me, database: database)
+        let laterWire = FakeWire()
+        later.connectForTesting(laterWire)
+        return (later, laterWire)
+    }
+
+    @Test func editingAMessageAnEarlierProcessWroteSendsACorrection() throws {
+        let message = try sentAndAwaitingAcknowledgement()
+        let (later, laterWire) = try relaunched()
+        try later.edit(message, to: "fixed")
+        later.drainSendQueue(alice)
+
+        let correction = try #require(laterWire.messages.first { $0.firstChild(name: "replace", xmlns: NS.correction) != nil })
+        #expect(correction.body == "fixed")
+        #expect(correction.firstChild(name: "replace", xmlns: NS.correction)?.getAttribute("id") == message.remoteId)
+        let stored = try #require(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!) })
+        #expect(stored.editedAt != nil)
+    }
+
+    @Test func retractingAMessageAnEarlierProcessWroteSendsARetraction() throws {
+        let message = try sentAndAwaitingAcknowledgement()
+        let (later, laterWire) = try relaunched()
+        try later.retract(message)
+        later.drainSendQueue(alice)
+
+        let retraction = try #require(laterWire.messages.first { $0.firstChild(name: "retract", xmlns: NS.retraction) != nil })
+        #expect(retraction.firstChild(name: "retract", xmlns: NS.retraction)?.getAttribute("id") == message.remoteId)
+    }
+
+    @Test func retractingAPendingMessageNeverWrittenStaysLocal() throws {
+        let message = try session.outgoingMessages.stage([.text("first", reply: nil)], to: alice)[0]
+        let (later, laterWire) = try relaunched()
+        try later.retract(message)
+        later.drainSendQueue(alice)
+
+        #expect(laterWire.messages.isEmpty)
+        let stored = try #require(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!) })
+        #expect(stored.isRetracted)
+        #expect(stored.actionPendingId == nil)
+    }
+
+    @Test func editingAPendingMessageNeverWrittenOnlyChangesItHereAfterARelaunch() throws {
+        let message = try session.outgoingMessages.stage([.text("first", reply: nil)], to: alice)[0]
+        let (later, laterWire) = try relaunched()
+        try later.edit(message, to: "fixed")
+
+        #expect(laterWire.messages.isEmpty)
+        let stored = try #require(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!) })
+        #expect(stored.body == "fixed")
+        #expect(stored.editedAt == nil)
+    }
+
+    @Test func aDroppedWriteIsNotMarkedWritten() throws {
+        session.enableAcknowledgementsForTesting()
+        wire.failsWrites = true
+        let message = try session.send("hello", to: alice)
+        session.drainSendQueue(alice)
+
+        let stored = try #require(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: message.id!) })
+        #expect(stored.writtenAt == nil)
+    }
+
+    @Test func aWrittenMessageIsMarkedUntilItFails() throws {
+        let message = try sentAndAwaitingAcknowledgement()
+        let id = try #require(message.id)
+        #expect(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: id)?.writtenAt } != nil)
+
+        try database.markFailed(conversationId: message.conversationId, remoteId: try #require(message.remoteId), error: "no")
+        #expect(try database.reader.read { try YapnestKit.Message.fetchOne($0, key: id)?.writtenAt } == nil)
+    }
+
     @Test func editingAMessageTheQueueHasNotTakenUpOnlyChangesItHere() throws {
         // Staged but never put on a send queue: nothing is on the wire.
         let message = try session.outgoingMessages.stage([.text("first", reply: nil)], to: alice)[0]
