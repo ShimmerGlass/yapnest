@@ -22,6 +22,8 @@ private final class BookmarkServer: @unchecked Sendable {
     private var onPublish: (@Sendable () -> Void)?
     private var rawHeld: Element?
     private var rawPublished: Element?
+    private var refuseRead: (@Sendable (Iq) -> Iq?)?
+    private var legacyCount = 0
 
     /// A conference as another client wrote it, served as is.
     var rawItem: Element? {
@@ -42,6 +44,10 @@ private final class BookmarkServer: @unchecked Sendable {
     /// "publish" and "retract" in the order they reached the server.
     var requests: [String] { lock.withLock { order } }
 
+    func refusingReads(_ answer: (@Sendable (Iq) -> Iq?)?) { lock.withLock { refuseRead = answer } }
+    /// How many requests for the old kind of bookmarks arrived.
+    var legacyRequests: Int { lock.withLock { legacyCount } }
+
     func refusingPublishes(_ answer: (@Sendable (Iq) -> Iq?)?) { lock.withLock { refusePublish = answer } }
     func refusingRetractions(_ answer: (@Sendable (Iq) -> Iq?)?) { lock.withLock { refuseRetract = answer } }
     func whenPublishing(_ action: (@Sendable () -> Void)?) { lock.withLock { onPublish = action } }
@@ -51,9 +57,11 @@ private final class BookmarkServer: @unchecked Sendable {
         // The old kind of bookmarks is not kept here.
         if pubsub.firstChild(name: "items")?.getAttribute("node") == NS.legacyBookmarks
             || pubsub.firstChild(name: "publish")?.getAttribute("node") == NS.legacyBookmarks {
+            lock.withLock { legacyCount += 1 }
             return FakeWire.error(to: iq, condition: "service-unavailable")
         }
         if let items = pubsub.firstChild(name: "items"), items.getAttribute("node") == NS.bookmarks {
+            if let refusal = lock.withLock({ refuseRead }) { return refusal(iq) }
             let result = Element(name: "pubsub", xmlns: pubsubNS)
             let list = Element(name: "items", attributes: ["node": NS.bookmarks])
             for bookmark in self.list {
@@ -410,6 +418,23 @@ struct OwedBookmarkTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(try group().bookmarkOwed)
         #expect(session.warnings.current.isEmpty)
+    }
+
+    @Test func aReadThatFailsLeavesTheXEP0402PublishOwedInsteadOfFallingBack() async throws {
+        await connect()
+        server.refusingReads { wait($0) }
+
+        try session.setNotify(.never, in: room)
+
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(server.legacyRequests == 0)
+        #expect(server.published.isEmpty)
+        #expect(try group().bookmarkOwed)
+
+        server.refusingReads(nil)
+        session.sendOwedBookmarks()
+        #expect(await eventually { (try? group().bookmarkOwed) == false })
+        #expect(server.published.last?.notify == .never)
     }
 
     @Test func aRefusedRetractionShowsAWarningWithRetry() async throws {

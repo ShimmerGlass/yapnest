@@ -2192,12 +2192,15 @@ extension XMPPSession {
             return
         }
         let options = Self.dataForm(type: "submit", formType: NS.publishOptions, fields: Self.settingsNodeFields(maxItems: "max"))
+        // Other clients' fields in the item are theirs to keep, so what's
+        // held is read and changed rather than written afresh. A read that
+        // fails ends the publish and leaves it owed: the old kind of bookmark
+        // is for a server that won't take this one, not for one that was slow
+        // to answer a read.
+        let held = try await heldBookmark(group.jid)
         // Some servers never answer a publish with max_items=max (Openfire),
         // so the wait is bounded, and the old kind of bookmark takes over.
         do {
-            // Other clients' fields in the item are theirs to keep, so what's
-            // held is read and changed rather than written afresh.
-            let held = try await heldBookmark(group.jid)
             try await publishPEPItem(
                 node: NS.bookmarks, itemId: group.jid.description, payload: bookmark.merged(into: held),
                 options: options, timeout: Self.bookmarkTimeout,
