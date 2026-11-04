@@ -1046,7 +1046,7 @@ final class ConversationModel {
     /// copies from our other devices, are not news to them, and nobody sees
     /// the glow in the background.
     private func notePulse(for arriving: Set<Int64>) {
-        guard isOnScreen, UIApplication.shared.applicationState == .active,
+        guard isOnScreen, UIApplication.shared.applicationState == .active, Platform.isAppFocused,
               arriving.contains(where: { items[$0]?.message.direction == .incoming }) else { return }
         let now = ContinuousClock.now
         if let lastPulse, now - lastPulse < Self.pulseWindow { return }
@@ -3363,7 +3363,7 @@ final class ConversationModel {
         if onScreen { awaitsScreen = false }
         if onScreen {
             markVisibleRead()
-            if UIApplication.shared.applicationState == .active { becomeActive() }
+            if UIApplication.shared.applicationState == .active, Platform.isAppFocused { becomeActive() }
         } else {
             becomeInactive()
             flushDraft()
@@ -3379,7 +3379,8 @@ final class ConversationModel {
     /// while the list is still being taken to the first unread message, as
     /// the rows it reports then aren't the ones the user will see.
     func markVisibleRead() {
-        guard hasLoaded, isPositioned, isOnScreen, isWindowVisible, UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+        guard hasLoaded, isPositioned, isOnScreen, isWindowVisible, Platform.isAppFocused,
+              UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
               let message = newestVisibleUnread() else { return }
         if message.timestamp > (readRequestedThrough ?? .distantPast) {
             readRequestedThrough = message.timestamp
@@ -3457,6 +3458,12 @@ final class ConversationModel {
         if isOnScreen { becomeInactive() }
         // The microphone isn't ours once the app is covered.
         voiceRecorder?.appWillResignActive()
+    }
+
+    /// Mac: another app came in front. The user may come back to a recording,
+    /// as nothing else takes the microphone, so only the chat state goes.
+    func appLostFocus() {
+        if isOnScreen { becomeInactive() }
     }
 
     // MARK: Chat states

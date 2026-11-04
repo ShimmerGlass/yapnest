@@ -222,6 +222,24 @@ struct AppModelSessionTests {
         #expect(await stays(for: .milliseconds(300)) { fixture.connects.count == 2 })
     }
 
+    @Test func anotherAppInFrontOnTheMacCountsAsLeavingTheApp() async throws {
+        // Catalyst posts AppKit's notifications only, and the app went on
+        // taking anything that arrived as seen: no banner on the Mac.
+        let fixture = AppModelFixture()
+        let model = fixture.model!
+        let center = NotificationCenter()
+        model.followLifecycle(of: center)
+        try await model.signIn(fixture.credentialsToSignIn)
+        #expect(model.isActive)
+
+        center.post(name: Platform.appDidLoseFocus, object: nil)
+        #expect(!model.isActive)
+        #expect(fixture.lock.isLocked, "it isn't the background")
+
+        center.post(name: Platform.appDidGainFocus, object: nil)
+        #expect(model.isActive)
+    }
+
     @Test func aSignInThatFinishesInTheBackgroundSuspendsTheSession() async throws {
         let fixture = AppModelFixture()
         let model = fixture.model!

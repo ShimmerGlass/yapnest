@@ -273,6 +273,9 @@ struct ConversationView: View {
         // On the Mac the window can lose focus while the app stays active.
         .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { _ in conversation.sceneActivated() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in conversation.appWillResignActive() }
+        // The Mac posts neither of UIKit's when another app is clicked.
+        .onReceive(NotificationCenter.default.publisher(for: Platform.appDidGainFocus)) { _ in conversation.appBecameActive() }
+        .onReceive(NotificationCenter.default.publisher(for: Platform.appDidLoseFocus)) { _ in conversation.appLostFocus() }
         // Or stay active with its window out of sight, as when the screen locks.
         .onReceive(NotificationCenter.default.publisher(for: Platform.windowVisibilityDidChange)) { _ in
             conversation.windowVisibilityChanged(Platform.isWindowVisible)

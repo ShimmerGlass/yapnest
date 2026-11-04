@@ -662,17 +662,30 @@ final class AppModel {
     /// process lock and the database when the app was suspended, which iOS
     /// kills an app for (0xdead10cc). UIKit posts these before it lets the
     /// app go, so the background task that lets go of them starts in time.
+    ///
+    /// The Mac doesn't post UIKit's when another app is clicked, only AppKit's,
+    /// so the app went on thinking the user was looking at it: no banner for
+    /// what arrived, and the open chat read. AppKit's count too, there, and
+    /// UIKit's "active" only while AppKit agrees. Only UIKit's say whether
+    /// the app is in the background, so a lost focus leaves that as it was.
     func followLifecycle(of center: NotificationCenter = .default) {
-        let phases: [(Notification.Name, active: Bool, background: Bool)] = [
+        let phases: [(Notification.Name, active: Bool, background: Bool?)] = [
             (UIApplication.didBecomeActiveNotification, true, false),
             (UIApplication.willResignActiveNotification, false, false),
             (UIApplication.didEnterBackgroundNotification, false, true),
             (UIApplication.willEnterForegroundNotification, false, false),
+            (Platform.appDidGainFocus, true, false),
+            (Platform.appDidLoseFocus, false, nil),
         ]
         lifecycleObservers = phases.map { name, active, background in
-            center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+            let gainsFocus = name == Platform.appDidGainFocus
+            return center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
                 // Posted on the main thread, and handled before it returns.
-                MainActor.assumeIsolated { self?.scenePhaseChanged(active: active, background: background) }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let focused = gainsFocus || Platform.isAppFocused
+                    self.scenePhaseChanged(active: active && focused, background: background ?? self.isBackground)
+                }
             }
         }
     }
