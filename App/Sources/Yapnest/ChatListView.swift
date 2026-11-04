@@ -17,7 +17,7 @@ struct ChatListView: View {
     @State private var path: [ChatRoute] = []
     /// Side by side: the open chat, and what's pushed in the sidebar.
     @State private var selection: JID?
-    /// The message the open chat was opened on, from a search.
+    /// The message the open chat was opened on or last moved to, from a search.
     @State private var selectedMessage: Int64?
     /// The list's row for a chat opened from it, which starts the header off.
     /// A reference, as the stack builds a pushed chat with the
@@ -219,10 +219,28 @@ struct ChatListView: View {
     }
 
     /// Its controller and state are made for one peer; a notification can
-    /// swap the peer under an open chat.
+    /// swap the peer under an open chat. Asking for the same chat at another
+    /// message keeps the screen and moves its list (`reopen`), as a new one
+    /// would lose what's staged in it.
     private func conversation(_ peer: JID, at message: Int64?) -> some View {
         ConversationView(session: session, peer: peer, openingAt: message, initial: openedItems[peer], prepared: prepared)
-            .id(OpenChat(peer: peer, message: message))
+            .id(peer)
+    }
+
+    /// The chat shown now, if one is. On the iPhone that is the only one in
+    /// the stack, as a chat pushed over another is a different screen.
+    private var openPeer: JID? {
+        if isSplit { return selection }
+        if path.count == 1, case .conversation(let peer, _) = path[0] { return peer }
+        return nil
+    }
+
+    /// Moves the open chat's list to `message`, or to the newest.
+    private func reopen(at message: Int64?) {
+        prepared.clear()
+        selectedMessage = message
+        guard let peer = openPeer else { return }
+        model.liveConversations.model(for: peer)?.reopen(at: message)
     }
 
     @ViewBuilder
@@ -359,11 +377,16 @@ struct ChatListView: View {
             let isSplit = isSplit
             // The chat already open beside the list stays as it is.
             if isSplit, selection == peer, selectedMessage == message { return }
+            if openPeer == peer {
+                reopen(at: message)
+                return
+            }
             prepared.open(session: session, peer: peer, openingAt: message, initial: item, previews: model.linkPreviews, waits: !isSplit) {
                 if isSplit {
                     selection = peer
                     selectedMessage = message
                 } else {
+                    selectedMessage = message
                     path.append(route)
                 }
             }
@@ -455,12 +478,18 @@ struct ChatListView: View {
     private func show(_ peer: JID) {
         openedItems[peer] = nil
         prepared.clear()
+        if openPeer == peer {
+            // Opened on a message, it goes back to the newest; otherwise it
+            // stays as it is.
+            if selectedMessage != nil { reopen(at: nil) }
+            return
+        }
         if isSplit {
             selection = peer
             selectedMessage = nil
         } else {
-            // The same chat stays as it is: its view is made for one peer.
-            if path != [.conversation(peer)] { path = [.conversation(peer)] }
+            selectedMessage = nil
+            path = [.conversation(peer)]
         }
     }
 }
@@ -469,12 +498,6 @@ enum ChatRoute: Hashable {
     /// `at` is a message to open on, such as a search result.
     case conversation(JID, at: Int64? = nil)
     case archive
-}
-
-/// What a chat view is made for: another message to open on is a new screen.
-private struct OpenChat: Hashable {
-    let peer: JID
-    let message: Int64?
 }
 
 /// The list of conversations, or of archived ones, with Signal's swipe actions.

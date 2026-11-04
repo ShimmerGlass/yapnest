@@ -2619,6 +2619,13 @@ final class ConversationModel {
         observeMessages()
     }
 
+    /// The chat is asked for again while it is open: moves the list to
+    /// `message`, or to the newest, and leaves the rest as it is. A new model
+    /// would lose what is staged, the reply or edit and a recording.
+    func reopen(at message: Int64?) {
+        if let message { reveal(message) } else { scrollToLatest() }
+    }
+
     // MARK: Quotes
 
     /// Jumps to the message `id` quotes. One older than the window grows it

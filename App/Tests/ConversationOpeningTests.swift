@@ -109,4 +109,33 @@ struct ConversationOpeningTests {
         #expect(f.model.flashID == nil)
         #expect(f.model.rows.count == 10)
     }
+
+    /// The chat is asked for again while it is open, as by a tapped
+    /// notification or another search result: a new model would drop what is
+    /// staged and the reply, which the old one's deinit also deletes the
+    /// copies of.
+    @Test(arguments: [false, true]) func openingTheOpenChatAgainMovesTheListAndKeepsWhatIsStaged(flipped: Bool) async throws {
+        let f = try ConversationFixture(isFlipped: flipped)
+        let old = try f.addMany(700, read: true)
+        let newest = try f.add("newest")
+        await f.start()
+        let staged = try makeTemporaryFile("photo.png")
+        f.model.stage(staged, isPhoto: true)
+        f.model.reply(to: newest.id!)
+        let model = try #require(f.model)
+
+        let target = old[5]
+        model.reopen(at: target.id)
+        await eventually("the list never moved to the message") { model.isPositioned && model.scroll.messageID == target.id }
+        await eventually("the message was never flashed") { model.flashID == target.id }
+
+        model.reopen(at: nil)
+        await eventually("the list never went back to the newest") { model.rows.last?.id == newest.id && !model.isBounded }
+        #expect(f.model === model)
+        #expect(model.pendingAttachments.count == 1)
+        #expect(model.replyingTo?.message.id == newest.id)
+        if case .file(let copy, _)? = model.pendingAttachments.first?.content {
+            #expect(FileManager.default.fileExists(atPath: copy.path))
+        }
+    }
 }
