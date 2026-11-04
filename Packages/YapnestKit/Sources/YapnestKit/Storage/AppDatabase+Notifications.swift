@@ -50,8 +50,8 @@ extension AppDatabase {
     /// `notifies` is false for a claim whose notifications won't be shown, as
     /// the app's while it's on screen: it doesn't start a group's
     /// notification interval, so the next message after it still notifies.
-    public func claimNotifications(now: Date = Date(), notifies: Bool = true) throws -> [MessageNotification] {
-        try claimNotificationsAndEdits(now: now, notifies: notifies).new
+    public func claimNotifications(now: Date = Date(), notifies: Bool = true, silencing peer: JID? = nil) throws -> [MessageNotification] {
+        try claimNotificationsAndEdits(now: now, notifies: notifies, silencing: peer).new
     }
 
     /// `claimNotifications`, and the messages corrected since the last claim
@@ -63,7 +63,12 @@ extension AppDatabase {
     /// again by the next one. Replacing a notification twice with the same
     /// text is harmless, and it's what keeps an edit stored just before the
     /// mark moved, but stamped by a slow clock, from being missed.
-    public func claimNotificationsAndEdits(now: Date = Date(), notifies: Bool = true) throws -> (new: [MessageNotification], edited: [MessageNotification]) {
+    ///
+    /// `peer` is the chat in front of the user while the app is on screen:
+    /// its messages are claimed like those of a claim that doesn't notify, so
+    /// they don't start a group's notification interval, which the next
+    /// message of that chat after the user leaves it would otherwise wait out.
+    public func claimNotificationsAndEdits(now: Date = Date(), notifies: Bool = true, silencing peer: JID? = nil) throws -> (new: [MessageNotification], edited: [MessageNotification]) {
         try writer.write { db in
             let newest = try Int64.fetchOne(db, sql: "SELECT MAX(id) FROM message") ?? 0
             let markId = try Self.setting(db, .lastNotifiedMessageId).flatMap { Int64($0) }
@@ -92,8 +97,11 @@ extension AppDatabase {
             // Claimed with the messages, in the same transaction, so that the
             // app and the extension can't both show one.
             let invitations = try Self.claimInvitations(db, notifies: notifies)
+            let silencedId = try peer.flatMap { try Conversation.filter(Column("peer") == $0).fetchOne(db)?.id }
             return (
-                try messages.compactMap { try Self.notification(db, for: $0, claimedAt: notifies ? now : nil) } + invitations,
+                try messages.compactMap {
+                    try Self.notification(db, for: $0, claimedAt: notifies && $0.conversationId != silencedId ? now : nil)
+                } + invitations,
                 try edits.compactMap { try Self.notification(db, for: $0) }.filter { !$0.isQuiet },
             )
         }

@@ -124,12 +124,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     /// call banner) and, on the Mac, another app being in front; the system
     /// would still hold those back as "foreground", so show them. When the
     /// app is active the user is looking at it, and anything arriving is a
-    /// push that raced the connection: the app has the message already.
+    /// push that raced the connection: the app has the message already. Except
+    /// for another chat than the one in front, which hides the list.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         // Delegate callbacks come on the main thread.
-        let active = MainActor.assumeIsolated { model.isActive }
-        completionHandler(active ? [] : [.banner, .list, .sound])
+        let userInfo = notification.request.content.userInfo
+        let peer = (userInfo[MessageNotification.peerKey] as? String).flatMap(JID.init(_:))
+        let isInvitation = userInfo[MessageNotification.invitationKey] != nil
+        let shown = MainActor.assumeIsolated { model.showsNotification(for: isInvitation ? nil : peer) }
+        completionHandler(shown ? [.banner, .list, .sound] : [])
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,

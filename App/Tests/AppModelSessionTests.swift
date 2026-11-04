@@ -240,6 +240,26 @@ struct AppModelSessionTests {
         #expect(model.isActive)
     }
 
+    @Test func aNotificationIsShownForWhatTheUserCantSee() {
+        let model = AppModelFixture().model!
+        let front = JID("front@example.com")!
+        let other = JID("other@example.com")!
+
+        #expect(model.isActive)
+        #expect(!model.showsNotification(for: other), "the list is in front, with every row")
+        #expect(!model.showsNotification(for: nil))
+
+        model.chatInFront = front
+        #expect(!model.showsNotification(for: front))
+        #expect(model.showsNotification(for: other))
+        #expect(model.showsNotification(for: nil), "an invitation is on the list, behind the chat")
+
+        model.chatInFront = nil
+        model.scenePhaseChanged(active: false, background: false)
+        #expect(model.showsNotification(for: front))
+        #expect(model.showsNotification(for: nil))
+    }
+
     @Test func aSignInThatFinishesInTheBackgroundSuspendsTheSession() async throws {
         let fixture = AppModelFixture()
         let model = fixture.model!

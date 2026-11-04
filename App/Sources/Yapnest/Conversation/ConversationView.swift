@@ -16,6 +16,7 @@ struct ConversationView: View {
     var prepared: PreparedChats?
 
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
     /// SwiftUI makes this struct again whenever the parent updates, and
     /// keeps only the first holder. Everything costly is made through it,
     /// once, when the body first needs it.
@@ -123,6 +124,11 @@ struct ConversationView: View {
         return Text(presence.title)
     }
 
+    /// What the badge counts in every chat but this one.
+    private var otherChatsUnread: Int {
+        model.unreadCounts.reduce(0) { $0 + ($1.key == peer ? 0 : $1.value) }
+    }
+
     var body: some View {
         messages
             // Not on the Mac, whose header isn't in the bar, so resizing the
@@ -139,6 +145,19 @@ struct ConversationView: View {
                     ToolbarItem(placement: .principal) {
                         header
                             .frame(width: headerWidth)
+                    }
+                }
+                if !Platform.usesChatHeader, sizeClass == .compact, otherChatsUnread > 0 {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Text(otherChatsUnread, format: .number)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .frame(minWidth: 20, minHeight: 20)
+                            .background(.tint, in: Capsule())
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("\(otherChatsUnread) unread in other chats")
+                            .accessibilityIdentifier("otherChatsUnread")
                     }
                 }
                 if canCall, !Platform.usesChatHeader {

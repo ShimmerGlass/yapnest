@@ -223,6 +223,20 @@ final class AppModel {
         appLock.unlock()
     }
     @ObservationIgnored private(set) var isActive = true
+    /// The chat that is the only screen in front, with the chat list out of
+    /// sight (a pushed chat on a compact layout). Set by the chat list.
+    @ObservationIgnored var chatInFront: JID?
+
+    /// Whether a notification for `peer` is shown: always while the app isn't
+    /// active, and while it is, for what the user can't see, which is every
+    /// chat but the one in front once the list is hidden behind it. A nil
+    /// `peer` is a group invitation, which only the list shows.
+    func showsNotification(for peer: JID?) -> Bool {
+        !isActive || (chatInFront != nil && peer != chatInFront)
+    }
+
+    /// Unread messages per chat, as the badge counts them.
+    private(set) var unreadCounts: [JID: Int] = [:]
     /// Kept for a session that appears while the app is already away.
     @ObservationIgnored private var isBackground = false
     @ObservationIgnored private var suspension: Task<Void, Never>?
@@ -899,15 +913,21 @@ final class AppModel {
         claim = Task {
             repeat {
                 claimsAgain = false
-                let database = session.database, notifies = !isActive
+                // Active with a chat in front, the other chats still notify.
+                let database = session.database, front = chatInFront, notifies = !isActive || front != nil
                 let (claimed, badge) = await Task.detached(priority: .utility) {
-                    ((try? database.claimNotificationsAndEdits(notifies: notifies)) ?? ([], []), try? database.unreadCount())
+                    ((try? database.claimNotificationsAndEdits(notifies: notifies, silencing: front)) ?? ([], []), try? database.unreadCount())
                 }.value
-                let (notifications, edited) = claimed
-                guard !isActive, self.session === session else { continue }
+                guard self.session === session else { continue }
+                // Asked again now: the user may have moved on while it was claimed.
+                let shown = { (list: [MessageNotification]) in
+                    list.filter { self.showsNotification(for: $0.isInvitation ? nil : $0.peer) }
+                }
+                let notifications = shown(claimed.0), edited = shown(claimed.1)
+                guard !notifications.isEmpty || !edited.isEmpty else { continue }
                 await MessageNotification.replaceDelivered(edited, badge: badge, avatars: session.avatars)
                 await MessageNotification.replaceHeld(notifications, badge: badge, avatars: session.avatars)
-                for notification in notifications where !notification.isQuiet {
+                for notification in notifications where !notification.isQuiet && showsNotification(for: notification.isInvitation ? nil : notification.peer) {
                     try? await UNUserNotificationCenter.current().add(await notification.request(badge: badge, avatars: session.avatars))
                 }
             } while claimsAgain
@@ -919,6 +939,7 @@ final class AppModel {
     /// notifications once it's read, here or on another device.
     private func observeUnread(_ session: XMPPSession) {
         unreadObservation?.cancel()
+        unreadCounts = [:]
         guard environment.managesBadge else { return }
         badgeSync.forget()
         let badgeSync = badgeSync
@@ -935,6 +956,7 @@ final class AppModel {
                 let counts = badge.counts
                 guard counts != last else { return }
                 last = counts
+                self.unreadCounts = counts
                 // Archived and deleted chats aren't in the counts at all, so
                 // it's what's unread that stays, not what's read that goes.
                 let delivered = await center.deliveredNotifications()

@@ -48,6 +48,19 @@ struct NotificationIntervalTests {
         #expect(try quiet(db.claimNotifications(now: start.addingTimeInterval(15 * 60))) == [false])
     }
 
+    @Test func aClaimSilencingAChatLeavesItsIntervalAloneAndStartsTheOthers() throws {
+        let front = try group(room)
+        let behind = try group(other)
+        _ = try db.claimNotifications()
+        let start = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded())
+        try incoming("here", in: front)
+        try incoming("there", in: behind)
+        let claimed = try db.claimNotifications(now: start, silencing: room)
+        #expect(claimed.count == 2)
+        #expect(try lastLoud(front) == nil)
+        #expect(try lastLoud(behind) == start)
+    }
+
     @Test func aQuietMessageDoesNotMoveTheIntervalOn() throws {
         let chat = try group(room, interval: 5)
         _ = try db.claimNotifications()

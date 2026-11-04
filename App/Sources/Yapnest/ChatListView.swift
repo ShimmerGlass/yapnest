@@ -38,6 +38,13 @@ struct ChatListView: View {
 
     private var isSplit: Bool { sizeClass == .regular }
 
+    /// The chat that hides the list: a pushed one on the compact layout. Beside
+    /// the list, as in the split layout, the user still sees both.
+    private var chatInFront: JID? {
+        guard !isSplit, case .conversation(let peer, _)? = path.last else { return nil }
+        return peer
+    }
+
     /// `opening` is a chat a notification asked for before this view existed,
     /// as on a cold launch. The stack is created with it already pushed, so
     /// nothing has to wait for the destinations to register. The size class
@@ -131,6 +138,10 @@ struct ChatListView: View {
             }
             .countsAsConversationSheet()
         }
+        // Told to the model, which shows other chats' notifications while
+        // this one is the only screen in front.
+        .onChange(of: chatInFront, initial: true) { model.chatInFront = chatInFront }
+        .onDisappear { model.chatInFront = nil }
         // From a tapped notification.
         .onChange(of: model.requestedConversation, initial: true) { applyRequests() }
         // From an invitation notification: the list has its row.
