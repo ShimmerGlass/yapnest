@@ -221,6 +221,24 @@ struct GroupChatParsingTests {
         #expect(reactions.first?.occupantId == "occ-me")
     }
 
+    @Test func ourReactionReplayedByAnArchiveWithoutAddressesIsntCountedTwice() throws {
+        try ingest("<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>cake?</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='r1'/></message>", occupants: [:])
+        try db.setReactions(["👍"], from: Author(jid: me, nick: "me"), conversationId: group.conversationId, messageRef: "r1", pendingId: "x1")
+        let reaction = "<message from='cake@rooms.example.org/me' type='groupchat' id='x1'><reactions id='r1' xmlns='urn:xmpp:reactions:0'><reaction>👍</reaction></reactions></message>"
+        try ingest(reaction, occupants: [:])
+        try ingest(reaction, source: .archive(serverId: "a2", timestamp: nil), occupants: [:])
+        let reactions = try db.reader.read { try Reaction.fetchAll($0) }
+        #expect(reactions.count == 1)
+        #expect(reactions.first?.sender == me)
+    }
+
+    @Test func aReactionFromAFormerHolderOfOurNickIsStillTheirs() throws {
+        try ingest("<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>cake?</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='r1'/></message>", occupants: [:])
+        try ingest("<message from='cake@rooms.example.org/me' type='groupchat' id='x1'><reactions id='r1' xmlns='urn:xmpp:reactions:0'><reaction>👍</reaction></reactions></message>", source: .archive(serverId: "a1", timestamp: nil), occupants: [:])
+        let reactions = try db.reader.read { try Reaction.fetchAll($0) }
+        #expect(reactions.map(\.sender) == [room])
+    }
+
     @Test func subjectIsStored() throws {
         try ingest("<message from='cake@rooms.example.org/anna' type='groupchat' id='s'><subject>Baking</subject></message>")
         #expect(try db.groupChat(room)?.subject == "Baking")

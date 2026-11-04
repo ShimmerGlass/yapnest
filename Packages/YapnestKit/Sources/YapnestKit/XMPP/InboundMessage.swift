@@ -71,6 +71,9 @@ public struct InboundMessage: Sendable, Equatable {
     /// message's delay is only as good as the server that wrote it, so ingest
     /// keeps such a message from landing before what's already stored.
     public var isDelayed = false
+    /// A group message that is old news: an archive result, or the history a
+    /// room sends on joining. See `isReplayed(_:source:)`.
+    var wasReplayed = false
 
     /// The most a body may take, in UTF-8 bytes: a few characters can be
     /// megabytes of combining marks, so counting characters caps nothing.
@@ -250,6 +253,7 @@ extension InboundMessage {
         self.init(stanza, peer: room.jid, isOutgoing: isOutgoing, sender: isOutgoing ? account : real ?? room.jid, nick: nick,
                   stampedBy: room.jid, account: account, source: source, encryption: encryption, now: now, clockOffset: clockOffset)
         self.occupantId = occupantId
+        self.wasReplayed = isReplayed
         // Only a live message from the present holder of a nickname can be
         // placed in a stay, and only where nothing else says who it is.
         if case .live = source, !isOutgoing, sender == room.jid, occupantId == nil {

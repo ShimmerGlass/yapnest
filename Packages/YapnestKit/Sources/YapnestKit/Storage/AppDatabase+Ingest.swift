@@ -41,6 +41,23 @@ extension AppDatabase {
         return try writer.write { db in try batch.map { try Self.ingest(db, $0, allowsInsecureLinks: insecure) } }
     }
 
+    /// Whether a replayed reaction stanza is our own coming back. A room that
+    /// gives neither addresses nor occupant ids shows our reaction as from
+    /// the room's address under our nick, so it can't be told from a former
+    /// holder of the nick; but our own is stored under our address and the
+    /// same nick, and our devices' current set is what that row holds. The
+    /// stanza's id can't tell: nothing keeps it once the echo settled ours.
+    /// Only replays are held back, as a live reaction under a nick we once
+    /// used is the nick's new holder's.
+    private static func repeatsOwnReaction(_ db: Database, _ inbound: InboundMessage, conversationId: Int64, ref: String) throws -> Bool {
+        guard inbound.wasReplayed, inbound.isGroupChat, !inbound.isOutgoing, inbound.sender == inbound.peer, inbound.occupantId == nil,
+              let nick = inbound.nick,
+              let message = try referencedMessage(db, conversationId: conversationId, id: ref), let messageId = message.id else { return false }
+        return try Reaction
+            .filter(Column("messageId") == messageId && Column("nick") == nick && Column("sender") != inbound.peer && Column("occupantId") == nil)
+            .isEmpty(db) == false
+    }
+
     static func ingest(_ db: Database, _ inbound: InboundMessage, allowsInsecureLinks: Bool = false) throws -> IngestResult {
         // A room nick is the sender's own claim, like any remote name. It is
         // cleaned once here, so that what is stored and what corrections,
@@ -256,7 +273,7 @@ extension AppDatabase {
             }
         }
 
-        if let reactions = inbound.reactions {
+        if let reactions = inbound.reactions, try !Self.repeatsOwnReaction(db, inbound, conversationId: conversationId, ref: reactions.id) {
             try Self.setReactions(db, reactions.emojis, from: inbound.author, conversationId: conversationId, messageRef: reactions.id, fromUs: inbound.isOutgoing, stanzaId: inbound.id)
         }
 
