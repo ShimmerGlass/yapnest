@@ -156,7 +156,23 @@ extension AppDatabase {
         if message.serverId != nil, !isOurOneToOne {
             request = request.filter(Column("serverId") == nil)
         }
-        return try request.fetchOne(db)
+        if let found = try request.fetchOne(db) { return found }
+        return try storedWithRealAddress(unaddressed: message, ids: ids, db)
+    }
+
+    /// A room's history on joining carries no address for anyone, while the
+    /// same message, when it was live, was stored with its sender's address
+    /// from their presence. The rejoin's `since` boundary replays one such
+    /// message. The room's stanza-id, when it gives one, is matched before
+    /// this; without it the nick, the id and the text have to agree.
+    private static func storedWithRealAddress(unaddressed message: Message, ids: [String], _ db: Database) throws -> Message? {
+        guard message.direction == .incoming, message.serverId == nil, let nick = message.nick,
+              try Conversation.fetchOne(db, key: message.conversationId)?.peer == message.sender else { return nil }
+        let conversation = Column("conversationId") == message.conversationId
+        return try Message
+            .filter(Column("direction") == Message.Direction.incoming && Column("nick") == nick && Column("body") == message.body && Column("serverId") == nil)
+            .filter((conversation && ids.contains(Column("originId"))) || (conversation && ids.contains(Column("remoteId"))))
+            .fetchOne(db)
     }
 
     private static func isOneToOne(_ db: Database, _ conversationId: Int64) throws -> Bool {

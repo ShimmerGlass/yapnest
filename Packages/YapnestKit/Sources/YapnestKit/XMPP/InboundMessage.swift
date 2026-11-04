@@ -234,10 +234,10 @@ extension InboundMessage {
             return
         }
         guard stanza.type == .groupchat, let nick = from.resource else { return nil }
-        let isArchived = source.isArchived
-        // Current occupants say nothing about who wrote an archived message,
+        let isReplayed = Self.isReplayed(stanza, source: source)
+        // Current occupants say nothing about who wrote a replayed message,
         // and anyone may have held our nick before we joined.
-        let real = Self.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous) ?? (isArchived ? nil : room.occupants[nick]?.jid)
+        let real = Self.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous) ?? (isReplayed ? nil : room.occupants[nick]?.jid)
         let occupantId = room.trustsOccupantIds ? Self.occupantId(in: stanza.element) : nil
         let isOutgoing = if let real {
             real == account
@@ -245,7 +245,7 @@ extension InboundMessage {
             occupantId == own
         } else {
             // Live, the room keeps nicks unique.
-            !isArchived && nick == room.nickname
+            !isReplayed && nick == room.nickname
         }
         self.init(stanza, peer: room.jid, isOutgoing: isOutgoing, sender: isOutgoing ? account : real ?? room.jid, nick: nick,
                   stampedBy: room.jid, account: account, source: source, encryption: encryption, now: now, clockOffset: clockOffset)
@@ -265,6 +265,16 @@ extension InboundMessage {
         if body == nil, let subject = stanza.firstChild(name: "subject") {
             self.subject = subject.value ?? ""
         }
+    }
+
+    /// Whether a group message is old news from before the current stay of
+    /// whoever holds its nick: an archive result, or the history a room sends
+    /// on joining, which arrives live and is told apart only by its XEP-0203
+    /// delay. A room doesn't hold messages for absent members, so a delayed
+    /// live one is always history. Any delay counts, as in `XMPPSession.isDelayed`:
+    /// treating a live message as a replay only withholds an author.
+    static func isReplayed(_ stanza: Martin.Message, source: Source) -> Bool {
+        source.isArchived || (source == .live && !stanza.element.filterChildren(name: "delay", xmlns: NS.delay).isEmpty)
     }
 
     var author: Author { Author(jid: sender, nick: nick, occupantId: occupantId, presenceSession: presenceSession) }

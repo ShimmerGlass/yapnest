@@ -129,9 +129,10 @@ struct EncryptedGroupSenderTests {
     private let carol = YapnestKit.JID("carol@example.org")!
     private let archive = InboundMessage.Source.archive(serverId: "r1", timestamp: nil)
 
-    private func sender(nick: String, occupantId: String? = nil, source: InboundMessage.Source, ownOccupantId: String? = nil) -> YapnestKit.JID? {
+    private func sender(nick: String, occupantId: String? = nil, source: InboundMessage.Source, ownOccupantId: String? = nil, delayed: Bool = false) -> YapnestKit.JID? {
         let id = occupantId.map { "<occupant-id xmlns='urn:xmpp:occupant-id:0' id='\($0)'/>" } ?? ""
-        let message = stanza("<message from='cake@rooms.example.org/\(nick)' type='groupchat' id='m1'>\(id)</message>")
+        let delay = delayed ? "<delay xmlns='urn:xmpp:delay' stamp='2020-01-01T00:00:00Z'/>" : ""
+        let message = stanza("<message from='cake@rooms.example.org/\(nick)' type='groupchat' id='m1'>\(id)\(delay)</message>")
         let context = RoomContext(jid: room, nickname: "me", occupants: ["carol": carol], trustsOccupantIds: true, ownOccupantId: ownOccupantId, isNonAnonymous: true)
         return XMPPSession.encryptedSender(of: message, nick: nick, in: context, account: me, source: source)
     }
@@ -145,6 +146,13 @@ struct EncryptedGroupSenderTests {
     @Test func archivedTheNickSaysNothing() {
         #expect(sender(nick: "carol", source: archive) == nil)
         #expect(sender(nick: "me", source: archive) == nil)
+    }
+
+    /// A room's history on joining arrives live, with a delay.
+    @Test func historyOnJoiningSaysAsLittleAsTheArchive() {
+        #expect(sender(nick: "carol", source: .live, delayed: true) == nil)
+        #expect(sender(nick: "me", source: .live, delayed: true) == nil)
+        #expect(sender(nick: "me", occupantId: "ours", source: .live, ownOccupantId: "ours", delayed: true) == me)
     }
 
     @Test func archivedOursIsKnownByOurOccupantId() {

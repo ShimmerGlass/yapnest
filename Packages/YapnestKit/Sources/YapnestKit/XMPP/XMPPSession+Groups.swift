@@ -1059,12 +1059,12 @@ extension XMPPSession {
     static let memberLists: [RoomAffiliation] = [.owner, .admin, .member]
 
     /// Whose sessions an encrypted group message is decrypted with. Current
-    /// occupants say nothing about who wrote an archived message, and anyone
-    /// may have held our nick before we joined, so an archived one is ours
-    /// only by the occupant id the room gave us.
+    /// occupants say nothing about who wrote a replayed message (archived, or
+    /// history on joining), and anyone may have held our nick before we
+    /// joined, so a replayed one is ours only by the occupant id the room gave us.
     static func encryptedSender(of stanza: Martin.Message, nick: String, in room: RoomContext, account: JID, source: InboundMessage.Source) -> JID? {
         if let real = InboundMessage.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous) { return real }
-        guard case .archive = source else { return room.occupants[nick]?.jid ?? (nick == room.nickname ? account : nil) }
+        guard InboundMessage.isReplayed(stanza, source: source) else { return room.occupants[nick]?.jid ?? (nick == room.nickname ? account : nil) }
         guard room.trustsOccupantIds, let own = room.ownOccupantId, InboundMessage.occupantId(in: stanza.element) == own else { return nil }
         return account
     }

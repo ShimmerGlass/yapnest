@@ -239,3 +239,68 @@ struct SearchMarkerTrustTests {
         #expect(m.body == "hello world")
     }
 }
+
+/// The history a room without an archive sends on joining arrives live, with
+/// a delay, so who holds a nick now says nothing about who wrote it.
+struct JoinHistoryAuthorTests {
+    let db: AppDatabase
+    let group: GroupChat
+
+    init() throws {
+        db = try AppDatabase.inMemory()
+        group = try db.joinGroupChat(room, nickname: "me", name: "Cake")
+    }
+
+    private let delay = "<delay xmlns='urn:xmpp:delay' from='cake@rooms.example.org' stamp='2020-01-01T00:00:00Z'/>"
+    private let origin = "<origin-id xmlns='urn:xmpp:sid:0' id='orig1'/>"
+
+    private func item(nick: String = "me", id: String = "x1", body: String = "hi", extra: String = "", occupants: [String: YapnestKit.JID] = [:]) throws -> InboundMessage {
+        let context = RoomContext(jid: room, nickname: "me", occupants: occupants)
+        return try #require(InboundMessage(groupchat: stanza("""
+            <message from='cake@rooms.example.org/\(nick)' type='groupchat' id='\(id)'><body>\(body)</body>\(extra)</message>
+            """), room: context, account: me, source: .live))
+    }
+
+    private func messages() throws -> [YapnestKit.Message] {
+        try db.reader.read { try YapnestKit.Message.order(Column("id")).fetchAll($0) }
+    }
+
+    @Test func historyFromOurNickIsntOursWithoutAStoredMessage() throws {
+        let m = try item(extra: delay)
+        #expect(!m.isOutgoing)
+        #expect(m.sender == room)
+        #expect(try db.ingest(m).newMessage?.direction == .incoming)
+    }
+
+    @Test func historyFromANickSomeoneElseHoldsNowIsntTheirs() throws {
+        #expect(try item(nick: "anna", extra: delay, occupants: ["anna": alice]).sender == room)
+        #expect(try item(nick: "anna", occupants: ["anna": alice]).sender == alice)
+    }
+
+    @Test func aLiveMessageFromOurNickIsStillOurs() throws {
+        #expect(try item().isOutgoing)
+    }
+
+    /// The boundary message of a rejoin's history was stored as it came the
+    /// first time, with the address its sender had then.
+    @Test func historyReplayedOnRejoiningIsntStoredTwice() throws {
+        _ = try db.ingest(try item(nick: "anna", extra: origin, occupants: ["anna": alice]))
+        _ = try db.ingest(try item(nick: "anna", extra: delay + origin, occupants: ["anna": alice]))
+        #expect(try messages().count == 1)
+    }
+
+    @Test func aReplayWithOtherTextIsAnotherMessageWhateverIdItCarries() throws {
+        _ = try db.ingest(try item(nick: "anna", extra: origin, occupants: ["anna": alice]))
+        _ = try db.ingest(try item(nick: "anna", body: "other", extra: delay + origin, occupants: ["anna": alice]))
+        #expect(try messages().count == 2)
+    }
+
+    @Test func ourOwnMessageInTheHistoryIsMatchedToTheOneStored() throws {
+        let sent = try db.insert(YapnestKit.Message(conversationId: group.conversationId, direction: .outgoing, sender: me, nick: "me", body: "hi", status: .sent, remoteId: "x1", originId: "orig1"))
+        let result = try db.ingest(try item(extra: delay + origin))
+        #expect(result.newMessage == nil)
+        let stored = try messages()
+        #expect(stored.map(\.id) == [sent.id])
+        #expect(stored[0].direction == YapnestKit.Message.Direction.outgoing)
+    }
+}
