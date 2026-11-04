@@ -74,6 +74,10 @@ public struct InboundMessage: Sendable, Equatable {
     /// A group message that is old news: an archive result, or the history a
     /// room sends on joining. See `isReplayed(_:source:)`.
     var wasReplayed = false
+    /// Our account and our nickname in the group chat this came from, to tell
+    /// our own replayed reaction from a former holder of the nick's.
+    var ownAccount: JID?
+    var ownNickname: String?
 
     /// The most a body may take, in UTF-8 bytes: a few characters can be
     /// megabytes of combining marks, so counting characters caps nothing.
@@ -254,6 +258,8 @@ extension InboundMessage {
                   stampedBy: room.jid, account: account, source: source, encryption: encryption, now: now, clockOffset: clockOffset)
         self.occupantId = occupantId
         self.wasReplayed = isReplayed
+        self.ownAccount = account
+        self.ownNickname = room.nickname
         // Only a live message from the present holder of a nickname can be
         // placed in a stay, and only where nothing else says who it is.
         if case .live = source, !isOutgoing, sender == room.jid, occupantId == nil {

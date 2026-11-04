@@ -47,14 +47,15 @@ extension AppDatabase {
     /// holder of the nick; but our own is stored under our address and the
     /// same nick, and our devices' current set is what that row holds. The
     /// stanza's id can't tell: nothing keeps it once the echo settled ours.
+    /// Another member's addressed row under their nick is no sign of ours.
     /// Only replays are held back, as a live reaction under a nick we once
     /// used is the nick's new holder's.
     private static func repeatsOwnReaction(_ db: Database, _ inbound: InboundMessage, conversationId: Int64, ref: String) throws -> Bool {
         guard inbound.wasReplayed, inbound.isGroupChat, !inbound.isOutgoing, inbound.sender == inbound.peer, inbound.occupantId == nil,
-              let nick = inbound.nick,
+              let nick = inbound.nick, let account = inbound.ownAccount, nick == XMPPSession.normalizedNickname(inbound.ownNickname),
               let message = try referencedMessage(db, conversationId: conversationId, id: ref), let messageId = message.id else { return false }
         return try Reaction
-            .filter(Column("messageId") == messageId && Column("nick") == nick && Column("sender") != inbound.peer && Column("occupantId") == nil)
+            .filter(Column("messageId") == messageId && Column("nick") == nick && Column("sender") == account && Column("occupantId") == nil)
             .isEmpty(db) == false
     }
 

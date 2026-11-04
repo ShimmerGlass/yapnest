@@ -239,6 +239,18 @@ struct GroupChatParsingTests {
         #expect(reactions.map(\.sender) == [room])
     }
 
+    @Test func anotherMembersAddressedReactionIsNotTakenForOursWhenAnUnaddressedOneIsReplayed() throws {
+        let bob = YapnestKit.JID("bob@example.org")!
+        try ingest("<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>cake?</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='r1'/></message>")
+        try ingest("<message from='cake@rooms.example.org/bob' type='groupchat' id='x1'><reactions id='r1' xmlns='urn:xmpp:reactions:0'><reaction>👍</reaction></reactions></message>", occupants: ["bob": bob])
+        // The history on joining shows the room's address only, so it can't be told
+        // from a former holder of the nick. It was dropped as if it were ours.
+        try ingest("<message from='cake@rooms.example.org/bob' type='groupchat' id='x2'><reactions id='r1' xmlns='urn:xmpp:reactions:0'><reaction>🎂</reaction></reactions><delay xmlns='urn:xmpp:delay' stamp='2020-01-01T00:00:00Z'/></message>", occupants: [:])
+        let reactions = try db.reader.read { try Reaction.order(Column("emoji")).fetchAll($0) }
+        #expect(Set(reactions.map(\.emoji)) == ["🎂", "👍"])
+        #expect(reactions.first { $0.emoji == "🎂" }?.sender == room)
+    }
+
     @Test func subjectIsStored() throws {
         try ingest("<message from='cake@rooms.example.org/anna' type='groupchat' id='s'><subject>Baking</subject></message>")
         #expect(try db.groupChat(room)?.subject == "Baking")
