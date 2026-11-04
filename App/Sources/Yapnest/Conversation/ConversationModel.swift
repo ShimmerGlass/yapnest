@@ -415,10 +415,14 @@ final class ConversationModel {
     /// Read by the location cards alone, so an answer to the maps notice
     /// redraws them and not the rows. Until the first read nothing is
     /// consented, so no card asks Apple for a map.
-    private(set) var mapSettings = MapPreview.Settings(enabled: true, consented: false)
+    private(set) var mapSettings = MapPreview.Settings()
     /// The locations the user tapped to show, for the stranger rule.
     private(set) var shownMaps: Set<Int64> = []
-    @ObservationIgnored private var mapTrust = MapPreview.Trust()
+    /// Who the stranger rule trusts, and whether the room is private: nil
+    /// outside a group. Observed by the cards alone, as `mapDisplay` is
+    /// worked out when one is drawn, so none of it rebuilds a row.
+    private(set) var mapTrust = MapPreview.Trust()
+    private(set) var groupIsPrivate: Bool?
 
     // What the list reports about itself.
     @ObservationIgnored private var geometry: ScrollGeometry?
@@ -605,18 +609,19 @@ final class ConversationModel {
         tasks["start"] = Task { [weak self] in
             let initial = await offMain { () -> Initial in
                 let database = session.database
+                let group = try? database.groupChat(peer)
                 var initial = Initial(
                     chatIsEncrypted: (try? database.isEncrypted(with: peer)) ?? true,
                     linkPreviewsAllowed: (try? database.linkPreviews(peer: peer)) ?? nil,
                     linkPreviewSetting: database.linkPreviewSetting,
                     mapSettings: database.mapPreviewSettings,
-                    mapTrust: (try? database.mapTrust(peer: peer)) ?? MapPreview.Trust(),
+                    mapTrust: (try? database.mapTrust(peer: peer, isGroup: group != nil)) ?? MapPreview.Trust(),
                     contactNames: (try? database.contactNames()) ?? [:],
                     // Reach back far enough to open at the first unread message,
                     // up to the window's limit, so there's usually no settling for
                     // the oldest one loaded.
                     openingStart: (try? database.openingWindow(peer: peer))?.start,
-                    group: try? database.groupChat(peer),
+                    group: group,
                 )
                 // A draft still on its way to the database is newer than what's in it.
                 initial.draft = DraftWriter.shared.current(for: peer, in: database)
@@ -657,6 +662,7 @@ final class ConversationModel {
         linkPreviewSetting = initial.linkPreviewSetting
         mapSettings = initial.mapSettings
         mapTrust = initial.mapTrust
+        groupIsPrivate = initial.group.map(\.isPrivate)
         contactNames = initial.contactNames
         windowStart = initial.openingStart
         storedDraft = initial.draft
@@ -710,7 +716,7 @@ final class ConversationModel {
             await database.forEachValue(of: mapSettings, "Map preview setting") { self?.mapSettingsChanged($0) }
         }
 
-        let mapTrust = database.observeMapTrust(peer: peer)
+        let mapTrust = database.observeMapTrust(peer: peer, isGroup: isGroup)
         tasks["mapTrust"] = Task { [weak self] in
             await database.forEachValue(of: mapTrust, "Map preview trust") { self?.mapTrustChanged($0) }
         }
@@ -799,6 +805,8 @@ final class ConversationModel {
 
     /// Fed by the screen's observation of the group, which it needs as well.
     func groupChanged(_ group: GroupChat?) {
+        let isPrivate = isGroup ? (group?.isPrivate ?? false) : nil
+        if isPrivate != groupIsPrivate { groupIsPrivate = isPrivate }
         let active = group?.hasLeft == false
         guard active != isActiveGroup else { return }
         isActiveGroup = active
@@ -1392,7 +1400,6 @@ final class ConversationModel {
         var contactNames: [JID: String]
         var linkPreviewSetting: LinkPreviewSetting
         var linkPreviewsAllowed: Bool?
-        var mapTrust: MapPreview.Trust
         var chatIsEncrypted: Bool
         var showsEveryBodyWhole: Bool
         var attachments: AttachmentStore
@@ -1405,7 +1412,7 @@ final class ConversationModel {
     private func rowEnvironment() -> RowEnvironment {
         RowEnvironment(
             account: session.account, peer: peer, isGroup: isGroup, contactNames: contactNames,
-            linkPreviewSetting: linkPreviewSetting, linkPreviewsAllowed: linkPreviewsAllowed, mapTrust: mapTrust,
+            linkPreviewSetting: linkPreviewSetting, linkPreviewsAllowed: linkPreviewsAllowed,
             chatIsEncrypted: chatIsEncrypted,
             showsEveryBodyWhole: showsEveryBodyWhole, attachments: session.attachments, previews: previews,
             now: now(), calendar: Calendar.current, locale: Locale.current,
@@ -1826,7 +1833,6 @@ final class ConversationModel {
             preview: preview,
             attachment: attachment,
             location: plan.location,
-            locationTrusted: plan.location != nil && environment.mapTrust.trusts(message),
             showsResponses: isNewest && !isOutgoing,
             isBare: MessageRow.drawsWithoutBubble(
                 isEmojiOnly: text?.isEmojiOnly ?? false, isRetracted: message.isRetracted, isAction: message.meAction != nil,
@@ -1960,12 +1966,14 @@ final class ConversationModel {
     private func mapTrustChanged(_ trust: MapPreview.Trust) {
         guard trust != mapTrust else { return }
         mapTrust = trust
-        inputsEpoch += 1
-        rebuildRows()
     }
 
-    func mapDisplay(for row: MessageRow) -> MapPreview.Display {
-        MapPreview.decide(enabled: mapSettings.enabled, consented: mapSettings.consented, trusted: row.content.locationTrusted, tappedToShow: shownMaps.contains(row.id))
+    /// Worked out when a card is drawn, from what only cards observe.
+    func mapDisplay(for message: Message) -> MapPreview.Display {
+        mapSettings.display(
+            trusted: mapTrust.trusts(message, groupIsPrivate: groupIsPrivate),
+            tappedToShow: message.id.map(shownMaps.contains) ?? false,
+        )
     }
 
     func showMap(of id: Int64) {

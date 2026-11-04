@@ -57,7 +57,7 @@ struct WelcomeView: View {
                     }
                 }
                 Section {
-                    option("Map Previews", isOn: $mapPreviewsEnabled, detail: "A shared location is drawn as a map by Apple, which sees the place and your IP address. Maps from people you haven't added wait until you tap them, and you're asked before the first one is drawn.")
+                    option("Map Previews", isOn: $mapPreviewsEnabled, detail: Text(MapPreview.disclosure) + Text(" Maps from people you haven't added wait until you tap them, and you're asked before the first one is drawn."))
                 }
 
                 Section {
@@ -97,10 +97,14 @@ struct WelcomeView: View {
     }
 
     private func option(_ title: LocalizedStringKey, isOn: Binding<Bool>, detail: LocalizedStringKey) -> some View {
+        option(title, isOn: isOn, detail: Text(detail))
+    }
+
+    private func option(_ title: LocalizedStringKey, isOn: Binding<Bool>, detail: Text) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(title, isOn: isOn)
                 .disabled(!isLoaded)
-            Text(detail)
+            detail
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }

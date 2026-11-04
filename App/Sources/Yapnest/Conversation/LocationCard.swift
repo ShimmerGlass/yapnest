@@ -10,6 +10,13 @@ extension GeoLocation {
     }
 }
 
+extension MapPreview {
+    /// What the map settings and the card's notice tell about where maps come from.
+    static var disclosure: LocalizedStringKey {
+        "Maps are drawn by Apple, which sees the place and your IP address."
+    }
+}
+
 /// A shared location in a bubble: a map snapshot with a pin when `display`
 /// allows one, else a pin with the coordinates. The frame has its shape in
 /// every state, so the list doesn't move when the picture arrives or the
@@ -17,7 +24,8 @@ extension GeoLocation {
 /// the caches, unless `display` is `.map`.
 struct LocationCard: View {
     let location: GeoLocation
-    let display: MapPreview.Display
+    /// Called in the card's own body, so what it reads from the model redraws cards and not the bubble around them.
+    let display: () -> MapPreview.Display
     let showMap: () -> Void
     let agree: () -> Void
     let notNow: () -> Void
@@ -25,17 +33,17 @@ struct LocationCard: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var scale
 
-    private var drawsMap: Bool { display == .map }
-
     var body: some View {
+        let display = display()
+        let drawsMap = display == .map
         let key = LocationSnapshotCache.key(location, dark: colorScheme == .dark, scale: scale)
         Color(.tertiarySystemFill)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay {
-                if drawsMap, let shown = loaded.flatMap({ $0.key == key ? $0.image : nil }) ?? LocationSnapshotCache.cached(key) {
+                if drawsMap, let shown = loaded.flatMap({ $0.key == key ? $0.image : nil }) ?? LocationSnapshotCache.cached(key, display: display) {
                     FilledImage(image: Image(uiImage: shown), shape: RoundedRectangle(cornerRadius: 10))
                 } else {
-                    placeholder
+                    placeholder(display)
                 }
             }
             .aspectRatio(LocationSnapshotCache.size.width / LocationSnapshotCache.size.height, contentMode: .fit)
@@ -45,13 +53,13 @@ struct LocationCard: View {
             .contentShape(RoundedRectangle(cornerRadius: 10))
             .task(id: drawsMap ? key : nil) {
                 guard drawsMap else { return }
-                if let cached = LocationSnapshotCache.cached(key) {
+                if let cached = LocationSnapshotCache.cached(key, display: display) {
                     // Kept here too, so evicting it from the cache can't blank the view.
                     loaded = (key, cached)
                     return
                 }
                 loaded = nil
-                if let image = await LocationSnapshotCache.load(location, dark: colorScheme == .dark, scale: scale, key: key) {
+                if let image = await LocationSnapshotCache.load(location, dark: colorScheme == .dark, scale: scale, key: key, display: display) {
                     loaded = (key, image)
                 }
             }
@@ -64,7 +72,7 @@ struct LocationCard: View {
         String(format: "%.5f, %.5f", location.latitude, location.longitude)
     }
 
-    private var placeholder: some View {
+    private func placeholder(_ display: MapPreview.Display) -> some View {
         VStack(spacing: 6) {
             Image(systemName: "mappin.and.ellipse")
                 .font(display == .map || display == .off ? .title : .title3)
@@ -79,7 +87,7 @@ struct LocationCard: View {
             }
             switch display {
             case .askConsent:
-                Text("Maps are drawn by Apple, which sees the place and your IP address.")
+                Text(MapPreview.disclosure)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -205,12 +213,17 @@ enum LocationSnapshotCache {
         cache.removeAllObjects()
     }
 
-    static func cached(_ key: String) -> UIImage? {
-        cache.object(forKey: key as NSString)
+    /// Nothing is returned unless `display` is `.map`: the card's own check
+    /// is for speed, and this is what keeps a map from being shown or asked
+    /// for when the user hasn't allowed it.
+    static func cached(_ key: String, display: MapPreview.Display) -> UIImage? {
+        guard display == .map else { return nil }
+        return cache.object(forKey: key as NSString)
     }
 
-    static func load(_ location: GeoLocation, dark: Bool, scale: CGFloat, key: String, disk: SnapshotDiskCache = .standard) async -> UIImage? {
-        if let image = cached(key) { return image }
+    static func load(_ location: GeoLocation, dark: Bool, scale: CGFloat, key: String, display: MapPreview.Display, disk: SnapshotDiskCache = .standard) async -> UIImage? {
+        guard display == .map else { return nil }
+        if let image = cached(key, display: display) { return image }
         let generation = disk.generation.withLock { $0 }
         // The cache was emptied for a sign-out while this waited: what it holds is the old account's.
         func current() -> Bool { disk.generation.withLock { $0 } == generation }

@@ -137,7 +137,7 @@ struct ConversationRegressionTests {
         let mine = try f.add("geo:1.5,2.5", .outgoing, read: true)
         await f.start()
         func display(_ message: Message) -> MapPreview.Display {
-            f.model.mapDisplay(for: f.model.rows.first { $0.id == message.id }!)
+            f.model.mapDisplay(for: message)
         }
         #expect(display(place) == .askConsent)
         #expect(display(mine) == .askConsent)
@@ -158,11 +158,10 @@ struct ConversationRegressionTests {
         let place = try f.add("geo:48.85,2.35", read: true)
         try f.database.agreeToMapPreviews()
         await f.start()
-        let row = { f.model.rows.first { $0.id == place.id }! }
-        #expect(f.model.mapDisplay(for: row()) == .tapToShow)
+        #expect(f.model.mapDisplay(for: place) == .tapToShow)
 
         try await f.database.writer.write { db in try Contact(jid: f.peer, subscription: .both, isInRoster: true).insert(db) }
-        await eventually("the contact never reached the rows") { f.model.mapDisplay(for: row()) == .map }
+        await eventually("the contact never reached the rows") { f.model.mapDisplay(for: place) == .map }
     }
 
     // MARK: Composer

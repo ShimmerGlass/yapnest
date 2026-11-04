@@ -65,12 +65,32 @@ struct LocationSnapshotCacheTests {
         let key = LocationSnapshotCache.key(place, dark: false, scale: 2)
         disk.store(picture(), for: key, generation: disk.generation.withLock { $0 })
         LocationSnapshotCache.removeAll()
-        let load = Task { await LocationSnapshotCache.load(place, dark: false, scale: 2, key: key, disk: disk) }
+        let load = Task { await LocationSnapshotCache.load(place, dark: false, scale: 2, key: key, display: .map, disk: disk) }
         // The load runs to its wait for the disk read, which can't resume while this holds the main actor.
         await Task.yield()
         disk.removeAll()
         LocationSnapshotCache.removeAll()
         #expect(await load.value == nil)
-        #expect(LocationSnapshotCache.cached(key) == nil)
+        #expect(LocationSnapshotCache.cached(key, display: .map) == nil)
+    }
+
+    /// The picture is on disk and in memory, so only the gate keeps it back.
+    @Test func noPictureIsReadOrAskedForUnlessTheDisplayIsAMap() async throws {
+        let disk = cache()
+        let key = LocationSnapshotCache.key(place, dark: false, scale: 2)
+        disk.store(picture(), for: key, generation: disk.generation.withLock { $0 })
+        LocationSnapshotCache.removeAll()
+        defer { LocationSnapshotCache.removeAll() }
+        for display in [MapPreview.Display.off, .askConsent, .tapToShow] {
+            #expect(await LocationSnapshotCache.load(place, dark: false, scale: 2, key: key, display: display, disk: disk) == nil)
+        }
+        #expect(LocationSnapshotCache.cached(key, display: .map) == nil, "a refused load must not have filled the memory cache")
+
+        #expect(await LocationSnapshotCache.load(place, dark: false, scale: 2, key: key, display: .map, disk: disk) != nil)
+        #expect(LocationSnapshotCache.cached(key, display: .map) != nil)
+        for display in [MapPreview.Display.off, .askConsent, .tapToShow] {
+            #expect(LocationSnapshotCache.cached(key, display: display) == nil)
+            #expect(await LocationSnapshotCache.load(place, dark: false, scale: 2, key: key, display: display, disk: disk) == nil)
+        }
     }
 }

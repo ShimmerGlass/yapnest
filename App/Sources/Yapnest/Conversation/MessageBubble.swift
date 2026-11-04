@@ -83,7 +83,7 @@ struct MessageBubble: View {
             }
             if let location = content.location {
                 LocationCard(
-                    location: location, display: model.mapDisplay(for: row), showMap: { model.showMap(of: row.id) },
+                    location: location, display: { model.mapDisplay(for: message) }, showMap: { model.showMap(of: row.id) },
                     agree: { model.agreeToMaps() }, notNow: { model.turnOffMaps() },
                 )
                     .onTapGesture { location.openInMaps() }

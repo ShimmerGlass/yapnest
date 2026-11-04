@@ -7,42 +7,33 @@ struct MapPreviewTests {
     private let alice = JID("alice@example.org")!
     private let room = JID("room@conference.example.org")!
 
-    @Test func policyCoversEveryCombination() {
-        for enabled in [false, true] {
-            for consented in [false, true] {
-                for trusted in [false, true] {
-                    for tapped in [false, true] {
-                        let expected: MapPreview.Display = if !enabled {
-                            .off
-                        } else if !consented {
-                            .askConsent
-                        } else if !trusted && !tapped {
-                            .tapToShow
-                        } else {
-                            .map
-                        }
-                        #expect(MapPreview.decide(enabled: enabled, consented: consented, trusted: trusted, tappedToShow: tapped) == expected)
-                    }
-                }
-            }
-        }
-    }
-
-    @Test func noSnapshotIsAskedForUntilTheUserAgrees() {
-        for trusted in [false, true] {
-            for tapped in [false, true] {
-                #expect(MapPreview.decide(enabled: true, consented: false, trusted: trusted, tappedToShow: tapped) == .askConsent)
-                #expect(MapPreview.decide(enabled: false, consented: true, trusted: trusted, tappedToShow: tapped) == .off)
-            }
-        }
-        #expect(MapPreview.decide(enabled: true, consented: true, trusted: false, tappedToShow: false) == .tapToShow)
-        #expect(MapPreview.decide(enabled: true, consented: true, trusted: false, tappedToShow: true) == .map)
-        #expect(MapPreview.decide(enabled: true, consented: true, trusted: true, tappedToShow: false) == .map)
+    @Test(arguments: [
+        // enabled, consented, trusted, tapped, shown
+        (false, false, false, false, MapPreview.Display.off),
+        (false, false, false, true, .off),
+        (false, false, true, false, .off),
+        (false, false, true, true, .off),
+        (false, true, false, false, .off),
+        (false, true, false, true, .off),
+        (false, true, true, false, .off),
+        (false, true, true, true, .off),
+        (true, false, false, false, .askConsent),
+        (true, false, false, true, .askConsent),
+        (true, false, true, false, .askConsent),
+        (true, false, true, true, .askConsent),
+        (true, true, false, false, .tapToShow),
+        (true, true, false, true, .map),
+        (true, true, true, false, .map),
+        (true, true, true, true, .map),
+    ])
+    func theDisplayForEveryCombination(enabled: Bool, consented: Bool, trusted: Bool, tapped: Bool, shown: MapPreview.Display) {
+        let settings = MapPreview.Settings(enabled: enabled, consented: consented)
+        #expect(settings.display(trusted: trusted, tappedToShow: tapped) == shown)
     }
 
     @Test func mapsAreOnWithoutConsentByDefault() throws {
         let db = try AppDatabase.inMemory()
-        #expect(db.mapPreviewSettings == MapPreview.Settings(enabled: true, consented: false))
+        #expect(db.mapPreviewSettings == MapPreview.Settings())
     }
 
     @Test func theFlagSyncsAndTheConsentDoesNot() throws {
@@ -93,40 +84,46 @@ struct MapPreviewTests {
 
     @Test func trustFollowsTheImageAutoDownloadRule() {
         let chat = MapPreview.Trust(trustedContacts: [alice])
-        #expect(chat.trusts(message(from: alice)))
-        #expect(!chat.trusts(message(from: JID("bob@example.org")!)))
-        #expect(MapPreview.Trust().trusts(message(from: alice, outgoing: true)))
+        #expect(chat.trusts(message(from: alice), groupIsPrivate: nil))
+        #expect(!chat.trusts(message(from: JID("bob@example.org")!), groupIsPrivate: nil))
+        #expect(MapPreview.Trust().trusts(message(from: alice, outgoing: true), groupIsPrivate: nil))
 
-        let privateGroup = MapPreview.Trust(isGroup: true, isPrivateGroup: true, trustsGroupMembers: true)
-        #expect(privateGroup.trusts(message(from: alice)))
-        var strict = privateGroup
-        strict.trustsGroupMembers = false
-        #expect(!strict.trusts(message(from: alice)))
-        #expect(MapPreview.Trust(isGroup: true).trusts(message(from: alice)) == false)
-        #expect(MapPreview.Trust(trustedContacts: [alice], isGroup: true).trusts(message(from: alice)))
+        let members = MapPreview.Trust(trustsGroupMembers: true)
+        #expect(members.trusts(message(from: alice), groupIsPrivate: true))
+        #expect(!members.trusts(message(from: alice), groupIsPrivate: false))
+        #expect(!MapPreview.Trust(trustsGroupMembers: false).trusts(message(from: alice), groupIsPrivate: true))
+        #expect(MapPreview.Trust(trustedContacts: [alice]).trusts(message(from: alice), groupIsPrivate: false))
         // A room's word that a message is ours isn't enough.
-        #expect(!MapPreview.Trust(isGroup: true).trusts(message(from: room, outgoing: true)))
-        #expect(MapPreview.Trust(isGroup: true).trusts(message(from: room, outgoing: true, writtenHere: true)))
+        #expect(!MapPreview.Trust().trusts(message(from: room, outgoing: true), groupIsPrivate: false))
+        #expect(MapPreview.Trust().trusts(message(from: room, outgoing: true, writtenHere: true), groupIsPrivate: false))
     }
 
-    @Test func trustReadsContactsAndTheGroupFromTheDatabase() throws {
+    @Test func aChatReadsOnlyItsPeerAndAGroupTheConsentedContacts() throws {
         let db = try AppDatabase.inMemory()
-        let bob = JID("bob@example.org")!, carol = JID("carol@example.org")!
+        let bob = JID("bob@example.org")!, carol = JID("carol@example.org")!, dave = JID("dave@example.org")!
         try db.writer.write { db in
             try Contact(jid: alice, subscription: .both, isInRoster: true).insert(db)
             try Contact(jid: bob, subscription: .both, isInRoster: true, isBlocked: true).insert(db)
             try Contact(jid: carol).insert(db)
+            try Contact(jid: dave, isSubscriptionPending: true).insert(db)
         }
-        let direct = try db.mapTrust(peer: alice)
-        #expect(direct.trustedContacts == [alice])
-        #expect(!direct.isGroup)
+        #expect(try db.mapTrust(peer: alice, isGroup: false).trustedContacts == [alice])
+        #expect(try db.mapTrust(peer: bob, isGroup: false).trustedContacts == [])
+        #expect(try db.mapTrust(peer: carol, isGroup: false).trustedContacts == [])
+        #expect(try db.mapTrust(peer: room, isGroup: true).trustedContacts == [alice, dave])
 
-        let id = try db.writer.write { db in try AppDatabase.conversation(db, with: room).id! }
-        try db.writer.write { db in
-            try GroupChat(conversationId: id, jid: room, nickname: "me", isMembersOnly: true, isNonAnonymous: true).insert(db)
-        }
         try db.setFlag(.downloadsFromGroupMembers, false)
-        let group = try db.mapTrust(peer: room)
-        #expect(group.isGroup && group.isPrivateGroup && !group.trustsGroupMembers)
+        #expect(try db.mapTrust(peer: room, isGroup: true).trustsGroupMembers == false)
+    }
+
+    @Test func aContactChangeUnrelatedToTheChatLeavesItsTrustAlone() throws {
+        let db = try AppDatabase.inMemory()
+        try db.writer.write { db in try Contact(jid: alice, subscription: .both, isInRoster: true).insert(db) }
+        let before = try db.mapTrust(peer: alice, isGroup: false)
+        try db.writer.write { db in
+            try Contact(jid: JID("bob@example.org")!, subscription: .both, isInRoster: true).insert(db)
+            try Contact(jid: JID("carol@example.org")!, name: "Carol").insert(db)
+        }
+        #expect(try db.mapTrust(peer: alice, isGroup: false) == before)
     }
 }

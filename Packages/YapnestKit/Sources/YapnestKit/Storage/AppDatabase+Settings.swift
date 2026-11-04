@@ -135,10 +135,13 @@ extension AppDatabase {
     /// A key that is synced between devices also records the change, in the
     /// same transaction, to be published.
     public func setSetting(_ key: SettingKey, _ value: String?) throws {
-        try writer.write { db in
-            try Self.setSetting(db, key, value)
-            if Self.syncedGlobalKeys[key] != nil { try Self.touch(db, item: Self.globalItem, key: key.rawValue) }
-        }
+        try writer.write { db in try Self.setSettingRecordingSync(db, key, value) }
+    }
+
+    /// `setSetting` for use inside a transaction that does more.
+    static func setSettingRecordingSync(_ db: Database, _ key: SettingKey, _ value: String?) throws {
+        try setSetting(db, key, value)
+        if syncedGlobalKeys[key] != nil { try touch(db, item: globalItem, key: key.rawValue) }
     }
 
     /// For use inside a transaction or an observation.
@@ -258,6 +261,11 @@ extension AppDatabase {
 
     public func setFlag(_ key: SettingKey, _ on: Bool) throws {
         try setSetting(key, on ? "1" : "0")
+    }
+
+    /// `setFlag` for use inside a transaction that does more.
+    static func setFlag(_ db: Database, _ key: SettingKey, _ on: Bool) throws {
+        try setSettingRecordingSync(db, key, on ? "1" : "0")
     }
 
     /// A setting holding a moment, stored as seconds since 1970.

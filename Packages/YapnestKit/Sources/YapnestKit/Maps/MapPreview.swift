@@ -17,16 +17,7 @@ public enum MapPreview {
         case off
     }
 
-    /// The order matters: the setting beats everything, consent comes before
-    /// the stranger rule, and a tap only lifts the stranger rule.
-    public static func decide(enabled: Bool, consented: Bool, trusted: Bool, tappedToShow: Bool) -> Display {
-        if !enabled { return .off }
-        if !consented { return .askConsent }
-        if !trusted && !tappedToShow { return .tapToShow }
-        return .map
-    }
-
-    /// The two flags `decide` reads, as one value to observe.
+    /// The two flags `display` reads, as one value to observe.
     public struct Settings: Sendable, Equatable {
         public var enabled: Bool
         public var consented: Bool
@@ -35,30 +26,37 @@ public enum MapPreview {
             self.enabled = enabled
             self.consented = consented
         }
+
+        /// The order matters: the setting beats everything, consent comes
+        /// before the stranger rule, and a tap only lifts the stranger rule.
+        public func display(trusted: Bool, tappedToShow: Bool) -> Display {
+            if !enabled { return .off }
+            if !consented { return .askConsent }
+            if !trusted && !tappedToShow { return .tapToShow }
+            return .map
+        }
     }
 
-    /// Who counts as trusted in one chat: exactly who has images downloaded
-    /// for them unasked (`XMPPSession.trustsForAutoDownload`).
+    /// Who counts as trusted in a chat: exactly who has images downloaded
+    /// for them unasked (`XMPPSession.trustsForAutoDownload`). What it holds
+    /// is read narrowly: a 1:1 chat's peer alone, and in a group the
+    /// contacts the user consented to.
     public struct Trust: Sendable, Equatable {
-        /// The contacts the user added or approved and hasn't blocked.
         public var trustedContacts: Set<JID>
-        public var isGroup: Bool
-        public var isPrivateGroup: Bool
         public var trustsGroupMembers: Bool
 
-        public init(trustedContacts: Set<JID> = [], isGroup: Bool = false, isPrivateGroup: Bool = false, trustsGroupMembers: Bool = true) {
+        public init(trustedContacts: Set<JID> = [], trustsGroupMembers: Bool = true) {
             self.trustedContacts = trustedContacts
-            self.isGroup = isGroup
-            self.isPrivateGroup = isPrivateGroup
             self.trustsGroupMembers = trustsGroupMembers
         }
 
-        /// A 1:1 chat's sender is the peer; a group message's is the real
-        /// address of its author, which only a room that shows them has.
-        public func trusts(_ message: Message) -> Bool {
+        /// `groupIsPrivate` is nil outside a group. A 1:1 chat's sender is the
+        /// peer; a group message's is the real address of its author, which
+        /// only a room that shows them has.
+        public func trusts(_ message: Message, groupIsPrivate: Bool?) -> Bool {
             XMPPSession.trustsForAutoDownload(
-                isOutgoing: Message.isTrustedOutgoing(isOutgoing: message.direction == .outgoing, isWrittenHere: message.isWrittenHere, inGroup: isGroup),
-                isPrivateGroup: isGroup && isPrivateGroup, trustsGroupMembers: trustsGroupMembers,
+                isOutgoing: Message.isTrustedOutgoing(isOutgoing: message.direction == .outgoing, isWrittenHere: message.isWrittenHere, inGroup: groupIsPrivate != nil),
+                isPrivateGroup: groupIsPrivate ?? false, trustsGroupMembers: trustsGroupMembers,
                 isTrusted: trustedContacts.contains(message.sender),
             )
         }
@@ -79,22 +77,19 @@ extension AppDatabase {
         .removeDuplicates()
     }
 
-    public func mapTrust(peer: JID) throws -> MapPreview.Trust {
-        try reader.read { try Self.mapTrust($0, peer: peer) }
+    public func mapTrust(peer: JID, isGroup: Bool) throws -> MapPreview.Trust {
+        try reader.read { try Self.mapTrust($0, peer: peer, isGroup: isGroup) }
     }
 
-    static func mapTrust(_ db: Database, peer: JID) throws -> MapPreview.Trust {
-        let group = try GroupChat.filter(Column("jid") == peer).fetchOne(db)
-        return MapPreview.Trust(
-            trustedContacts: Set(try Contact.fetchAll(db).filter(\.mayReceive).map(\.jid)),
-            isGroup: group != nil,
-            isPrivateGroup: group?.isPrivate ?? false,
+    static func mapTrust(_ db: Database, peer: JID, isGroup: Bool) throws -> MapPreview.Trust {
+        MapPreview.Trust(
+            trustedContacts: isGroup ? try consentedContacts(db) : try consented(db, among: [peer]),
             trustsGroupMembers: try flag(db, .downloadsFromGroupMembers, default: true),
         )
     }
 
-    public func observeMapTrust(peer: JID) -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<MapPreview.Trust>>> {
-        ValueObservation.trackingConstantRegion { db in try Self.mapTrust(db, peer: peer) }
+    public func observeMapTrust(peer: JID, isGroup: Bool) -> ValueObservation<ValueReducers.RemoveDuplicates<ValueReducers.Fetch<MapPreview.Trust>>> {
+        ValueObservation.trackingConstantRegion { db in try Self.mapTrust(db, peer: peer, isGroup: isGroup) }
         .removeDuplicates()
     }
 
@@ -102,15 +97,14 @@ extension AppDatabase {
     /// so it records the agreement too, in one write with the flag.
     public func setMapPreviews(_ on: Bool) throws {
         try writer.write { db in
-            try Self.setSetting(db, .mapPreviews, on ? "1" : "0")
-            try Self.touch(db, item: Self.globalItem, key: SettingKey.mapPreviews.rawValue)
-            if on { try Self.setSetting(db, .mapConsent, "1") }
+            try Self.setFlag(db, .mapPreviews, on)
+            if on { try Self.setFlag(db, .mapConsent, true) }
         }
     }
 
     /// "Show Maps" on a card. Recorded per install and not synced, like the GIF consent.
     public func agreeToMapPreviews() throws {
-        try setSetting(.mapConsent, "1")
+        try setFlag(.mapConsent, true)
     }
 
     /// "Not Now" on a card: the Settings switch, with no consent recorded.

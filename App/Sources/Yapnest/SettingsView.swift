@@ -92,7 +92,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("Map Previews", isOn: Binding(get: { mapPreviewsEnabled }, set: setMapPreviews))
                 } footer: {
-                    Text("A shared location is drawn as a map by Apple, which sees the place and your IP address. With this off, a location shows only a pin and its coordinates, and opens in Maps when tapped. Maps from people you haven't added wait until you tap them.")
+                    Text(MapPreview.disclosure) + Text(" With this off, a location shows only a pin and its coordinates, and opens in Maps when tapped. Maps from people you haven't added wait until you tap them.")
                 }
                 .disabled(!isLoaded)
 

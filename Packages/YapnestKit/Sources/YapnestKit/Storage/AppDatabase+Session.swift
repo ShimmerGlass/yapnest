@@ -26,7 +26,20 @@ extension AppDatabase {
 
     /// Those of `peers` who have consented, in one read.
     func consented(among peers: [JID]) throws -> Set<JID> {
-        try reader.read { db in Set(try Contact.fetchAll(db, keys: peers).filter(\.mayReceive).map(\.jid)) }
+        try reader.read { try Self.consented($0, among: peers) }
+    }
+
+    static func consented(_ db: Database, among peers: [JID]) throws -> Set<JID> {
+        Set(try Contact.fetchAll(db, keys: peers).filter(\.mayReceive).map(\.jid))
+    }
+
+    /// Every contact who has consented, as `Contact.mayReceive` and
+    /// `missedImages` decide it, read as addresses alone.
+    static func consentedContacts(_ db: Database) throws -> Set<JID> {
+        Set(try JID.fetchAll(db, sql: """
+            SELECT jid FROM contact
+            WHERE (isAddedByUser OR isSubscriptionPending OR subscription IN ('to', 'from', 'both')) AND NOT isBlocked
+            """))
     }
 
     /// Applies `change` to the stored contact, or a new one, and saves only
