@@ -412,6 +412,13 @@ final class ConversationModel {
     @ObservationIgnored private var chatIsEncrypted = true
     /// The app-wide choice, which overrides the chat's.
     @ObservationIgnored private var linkPreviewSetting: LinkPreviewSetting = .askPerConversation
+    /// Read by the location cards alone, so an answer to the maps notice
+    /// redraws them and not the rows. Until the first read nothing is
+    /// consented, so no card asks Apple for a map.
+    private(set) var mapSettings = MapPreview.Settings(enabled: true, consented: false)
+    /// The locations the user tapped to show, for the stranger rule.
+    private(set) var shownMaps: Set<Int64> = []
+    @ObservationIgnored private var mapTrust = MapPreview.Trust()
 
     // What the list reports about itself.
     @ObservationIgnored private var geometry: ScrollGeometry?
@@ -602,6 +609,8 @@ final class ConversationModel {
                     chatIsEncrypted: (try? database.isEncrypted(with: peer)) ?? true,
                     linkPreviewsAllowed: (try? database.linkPreviews(peer: peer)) ?? nil,
                     linkPreviewSetting: database.linkPreviewSetting,
+                    mapSettings: database.mapPreviewSettings,
+                    mapTrust: (try? database.mapTrust(peer: peer)) ?? MapPreview.Trust(),
                     contactNames: (try? database.contactNames()) ?? [:],
                     // Reach back far enough to open at the first unread message,
                     // up to the window's limit, so there's usually no settling for
@@ -628,6 +637,8 @@ final class ConversationModel {
         var chatIsEncrypted: Bool
         var linkPreviewsAllowed: Bool?
         var linkPreviewSetting: LinkPreviewSetting
+        var mapSettings: MapPreview.Settings
+        var mapTrust: MapPreview.Trust
         var contactNames: [JID: String]
         var openingStart: MessageCursor?
         var group: GroupChat?
@@ -644,6 +655,8 @@ final class ConversationModel {
         chatIsEncrypted = initial.chatIsEncrypted
         linkPreviewsAllowed = initial.linkPreviewsAllowed
         linkPreviewSetting = initial.linkPreviewSetting
+        mapSettings = initial.mapSettings
+        mapTrust = initial.mapTrust
         contactNames = initial.contactNames
         windowStart = initial.openingStart
         storedDraft = initial.draft
@@ -690,6 +703,16 @@ final class ConversationModel {
         let gifsEnabled = database.observeGifsEnabled()
         tasks["gifsEnabled"] = Task { [weak self] in
             await database.forEachValue(of: gifsEnabled, "GIF setting") { self?.gifsEnabledChanged($0) }
+        }
+
+        let mapSettings = database.observeMapPreviewSettings()
+        tasks["mapSettings"] = Task { [weak self] in
+            await database.forEachValue(of: mapSettings, "Map preview setting") { self?.mapSettingsChanged($0) }
+        }
+
+        let mapTrust = database.observeMapTrust(peer: peer)
+        tasks["mapTrust"] = Task { [weak self] in
+            await database.forEachValue(of: mapTrust, "Map preview trust") { self?.mapTrustChanged($0) }
         }
 
         // "Today" and "Yesterday" in the day headers go stale at midnight, and
@@ -1369,6 +1392,7 @@ final class ConversationModel {
         var contactNames: [JID: String]
         var linkPreviewSetting: LinkPreviewSetting
         var linkPreviewsAllowed: Bool?
+        var mapTrust: MapPreview.Trust
         var chatIsEncrypted: Bool
         var showsEveryBodyWhole: Bool
         var attachments: AttachmentStore
@@ -1381,7 +1405,7 @@ final class ConversationModel {
     private func rowEnvironment() -> RowEnvironment {
         RowEnvironment(
             account: session.account, peer: peer, isGroup: isGroup, contactNames: contactNames,
-            linkPreviewSetting: linkPreviewSetting, linkPreviewsAllowed: linkPreviewsAllowed,
+            linkPreviewSetting: linkPreviewSetting, linkPreviewsAllowed: linkPreviewsAllowed, mapTrust: mapTrust,
             chatIsEncrypted: chatIsEncrypted,
             showsEveryBodyWhole: showsEveryBodyWhole, attachments: session.attachments, previews: previews,
             now: now(), calendar: Calendar.current, locale: Locale.current,
@@ -1802,6 +1826,7 @@ final class ConversationModel {
             preview: preview,
             attachment: attachment,
             location: plan.location,
+            locationTrusted: plan.location != nil && environment.mapTrust.trusts(message),
             showsResponses: isNewest && !isOutgoing,
             isBare: MessageRow.drawsWithoutBubble(
                 isEmojiOnly: text?.isEmojiOnly ?? false, isRetracted: message.isRetracted, isAction: message.meAction != nil,
@@ -1925,6 +1950,34 @@ final class ConversationModel {
     private func gifsEnabledChanged(_ enabled: Bool) {
         gifsAvailable = enabled && Klipy.apiKey != nil
         composer.bar?.setGifsAvailable(gifsAvailable)
+    }
+
+    private func mapSettingsChanged(_ settings: MapPreview.Settings) {
+        guard settings != mapSettings else { return }
+        mapSettings = settings
+    }
+
+    private func mapTrustChanged(_ trust: MapPreview.Trust) {
+        guard trust != mapTrust else { return }
+        mapTrust = trust
+        inputsEpoch += 1
+        rebuildRows()
+    }
+
+    func mapDisplay(for row: MessageRow) -> MapPreview.Display {
+        MapPreview.decide(enabled: mapSettings.enabled, consented: mapSettings.consented, trusted: row.content.locationTrusted, tappedToShow: shownMaps.contains(row.id))
+    }
+
+    func showMap(of id: Int64) {
+        shownMaps.insert(id)
+    }
+
+    func agreeToMaps() {
+        write { [database = session.database] in try database.agreeToMapPreviews() }
+    }
+
+    func turnOffMaps() {
+        write { [database = session.database] in try database.turnOffMapPreviews() }
     }
 
     private func redrawLinkedMessages() {

@@ -141,6 +141,7 @@ extension AppDatabase {
     static let syncedGlobalKeys: [SettingKey: SyncedKey] = [
         .linkPreviews: globalKey(.linkPreviews, default: LinkPreviewSetting.askPerConversation.rawValue),
         .gifs: globalKey(.gifs, default: "1"),
+        .mapPreviews: globalKey(.mapPreviews, default: "1"),
         .sendsReadMarkers: globalKey(.sendsReadMarkers, default: "1"),
         .sendsChatStates: globalKey(.sendsChatStates, default: "1"),
         .sharesLastSeen: globalKey(.sharesLastSeen, default: "0"),

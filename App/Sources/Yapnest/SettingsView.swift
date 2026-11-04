@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var relaysCalls = false
     @State private var includesMessagesInBackups = true
     @State private var gifsEnabled = true
+    @State private var mapPreviewsEnabled = true
     @State private var encryptsNewChats = true
     @AppStorage(AppSwitcherCoverSetting.key) private var hidesScreenInAppSwitcher = false
     @State private var privacyError: String?
@@ -87,6 +88,13 @@ struct SettingsView: View {
                     }
                     .disabled(!isLoaded)
                 }
+
+                Section {
+                    Toggle("Map Previews", isOn: Binding(get: { mapPreviewsEnabled }, set: setMapPreviews))
+                } footer: {
+                    Text("A shared location is drawn as a map by Apple, which sees the place and your IP address. With this off, a location shows only a pin and its coordinates, and opens in Maps when tapped. Maps from people you haven't added wait until you tap them.")
+                }
+                .disabled(!isLoaded)
 
                 #if targetEnvironment(macCatalyst)
                 Section {
@@ -178,6 +186,7 @@ struct SettingsView: View {
                         relaysCalls: session.relaysCalls,
                         includesMessagesInBackups: BackupPolicy.includesMessages(),
                         gifsEnabled: session.database.flag(.gifs, default: true),
+                        mapPreviewsEnabled: session.database.flag(.mapPreviews, default: true),
                         encryptsNewChats: session.database.flag(.encryptsNewChats, default: true),
                     )
                 }
@@ -189,6 +198,7 @@ struct SettingsView: View {
                 relaysCalls = saved.relaysCalls
                 includesMessagesInBackups = saved.includesMessagesInBackups
                 gifsEnabled = saved.gifsEnabled
+                mapPreviewsEnabled = saved.mapPreviewsEnabled
                 encryptsNewChats = saved.encryptsNewChats
                 isLoaded = true
             }
@@ -231,6 +241,11 @@ struct SettingsView: View {
     /// Saves a flag that only differs from the others by its key; `done` shows it.
     private func setFlag(_ key: AppDatabase.SettingKey, _ on: Bool, then done: @escaping () -> Void) {
         save({ [session] in try session.database.setFlag(key, on) }, then: done)
+    }
+
+    /// Turning it on here, with the disclosure in view, is the user's agreement.
+    private func setMapPreviews(_ on: Bool) {
+        save({ [session] in try session.database.setMapPreviews(on) }) { mapPreviewsEnabled = on }
     }
 
     private func setIncludesMessagesInBackups(_ on: Bool) {

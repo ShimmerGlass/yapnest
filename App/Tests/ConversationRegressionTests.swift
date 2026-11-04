@@ -131,6 +131,40 @@ struct ConversationRegressionTests {
         #expect(!(bar.replyText.text ?? "").contains("aesgcm"))
     }
 
+    @Test func aLocationFromAStrangerWaitsForAnAnswerAndThenATap() async throws {
+        let f = try ConversationFixture()
+        let place = try f.add("geo:48.85,2.35", read: true)
+        let mine = try f.add("geo:1.5,2.5", .outgoing, read: true)
+        await f.start()
+        func display(_ message: Message) -> MapPreview.Display {
+            f.model.mapDisplay(for: f.model.rows.first { $0.id == message.id }!)
+        }
+        #expect(display(place) == .askConsent)
+        #expect(display(mine) == .askConsent)
+
+        try f.database.agreeToMapPreviews()
+        await eventually("the consent never reached the model") { display(mine) == .map }
+        #expect(display(place) == .tapToShow)
+        f.model.showMap(of: place.id!)
+        #expect(display(place) == .map)
+
+        try f.database.setMapPreviews(false)
+        await eventually("the setting never reached the model") { display(place) == .off }
+        #expect(display(mine) == .off)
+    }
+
+    @Test func aContactTheUserAddedIsTrustedWithoutATap() async throws {
+        let f = try ConversationFixture()
+        let place = try f.add("geo:48.85,2.35", read: true)
+        try f.database.agreeToMapPreviews()
+        await f.start()
+        let row = { f.model.rows.first { $0.id == place.id }! }
+        #expect(f.model.mapDisplay(for: row()) == .tapToShow)
+
+        try await f.database.writer.write { db in try Contact(jid: f.peer, subscription: .both, isInRoster: true).insert(db) }
+        await eventually("the contact never reached the rows") { f.model.mapDisplay(for: row()) == .map }
+    }
+
     // MARK: Composer
 
     @Test func theMentionHandlerIsThereEvenIfTheComposerAppearsBeforeTheGroupIsKnown() async throws {

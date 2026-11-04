@@ -14,6 +14,7 @@ struct WelcomeView: View {
     @State private var sendsChatStates = true
     @State private var sharesLastSeen = false
     @State private var gifsEnabled = true
+    @State private var mapPreviewsEnabled = true
     /// What was stored when the screen opened. Only what the user changed is
     /// written: each synced one is published to the other devices, and Last Seen
     /// also sends a new presence.
@@ -55,6 +56,9 @@ struct WelcomeView: View {
                         option("GIFs", isOn: $gifsEnabled, detail: Klipy.disclosure)
                     }
                 }
+                Section {
+                    option("Map Previews", isOn: $mapPreviewsEnabled, detail: "A shared location is drawn as a map by Apple, which sees the place and your IP address. Maps from people you haven't added wait until you tap them, and you're asked before the first one is drawn.")
+                }
 
                 Section {
                     ProminentBusyButton("Continue", isBusy: isSaving, action: save)
@@ -77,6 +81,7 @@ struct WelcomeView: View {
                         sendsChatStates: session.sendsChatStates,
                         sharesLastSeen: session.sharesLastSeen,
                         gifsEnabled: session.database.flag(.gifs, default: true),
+                        mapPreviewsEnabled: session.database.flag(.mapPreviews, default: true),
                     )
                 }
                 encryptsNewChats = saved.encryptsNewChats
@@ -84,6 +89,7 @@ struct WelcomeView: View {
                 sendsChatStates = saved.sendsChatStates
                 sharesLastSeen = saved.sharesLastSeen
                 gifsEnabled = saved.gifsEnabled
+                mapPreviewsEnabled = saved.mapPreviewsEnabled
                 stored = saved
                 isLoaded = true
             }
@@ -107,10 +113,11 @@ struct WelcomeView: View {
         var sendsChatStates: Bool
         var sharesLastSeen: Bool
         var gifsEnabled: Bool
+        var mapPreviewsEnabled: Bool
     }
 
     private func save() {
-        let new = Choices(encryptsNewChats: encryptsNewChats, sendsReadMarkers: sendsReadMarkers, sendsChatStates: sendsChatStates, sharesLastSeen: sharesLastSeen, gifsEnabled: gifsEnabled)
+        let new = Choices(encryptsNewChats: encryptsNewChats, sendsReadMarkers: sendsReadMarkers, sendsChatStates: sendsChatStates, sharesLastSeen: sharesLastSeen, gifsEnabled: gifsEnabled, mapPreviewsEnabled: mapPreviewsEnabled)
         guard let old = stored else { return }
         isSaving = true
         Task {
@@ -131,6 +138,8 @@ struct WelcomeView: View {
                 if Klipy.apiKey != nil {
                     try await write(\.gifsEnabled) { try $0.database.setFlag(.gifs, $1) }
                 }
+                // Not `setMapPreviews`: this switch defaults on without the user reading it, so it records no consent.
+                try await write(\.mapPreviewsEnabled) { try $0.database.setFlag(.mapPreviews, $1) }
                 try await model.finishWelcome()
             } catch {
                 self.error = error.localizedDescription

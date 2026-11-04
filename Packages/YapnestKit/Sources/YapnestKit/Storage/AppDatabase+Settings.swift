@@ -63,6 +63,12 @@ extension AppDatabase {
         /// seeing their searches, region and IP address: see
         /// `ConsentedGifService`. Not synced, and kept when GIFs are turned off.
         case gifConsent
+        /// Whether a received location is drawn as a map, which Apple's
+        /// servers see. On unless turned off: see `MapPreview`.
+        case mapPreviews
+        /// Set once the user has agreed to Apple seeing the places and their
+        /// IP address. Not synced, and kept when maps are turned off.
+        case mapConsent
         /// The GIFs starred before they were synced, as JSON. Taken into
         /// `syncedEntry` and removed by the first write: see `addGifFavorite`.
         case gifFavorites

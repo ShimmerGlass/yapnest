@@ -77,6 +77,8 @@ struct MessageRow: Identifiable, Equatable {
         var attachment: AttachmentDisplay?
         /// Set when the whole body is a `geo:` URI, which is drawn as a map.
         var location: GeoLocation?
+        /// Whether a map of `location` may be drawn without a tap: see `MapPreview.Trust`.
+        var locationTrusted = false
         /// The message is the chat's newest, so its suggested replies are offered.
         var showsResponses = false
         /// Drawn as the emoji alone, without a bubble; see `drawsWithoutBubble`.

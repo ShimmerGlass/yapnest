@@ -10,25 +10,32 @@ extension GeoLocation {
     }
 }
 
-/// A shared location in a bubble: a map snapshot with a pin. The frame has
-/// its shape from the start, so the list doesn't move when the picture arrives.
+/// A shared location in a bubble: a map snapshot with a pin when `display`
+/// allows one, else a pin with the coordinates. The frame has its shape in
+/// every state, so the list doesn't move when the picture arrives or the
+/// answer changes. Nothing here asks Apple for a snapshot, or reads one from
+/// the caches, unless `display` is `.map`.
 struct LocationCard: View {
     let location: GeoLocation
+    let display: MapPreview.Display
+    let showMap: () -> Void
+    let agree: () -> Void
+    let notNow: () -> Void
     @State private var loaded: (key: String, image: UIImage)?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var scale
+
+    private var drawsMap: Bool { display == .map }
 
     var body: some View {
         let key = LocationSnapshotCache.key(location, dark: colorScheme == .dark, scale: scale)
         Color(.tertiarySystemFill)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay {
-                if let shown = loaded.flatMap({ $0.key == key ? $0.image : nil }) ?? LocationSnapshotCache.cached(key) {
+                if drawsMap, let shown = loaded.flatMap({ $0.key == key ? $0.image : nil }) ?? LocationSnapshotCache.cached(key) {
                     FilledImage(image: Image(uiImage: shown), shape: RoundedRectangle(cornerRadius: 10))
                 } else {
-                    Image(systemName: "mappin.and.ellipse")
-                        .font(.title)
-                        .foregroundStyle(.secondary)
+                    placeholder
                 }
             }
             .aspectRatio(LocationSnapshotCache.size.width / LocationSnapshotCache.size.height, contentMode: .fit)
@@ -36,7 +43,8 @@ struct LocationCard: View {
             // Clipped on the snapshot itself rather than here: a clip on a
             // stack of layers is an offscreen render pass.
             .contentShape(RoundedRectangle(cornerRadius: 10))
-            .task(id: key) {
+            .task(id: drawsMap ? key : nil) {
+                guard drawsMap else { return }
                 if let cached = LocationSnapshotCache.cached(key) {
                     // Kept here too, so evicting it from the cache can't blank the view.
                     loaded = (key, cached)
@@ -47,9 +55,54 @@ struct LocationCard: View {
                     loaded = (key, image)
                 }
             }
-            .accessibilityElement(children: .ignore)
+            .accessibilityElement(children: display == .map || display == .off ? .ignore : .contain)
             .accessibilityLabel(GeoLocation.summary)
-            .accessibilityAddTraits(.isButton)
+            .accessibilityAddTraits(display == .map || display == .off ? .isButton : [])
+    }
+
+    private var coordinates: String {
+        String(format: "%.5f, %.5f", location.latitude, location.longitude)
+    }
+
+    private var placeholder: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "mappin.and.ellipse")
+                .font(display == .map || display == .off ? .title : .title3)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            if display != .map {
+                Text(coordinates)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            switch display {
+            case .askConsent:
+                Text("Maps are drawn by Apple, which sees the place and your IP address.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.7)
+                HStack(spacing: 8) {
+                    Button("Show Maps", action: agree)
+                        .buttonStyle(.borderedProminent)
+                    Button("Not Now", action: notNow)
+                        .buttonStyle(.bordered)
+                }
+                .controlSize(.small)
+                .font(.caption)
+            case .tapToShow:
+                Button("Show Map", action: showMap)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .font(.caption)
+            case .map, .off:
+                EmptyView()
+            }
+        }
+        .padding(8)
     }
 }
 
