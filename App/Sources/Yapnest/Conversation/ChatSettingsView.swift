@@ -457,6 +457,9 @@ struct ChatSettingsView: View {
             }
         }
         .closableFromPushedScreens()
+        // A tapped notification would swap the chat under a Leave or Destroy
+        // that is still running, and the alert for its failure would go with it.
+        .reportsBusy(isBusy)
     }
 
     private func saveNickname(_ name: String) async throws {

@@ -161,6 +161,7 @@ struct EditGroupView: View {
                 await loadConfiguration()
             }
         }
+        .reportsBusy(isSaving)
     }
 
     // MARK: Sections

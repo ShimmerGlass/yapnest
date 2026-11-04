@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 import YapnestKit
 @testable import Yapnest
@@ -42,6 +43,33 @@ struct SheetBusyTests {
         #expect(model.takePendingLink() == link)
         #expect(model.takeRequestsChatList())
         #expect(model.pendingLink == nil && !model.requestsChatList)
+    }
+
+    /// A conversation's sheets (chat settings, edit group, add members) report
+    /// busy beside counting as conversation sheets and refusing a swipe away.
+    @Test func aConversationSheetReportsBusyBesideItsOtherModifiers() async throws {
+        let model = try await signedIn()
+        func host(busy: Bool) -> UIHostingController<some View> {
+            let host = UIHostingController(rootView: Text("sheet")
+                .interactiveDismissDisabled(busy)
+                .reportsBusy(busy)
+                .countsAsConversationSheet()
+                .environment(model))
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+            window.rootViewController = host
+            window.isHidden = false
+            host.view.layoutIfNeeded()
+            return host
+        }
+        let busy = host(busy: true)
+        await Task.yield()
+        busy.view.layoutIfNeeded()
+        #expect(model.sheetIsBusy)
+        #expect(model.hasConversationSheet)
+        busy.view.window?.isHidden = true
+        busy.view.window?.rootViewController = nil
+        await Task.yield()
+        #expect(!model.sheetIsBusy)
     }
 
     @Test func aLateAnswerClosesOnlyItsOwnSheet() {

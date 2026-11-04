@@ -284,6 +284,7 @@ struct InviteView: View {
             .actionAlert("Couldn't add them", invitation)
         }
         .interactiveDismissDisabled(invitation.isBusy)
+        .reportsBusy(invitation.isBusy)
     }
 
     private func invite() {
