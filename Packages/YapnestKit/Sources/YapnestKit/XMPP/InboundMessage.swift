@@ -240,7 +240,7 @@ extension InboundMessage {
         let isReplayed = Self.isReplayed(stanza, source: source)
         // Current occupants say nothing about who wrote a replayed message,
         // and anyone may have held our nick before we joined.
-        let real = Self.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous) ?? (isReplayed ? nil : room.occupants[nick]?.jid)
+        let real = Self.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous, occupant: room.occupants[nick]?.jid) ?? (isReplayed ? nil : room.occupants[nick]?.jid)
         let occupantId = room.trustsOccupantIds ? Self.occupantId(in: stanza.element) : nil
         let isOutgoing = if let real {
             real == account
@@ -301,8 +301,19 @@ extension InboundMessage {
     /// but an honest message carries a single address: one believed only when
     /// every claim agrees. An anonymous room's archive may add nothing at
     /// all, leaving only the sender's claims, so none are believed there.
-    static func archivedAddress(in stanza: Martin.Message, source: Source, isNonAnonymous: Bool) -> JID? {
-        guard case .archive = source, isNonAnonymous else { return nil }
+    ///
+    /// The history a room sends on joining is live, so nothing but the
+    /// room's own say-so vouches for its addresses. They are believed only
+    /// when they name `occupant`, the real address the nick has now: the
+    /// stay is then the same one's, whereas a nick passed on to someone else
+    /// stays unattributed.
+    static func archivedAddress(in stanza: Martin.Message, source: Source, isNonAnonymous: Bool, occupant: JID? = nil) -> JID? {
+        guard isNonAnonymous else { return nil }
+        switch source {
+        case .archive: break
+        case .live where XMPPSession.isDelayed(stanza) && occupant != nil: break
+        default: return nil
+        }
         let items = stanza.filterChildren(name: "x", xmlns: NS.mucUser)
             .flatMap { $0.filterChildren(name: "item", xmlns: nil) }
             .compactMap { $0.getAttribute("jid") }
@@ -313,6 +324,7 @@ extension InboundMessage {
         let claims = (items + originalSenders).map { JID($0) }
         // One that doesn't parse disagrees with every other.
         guard let address = claims.first ?? nil, claims.allSatisfy({ $0 == address }) else { return nil }
+        if case .live = source, address != occupant { return nil }
         return address
     }
 

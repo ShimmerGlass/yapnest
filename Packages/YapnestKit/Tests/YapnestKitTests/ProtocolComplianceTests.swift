@@ -155,6 +155,31 @@ struct EncryptedGroupSenderTests {
         #expect(sender(nick: "me", occupantId: "ours", source: .live, ownOccupantId: "ours", delayed: true) == me)
     }
 
+    /// Non-anonymous history names its authors, and a name is believed live
+    /// only where it is the address the nick has now.
+    @Test func historyOnJoiningNamingTheCurrentHolderIsTheirs() throws {
+        func history(_ nick: String, ofrom: String) -> Martin.Message {
+            stanza("""
+            <message from='cake@rooms.example.org/\(nick)' type='groupchat' id='m1'>\
+            <delay xmlns='urn:xmpp:delay' stamp='2020-01-01T00:00:00Z'/>\
+            <addresses xmlns='http://jabber.org/protocol/address'><address type='ofrom' jid='\(ofrom)'/></addresses></message>
+            """)
+        }
+        let context = RoomContext(jid: room, nickname: "me", occupants: ["carol": carol], isNonAnonymous: true)
+        let own = history("carol", ofrom: "carol@example.org")
+        #expect(XMPPSession.encryptedSender(of: own, nick: "carol", in: context, account: me, source: .live) == carol)
+        let inbound = try #require(InboundMessage(groupchat: own, room: context, account: me, source: .live))
+        #expect(inbound.sender == carol)
+        // The nick now belongs to someone other than who wrote it.
+        let passedOn = history("carol", ofrom: "dave@example.org")
+        #expect(XMPPSession.encryptedSender(of: passedOn, nick: "carol", in: context, account: me, source: .live) == nil)
+        let other = try #require(InboundMessage(groupchat: passedOn, room: context, account: me, source: .live))
+        #expect(other.sender == room)
+        // An anonymous room's history is the sender's own claim.
+        let anonymous = RoomContext(jid: room, nickname: "me", occupants: ["carol": carol])
+        #expect(XMPPSession.encryptedSender(of: own, nick: "carol", in: anonymous, account: me, source: .live) == nil)
+    }
+
     @Test func archivedOursIsKnownByOurOccupantId() {
         #expect(sender(nick: "me", occupantId: "ours", source: archive, ownOccupantId: "ours") == me)
         #expect(sender(nick: "me", occupantId: "theirs", source: archive, ownOccupantId: "ours") == nil)

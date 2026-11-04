@@ -1094,7 +1094,7 @@ extension XMPPSession {
     /// history on joining), and anyone may have held our nick before we
     /// joined, so a replayed one is ours only by the occupant id the room gave us.
     static func encryptedSender(of stanza: Martin.Message, nick: String, in room: RoomContext, account: JID, source: InboundMessage.Source) -> JID? {
-        if let real = InboundMessage.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous) { return real }
+        if let real = InboundMessage.archivedAddress(in: stanza, source: source, isNonAnonymous: room.isNonAnonymous, occupant: room.occupants[nick]?.jid) { return real }
         guard InboundMessage.isReplayed(stanza, source: source) else { return room.occupants[nick]?.jid ?? (nick == room.nickname ? account : nil) }
         guard room.trustsOccupantIds, let own = room.ownOccupantId, InboundMessage.occupantId(in: stanza.element) == own else { return nil }
         return account
