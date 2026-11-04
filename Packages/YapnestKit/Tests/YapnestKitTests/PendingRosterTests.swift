@@ -486,6 +486,19 @@ struct PendingRosterTests {
         #expect(try contact(alice).pendingRoster == .add)
     }
 
+    @Test func anAddWhileARemovalIsStillQueuedGoesThroughTheQueue() async throws {
+        try await session.removeContact(alice)
+        connect()
+        try await session.addContactAndWait(alice)
+        #expect(queued.map(\.kind) == [.add], "sent directly, the removal still queued would undo it")
+        #expect(rosterSets.isEmpty)
+
+        session.sendPendingRosterChanges()
+        #expect(await eventually { queued.isEmpty })
+        #expect(rosterSets.map { $0.attribute("jid") } == ["alice@example.org"])
+        #expect(rosterSets.first?.attribute("subscription") != "remove")
+    }
+
     @Test func aLaterAddReplacesAnEarlierOne() async throws {
         try await session.addContactAndWait(stranger, name: "One", preauth: "a")
         try await session.addContactAndWait(stranger, name: "Two", preauth: "b")

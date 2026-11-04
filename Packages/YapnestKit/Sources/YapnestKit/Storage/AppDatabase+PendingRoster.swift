@@ -35,6 +35,10 @@ extension AppDatabase {
         try reader.read { try PendingRosterChange.order(Column("id")).fetchAll($0) }
     }
 
+    func hasPendingRosterChange(_ jid: JID) throws -> Bool {
+        try reader.read { try PendingRosterChange.filter(Column("jid") == jid).fetchCount($0) > 0 }
+    }
+
     func hasPendingRosterChange(_ jid: JID, kind: PendingRosterKind) throws -> Bool {
         try reader.read { try PendingRosterChange.filter(Column("jid") == jid && Column("kind") == kind).fetchCount($0) > 0 }
     }

@@ -129,9 +129,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         // Delegate callbacks come on the main thread.
-        // An invitation's has no peer, which is what `showsNotification` takes it to be.
-        let peer = (notification.request.content.userInfo[MessageNotification.peerKey] as? String).flatMap(JID.init(_:))
-        let shown = MainActor.assumeIsolated { model.showsNotification(for: peer) }
+        nonisolated(unsafe) let userInfo = notification.request.content.userInfo
+        let shown = MainActor.assumeIsolated { model.showsNotification(userInfo: userInfo) }
         completionHandler(shown ? [.banner, .list, .sound] : [])
     }
 

@@ -25,7 +25,9 @@ extension XMPPSession {
     /// Writes to the database, so call it off the main thread.
     public func addContactAndWait(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {
         guard jid != account else { return }
-        if await waitForConnection() {
+        // Behind a change still queued for them, as a removal sent after the
+        // add would undo it: the queue sends them in order.
+        if try !database.hasPendingRosterChange(jid), await waitForConnection() {
             do {
                 try await addContactNow(jid, name: name, preauth: preauth)
                 return
@@ -140,7 +142,8 @@ extension XMPPSession {
     /// Nobody waits on it, so a failure is a warning with a Retry.
     public func befriendForNewChat(_ jid: JID) async {
         guard isConnected else { return }
-        // A dropped connection leaves the chat's banner to offer it again.
+        // A dropped connection queues the add, or, for a request, leaves the
+        // chat's banner to accept it again.
         await warnings.attempt(
             "befriend:\(jid.description)", title: String(localized: "Contact not added"),
             friendly: String(localized: "\(jid.description) wasn't added to your contacts"),

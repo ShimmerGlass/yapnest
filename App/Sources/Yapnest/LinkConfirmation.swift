@@ -98,8 +98,8 @@ private struct AddContactLinkView: View {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let (session, peer, preauth) = (session, link.jid, preauth)
         let (opensChat, chatBody) = (opensChat, chatBody)
-        // The sheet stays until the server has taken the contact, so a refusal
-        // or silence is shown where the user asked.
+        // The sheet stays until the server has taken the contact or the add is
+        // queued, so a refusal is shown where the user asked.
         add.run {
             try await session.addContactAndWait(peer, name: name.isEmpty ? nil : name, preauth: preauth)
             onDone(opensChat ? peer : nil, chatBody)

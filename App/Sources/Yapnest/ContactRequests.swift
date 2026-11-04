@@ -78,8 +78,8 @@ struct ContactRequestRow: View {
 }
 
 /// Adds someone to the roster, with a spinner until the server has taken
-/// them, and an alert if it refuses or doesn't answer. The roster push then
-/// hides the button.
+/// them or the add is queued, and an alert if it refuses. The roster push,
+/// or the add waiting to send, then hides the button.
 struct AddContactButton: View {
     let session: XMPPSession
     let peer: JID

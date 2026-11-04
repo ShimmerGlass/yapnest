@@ -239,6 +239,23 @@ final class AppModel {
         showsNotification(for: notification.isInvitation ? nil : notification.peer)
     }
 
+    /// For a notification as delivered. One with neither a peer nor an
+    /// invitation is the extension's stand-in for messages it didn't fetch;
+    /// the app, while active, has them and notifies for them itself.
+    func showsNotification(userInfo: [AnyHashable: Any]) -> Bool {
+        if userInfo[MessageNotification.invitationKey] != nil { return showsNotification(for: nil) }
+        guard let peer = (userInfo[MessageNotification.peerKey] as? String).flatMap(JID.init(_:)) else { return !isActive }
+        return showsNotification(for: peer)
+    }
+
+    /// How the next claim treats what it claims: whether its notifications are
+    /// shown at all (which starts a group's interval), and the chat whose
+    /// aren't. Only while active: in the background the chat left open is out
+    /// of sight like any other, and keeps its interval.
+    var claimScope: (notifies: Bool, silencing: JID?) {
+        isActive ? (chatInFront != nil, chatInFront) : (true, nil)
+    }
+
     /// Unread messages per chat, as the badge counts them.
     private(set) var unreadCounts: [JID: Int] = [:]
     /// Kept for a session that appears while the app is already away.
@@ -904,7 +921,8 @@ final class AppModel {
     }()
 
     /// Messages that arrive while the app is in the background, before it lets
-    /// the server push, get their notification from here.
+    /// the server push, or while a chat in front hides the others, get their
+    /// notification from here.
     ///
     /// A catch-up brings messages by the hundred, each stored while the next
     /// is being written: claiming is a write, so it runs off the main thread,
@@ -917,10 +935,9 @@ final class AppModel {
         claim = Task {
             repeat {
                 claimsAgain = false
-                // Active with a chat in front, the other chats still notify.
-                let database = session.database, front = chatInFront, notifies = !isActive || front != nil
+                let database = session.database, scope = claimScope
                 let (claimed, badge) = await Task.detached(priority: .utility) {
-                    ((try? database.claimNotificationsAndEdits(notifies: notifies, silencing: front)) ?? ([], []), try? database.unreadCount())
+                    ((try? database.claimNotificationsAndEdits(notifies: scope.notifies, silencing: scope.silencing)) ?? ([], []), try? database.unreadCount())
                 }.value
                 guard self.session === session else { continue }
                 // Asked again now: the user may have moved on while it was claimed.

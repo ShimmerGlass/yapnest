@@ -260,6 +260,33 @@ struct AppModelSessionTests {
         #expect(model.showsNotification(for: nil))
     }
 
+    @Test func theExtensionsStandInIsHiddenWhileTheAppIsActive() {
+        let model = AppModelFixture().model!
+        model.chatInFront = JID("front@example.com")!
+        let other: [AnyHashable: Any] = [MessageNotification.peerKey: "other@example.com"]
+        let invitation: [AnyHashable: Any] = [MessageNotification.invitationKey: "room@example.com"]
+        let standIn: [AnyHashable: Any] = [MessageNotification.placeholderKey: true]
+
+        #expect(model.showsNotification(userInfo: other))
+        #expect(model.showsNotification(userInfo: invitation))
+        #expect(!model.showsNotification(userInfo: standIn), "the app has those messages and notifies for them itself")
+        #expect(!model.showsNotification(userInfo: [MessageNotification.peerKey: "front@example.com"]))
+
+        model.scenePhaseChanged(active: false, background: false)
+        #expect(model.showsNotification(userInfo: standIn))
+    }
+
+    @Test func aChatLeftOpenInTheBackgroundKeepsItsInterval() {
+        let model = AppModelFixture().model!
+        let front = JID("front@example.com")!
+        #expect(model.claimScope == (false, nil), "the list shows everything")
+        model.chatInFront = front
+        #expect(model.claimScope == (true, front))
+
+        model.scenePhaseChanged(active: false, background: true)
+        #expect(model.claimScope == (true, nil), "out of sight like every other chat")
+    }
+
     @Test func aSignInThatFinishesInTheBackgroundSuspendsTheSession() async throws {
         let fixture = AppModelFixture()
         let model = fixture.model!
