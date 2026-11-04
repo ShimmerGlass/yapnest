@@ -33,13 +33,16 @@ extension AppDatabase {
         Set(try Contact.fetchAll(db, keys: peers).filter(\.mayReceive).map(\.jid))
     }
 
-    /// Every contact who has consented, as `Contact.mayReceive` and
-    /// `missedImages` decide it, read as addresses alone.
-    static func consentedContacts(_ db: Database) throws -> Set<JID> {
+    /// Every contact who has consented, or `peer` alone if they have, as
+    /// `Contact.mayReceive` and `missedImages` decide it. Only the address
+    /// and the columns of the rule are read, so an observation of it isn't
+    /// woken by a write to a contact's name, avatar or last seen.
+    static func consentedContacts(_ db: Database, peer: JID? = nil) throws -> Set<JID> {
         Set(try JID.fetchAll(db, sql: """
             SELECT jid FROM contact
             WHERE (isAddedByUser OR isSubscriptionPending OR subscription IN ('to', 'from', 'both')) AND NOT isBlocked
-            """))
+            AND (?1 IS NULL OR jid = ?1)
+            """, arguments: [peer]))
     }
 
     /// Applies `change` to the stored contact, or a new one, and saves only

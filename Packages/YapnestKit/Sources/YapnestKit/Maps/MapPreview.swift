@@ -83,7 +83,7 @@ extension AppDatabase {
 
     static func mapTrust(_ db: Database, peer: JID, isGroup: Bool) throws -> MapPreview.Trust {
         MapPreview.Trust(
-            trustedContacts: isGroup ? try consentedContacts(db) : try consented(db, among: [peer]),
+            trustedContacts: try consentedContacts(db, peer: isGroup ? nil : peer),
             trustsGroupMembers: try flag(db, .downloadsFromGroupMembers, default: true),
         )
     }
@@ -97,8 +97,8 @@ extension AppDatabase {
     /// so it records the agreement too, in one write with the flag.
     public func setMapPreviews(_ on: Bool) throws {
         try writer.write { db in
-            try Self.setFlag(db, .mapPreviews, on)
-            if on { try Self.setFlag(db, .mapConsent, true) }
+            try Self.setFlagRecordingSync(db, .mapPreviews, on)
+            if on { try Self.setFlagRecordingSync(db, .mapConsent, true) }
         }
     }
 

@@ -126,4 +126,27 @@ struct MapPreviewTests {
         }
         #expect(try db.mapTrust(peer: alice, isGroup: false) == before)
     }
+
+    /// What a chat's trust reads decides which writes wake its observation.
+    @Test(arguments: [(JID?.none, true), (JID("alice@example.org"), false)])
+    func trustIsNotWokenByAContactsNameAvatarOrLastSeen(peer: JID?, isGroup: Bool) async throws {
+        final class Box: @unchecked Sendable {
+            let lock = NSLock()
+            var region: DatabaseRegion?
+        }
+        let db = try AppDatabase.inMemory()
+        let box = Box()
+        let room = room
+        let running = ValueObservation.trackingConstantRegion { try AppDatabase.mapTrust($0, peer: peer ?? room, isGroup: isGroup) }
+            .handleEvents(willTrackRegion: { region in box.lock.withLock { box.region = region } })
+            .start(in: db.writer, scheduling: .async(onQueue: .global()), onError: { _ in }, onChange: { _ in })
+        defer { running.cancel() }
+        await eventually("the observation to track its region") { box.lock.withLock { box.region } != nil }
+        let region = try #require(box.lock.withLock { box.region })
+        for column in ["lastSeenAt", "avatarHash", "name"] {
+            #expect(!region.isModified(byEventsOfKind: .update(tableName: "contact", columnNames: [column])), "\(column)")
+        }
+        #expect(region.isModified(byEventsOfKind: .update(tableName: "contact", columnNames: ["subscription"])))
+        #expect(region.isModified(byEventsOfKind: .update(tableName: "contact", columnNames: ["isBlocked"])))
+    }
 }

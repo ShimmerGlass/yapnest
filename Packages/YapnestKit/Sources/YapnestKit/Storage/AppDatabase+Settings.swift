@@ -264,7 +264,7 @@ extension AppDatabase {
     }
 
     /// `setFlag` for use inside a transaction that does more.
-    static func setFlag(_ db: Database, _ key: SettingKey, _ on: Bool) throws {
+    static func setFlagRecordingSync(_ db: Database, _ key: SettingKey, _ on: Bool) throws {
         try setSettingRecordingSync(db, key, on ? "1" : "0")
     }
 
