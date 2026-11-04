@@ -70,8 +70,8 @@ public struct NotificationFetcher: Sendable {
             if Task.isCancelled { return .failed("Cancelled") }
             let lastCatchUp = await Self.queue.lastCatchUp
             switch Self.plan(arrived: arrived, lastCatchUp: lastCatchUp, now: Date(), timeout: timeout) {
-            case .claimOnly:
-                return claim()
+            case .claimOnly(let caughtUp):
+                return claim(caughtUp: caughtUp)
             case .catchUp(let lockWait, let timeout):
                 // Only a catch-up that finished, or one that found the app
                 // holding the session (it has the connection and notifies by
@@ -90,8 +90,10 @@ public struct NotificationFetcher: Sendable {
     }
 
     enum Plan: Equatable {
-        /// Only hand out what earlier catch-ups stored.
-        case claimOnly
+        /// Only hand out what earlier catch-ups stored. `caughtUp` is whether
+        /// one ran after the push arrived, so that an empty claim says there
+        /// was nothing to show; otherwise the push was never looked into.
+        case claimOnly(caughtUp: Bool)
         case catchUp(lockWait: TimeInterval, timeout: TimeInterval)
     }
 
@@ -104,9 +106,9 @@ public struct NotificationFetcher: Sendable {
     /// the front of the queue at `now`. Its deadline is `timeout` after it
     /// arrived, however long it waited behind others.
     static func plan(arrived: Date, lastCatchUp: Date, now: Date, timeout: TimeInterval) -> Plan {
-        if lastCatchUp > arrived { return .claimOnly }
+        if lastCatchUp > arrived { return .claimOnly(caughtUp: true) }
         let remaining = arrived.addingTimeInterval(timeout).timeIntervalSince(now)
-        if remaining < minimumCatchUp { return .claimOnly }
+        if remaining < minimumCatchUp { return .claimOnly(caughtUp: false) }
         let lockWait = min(maxLockWait, remaining)
         return .catchUp(lockWait: lockWait, timeout: remaining - lockWait)
     }
@@ -141,9 +143,9 @@ public struct NotificationFetcher: Sendable {
         }
     }
 
-    private func claim() -> Outcome {
+    private func claim(caughtUp: Bool) -> Outcome {
         do {
-            return try claimed(from: account.files.openDatabase())
+            return try claimed(from: account.files.openDatabase(), caughtUp: caughtUp)
         } catch {
             return .failed(error.localizedDescription)
         }

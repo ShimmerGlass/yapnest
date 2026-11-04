@@ -20,8 +20,8 @@ struct NotificationFetchPlanTests {
     }
 
     @Test func aPushWithTooLittleLeftOnlyClaims() {
-        #expect(plan(waited: 16.5) == .claimOnly)
-        #expect(plan(waited: 25) == .claimOnly)
+        #expect(plan(waited: 16.5) == .claimOnly(caughtUp: false))
+        #expect(plan(waited: 25) == .claimOnly(caughtUp: false))
         #expect(plan(waited: 16) == .catchUp(lockWait: 3, timeout: 1))
     }
 
@@ -33,8 +33,24 @@ struct NotificationFetchPlanTests {
     }
 
     @Test func aPushOlderThanTheLatestCatchUpOnlyClaims() {
-        #expect(plan(lastCatchUp: start.addingTimeInterval(1), waited: 2) == .claimOnly)
-        #expect(plan(lastCatchUp: start.addingTimeInterval(-1), waited: 2) != .claimOnly)
+        #expect(plan(lastCatchUp: start.addingTimeInterval(1), waited: 2) == .claimOnly(caughtUp: true))
+        #expect(plan(lastCatchUp: start.addingTimeInterval(-1), waited: 2) != .claimOnly(caughtUp: true))
+    }
+
+    @Test func aPushLeftToClaimWithoutAnyCatchUpAfterItIsNotSilencedWhenNothingIsClaimed() {
+        guard case .claimOnly(let caughtUp) = plan(lastCatchUp: start.addingTimeInterval(-1), waited: 18) else {
+            Issue.record("expected a claim")
+            return
+        }
+        guard case .incomplete = NotificationFetcher.outcome(new: [], edited: [], badge: 0, caughtUp: caughtUp) else {
+            Issue.record("an empty claim must not be quiet")
+            return
+        }
+        guard case .claimOnly(let covered) = plan(lastCatchUp: start.addingTimeInterval(1), waited: 18),
+              case .notifications = NotificationFetcher.outcome(new: [], edited: [], badge: 0, caughtUp: covered) else {
+            Issue.record("a push a later catch-up covered stays quiet when empty")
+            return
+        }
     }
 }
 
