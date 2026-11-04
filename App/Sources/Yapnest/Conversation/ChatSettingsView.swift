@@ -222,13 +222,17 @@ struct ChatSettingsView: View {
 
                 if group == nil {
                     Section {
-                        NavigationLink {
-                            NotificationSoundPicker(selection: Binding(get: { notificationSound }, set: setNotificationSound))
-                        } label: {
-                            LabeledContent {
-                                Text(NotificationSound.displayName(of: notificationSound))
+                        // The Mac plays its default sound whatever was chosen
+                        // (`NotificationSound.Choice.unSound`), so it offers no choice.
+                        if !Platform.isMac {
+                            NavigationLink {
+                                NotificationSoundPicker(selection: Binding(get: { notificationSound }, set: setNotificationSound))
                             } label: {
-                                Label("Notification sound", systemImage: "speaker.wave.2")
+                                LabeledContent {
+                                    Text(NotificationSound.displayName(of: notificationSound))
+                                } label: {
+                                    Label("Notification sound", systemImage: "speaker.wave.2")
+                                }
                             }
                         }
                         if !peerCommandEntities.isEmpty {

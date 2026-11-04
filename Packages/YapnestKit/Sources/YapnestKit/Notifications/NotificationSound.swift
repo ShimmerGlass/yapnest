@@ -58,10 +58,25 @@ public enum NotificationSound {
 
 extension NotificationSound.Choice {
     public var unSound: UNNotificationSound? {
-        switch self {
+        #if targetEnvironment(macCatalyst)
+        let played = played(onMac: true)
+        #else
+        let played = played(onMac: false)
+        #endif
+        return switch played {
         case .systemDefault: .default
         case .none: nil
         case .file(let file): UNNotificationSound(named: UNNotificationSoundName(file))
         }
+    }
+
+    /// macOS doesn't play an app's own notification sound: from the bundle,
+    /// the app's or the group's `Library/Sounds`, it takes the name, finds no
+    /// tone and plays a fallback (seen on macOS 26 and 27). It only plays one
+    /// from `~/Library/Sounds`, which the sandbox doesn't let the app write.
+    /// So the Mac plays its default sound for a chat with a sound of its own.
+    func played(onMac: Bool) -> Self {
+        if onMac, case .file = self { return .systemDefault }
+        return self
     }
 }

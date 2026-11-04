@@ -25,6 +25,13 @@ struct NotificationSoundTests {
         #expect(NotificationSound.choice(kind: .chat, stored: nil, isQuiet: true) == .none)
     }
 
+    @Test func theMacPlaysItsDefaultSoundForAChatsOwnSound() {
+        #expect(NotificationSound.Choice.file("hmm.caf").played(onMac: true) == .systemDefault)
+        #expect(NotificationSound.Choice.file("hmm.caf").played(onMac: false) == .file("hmm.caf"))
+        #expect(NotificationSound.Choice.none.played(onMac: true) == .none)
+        #expect(NotificationSound.Choice.systemDefault.played(onMac: true) == .systemDefault)
+    }
+
     @Test func anUnknownNameFallsBackToTheSystemSound() {
         #expect(NotificationSound.choice(kind: .chat, stored: "gone.caf", isQuiet: false) == .systemDefault)
     }
