@@ -235,6 +235,10 @@ final class AppModel {
         !isActive || (chatInFront != nil && peer != chatInFront)
     }
 
+    func showsNotification(_ notification: MessageNotification) -> Bool {
+        showsNotification(for: notification.isInvitation ? nil : notification.peer)
+    }
+
     /// Unread messages per chat, as the badge counts them.
     private(set) var unreadCounts: [JID: Int] = [:]
     /// Kept for a session that appears while the app is already away.
@@ -920,14 +924,11 @@ final class AppModel {
                 }.value
                 guard self.session === session else { continue }
                 // Asked again now: the user may have moved on while it was claimed.
-                let shown = { (list: [MessageNotification]) in
-                    list.filter { self.showsNotification(for: $0.isInvitation ? nil : $0.peer) }
-                }
-                let notifications = shown(claimed.0), edited = shown(claimed.1)
+                let notifications = claimed.0.filter { showsNotification($0) }, edited = claimed.1.filter { showsNotification($0) }
                 guard !notifications.isEmpty || !edited.isEmpty else { continue }
                 await MessageNotification.replaceDelivered(edited, badge: badge, avatars: session.avatars)
                 await MessageNotification.replaceHeld(notifications, badge: badge, avatars: session.avatars)
-                for notification in notifications where !notification.isQuiet && showsNotification(for: notification.isInvitation ? nil : notification.peer) {
+                for notification in notifications where !notification.isQuiet {
                     try? await UNUserNotificationCenter.current().add(await notification.request(badge: badge, avatars: session.avatars))
                 }
             } while claimsAgain

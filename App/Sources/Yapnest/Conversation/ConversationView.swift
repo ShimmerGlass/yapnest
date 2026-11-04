@@ -126,7 +126,7 @@ struct ConversationView: View {
 
     /// What the badge counts in every chat but this one.
     private var otherChatsUnread: Int {
-        model.unreadCounts.reduce(0) { $0 + ($1.key == peer ? 0 : $1.value) }
+        model.unreadCounts.values.reduce(0, +) - (model.unreadCounts[peer] ?? 0)
     }
 
     var body: some View {
@@ -147,16 +147,12 @@ struct ConversationView: View {
                             .frame(width: headerWidth)
                     }
                 }
-                if !Platform.usesChatHeader, sizeClass == .compact, otherChatsUnread > 0 {
+                let otherUnread = Platform.usesChatHeader || sizeClass != .compact ? 0 : otherChatsUnread
+                if otherUnread > 0 {
                     ToolbarItem(placement: .topBarLeading) {
-                        Text(otherChatsUnread, format: .number)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 7)
-                            .frame(minWidth: 20, minHeight: 20)
-                            .background(.tint, in: Capsule())
+                        UnreadCountBadge(count: otherUnread)
                             .accessibilityElement(children: .ignore)
-                            .accessibilityLabel("\(otherChatsUnread) unread in other chats")
+                            .accessibilityLabel("\(otherUnread) unread in other chats")
                             .accessibilityIdentifier("otherChatsUnread")
                     }
                 }

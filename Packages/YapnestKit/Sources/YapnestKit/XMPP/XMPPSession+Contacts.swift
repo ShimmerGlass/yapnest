@@ -25,16 +25,13 @@ extension XMPPSession {
     /// Writes to the database, so call it off the main thread.
     public func addContactAndWait(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {
         guard jid != account else { return }
-        guard await waitForConnection() else {
-            try queueRosterChange(jid, kind: .add, name: name, preauth: preauth)
-            return
+        if await waitForConnection() {
+            do {
+                try await addContactNow(jid, name: name, preauth: preauth)
+                return
+            } catch where !(error is CancellationError) && !ServerError.isFinalRefusal(error) {}
         }
-        do {
-            try await addContactNow(jid, name: name, preauth: preauth)
-        } catch {
-            guard !(error is CancellationError), !ServerError.isFinalRefusal(error) else { throw error }
-            try queueRosterChange(jid, kind: .add, name: name, preauth: preauth)
-        }
+        try queueRosterChange(jid, kind: .add, name: name, preauth: preauth)
     }
 
     func addContactNow(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {

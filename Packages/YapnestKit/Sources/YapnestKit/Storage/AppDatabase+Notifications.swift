@@ -97,7 +97,7 @@ extension AppDatabase {
             // Claimed with the messages, in the same transaction, so that the
             // app and the extension can't both show one.
             let invitations = try Self.claimInvitations(db, notifies: notifies)
-            let silencedId = try peer.flatMap { try Conversation.filter(Column("peer") == $0).fetchOne(db)?.id }
+            let silencedId = try peer.flatMap { try Self.conversationId(db, peer: $0) }
             return (
                 try messages.compactMap {
                     try Self.notification(db, for: $0, claimedAt: notifies && $0.conversationId != silencedId ? now : nil)

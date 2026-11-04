@@ -1120,12 +1120,7 @@ private struct ChatListRow: View {
                                 .accessibilityLabel(status.spokenNameFromYou)
                         }
                         if item.notifyingUnreadCount > 0 {
-                            Text(item.notifyingUnreadCount, format: .number)
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 6)
-                                .frame(minWidth: 20, minHeight: 20)
-                                .background(Capsule().fill(Color.accentColor))
+                            UnreadCountBadge(count: item.notifyingUnreadCount)
                         } else if item.unreadCount > 0 {
                             // Unread, but nothing that notifies: a dot, not a count.
                             Circle()
@@ -1268,5 +1263,19 @@ private final class OpenedItems {
     subscript(peer: JID) -> ChatListItem? {
         get { items[peer] }
         set { items[peer] = newValue }
+    }
+}
+
+/// A chat's count of unread messages, as the list and the chat's back button show it.
+struct UnreadCountBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text(count, format: .number)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .frame(minWidth: 20, minHeight: 20)
+            .background(Capsule().fill(Color.accentColor))
     }
 }

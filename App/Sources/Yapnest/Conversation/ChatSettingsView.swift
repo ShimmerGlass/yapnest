@@ -307,13 +307,8 @@ struct ChatSettingsView: View {
 
                 if group == nil, peer != session.account, contact?.isBlocked != true {
                     Section {
-                        if contact?.pendingRoster == .remove {
-                            LabeledContent("Remove from Contacts") {
-                                Text("Waiting to send")
-                            }
-                            .foregroundStyle(.secondary)
-                        } else if contact?.pendingRoster == .add {
-                            LabeledContent("Add to Contacts") {
+                        if let pending = contact?.pendingRoster, pending == .remove || pending == .add {
+                            LabeledContent(pending == .add ? "Add to Contacts" : "Remove from Contacts") {
                                 Text("Waiting to send")
                             }
                             .foregroundStyle(.secondary)
