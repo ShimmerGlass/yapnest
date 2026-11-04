@@ -49,19 +49,17 @@ struct EncryptNewChatsTests {
         #expect(try db.isEncrypted(with: room) == false)
     }
 
-    @Test func itSyncsLikeTheOtherPrivacySettings() throws {
+    @Test func itStaysOnThisDeviceWhateverTheServerWrites() throws {
+        // The account's server can write the settings node, and a newer "0"
+        // from it turned encryption off for every new chat.
         let db = try AppDatabase.inMemory()
-        #expect(AppDatabase.syncedGlobalKeys[.encryptsNewChats] != nil)
-        #expect(AppDatabase.syncedGlobalKeys[.welcomeShown] == nil)
-
         let off = SettingsEntry(key: "encryptsNewChats", value: "0", version: SettingsVersion(ms: 100, counter: 0), by: "other")
         let result = try db.writer.write { try AppDatabase.applyRemote($0, item: "global", entries: [off]) }
-        #expect(result.changedGlobalKeys == [.encryptsNewChats])
-        #expect(try db.isEncrypted(with: bob) == false)
+        #expect(result.changedGlobalKeys.isEmpty)
+        #expect(try db.isEncrypted(with: bob))
 
-        try db.setFlag(.encryptsNewChats, true)
+        try db.setFlag(.encryptsNewChats, false)
         let published = try db.reader.read { try AppDatabase.syncedEntries($0, item: "global") }
-        let entry = try #require(published.first { $0.key == "encryptsNewChats" })
-        #expect(entry.version > off.version)
+        #expect(published.first { $0.key == "encryptsNewChats" } == off, "only what the server held, never ours")
     }
 }

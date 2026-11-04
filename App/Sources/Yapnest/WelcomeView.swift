@@ -15,7 +15,7 @@ struct WelcomeView: View {
     @State private var sharesLastSeen = false
     @State private var gifsEnabled = true
     /// What was stored when the screen opened. Only what the user changed is
-    /// written: each write is published to the other devices, and Last Seen
+    /// written: each synced one is published to the other devices, and Last Seen
     /// also sends a new presence.
     @State private var stored: Choices?
     /// The stored values are read off the main thread; until then the switches

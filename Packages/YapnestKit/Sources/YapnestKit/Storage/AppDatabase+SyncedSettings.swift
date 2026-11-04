@@ -132,12 +132,17 @@ extension AppDatabase {
         )
     }
 
+    /// Not "encrypt new chats": the node is whitelist, which keeps other
+    /// users out but not the account's own server, which could write a newer
+    /// "0" and have every new chat start in plaintext. The server already sees
+    /// presence and holds the profile, so the other privacy settings give it
+    /// nothing it couldn't take; encryption is the one thing it can't
+    /// otherwise reach, so it stays on each device.
     static let syncedGlobalKeys: [SettingKey: SyncedKey] = [
         .linkPreviews: globalKey(.linkPreviews, default: LinkPreviewSetting.askPerConversation.rawValue),
         .gifs: globalKey(.gifs, default: "1"),
         .sendsReadMarkers: globalKey(.sendsReadMarkers, default: "1"),
         .sendsChatStates: globalKey(.sendsChatStates, default: "1"),
-        .encryptsNewChats: globalKey(.encryptsNewChats, default: "1"),
         .sharesLastSeen: globalKey(.sharesLastSeen, default: "0"),
         .downloadsFromGroupMembers: globalKey(.downloadsFromGroupMembers, default: "1"),
         .relaysCalls: globalKey(.relaysCalls, default: "0"),
