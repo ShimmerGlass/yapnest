@@ -463,8 +463,14 @@ extension XMPPSession {
     /// Whether a signal read back from the archive says that the call has
     /// been answered or given up, which the machine hasn't been told when the
     /// connection broke before it came. The proposes and the rest are only
-    /// the log's.
+    /// the log's. A call of ours waiting for an answer hears only a reject: a
+    /// proceed read back late would start a session with a device that has
+    /// long since given up.
     static func archivedSignalEndsRinging(_ signal: CallSignal, in phase: CallPhase?) -> Bool {
+        if phase?.isAwaitingAnswer == true {
+            if case .reject = signal.action { return true }
+            return false
+        }
         guard phase == .incoming || phase == .accepted else { return false }
         return switch signal.action {
         case .proceed, .accept, .reject, .retract: true

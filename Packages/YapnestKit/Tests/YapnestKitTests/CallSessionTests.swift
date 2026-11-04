@@ -267,6 +267,29 @@ struct CallSessionOutgoingTests {
         await eventually("the media to close") { media.isClosed }
     }
 
+    @Test(arguments: [false, true]) func anArchivedRejectEndsACallOfOursStillRinging(ringing: Bool) async throws {
+        let h = try CallSessionHarness()
+        try h.session.startCall(to: alice)
+        let sid = try #require(h.session.callState.value).sid
+        if ringing {
+            h.receive(h.jmi("ringing", sid: sid))
+            #expect(h.phase == .ringing)
+        }
+        // Alice declined while our stream was down; only the catch-up has it.
+        h.receive(h.jmi("reject", sid: sid, inner: "<reason xmlns='urn:xmpp:jingle:1'><decline/></reason>"), source: .archive(serverId: "a1", timestamp: Date().addingTimeInterval(-5)))
+        await eventually("the ringing ends") { h.phase == .ended(.declined) }
+    }
+
+    @Test func anArchivedProceedDoesNotStartASessionForACallOfOurs() async throws {
+        let h = try CallSessionHarness()
+        try h.session.startCall(to: alice)
+        let sid = try #require(h.session.callState.value).sid
+        h.receive(h.jmi("proceed", sid: sid), source: .archive(serverId: "a1", timestamp: Date().addingTimeInterval(-5)))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(h.phase == .proposing)
+        #expect(h.jingleIqs("session-initiate").isEmpty)
+    }
+
     @Test func candidatesAreTrickledBothWays() async throws {
         let h = try CallSessionHarness()
         try h.session.startCall(to: alice)
