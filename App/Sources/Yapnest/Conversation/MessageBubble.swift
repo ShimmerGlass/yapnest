@@ -84,7 +84,7 @@ struct MessageBubble: View {
             if let location = content.location {
                 LocationCard(
                     location: location, display: { model.mapDisplay(for: message) }, showMap: { model.showMap(of: message) },
-                    agree: { model.agreeToMaps(on: message) }, notNow: { model.turnOffMaps() },
+                    agree: { model.agreeToMaps(on: message) }, notNow: { model.dismissMapNotice() },
                 )
                 .bubbleSpacingAfter(6)
             }

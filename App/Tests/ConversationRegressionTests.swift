@@ -180,6 +180,27 @@ struct ConversationRegressionTests {
         #expect(f.model.mapDisplay(for: moved) == .map)
     }
 
+    @Test func notNowOnlyDismissesTheNoticeInThatOpenChat() async throws {
+        let f = try ConversationFixture()
+        let place = try f.add("geo:48.85,2.35", read: true)
+        let before = f.database.mapPreviewSettings
+        await f.start()
+        #expect(f.model.mapDisplay(for: place) == .askConsent)
+
+        f.model.dismissMapNotice()
+        #expect(f.model.mapDisplay(for: place) == .off)
+        #expect(f.database.mapPreviewSettings == before)
+        #expect(f.database.flag(.mapConsent, default: false) == false)
+
+        try f.database.agreeToMapPreviews()
+        await eventually("the consent never reached the model") { f.model.mapDisplay(for: place) == .tapToShow }
+
+        let reopened = try ConversationFixture()
+        let again = try reopened.add("geo:48.85,2.35", read: true)
+        await reopened.start()
+        #expect(reopened.model.mapDisplay(for: again) == .askConsent)
+    }
+
     @Test func aContactTheUserAddedIsTrustedWithoutATap() async throws {
         let f = try ConversationFixture()
         let place = try f.add("geo:48.85,2.35", read: true)

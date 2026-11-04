@@ -420,6 +420,8 @@ final class ConversationModel {
     /// message is named with its body, so a correction that moves the pin
     /// needs a tap of its own.
     private(set) var shownMaps: Set<ShownMap> = []
+    /// Set by "Not Now", for this open chat only. Read by the cards alone.
+    private(set) var mapNoticeDismissed = false
     struct ShownMap: Hashable {
         let id: Int64
         let body: String
@@ -1981,10 +1983,11 @@ final class ConversationModel {
 
     /// Worked out when a card is drawn, from what only cards observe.
     func mapDisplay(for message: Message) -> MapPreview.Display {
-        mapSettings.display(
+        let display = mapSettings.display(
             trusted: mapTrust.trusts(message, groupIsPrivate: groupIsPrivate),
             tappedToShow: ShownMap(message).map(shownMaps.contains) ?? false,
         )
+        return display == .askConsent && mapNoticeDismissed ? .off : display
     }
 
     func showMap(of message: Message) {
@@ -1997,8 +2000,10 @@ final class ConversationModel {
         write { [database = session.database] in try database.agreeToMapPreviews() }
     }
 
-    func turnOffMaps() {
-        write { [database = session.database] in try database.turnOffMapPreviews() }
+    /// "Not Now" only dismisses the notice in this open chat, as the GIF
+    /// notice's does: nothing is stored, so the next time the chat opens it asks again.
+    func dismissMapNotice() {
+        mapNoticeDismissed = true
     }
 
     private func redrawLinkedMessages() {

@@ -41,7 +41,7 @@ struct MapPreviewTests {
         #expect(!db.mapPreviewSettings.switchIsOn)
         try db.agreeToMapPreviews()
         #expect(db.mapPreviewSettings.switchIsOn)
-        try db.turnOffMapPreviews()
+        try db.setMapPreviews(false)
         #expect(!db.mapPreviewSettings.switchIsOn)
         try db.setMapPreviews(true)
         #expect(db.mapPreviewSettings.switchIsOn)
@@ -58,12 +58,6 @@ struct MapPreviewTests {
         try db.setMapPreviews(false)
         #expect(db.mapPreviewSettings.enabled == false)
         #expect(try db.reader.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM syncedEntry WHERE item = 'global' AND key = 'mapPreviews'") } == 1)
-    }
-
-    @Test func notNowTurnsMapsOffWithoutConsent() throws {
-        let db = try AppDatabase.inMemory()
-        try db.turnOffMapPreviews()
-        #expect(db.mapPreviewSettings == MapPreview.Settings(enabled: false, consented: false))
     }
 
     @Test func showMapsRecordsConsentAndKeepsTheFlag() throws {

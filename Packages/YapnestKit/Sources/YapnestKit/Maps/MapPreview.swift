@@ -111,9 +111,4 @@ extension AppDatabase {
     public func agreeToMapPreviews() throws {
         try setFlag(.mapConsent, true)
     }
-
-    /// "Not Now" on a card: the Settings switch, with no consent recorded.
-    public func turnOffMapPreviews() throws {
-        try setFlag(.mapPreviews, false)
-    }
 }
