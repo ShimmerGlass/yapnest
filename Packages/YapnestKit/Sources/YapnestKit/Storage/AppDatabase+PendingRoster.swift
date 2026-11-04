@@ -6,18 +6,21 @@ extension AppDatabase {
     /// server confirms; it shows the change as waiting. A later change
     /// replaces an earlier unsent one that it makes pointless, except the
     /// one in flight (`inFlight`, a row id), which the server may already have.
-    func queueRosterChange(_ jid: JID, kind: PendingRosterKind, name: String? = nil, inFlight: Int64?, at date: Date = Date()) throws {
+    func queueRosterChange(_ jid: JID, kind: PendingRosterKind, name: String? = nil, preauth: String? = nil, inFlight: Int64?, at date: Date = Date()) throws {
         try writer.write { db in
             let earlier = try PendingRosterChange.filter(Column("jid") == jid).order(Column("id")).fetchAll(db)
             let replaced: Set<PendingRosterKind> = switch kind {
             case .rename: [.rename]
-            case .remove: [.rename, .remove]
+            // A removal cancels an add that wasn't sent, and an add replaces
+            // a removal that wasn't sent or an earlier add (the latest name wins).
+            case .remove: [.rename, .remove, .add]
+            case .add: [.remove, .add]
             case .accept, .decline: [.accept, .decline]
             }
             for change in earlier where replaced.contains(change.kind) && change.id != inFlight {
                 _ = try change.delete(db)
             }
-            var change = PendingRosterChange(jid: jid, kind: kind, name: kind == .rename ? name : nil, createdAt: date)
+            var change = PendingRosterChange(jid: jid, kind: kind, name: kind == .rename || kind == .add ? name : nil, preauth: kind == .add ? preauth : nil, createdAt: date)
             try change.insert(db)
             try Self.refreshPendingRoster(db, jid)
         }
@@ -49,7 +52,7 @@ extension AppDatabase {
     }
 
     /// What the contact shows of the changes waiting for it: the latest answer
-    /// to a request or removal, and the latest rename.
+    /// to a request, add or removal, and the latest rename.
     private static func refreshPendingRoster(_ db: Database, _ jid: JID) throws {
         let changes = try PendingRosterChange.filter(Column("jid") == jid).order(Column("id")).fetchAll(db)
         let answer = changes.last { $0.kind != .rename }?.kind

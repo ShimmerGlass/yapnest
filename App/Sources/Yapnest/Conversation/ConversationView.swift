@@ -444,7 +444,7 @@ struct ConversationView: View {
     /// Someone the user hasn't added or approved wrote to us, even if the
     /// server put them in the roster.
     private var isStranger: Bool {
-        screen.isLoaded && group == nil && peer != session.account && contact?.hasConsent != true && contact?.isBlocked != true
+        screen.isLoaded && group == nil && peer != session.account && contact?.hasConsent != true && contact?.pendingRoster != .add && contact?.isBlocked != true
     }
 
     private var strangerBanner: some View {

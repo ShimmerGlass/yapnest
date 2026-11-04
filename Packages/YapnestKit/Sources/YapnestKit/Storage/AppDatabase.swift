@@ -976,6 +976,12 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v61-pending-roster-preauth") { db in
+            try db.alter(table: "pendingRosterChange") { t in
+                t.add(column: "preauth", .text)
+            }
+        }
+
         return migrator
     }
 

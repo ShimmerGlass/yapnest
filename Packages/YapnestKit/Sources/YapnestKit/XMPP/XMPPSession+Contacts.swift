@@ -17,15 +17,27 @@ extension XMPPSession {
     }
 
     /// Adds `jid` and asks to subscribe to it, waiting for the server to take
-    /// the roster item and throwing if it refuses or never answers. The
-    /// JID counts as added, and the subscription request goes out, only once
-    /// it has. Writes to the database, so call it off the main thread.
+    /// the roster item and throwing if it refuses for good. The JID counts as
+    /// added, and the subscription request goes out, only once it has.
+    /// Offline, or when the connection drops or the server doesn't answer in
+    /// time, the add is queued instead and returns: it shows as waiting and is
+    /// sent on the next connect, with a warning if the server then refuses.
+    /// Writes to the database, so call it off the main thread.
     public func addContactAndWait(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {
-        guard await waitForConnection() else { throw ContactError.offline }
-        try await addContactNow(jid, name: name, preauth: preauth)
+        guard jid != account else { return }
+        guard await waitForConnection() else {
+            try queueRosterChange(jid, kind: .add, name: name, preauth: preauth)
+            return
+        }
+        do {
+            try await addContactNow(jid, name: name, preauth: preauth)
+        } catch {
+            guard !(error is CancellationError), !ServerError.isFinalRefusal(error) else { throw error }
+            try queueRosterChange(jid, kind: .add, name: name, preauth: preauth)
+        }
     }
 
-    private func addContactNow(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {
+    func addContactNow(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {
         guard jid != account else { return }
         _ = try await retryingPassingErrors {
             try await client.module(.roster).addItem(jid: Martin.JID(jid.martin), name: name, groups: [])

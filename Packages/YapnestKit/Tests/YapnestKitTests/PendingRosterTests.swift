@@ -418,6 +418,88 @@ struct PendingRosterTests {
         #expect(presences(.subscribe).count == 1)
     }
 
+    // MARK: Adding a contact
+
+    private var subscribes: [Presence] { presences(.subscribe) }
+
+    @Test func anAddMadeOfflineWaitsAndIsSentWithItsNameAndTokenOnConnect() async throws {
+        try await session.addContactAndWait(stranger, name: "Stray", preauth: "tok")
+        #expect(queued.map(\.kind) == [.add])
+        #expect(queued.first?.name == "Stray")
+        #expect(queued.first?.preauth == "tok")
+        #expect(try contact(stranger).pendingRoster == .add)
+        #expect(try !db.hasConsented(stranger))
+        #expect(wire.written.isEmpty)
+
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually { queued.isEmpty })
+        #expect(rosterSets.map { $0.attribute("jid") } == ["stranger@example.net"])
+        #expect(rosterSets.first?.attribute("name") == "Stray")
+        #expect(subscribes.count == 1)
+        #expect(subscribes.first?.firstChild(name: "preauth", xmlns: "urn:xmpp:pars:0")?.attribute("token") == "tok")
+        let done = try contact(stranger)
+        #expect(done.pendingRoster == nil)
+        #expect(done.isAddedByUser)
+    }
+
+    @Test func anAddThatHitAPassingErrorIsQueuedInsteadOfFailing() async throws {
+        connect { FakeWire.error(to: $0, condition: "resource-constraint", type: "wait") }
+        try await session.addContactAndWait(stranger)
+        #expect(queued.map(\.kind) == [.add])
+        #expect(try contact(stranger).pendingRoster == .add)
+        #expect(try !db.hasConsented(stranger))
+    }
+
+    @Test func anAddTheServerRefusesWhileWaitingStillThrows() async throws {
+        connect { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
+        await #expect(throws: (any Error).self) { try await session.addContactAndWait(stranger) }
+        #expect(queued.isEmpty)
+    }
+
+    @Test func aQueuedAddTheServerRefusesForGoodIsDroppedWithAWarning() async throws {
+        try await session.addContactAndWait(stranger)
+        connect { FakeWire.error(to: $0, condition: "forbidden", type: "auth") }
+        session.sendPendingRosterChanges()
+        #expect(await eventually { session.warnings.current.count == 1 && queued.isEmpty })
+        #expect(try contact(stranger).pendingRoster == nil)
+        #expect(try !db.hasConsented(stranger))
+        #expect(subscribes.isEmpty)
+    }
+
+    @Test func aRemovalCancelsAnAddThatWasNotSent() async throws {
+        try await session.addContactAndWait(stranger)
+        try await session.removeContact(stranger)
+        #expect(queued.map(\.kind) == [.remove])
+
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually { queued.isEmpty })
+        #expect(rosterSets.isEmpty)
+        #expect(subscribes.isEmpty)
+    }
+
+    @Test func anAddReplacesARemovalThatWasNotSent() async throws {
+        try await session.removeContact(alice)
+        try await session.addContactAndWait(alice)
+        #expect(queued.map(\.kind) == [.add])
+        #expect(try contact(alice).pendingRoster == .add)
+    }
+
+    @Test func aLaterAddReplacesAnEarlierOne() async throws {
+        try await session.addContactAndWait(stranger, name: "One", preauth: "a")
+        try await session.addContactAndWait(stranger, name: "Two", preauth: "b")
+        #expect(queued.map(\.name) == ["Two"])
+        #expect(queued.map(\.preauth) == ["b"])
+    }
+
+    @Test func anAddBeingSentIsNotReplacedByARemoval() async throws {
+        try await session.addContactAndWait(stranger)
+        let id = try #require(queued.first?.id)
+        try db.queueRosterChange(stranger, kind: .remove, inFlight: id)
+        #expect(queued.map(\.kind) == [.add, .remove])
+    }
+
     // MARK: Storage
 
     @Test func theTableAndColumnsAreAddedToADatabaseFromBefore() throws {
@@ -429,5 +511,15 @@ struct PendingRosterTests {
         let contact = try queue.read { try Contact.fetchOne($0, key: YapnestKit.JID("a@example.org")!) }
         #expect(contact?.pendingRoster == nil)
         #expect(contact?.pendingRename == false)
+    }
+
+    @Test func thePreauthColumnIsAddedToAQueueFromBefore() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v60-message-written-at")
+        try queue.write { try $0.execute(sql: "INSERT INTO pendingRosterChange (jid, kind, createdAt) VALUES ('a@example.org', 'remove', '2026-01-01 00:00:00')") }
+        try AppDatabase.migrator.migrate(queue)
+        let change = try queue.read { try PendingRosterChange.fetchOne($0) }
+        #expect(change?.kind == .remove)
+        #expect(change?.preauth == nil)
     }
 }

@@ -312,6 +312,11 @@ struct ChatSettingsView: View {
                                 Text("Waiting to send")
                             }
                             .foregroundStyle(.secondary)
+                        } else if contact?.pendingRoster == .add {
+                            LabeledContent("Add to Contacts") {
+                                Text("Waiting to send")
+                            }
+                            .foregroundStyle(.secondary)
                         } else if contact?.isInRoster == true {
                             destructiveRow("Remove from Contacts", systemImage: "person.badge.minus", action: remove, confirming: $confirmsRemove)
                         } else if contact?.hasContactRequest != true {

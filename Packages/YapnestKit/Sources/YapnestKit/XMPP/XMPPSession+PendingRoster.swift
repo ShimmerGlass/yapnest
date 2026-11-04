@@ -5,11 +5,11 @@ import Foundation
 /// confirms them, so they can be made offline. The contact is untouched
 /// meanwhile (`Contact.pendingRoster`), apart from a rename's name.
 extension XMPPSession {
-    func queueRosterChange(_ jid: JID, kind: PendingRosterKind, name: String? = nil) throws {
+    func queueRosterChange(_ jid: JID, kind: PendingRosterKind, name: String? = nil, preauth: String? = nil) throws {
         try rosterQueueLock.withLock {
             // A change being sent can't be replaced before the server has it.
             let sending = lock.withLock { $0.rosterInFlight }
-            try database.queueRosterChange(jid, kind: kind, name: name, inFlight: sending)
+            try database.queueRosterChange(jid, kind: kind, name: name, preauth: preauth, inFlight: sending)
         }
         sendPendingRosterChanges()
     }
@@ -85,6 +85,8 @@ extension XMPPSession {
             _ = try await retryingPassingErrors { try await client.module(.roster).removeItem(jid: target) }
             // The server's push says the same; this is for the UI, right away.
             try database.removeRosterItem(jid: jid)
+        case .add:
+            try await addContactNow(jid, name: change.name, preauth: change.preauth)
         case .rename:
             guard let contact, contact.isInRoster else { throw ContactError.notInRoster }
             // A roster set replaces the item's name and groups, so the groups are
@@ -94,7 +96,7 @@ extension XMPPSession {
     }
 
     private func postRosterWarning(_ change: PendingRosterChange, error: Error) {
-        let (jid, kind, name) = (change.jid, change.kind, change.name)
+        let (jid, kind, name, preauth) = (change.jid, change.kind, change.name, change.preauth)
         let title: String
         let friendly: String
         switch kind {
@@ -107,6 +109,9 @@ extension XMPPSession {
         case .remove:
             title = String(localized: "Couldn't remove the contact")
             friendly = String(localized: "The server wouldn't remove \(jid.description) from your contacts")
+        case .add:
+            title = String(localized: "Couldn't add the contact")
+            friendly = String(localized: "The server wouldn't add \(jid.description) to your contacts")
         case .rename:
             title = String(localized: "Couldn't save the nickname")
             friendly = String(localized: "The server wouldn't save the nickname for \(jid.description)")
@@ -121,6 +126,7 @@ extension XMPPSession {
                     case .accept: try await acceptContactRequest(from: jid)
                     case .decline: try declineContactRequest(from: jid)
                     case .remove: try await removeContact(jid)
+                    case .add: try queueRosterChange(jid, kind: .add, name: name, preauth: preauth)
                     case .rename: try await setContactName(jid, name: name)
                     }
                 } run: { sendPendingRosterChanges() }

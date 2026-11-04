@@ -112,10 +112,12 @@ struct ContactRequestTests {
         #expect(try !db.hasConsented(alice))
     }
 
-    @Test func addingAndWaitingOfflineThrows() async throws {
+    @Test func addingAndWaitingOfflineQueuesTheAdd() async throws {
         let session = try makeSession(JID("me@example.org")!, database: db)
-        await #expect(throws: XMPPSession.ContactError.self) { try await session.addContactAndWait(alice) }
-        #expect(try db.contact(alice) == nil)
+        try await session.addContactAndWait(alice, name: "Ally", preauth: "tok")
+        #expect(try db.pendingRosterChanges().map(\.kind) == [.add])
+        #expect(try db.contact(alice)?.pendingRoster == .add)
+        #expect(try !db.hasConsented(alice))
     }
 
     @Test func befriendingOfflineChangesNothing() async throws {
