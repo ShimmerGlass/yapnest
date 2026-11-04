@@ -86,7 +86,7 @@ extension XMPPSession {
             // The server's push says the same; this is for the UI, right away.
             try database.removeRosterItem(jid: jid)
         case .add:
-            try await addContactNow(jid, name: change.name, preauth: change.preauth)
+            try await addContactAnsweringRequest(jid, name: change.name, preauth: change.preauth)
         case .rename:
             guard let contact, contact.isInRoster else { throw ContactError.notInRoster }
             // A roster set replaces the item's name and groups, so the groups are

@@ -29,11 +29,21 @@ extension XMPPSession {
         // add would undo it: the queue sends them in order.
         if try !database.hasPendingRosterChange(jid), await waitForConnection() {
             do {
-                try await addContactNow(jid, name: name, preauth: preauth)
+                try await addContactAnsweringRequest(jid, name: name, preauth: preauth)
                 return
             } catch where !(error is CancellationError) && !ServerError.isFinalRefusal(error) {}
         }
         try queueRosterChange(jid, kind: .add, name: name, preauth: preauth)
+    }
+
+    /// An add, which approves them as an accept does, so a request of theirs
+    /// is answered by it and leaves the list.
+    func addContactAnsweringRequest(_ jid: JID, name: String?, preauth: String?) async throws {
+        try await addContactNow(jid, name: name, preauth: preauth)
+        guard (try? database.contact(jid))??.hasContactRequest == true else { return }
+        try database.clearContactRequest(from: jid)
+        // As for an accept: their avatar is fetched only once they're approved.
+        fetchAvatar(of: jid)
     }
 
     func addContactNow(_ jid: JID, name: String? = nil, preauth: String? = nil) async throws {

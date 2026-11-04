@@ -443,6 +443,22 @@ struct PendingRosterTests {
         #expect(done.isAddedByUser)
     }
 
+    @Test func aQueuedAddForSomeoneWhoAskedAnswersTheirRequest() async throws {
+        #expect(try contact(stranger).hasContactRequest)
+        try await session.addContactAndWait(stranger)
+        connect()
+        session.sendPendingRosterChanges()
+        #expect(await eventually { queued.isEmpty })
+        #expect(try !contact(stranger).hasContactRequest, "approved by the add, so off the list")
+    }
+
+    @Test func anAddMadeOnlineForSomeoneWhoAskedAnswersTheirRequest() async throws {
+        connect()
+        try await session.addContactAndWait(stranger)
+        #expect(queued.isEmpty)
+        #expect(try !contact(stranger).hasContactRequest)
+    }
+
     @Test func anAddThatHitAPassingErrorIsQueuedInsteadOfFailing() async throws {
         connect { FakeWire.error(to: $0, condition: "resource-constraint", type: "wait") }
         try await session.addContactAndWait(stranger)
