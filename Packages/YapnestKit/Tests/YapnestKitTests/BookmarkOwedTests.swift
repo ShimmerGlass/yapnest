@@ -20,6 +20,17 @@ private final class BookmarkServer: @unchecked Sendable {
     private var refusePublish: (@Sendable (Iq) -> Iq?)?
     private var refuseRetract: (@Sendable (Iq) -> Iq?)?
     private var onPublish: (@Sendable () -> Void)?
+    private var rawHeld: Element?
+    private var rawPublished: Element?
+
+    /// A conference as another client wrote it, served as is.
+    var rawItem: Element? {
+        get { lock.withLock { rawHeld } }
+        set { lock.withLock { rawHeld = newValue } }
+    }
+
+    /// The last conference published, as it came.
+    var publishedElement: Element? { lock.withLock { rawPublished } }
 
     var list: [Bookmark] {
         get { lock.withLock { held } }
@@ -47,7 +58,7 @@ private final class BookmarkServer: @unchecked Sendable {
             let list = Element(name: "items", attributes: ["node": NS.bookmarks])
             for bookmark in self.list {
                 let item = Element(name: "item", attributes: ["id": bookmark.jid.description])
-                item.addChild(bookmark.element)
+                item.addChild(lock.withLock { rawHeld } ?? bookmark.element)
                 list.addChild(item)
             }
             result.addChild(list)
@@ -57,6 +68,7 @@ private final class BookmarkServer: @unchecked Sendable {
             guard let bookmark = Bookmark(id: publish.firstChild(name: "item")?.getAttribute("id") ?? "", payload: publish.firstChild(name: "item")?.firstChild(name: "conference")) else { return nil }
             let (refusal, action) = lock.withLock {
                 publishes.append(bookmark)
+                rawPublished = publish.firstChild(name: "item")?.firstChild(name: "conference")
                 order.append("publish")
                 return (refusePublish, onPublish)
             }
@@ -152,6 +164,43 @@ struct OwedBookmarkTests {
         #expect(await eventually { (try? group().bookmarkOwed) == false })
         #expect(server.published.last?.notify == .never)
         session.cancelAllRejoins()
+    }
+
+    @Test func aRepublishAfterANewNameKeepsAPasswordAndExtensionsOfOtherClients() async throws {
+        let held = try #require(Element.from(string: """
+        <conference xmlns='urn:xmpp:bookmarks:1' name='Cake' autojoin='true'><nick>me</nick><password>s3cret</password>\
+        <extensions><notify xmlns='urn:xmpp:notification-settings:1'><never identity-category='client' identity-type='pc'/><always/></notify>\
+        <other xmlns='urn:example:gajim'>kept</other></extensions></conference>
+        """))
+        server.rawItem = held
+        server.list = [listedAsBefore]
+        await connect()
+        try database.setRoomInfo(room, name: "Pie", isMembersOnly: false, isNonAnonymous: false)
+        session.sendOwedBookmarks()
+
+        #expect(await eventually { server.publishedElement != nil })
+        let sent = try #require(server.publishedElement)
+        #expect(sent.getAttribute("name") == "Pie")
+        #expect(sent.firstChild(name: "password")?.value == "s3cret")
+        let extensions = try #require(sent.firstChild(name: "extensions"))
+        #expect(extensions.firstChild(name: "other")?.value == "kept")
+        let settings = try #require(extensions.firstChild(name: "notify"))
+        #expect(settings.getChildren(name: "never").first?.getAttribute("identity-type") == "pc")
+    }
+
+    @Test func aPasswordInABookmarkIsKeptToJoinWith() async throws {
+        let bookmark = Bookmark(jid: room, name: "Cake", autojoin: true, nick: "me", password: "s3cret")
+        session.reconcileBookmarks([bookmark])
+        #expect(try group().password == "s3cret")
+        #expect(Bookmark(id: room.description, payload: bookmark.element)?.password == "s3cret")
+    }
+
+    @Test func ourPasswordIsNotAddedToABookmarkWithoutOne() async throws {
+        try database.updateGroupChat(room) { $0.password = "ours" }
+        let group = try group()
+        #expect(Bookmark(group).element.firstChild(name: "password") == nil)
+        let held = try #require(Element.from(string: "<conference xmlns='urn:xmpp:bookmarks:1' name='Cake' autojoin='true'><password>theirs</password></conference>"))
+        #expect(Bookmark(group).merged(into: held).firstChild(name: "password")?.value == "theirs")
     }
 
     @Test func aNotifySettingChangedOnlineIsPublishedAndConfirmed() async throws {
@@ -525,6 +574,8 @@ struct OwedLegacyBookmarkTests {
     let session: XMPPSession
     let wire = FakeWire()
     private let sets = Locked(0)
+    private let heldStorage = Locked<Element?>(nil)
+    private let publishedStorage = Locked<Element?>(nil)
 
     init() throws {
         database = try AppDatabase.inMemory()
@@ -536,7 +587,7 @@ struct OwedLegacyBookmarkTests {
 
     private func connect(_ session: XMPPSession? = nil, refusingSetsWith refusal: @escaping @Sendable (Iq) -> Iq) async {
         let session = session ?? self.session
-        let sets = sets
+        let sets = sets, heldStorage = heldStorage, publishedStorage = publishedStorage
         wire.answer { iq in
             if let bind = iq.firstChild(name: "bind"), bind.xmlns == "urn:xmpp:bind:0" || bind.xmlns == "urn:ietf:params:xml:ns:xmpp-bind" {
                 let result = Element(name: "bind", xmlns: "urn:ietf:params:xml:ns:xmpp-bind")
@@ -548,9 +599,17 @@ struct OwedLegacyBookmarkTests {
             }
             guard let pubsub = iq.firstChild(name: "pubsub", xmlns: pubsubNS) else { return nil }
             if pubsub.firstChild(name: "items")?.getAttribute("node") == NS.legacyBookmarks {
-                return FakeWire.error(to: iq, condition: "item-not-found")
+                guard let storage = heldStorage.value else { return FakeWire.error(to: iq, condition: "item-not-found") }
+                let result = Element(name: "pubsub", xmlns: pubsubNS)
+                let list = Element(name: "items", attributes: ["node": NS.legacyBookmarks])
+                let item = Element(name: "item", attributes: ["id": "current"])
+                item.addChild(storage)
+                list.addChild(item)
+                result.addChild(list)
+                return FakeWire.result(to: iq, result)
             }
-            if pubsub.firstChild(name: "publish")?.getAttribute("node") == NS.legacyBookmarks {
+            if let publish = pubsub.firstChild(name: "publish"), publish.getAttribute("node") == NS.legacyBookmarks {
+                publishedStorage.value = publish.firstChild(name: "item")?.firstChild(name: "storage")
                 sets.value += 1
                 return refusal(iq)
             }
@@ -564,6 +623,22 @@ struct OwedLegacyBookmarkTests {
     }
 
     private func group() throws -> GroupChat { try #require(try database.groupChat(room)) }
+
+    @Test func aRepublishOfTheOldKindKeepsAPasswordAndUnknownChildrenOfOtherClients() async throws {
+        heldStorage.value = try #require(Element.from(string: """
+        <storage xmlns='storage:bookmarks'><conference jid='cake@rooms.example.org' name='Cake' autojoin='true'><nick>me</nick>\
+        <password>s3cret</password><extensions><other xmlns='urn:example:conversations'>kept</other></extensions></conference></storage>
+        """))
+        await connect { FakeWire.result(to: $0) }
+        try database.setRoomInfo(room, name: "Pie", isMembersOnly: false, isNonAnonymous: false)
+        session.sendOwedBookmarks()
+
+        #expect(await eventually { publishedStorage.value != nil })
+        let conference = try #require(publishedStorage.value?.firstChild(name: "conference"))
+        #expect(conference.getAttribute("name") == "Pie")
+        #expect(conference.firstChild(name: "password")?.value == "s3cret")
+        #expect(conference.firstChild(name: "extensions")?.firstChild(name: "other")?.value == "kept")
+    }
 
     @Test func aFinalRefusalOfTheOldKindShowsAWarningAndStopsBeingOwed() async throws {
         await connect { forbidden($0) }

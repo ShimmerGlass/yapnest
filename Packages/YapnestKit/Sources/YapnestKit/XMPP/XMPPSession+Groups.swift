@@ -264,13 +264,18 @@ struct Bookmark: Sendable, Equatable {
     var nick: String?
     /// XEP-0492, in the bookmark's extensions; absent means always.
     var notify: GroupChat.Notify
+    /// The password another client wrote in the bookmark. We use it to join
+    /// but never write ours into one, so a republish only carries over
+    /// what the server's copy already holds.
+    var password: String?
 
-    init(jid: JID, name: String?, autojoin: Bool, nick: String?, notify: GroupChat.Notify = .always) {
+    init(jid: JID, name: String?, autojoin: Bool, nick: String?, notify: GroupChat.Notify = .always, password: String? = nil) {
         self.jid = jid
         self.name = name
         self.autojoin = autojoin
         self.nick = nick
         self.notify = notify
+        self.password = password
     }
 
     /// What the group's row says to publish. Comparing two of these tells
@@ -283,44 +288,70 @@ struct Bookmark: Sendable, Equatable {
     init?(id: String, payload: Element?) {
         guard let jid = JID(id), let conference = payload, conference.name == "conference", conference.xmlns == NS.bookmarks else { return nil }
         self.jid = jid
-        (self.name, self.autojoin, self.nick) = Self.conferenceFields(conference)
+        (self.name, self.autojoin, self.nick, self.password) = Self.conferenceFields(conference)
         self.notify = conference.firstChild(name: "extensions")?.firstChild(name: "notify", xmlns: NS.notificationSettings)
-            .flatMap(Self.notify(in:)) ?? .always
+            .flatMap(Self.appliedSetting(in:)).flatMap { GroupChat.Notify(rawValue: $0.name) } ?? .always
     }
 
     /// The fields XEP-0048 and XEP-0402 write alike.
-    static func conferenceFields(_ conference: Element) -> (name: String?, autojoin: Bool, nick: String?) {
-        (conference.getAttribute("name"), ["true", "1"].contains(conference.getAttribute("autojoin")), conference.firstChild(name: "nick")?.value)
+    static func conferenceFields(_ conference: Element) -> (name: String?, autojoin: Bool, nick: String?, password: String?) {
+        (conference.getAttribute("name"), ["true", "1"].contains(conference.getAttribute("autojoin")), conference.firstChild(name: "nick")?.value,
+         conference.firstChild(name: "password")?.value.nonEmpty)
     }
 
+    /// Sets our fields on a conference, which may be one another client
+    /// wrote: what we don't hold stays as it was, so that a password only
+    /// they know isn't taken from every client.
     func addConferenceFields(to conference: Element) {
         if let name { conference.setAttribute("name", value: name) }
         conference.setAttribute("autojoin", value: autojoin ? "true" : "false")
-        if let nick { conference.addChild(Element(name: "nick", cdata: nick)) }
+        if let nick {
+            conference.removeChildren { $0.name == "nick" }
+            conference.addChild(Element(name: "nick", cdata: nick))
+        }
+        if let password {
+            conference.removeChildren { $0.name == "password" }
+            conference.addChild(Element(name: "password", cdata: password))
+        }
     }
 
     /// The setting that applies to us: one for phones, then for clients,
     /// then for everyone.
-    private static func notify(in element: Element) -> GroupChat.Notify? {
-        let settings = element.children.compactMap { child -> (GroupChat.Notify, category: String?, type: String?)? in
-            guard let value = GroupChat.Notify(rawValue: child.name) else { return nil }
-            return (value, child.getAttribute("identity-category"), child.getAttribute("identity-type"))
-        }
+    private static func appliedSetting(in element: Element) -> Element? {
+        let settings = element.children.filter { GroupChat.Notify(rawValue: $0.name) != nil }
         let ranked: [(String?, String?)] = [("client", "phone"), ("client", nil), (nil, nil)]
         return ranked.lazy.compactMap { category, type in
-            settings.first { $0.category == category && $0.type == type }?.0
+            settings.first { $0.getAttribute("identity-category") == category && $0.getAttribute("identity-type") == type }
         }.first
     }
 
-    var element: Element {
-        let conference = Element(name: "conference", xmlns: NS.bookmarks)
+    var element: Element { merged(into: nil) }
+
+    /// The bookmark as XEP-0402 writes it. `existing` is what the server
+    /// holds for the room: its extensions are other clients' to keep, so only
+    /// the setting that applies to us is changed in them.
+    func merged(into existing: Element?) -> Element {
+        let conference = existing.map(Element.init(element:)) ?? Element(name: "conference", xmlns: NS.bookmarks)
         addConferenceFields(to: conference)
-        if notify != .always {
-            let notify = Element(name: "notify", xmlns: NS.notificationSettings)
-            notify.addChild(Element(name: self.notify.rawValue))
-            let extensions = Element(name: "extensions")
-            extensions.addChild(notify)
-            conference.addChild(extensions)
+        let extensions = conference.firstChild(name: "extensions")
+        let settings = extensions?.firstChild(name: "notify", xmlns: NS.notificationSettings)
+        if let applied = settings.flatMap(Self.appliedSetting(in:)) {
+            if applied.name != notify.rawValue {
+                settings?.removeChild(applied)
+                settings?.addChild(Element(name: notify.rawValue, attributes: applied.attributes))
+            }
+        } else if notify != .always {
+            let settings = settings ?? {
+                let created = Element(name: "notify", xmlns: NS.notificationSettings)
+                let extensions = extensions ?? {
+                    let created = Element(name: "extensions")
+                    conference.addChild(created)
+                    return created
+                }()
+                extensions.addChild(created)
+                return created
+            }()
+            settings.addChild(Element(name: notify.rawValue))
         }
         return conference
     }
@@ -2005,7 +2036,7 @@ extension XMPPSession {
             if let group, group.bookmarkOwed, bookmark.autojoin || group.hasLeft || !group.isBookmarked { continue }
             let isIn = group.map { !$0.hasLeft } ?? false
             if bookmark.autojoin {
-                if let group, isIn, group.isBookmarked, group.notify == bookmark.notify,
+                if let group, isIn, group.isBookmarked, group.notify == bookmark.notify, bookmark.password == nil || group.password != nil,
                    bookmark.name?.isEmpty != false || group.name == bookmark.name { continue }
             } else if !isIn {
                 // It says to leave a room we aren't in.
@@ -2050,7 +2081,12 @@ extension XMPPSession {
     }
 
     private func joinBookmarked(_ bookmark: Bookmark, existing group: GroupChat?) throws -> GroupChat {
-        try database.joinGroupChat(bookmark.jid, nickname: bookmark.nick ?? group?.nickname ?? defaultNickname, name: bookmark.name, isBookmarked: true)
+        let joined = try database.joinGroupChat(bookmark.jid, nickname: bookmark.nick ?? group?.nickname ?? defaultNickname, name: bookmark.name, isBookmarked: true)
+        // The join that follows reads the password from the group's row.
+        if let password = bookmark.password, joined.password == nil {
+            try database.updateGroupChat(joined.jid) { $0.password = password }
+        }
+        return joined
     }
 
     private func applyBookmarkFields(_ bookmark: Bookmark) {
@@ -2058,6 +2094,7 @@ extension XMPPSession {
             group.isBookmarked = true
             if let name = bookmark.name, !name.isEmpty { group.name = name }
             group.notify = bookmark.notify
+            if let password = bookmark.password, group.password == nil { group.password = password }
         }
     }
 
@@ -2158,8 +2195,11 @@ extension XMPPSession {
         // Some servers never answer a publish with max_items=max (Openfire),
         // so the wait is bounded, and the old kind of bookmark takes over.
         do {
+            // Other clients' fields in the item are theirs to keep, so what's
+            // held is read and changed rather than written afresh.
+            let held = try await heldBookmark(group.jid)
             try await publishPEPItem(
-                node: NS.bookmarks, itemId: group.jid.description, payload: bookmark.element,
+                node: NS.bookmarks, itemId: group.jid.description, payload: bookmark.merged(into: held),
                 options: options, timeout: Self.bookmarkTimeout,
             )
         } catch let refusal {
@@ -2168,6 +2208,25 @@ extension XMPPSession {
             do { try await publishLegacyBookmark(bookmark) } catch { throw refusal }
         }
         try? database.updateGroupChat(group.jid) { $0.isBookmarked = true }
+    }
+
+    /// The conference the server holds for `room`, if any. A read that fails
+    /// is thrown, as writing without it would drop what it holds.
+    private func heldBookmark(_ room: JID) async throws -> Element? {
+        let read: NodeRead = try await withCheckedThrowingContinuation { continuation in
+            let once = Once()
+            readNode(NS.bookmarks, as: "Bookmarks") { read in
+                if once.first() { continuation.resume(returning: read) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.bookmarkTimeout) {
+                if once.first() { continuation.resume(throwing: TimeoutError()) }
+            }
+        }
+        switch read {
+        case .items(let page): return page.items.first { $0.id == room.description }?.payload
+        case .noNode, .unsupported: return nil
+        case .failed(let error): throw error
+        }
     }
 
     /// Takes the bookmark off the server, with notifications, which XEP-0402

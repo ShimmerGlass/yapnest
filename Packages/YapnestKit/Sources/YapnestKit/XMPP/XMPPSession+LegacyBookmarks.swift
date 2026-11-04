@@ -32,16 +32,19 @@ extension Bookmark {
     init?(legacy conference: Element) {
         guard conference.name == "conference", let jid = conference.getAttribute("jid").flatMap(JID.init(_:)) else { return nil }
         let fields = Self.conferenceFields(conference)
-        self.init(jid: jid, name: fields.name, autojoin: fields.autojoin, nick: fields.nick)
+        self.init(jid: jid, name: fields.name, autojoin: fields.autojoin, nick: fields.nick, password: fields.password)
     }
 
     static func legacyList(in storage: Element) -> [Bookmark] {
         storage.children.compactMap(Bookmark.init(legacy:))
     }
 
-    /// The conference as XEP-0048 writes it.
-    var legacyElement: Element {
-        let conference = Element(name: "conference")
+    /// The conference as XEP-0048 writes it, over `existing` when the list
+    /// holds one, so that what other clients put in it stays.
+    var legacyElement: Element { legacyMerged(into: nil) }
+
+    func legacyMerged(into existing: Element?) -> Element {
+        let conference = existing.map(Element.init(element:)) ?? Element(name: "conference")
         conference.setAttribute("jid", value: jid.description)
         addConferenceFields(to: conference)
         return conference
@@ -67,8 +70,9 @@ extension XMPPSession {
         let room = bookmark.jid
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             updateLegacyBookmarks { storage in
+                let held = storage.children.first { $0.getAttribute("jid") == room.description }
                 storage.removeChildren { $0.getAttribute("jid") == room.description }
-                storage.addChild(bookmark.legacyElement)
+                storage.addChild(bookmark.legacyMerged(into: held))
             } then: { continuation.resume(with: $0) }
         }
         try? database.updateGroupChat(room) { $0.isBookmarked = true }

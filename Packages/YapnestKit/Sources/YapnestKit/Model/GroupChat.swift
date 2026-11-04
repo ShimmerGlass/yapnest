@@ -35,8 +35,10 @@ public struct GroupChat: Codable, Hashable, Sendable, FetchableRecord, Persistab
     /// The room vouches for XEP-0421 occupant ids, so they can be trusted
     /// to tell occupants apart. Elsewhere anyone could forge one.
     public var hasOccupantIds: Bool
-    /// The room's password, from the invitation that gave it. Kept here and
-    /// not in the bookmark: it is only ever sent back to the room, on joining.
+    /// The room's password, from the invitation that gave it. Kept here,
+    /// not added to the bookmark: it is only ever sent back to the room, on
+    /// joining. A password another client wrote in the bookmark is used and
+    /// preserved.
     public var password: String?
     /// What we hold for this group's bookmark isn't on the server yet: a
     /// publish of our fields (name, nickname, notify, autojoin) if we're in,
