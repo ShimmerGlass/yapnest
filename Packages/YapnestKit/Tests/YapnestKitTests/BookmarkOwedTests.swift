@@ -203,6 +203,16 @@ struct OwedBookmarkTests {
         #expect(Bookmark(id: room.description, payload: bookmark.element)?.password == "s3cret")
     }
 
+    @Test func aChangedPasswordInABookmarkReplacesTheOneWeHold() async throws {
+        try database.updateGroupChat(room) { $0.password = "old" }
+        let same = Bookmark(jid: room, name: "Cake", autojoin: true, nick: "me", notify: .always)
+        session.reconcileBookmarks([same])
+        #expect(try group().password == "old")
+
+        session.reconcileBookmarks([Bookmark(jid: room, name: "Cake", autojoin: true, nick: "me", notify: .always, password: "new")])
+        #expect(try group().password == "new")
+    }
+
     @Test func ourPasswordIsNotAddedToABookmarkWithoutOne() async throws {
         try database.updateGroupChat(room) { $0.password = "ours" }
         let group = try group()

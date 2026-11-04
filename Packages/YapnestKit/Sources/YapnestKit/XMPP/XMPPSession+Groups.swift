@@ -2036,7 +2036,7 @@ extension XMPPSession {
             if let group, group.bookmarkOwed, bookmark.autojoin || group.hasLeft || !group.isBookmarked { continue }
             let isIn = group.map { !$0.hasLeft } ?? false
             if bookmark.autojoin {
-                if let group, isIn, group.isBookmarked, group.notify == bookmark.notify, bookmark.password == nil || group.password != nil,
+                if let group, isIn, group.isBookmarked, group.notify == bookmark.notify, bookmark.password == nil || group.password == bookmark.password,
                    bookmark.name?.isEmpty != false || group.name == bookmark.name { continue }
             } else if !isIn {
                 // It says to leave a room we aren't in.
@@ -2082,8 +2082,10 @@ extension XMPPSession {
 
     private func joinBookmarked(_ bookmark: Bookmark, existing group: GroupChat?) throws -> GroupChat {
         let joined = try database.joinGroupChat(bookmark.jid, nickname: bookmark.nick ?? group?.nickname ?? defaultNickname, name: bookmark.name, isBookmarked: true)
-        // The join that follows reads the password from the group's row.
-        if let password = bookmark.password, joined.password == nil {
+        // The join that follows reads the password from the group's row. We
+        // never write ours into a bookmark, so one in a bookmark was written
+        // by another client, and is the newer.
+        if let password = bookmark.password, joined.password != password {
             try database.updateGroupChat(joined.jid) { $0.password = password }
         }
         return joined
@@ -2094,7 +2096,7 @@ extension XMPPSession {
             group.isBookmarked = true
             if let name = bookmark.name, !name.isEmpty { group.name = name }
             group.notify = bookmark.notify
-            if let password = bookmark.password, group.password == nil { group.password = password }
+            if let password = bookmark.password { group.password = password }
         }
     }
 
