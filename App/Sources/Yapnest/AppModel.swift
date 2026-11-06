@@ -241,10 +241,6 @@ final class AppModel {
 
     /// Unread messages per chat, as the badge counts them.
     private(set) var unreadCounts: [JID: Int] = [:]
-    /// The chats with a count above 0, changed only when one gains its first
-    /// unread message or loses its last, for views that only show whether
-    /// there are any: reading the counts would update them on every message.
-    private(set) var chatsWithUnread: Set<JID> = []
     /// Kept for a session that appears while the app is already away.
     @ObservationIgnored private var isBackground = false
     @ObservationIgnored private var suspension: Task<Void, Never>?
@@ -395,6 +391,8 @@ final class AppModel {
                     session.videoCallablePeers.send(peers)
                 }
                 DevFixture.deliverIncoming(into: session.database)
+                // The counts without the badge, which would ask for permission.
+                observeUnread(session, managesBadge: false)
                 showsWelcome = ProcessInfo.processInfo.environment["YAPNEST_DEV_WELCOME"] == "1"
                 phase = .signedIn(session)
             } catch {
@@ -843,7 +841,9 @@ final class AppModel {
     // MARK: Notifications
 
     private func didSignIn(_ session: XMPPSession) {
-        observeUnread(session)
+        // Unit tests replace the model without signing out, which would leave
+        // the old one observing.
+        if environment.managesBadge { observeUnread(session, managesBadge: true) }
         observeShares()
         #if targetEnvironment(macCatalyst)
         idleWatch = IdleWatch(session: session)
@@ -943,18 +943,20 @@ final class AppModel {
         }
     }
 
-    /// Keeps the badge on the unread count, and clears a conversation's
-    /// notifications once it's read, here or on another device.
-    private func observeUnread(_ session: XMPPSession) {
+    /// Keeps the unread counts, and when `managesBadge`, the badge on them,
+    /// clearing a conversation's notifications once it's read, here or on
+    /// another device.
+    private func observeUnread(_ session: XMPPSession, managesBadge: Bool) {
         unreadObservation?.cancel()
         unreadCounts = [:]
-        chatsWithUnread = []
-        guard environment.managesBadge else { return }
-        badgeSync.forget()
+        if managesBadge { badgeSync.forget() }
         let badgeSync = badgeSync
         unreadObservation = Task {
             var last: [JID: Int]?
             await session.database.forEachValue(of: session.database.observeUnreadBadge(), "Unread") { badge in
+                let counts = badge.counts
+                if counts != self.unreadCounts { self.unreadCounts = counts }
+                guard managesBadge else { return }
                 let center = UNUserNotificationCenter.current()
                 // Each call is a round trip to the system, and most writes
                 // leave the count alone. The notification extension sets the
@@ -962,12 +964,8 @@ final class AppModel {
                 // it may have stored something (`BadgeSync`).
                 if badgeSync.shouldSet(badge.count) { try? await center.setBadgeCount(badge.count) }
                 DockBadge.showDot(badge.showsDot)
-                let counts = badge.counts
                 guard counts != last else { return }
                 last = counts
-                self.unreadCounts = counts
-                let chats = Set(counts.filter { $0.value > 0 }.keys)
-                if chats != self.chatsWithUnread { self.chatsWithUnread = chats }
                 // Archived and deleted chats aren't in the counts at all, so
                 // it's what's unread that stays, not what's read that goes.
                 let delivered = await center.deliveredNotifications()

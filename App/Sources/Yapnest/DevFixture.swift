@@ -159,15 +159,20 @@ enum DevFixture: String, CaseIterable {
 
     /// With `YAPNEST_DEV_INCOMING=<seconds>[,<seconds>...]`, a message from the chat
     /// named by `YAPNEST_DEV_OPEN` arrives after each delay, for watching what
-    /// the open chat does with one.
+    /// the open chat does with one. `YAPNEST_DEV_INCOMING_FROM` names another
+    /// chat to send them, for watching what the screens do with another's.
     static func deliverIncoming(into database: AppDatabase) {
         let environment = ProcessInfo.processInfo.environment
-        guard let delays = environment["YAPNEST_DEV_INCOMING"], let peer = environment["YAPNEST_DEV_OPEN"].flatMap(JID.init(_:)) else { return }
+        let open = environment["YAPNEST_DEV_OPEN"].flatMap(JID.init(_:))
+        guard let delays = environment["YAPNEST_DEV_INCOMING"],
+              let peer = environment["YAPNEST_DEV_INCOMING_FROM"].flatMap(JID.init(_:)) ?? open else { return }
+        // Only the chat on screen reads what arrives.
+        let isRead = peer == open
         for (index, delay) in delays.split(separator: ",").compactMap({ Double($0) }).enumerated() {
             Task {
                 try? await Task.sleep(for: .seconds(delay))
                 guard let conversation = try? database.conversation(with: peer) else { return }
-                try? add(database, conversation, peer: peer, body: "A message arriving, number \(index + 1).", outgoing: false, at: Date())
+                try? add(database, conversation, peer: peer, body: "A message arriving, number \(index + 1).", outgoing: false, at: Date(), isRead: isRead)
             }
         }
     }
@@ -481,10 +486,10 @@ enum DevFixture: String, CaseIterable {
         return conversation
     }
 
-    private static func add(_ database: AppDatabase, _ conversation: Conversation, peer: JID, body: String, outgoing: Bool, at time: Date) throws {
+    private static func add(_ database: AppDatabase, _ conversation: Conversation, peer: JID, body: String, outgoing: Bool, at time: Date, isRead: Bool = true) throws {
         _ = try database.insert(Message(
             conversationId: conversation.id!, direction: outgoing ? .outgoing : .incoming, sender: outgoing ? account : peer,
-            body: body, timestamp: time, status: outgoing ? .displayed : nil, isRead: true,
+            body: body, timestamp: time, status: outgoing ? .displayed : nil, isRead: isRead,
         ))
     }
 

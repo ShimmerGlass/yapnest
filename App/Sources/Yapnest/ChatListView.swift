@@ -78,8 +78,7 @@ struct ChatListView: View {
                         .navigationDestination(for: ChatRoute.self) { route in
                             switch route {
                             case .conversation(let peer, let message):
-                                // Back leads to the list only from the first screen.
-                                conversation(peer, at: message, countsOtherChats: path.first == route)
+                                conversation(peer, at: message)
                             case .archive:
                                 archive
                             }
@@ -223,8 +222,8 @@ struct ChatListView: View {
     /// swap the peer under an open chat. Asking for the same chat at another
     /// message keeps the screen and moves its list (`reopen`), as a new one
     /// would lose what's staged in it.
-    private func conversation(_ peer: JID, at message: Int64?, countsOtherChats: Bool = false) -> some View {
-        ConversationView(session: session, peer: peer, openingAt: message, initial: openedItems[peer], prepared: prepared, countsOtherChats: countsOtherChats)
+    private func conversation(_ peer: JID, at message: Int64?) -> some View {
+        ConversationView(session: session, peer: peer, openingAt: message, initial: openedItems[peer], prepared: prepared)
             .id(peer)
     }
 

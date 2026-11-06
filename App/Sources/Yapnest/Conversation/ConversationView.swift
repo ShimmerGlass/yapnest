@@ -14,9 +14,6 @@ struct ConversationView: View {
     /// The chat list's chats started on a tap, of which this screen takes
     /// its own if there is one.
     var prepared: PreparedChats?
-    /// Whether the bar counts what's unread in the other chats: when back
-    /// leads to the chat list, which shows them.
-    var countsOtherChats = false
 
     @Environment(AppModel.self) private var model
     /// SwiftUI makes this struct again whenever the parent updates, and
@@ -137,16 +134,15 @@ struct ConversationView: View {
             .windowTitle(title)
             // The Mac's header has the picture, the name and the call button.
             .toolbar(Platform.usesChatHeader ? .hidden : .automatic, for: .navigationBar)
+            .background {
+                // Shown only when back leads to the chat list (`BackButtonTitle`).
+                if !Platform.usesChatHeader { OtherChatsBackTitle(peer: peer) }
+            }
             .toolbar {
                 if !Platform.usesChatHeader {
                     ToolbarItem(placement: .principal) {
                         header
                             .frame(width: headerWidth)
-                    }
-                }
-                if countsOtherChats, !Platform.usesChatHeader, model.chatsWithUnread.contains(where: { $0 != peer }) {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OtherChatsUnreadCount(peer: peer)
                     }
                 }
                 if canCall, !Platform.usesChatHeader {
@@ -390,8 +386,11 @@ struct ConversationView: View {
     }
 
     /// A bar button with the margins beside it. The call button takes 84 on
-    /// iOS 26; with less, the bar moves the slot off centre to fit.
-    private static let barButtonRoom: CGFloat = 88
+    /// iOS 26; with less, the bar moves the slot off centre to fit. Back takes
+    /// the rest, with a count of up to two digits (`OtherChatsBackTitle`):
+    /// beside a call button, the bar has nowhere to move the slot, and draws
+    /// back without the count.
+    private static let barButtonRoom: CGFloat = 112
 
     /// Room for the three buttons at the header's trailing edge.
     private static let macHeaderButtonsRoom: CGFloat = 112
@@ -756,17 +755,18 @@ private struct MacArrival: ViewModifier {
     }
 }
 
-/// The bar's count of what's unread in every chat but `peer`. Its own view, so
-/// that only it, not the chat's screen, updates as the counts change.
-private struct OtherChatsUnreadCount: View {
+/// Puts the count of what's unread in every chat but `peer` in the system's
+/// back button, where it reads as part of it and taps through to the list.
+/// Its own view, so that only it, not the chat's screen, updates as the
+/// counts change.
+private struct OtherChatsBackTitle: View {
     let peer: JID
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let count = model.unreadCounts.values.reduce(0, +) - (model.unreadCounts[peer] ?? 0)
-        UnreadCountBadge(count: count)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(count) unread in other chats")
-            .accessibilityIdentifier("otherChatsUnread")
+        BackButtonTitle(title: count > 0 ? count.formatted() : nil)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
     }
 }

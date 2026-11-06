@@ -10,10 +10,12 @@ class InteractionsTestCase: XCTestCase {
 
     /// The chat opened at launch; the chat list if nil.
     var chat: String? { "nest@fixture.test" }
+    /// More of the app's launch environment.
+    var environment: [String: String] { [:] }
 
     override func setUp() async throws {
         continueAfterFailure = false
-        driver = ConversationDriver(fixture: "interactions", open: chat, context: name)
+        driver = ConversationDriver(fixture: "interactions", open: chat, environment: environment, context: name)
         if chat != nil {
             driver.waitForOpenChat()
             driver.waitForStillness()
