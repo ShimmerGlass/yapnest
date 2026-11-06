@@ -54,8 +54,28 @@ public struct NotificationFetcher: Sendable {
     public func fetch(timeout: TimeInterval = 20) async -> Outcome {
         let started = Date()
         let outcome = await run(timeout: timeout)
-        DiagLog.info(.notificationExtension, "Fetch finished", .value("outcome", FetchResult(outcome)), .duration("took", since: started))
+        Self.logFinished(outcome, since: started)
         return outcome
+    }
+
+    /// With how many messages it found, as a fetch that found none is what
+    /// leaves only a stand-in alert. Counts alone say nothing of who or what.
+    static func logFinished(_ outcome: Outcome, since started: Date) {
+        var messages = 0, quiet = 0, edited = 0
+        switch outcome {
+        case .notifications(let new, let corrected, _):
+            messages = new.count
+            quiet = new.count(where: \.isQuiet)
+            edited = corrected.count
+        case .incomplete(let corrected, _):
+            edited = corrected.count
+        case .appIsRunning, .busy, .failed:
+            break
+        }
+        DiagLog.info(
+            .notificationExtension, "Fetch finished", .value("outcome", FetchResult(outcome)),
+            .int("messages", messages), .int("quiet", quiet), .int("edited", edited), .duration("took", since: started),
+        )
     }
 
     private func run(timeout: TimeInterval) async -> Outcome {

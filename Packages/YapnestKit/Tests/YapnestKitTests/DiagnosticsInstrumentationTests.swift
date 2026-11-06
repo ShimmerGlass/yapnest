@@ -53,6 +53,28 @@ struct DiagnosticsInstrumentationTests {
         }
     }
 
+    /// A wake that found nothing is the one that leaves only a stand-in alert,
+    /// so the log has to tell it from one that found messages.
+    @Test func aFetchLogsHowManyMessagesItFoundButNotWhichOrFromWhom() throws {
+        func note(_ id: Int64, quiet: Bool = false) -> MessageNotification {
+            var note = MessageNotification(messageId: id, peer: alice, title: "Alice", body: "the secret plan", timestamp: Date())
+            note.isQuiet = quiet
+            return note
+        }
+        let text = try withStore { _ in
+            NotificationFetcher.logFinished(.notifications([], edited: [], badge: 0), since: Date())
+            NotificationFetcher.logFinished(.notifications([note(1), note(2, quiet: true)], edited: [note(3)], badge: 2), since: Date())
+            NotificationFetcher.logFinished(.incomplete(edited: [note(4)], badge: 1), since: Date())
+            NotificationFetcher.logFinished(.busy, since: Date())
+        }
+        #expect(text.contains("outcome=notifications messages=0 quiet=0 edited=0"))
+        #expect(text.contains("outcome=notifications messages=2 quiet=1 edited=1"))
+        #expect(text.contains("outcome=incomplete messages=0 quiet=0 edited=1"))
+        #expect(text.contains("outcome=busy messages=0 quiet=0 edited=0"))
+        #expect(!text.contains("secret"))
+        #expect(!text.contains("Alice"))
+    }
+
     @Test func connectionEventsLogKindsAndPortsButNoHost() throws {
         let text = try withStore { _ in
             XMPPSession.logConnect(.resolved(candidates: 0, fallback: true, duration: 0.12))
