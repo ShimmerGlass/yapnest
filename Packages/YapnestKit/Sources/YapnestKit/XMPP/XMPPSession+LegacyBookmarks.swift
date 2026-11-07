@@ -55,9 +55,6 @@ extension XMPPSession {
     /// How long a bookmark publish may go unanswered.
     static let bookmarkTimeout: TimeInterval = 10
 
-    /// One at a time: each change reads the list and writes it back.
-    private static let legacyBookmarkQueue = DispatchQueue(label: "Yapnest.XMPPSession.legacyBookmarks")
-
     /// Whether our server doesn't keep XEP-0402 bookmarks where other clients
     /// see them, which `#compat` (Prosody) or `#compat-pep` (ejabberd) say it
     /// does.
@@ -99,7 +96,7 @@ extension XMPPSession {
         _ change: @escaping @Sendable (Element) -> Void, unsupportedMeansNothingToChange: Bool = false,
         then done: @escaping @Sendable (Result<Void, Error>) -> Void,
     ) {
-        Self.legacyBookmarkQueue.async { [self] in
+        legacyBookmarkQueue.async { [self] in
             let pubsub = client.module(.pubsub)
             let storage: Element
             let current = waitFor { (finish: @escaping @Sendable (NodeRead) -> Void) in

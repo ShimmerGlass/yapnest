@@ -471,7 +471,7 @@ struct OwedBookmarkTests {
 
         try session.setNotify(.never, in: room)
 
-        // The old kind of bookmark is tried after the refusal, on a queue the whole process shares.
+        // The old kind of bookmark is tried after the refusal.
         #expect(await eventually(timeout: 40) { session.warnings.current.contains { $0.key == "bookmark/\(room)" } })
         #expect(try !group().bookmarkOwed)
         let gone = await session.warnings.retry("bookmark/\(room)")
@@ -602,8 +602,7 @@ struct OwedBookmarkTests {
 }
 
 /// A server that keeps only the old kind of bookmarks: no node yet, and a set
-/// it answers as told. Every request is answered, as the old kind waits for
-/// each on a queue the whole process shares.
+/// it answers as told.
 struct OwedLegacyBookmarkTests {
     let database: AppDatabase
     let session: XMPPSession
@@ -732,5 +731,24 @@ struct BookmarkOwedMigrationTests {
         let column = try queue.read { try Row.fetchAll($0, sql: "PRAGMA table_info(groupChat)").first { $0["name"] as String == "bookmarkOwed" } }
         #expect(column?["notnull"] as Int? == 1)
         #expect(column?["dflt_value"] as String? == "0" || column?["dflt_value"] as String? == "false")
+    }
+}
+
+/// The old kind of bookmark waits for each answer, up to `bookmarkTimeout`, so a session whose
+/// server stays silent must not hold up another session's.
+struct LegacyBookmarkQueueTests {
+    @Test func aSessionWaitingForAnAnswerDoesNotHoldUpAnother() async throws {
+        let silent = try makeSession(me)
+        silent.connectForTesting(FakeWire())
+        silent.removeLegacyBookmark(room)
+
+        let other = try makeSession(me)
+        let wire = FakeWire()
+        wire.answer { iq in iq.firstChild(name: "pubsub") == nil ? nil : FakeWire.error(to: iq, condition: "service-unavailable") }
+        other.connectForTesting(wire)
+        let done = Locked(false)
+        other.removeLegacyBookmark(room) { _ in done.value = true }
+
+        #expect(await eventually(timeout: XMPPSession.bookmarkTimeout / 2) { done.value })
     }
 }

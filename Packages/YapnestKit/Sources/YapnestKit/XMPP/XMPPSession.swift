@@ -159,6 +159,10 @@ public final class XMPPSession: @unchecked Sendable {
     /// next one and its marking as in flight, and a queued change's check of it.
     let rosterQueueLock = NSLock()
     var afterRosterChangeChosenForTesting: (@Sendable () -> Void)?
+    /// One change of the old bookmarks at a time, each reading the list and writing it back. The
+    /// session's own: a queue shared by every session would make one that waits out a timeout
+    /// hold up all the others.
+    let legacyBookmarkQueue = DispatchQueue(label: "Yapnest.XMPPSession.legacyBookmarks")
     /// Orders what `reportClientState` decides and writes.
     private let clientStateLock = NSLock()
     /// Keep a snapshot's sends in the order the snapshots were built: see
