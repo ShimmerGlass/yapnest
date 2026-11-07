@@ -78,7 +78,7 @@ extension LiveServer {
             #expect(a.presence(of: bob) == .online, "not without sharing last seen")
             try await LiveServer.setSharesLastSeen(true, on: b)
             try await waitUntil("alice to see bob away") { a.presence(of: bob) == .away }
-            b.suspend()
+            await b.suspend()
             try await waitUntil("bob to drop the connection") { if case .disconnected = b.state.value { true } else { false } }
 
             b.setAway(false)

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import GRDB
 import Testing
@@ -77,6 +78,23 @@ extension LiveServer {
             }
         }
 
+        /// Whether each of a session's connections was a resumption of its stream.
+        private final class ResumeLog: @unchecked Sendable {
+            private let lock = NSLock()
+            private var values: [Bool] = []
+            var cancellable: AnyCancellable?
+            var resumed: Bool { lock.withLock { values.contains(true) } }
+            func record(_ resumed: Bool) { lock.withLock { values.append(resumed) } }
+        }
+
+        private func watchResumptions(of session: XMPPSession) -> ResumeLog {
+            let log = ResumeLog()
+            log.cancellable = session.client.$state.sink { state in
+                if case .connected(let resumed) = state { log.record(resumed) }
+            }
+            return log
+        }
+
         private func message(_ body: String, in session: XMPPSession) throws -> [Message] {
             try session.database.reader.read { try Message.filter(Column("body") == body).fetchAll($0) }
         }
@@ -89,7 +107,7 @@ extension LiveServer {
             defer { a.disconnect(); b.disconnect() }
             _ = try a.database.claimNotifications()
 
-            a.suspend()
+            await a.suspend()
             try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
             let secret = "while you were out \(UUID().uuidString.prefix(6))"
             let sent = try b.send(secret, to: alice)
@@ -123,7 +141,7 @@ extension LiveServer {
         }
 
         /// The extension takes over the app's stream, and leaves it for the next wake, so the server never
-        /// sees a second session come and go; the app then starts a new session, losing and doubling nothing.
+        /// sees a second session come and go; the app then resumes it, losing and doubling nothing.
         @Test func extensionResumesTheAppsStreamWakeAfterWake() async throws {
             let a = try session(alice, device: "alice-push"), b = try session(bob, device: "bob-push")
             try await connected(a, b)
@@ -131,8 +149,9 @@ extension LiveServer {
             _ = try a.database.claimNotifications()
             let store = tickets("alice-push")
             let started = Date()
+            let resumptions = watchResumptions(of: a)
 
-            a.suspend()
+            await a.suspend()
             try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
             let appsStream = try #require(store.load()).stream
             // Over SASL2 the server picks the resource, so only the account is known.
@@ -161,9 +180,12 @@ extension LiveServer {
                 generation = ticket.generation
             }
 
+            let before = resumptions.resumed
             a.connect()
             try await waitUntil("alice to come back") { a.state.value == .connected(isSyncing: false) }
             try await Task.sleep(for: .seconds(2))
+            #expect(!before)
+            #expect(resumptions.resumed, "the app started a new session instead of resuming after the extension")
             for body in bodies { #expect(try message(body, in: a).count == 1, "\(body) after the app returned") }
             let undecryptable = try await a.database.reader.read {
                 try Message.filter(Column("encryption") == "omemoUndecryptable" && Column("timestamp") > started.addingTimeInterval(-1)).fetchCount($0)
@@ -181,7 +203,7 @@ extension LiveServer {
             defer { a.disconnect(); b.disconnect() }
             _ = try a.database.claimNotifications()
             let store = tickets("alice-push")
-            a.suspend()
+            await a.suspend()
             try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
             let bogus = "no-such-stream-\(UUID().uuidString.prefix(8))"
             store.save(.init(id: bogus, incoming: 3, outgoing: 3, boundJid: "\(alice)/Yapnest-gone"))
@@ -226,7 +248,7 @@ extension LiveServer {
             _ = try a.database.claimNotifications()
             let store = tickets("alice-push")
 
-            a.suspend()
+            await a.suspend()
             try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
             try b.startCall(to: alice)
             let sid = try #require(b.callState.value?.sid)
@@ -236,12 +258,71 @@ extension LiveServer {
                 Issue.record("Fetch failed: \(outcome)")
                 return
             }
-            #expect(store.handovers().map(\.sid) == [sid], "the extension consumed the propose and left nothing to ring for")
+            let kept = store.readJournal()
+            #expect(kept.isComplete)
+            #expect(kept.entries.contains { $0.xml.contains(sid) }, "the extension consumed the propose and kept nothing to ring for")
+            let resumptions = watchResumptions(of: a)
 
             a.connect()
             try await waitUntil("alice's phone to ring") { a.callState.value?.phase == .incoming }
             #expect(a.callState.value?.sid == sid)
+            #expect(resumptions.resumed, "the app started a new session after the extension")
             b.hangUpCall()
+        }
+
+        /// The app suspends, a contact goes away, says something in a room and to the app, and the extension
+        /// wakes and resumes the stream: the app returns and resumes it too, with the presence updated, each
+        /// message once, and what it had sent before neither lost nor doubled.
+        @Test func theAppResumesAfterAnExtensionAndSeesWhatItConsumed() async throws {
+            let a = try session(alice, device: "alice-push"), b = try session(bob, device: "bob-push")
+            try await connected(a, b)
+            defer { a.disconnect(); b.disconnect() }
+            a.addContact(bob)
+            b.addContact(alice)
+            try await waitUntil("each other in the roster") { try a.database.isInRoster(bob) && b.database.isInRoster(alice) }
+            let room = try await a.createGroup(name: "Night owls", inviting: [bob])
+            try await LiveServer.accept(invitationTo: room, on: b)
+            try await waitUntil("bob to join") { b.roomStatus(room)?.isJoined == true && b.roomStatus(room)?.isSyncing == false }
+            try await waitUntil("alice to see bob as a member") { a.groupRecipients(room) == [bob] }
+            try await waitUntil("bob to see alice as a member") { b.groupRecipients(room) == [alice] }
+            try await waitUntil("alice to see bob online") { a.presence(of: bob) == .online }
+            _ = try a.database.claimNotifications()
+            let tag = UUID().uuidString.prefix(6)
+            let before = "sent before suspending \(tag)"
+            try a.send(before, to: bob)
+            try await waitUntil("bob to get it") { try message(before, in: b).count == 1 }
+            let resumptions = watchResumptions(of: a)
+
+            await a.suspend()
+            try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
+            b.setShowForTesting(.away)
+            let inRoom = "to the room \(tag)", direct = "to alice \(tag)"
+            try b.send(inRoom, to: room)
+            try b.send(direct, to: alice)
+            try await waitUntil("the room to echo bob's message") { try message(inRoom, in: b).first?.serverId != nil }
+            try await waitUntil("bob's message to go out") { try message(direct, in: b).first?.status == .sent }
+
+            guard case .notifications = await fetcher(alice, device: "alice-push").fetch(timeout: 15) else {
+                Issue.record("Fetch failed")
+                return
+            }
+            #expect(a.presence(of: bob) == .online, "the app's memory is as it was when it suspended")
+
+            a.connect()
+            try await waitUntil("alice to come back") { a.state.value == .connected(isSyncing: false) }
+            #expect(resumptions.resumed, "the app started a new session after the extension")
+            try await waitUntil("bob's presence to be replayed") { a.presence(of: bob) == .away }
+            try await Task.sleep(for: .seconds(2))
+            #expect(try message(inRoom, in: a).count == 1)
+            #expect(try message(direct, in: a).count == 1)
+            let after = "sent after returning \(tag)"
+            try a.send(after, to: bob)
+            try await waitUntil("bob to get both") { try message(after, in: b).count == 1 && message(before, in: b).count == 1 }
+            try await Task.sleep(for: .seconds(1))
+            #expect(try message(after, in: b).count == 1)
+            #expect(try message(before, in: b).count == 1)
+            try await a.leaveGroup(room)
+            try await b.leaveGroup(room)
         }
 
         /// Servers push for more than messages, in bursts: the extension
@@ -251,7 +332,7 @@ extension LiveServer {
             try await connected(a, b)
             defer { a.disconnect(); b.disconnect() }
             _ = try a.database.claimNotifications()
-            a.suspend()
+            await a.suspend()
             try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
             let secret = "just once \(UUID().uuidString.prefix(6))"
             try b.send(secret, to: alice)
@@ -286,7 +367,7 @@ extension LiveServer {
             try await waitUntil("alice to see bob as a member") { a.groupRecipients(room) == [bob] }
             _ = try a.database.claimNotifications()
 
-            a.suspend()
+            await a.suspend()
             try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
             let secret = "anyone up? \(UUID().uuidString.prefix(6))"
             try b.send(secret, to: room)
@@ -331,7 +412,7 @@ extension LiveServer {
             try await waitUntil("alice to decrypt bob") { try message(hiB, in: a).first?.encryption == .omemo }
             _ = try a.database.claimNotifications()
 
-            a.suspend()
+            await a.suspend()
             try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
             var bodies: [String] = []
             for n in 1...2 {
@@ -357,7 +438,7 @@ extension LiveServer {
                 let after = try message(secret, in: a)
                 #expect(after.count == 1 && after.first?.encryption == .omemo, "stored after resume \(n)")
                 if n == 1 {
-                    a.suspend()
+                    await a.suspend()
                     try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
                 }
             }

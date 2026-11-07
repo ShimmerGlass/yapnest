@@ -74,6 +74,8 @@ final class AppModelFixture {
     /// The names of the background tasks the model asked for, and how many are still open.
     private(set) var backgroundTasks: [String] = []
     private(set) var openBackgroundTasks = 0
+    /// What iOS runs when it takes the suspension's time back.
+    private(set) var suspensionExpiry: (@MainActor () -> Void)?
     /// Whether the app starts in the background, as a silent push launches it.
     var launchesInBackground = false
     /// How many catch-ups a silent push ran, and what they answer.
@@ -108,8 +110,9 @@ final class AppModelFixture {
             if let replacementError { throw replacementError }
             try await session.replaceEncryptionDevice()
         }
-        environment.beginBackgroundTask = { [unowned self] name, _ in
+        environment.beginBackgroundTask = { [unowned self] name, onExpiry in
             backgroundTasks.append(name)
+            if name == "Suspend session" { suspensionExpiry = onExpiry }
             openBackgroundTasks += 1
             return { [unowned self] in openBackgroundTasks -= 1 }
         }

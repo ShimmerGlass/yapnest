@@ -306,12 +306,25 @@ open class SocketSessionLogic: XmppSessionLogic {
         }
     }
     
-    private func receivedIncomingStanza(_ stanza:Stanza) {
+    /// Sees each stanza read, before the filters, so before stream management counts it.
+    public var incomingObserver: ((Stanza) -> Void)?;
+
+    /// Runs a stanza kept from earlier through the modules as if it had just arrived, without the filters:
+    /// stream management counted it when it was read, and counting it again would put the counters ahead
+    /// of the server's. Call it on the client's dispatcher, as the resumption handler is.
+    public func replayIncoming(_ stanza: Stanza) {
+        receivedIncomingStanza(stanza, replayed: true);
+    }
+
+    private func receivedIncomingStanza(_ stanza:Stanza, replayed: Bool = false) {
 //        dispatcher.async {
             do {
-                for filter in self.modulesManager.filters {
-                    if filter.processIncoming(stanza: stanza) {
-                        return;
+                if !replayed {
+                    incomingObserver?(stanza);
+                    for filter in self.modulesManager.filters {
+                        if filter.processIncoming(stanza: stanza) {
+                            return;
+                        }
                     }
                 }
             

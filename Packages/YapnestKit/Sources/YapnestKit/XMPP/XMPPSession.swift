@@ -92,6 +92,8 @@ public final class XMPPSession: @unchecked Sendable {
     public let mode: Mode
     let policy: Policy
     let resumeTickets: ResumeTicketStore?
+    /// What an extension on the app's stream keeps of it for the app (`ResumeJournal`).
+    let journal: ResumeJournal?
     /// The XEP-0357 app server that wakes this device.
     let pushRelay: JID
     public let state = CurrentValueSubject<State, Never>(.disconnected(error: nil))
@@ -217,6 +219,12 @@ public final class XMPPSession: @unchecked Sendable {
         init(_ subscription: AnyCancellable) { self.subscription = subscription }
     }
 
+    final class CancellableHolder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancellable: AnyCancellable?
+        func set(_ new: AnyCancellable?) { lock.withLock { cancellable = new } }
+    }
+
     struct Probation {
         var id: String
         var token: Int
@@ -323,10 +331,17 @@ public final class XMPPSession: @unchecked Sendable {
         /// The generation of the resume ticket the app saved as it suspended:
         /// a ticket of another is one an extension wrote, which used the stream.
         var savedTicketGeneration: UInt64?
-        /// Calls an extension took from the live stream while the app was away, to ring for once connected.
-        var handedOverCalls: [CallHandover] = []
+        /// What an extension kept of the stream while the app was away (`ResumeJournal`), until it is replayed
+        /// into the resumed stream, or its calls are rung for in a new session.
+        var journaled: [JournalEntry] = []
+        /// The app's stream was adopted from the ticket, so the journal belongs in it.
+        var replaysJournal = false
         /// The stream an extension's session was given to resume, until it knows whether the server took it.
         var seededStreamId: String?
+        /// What the ticket it was given said of the earlier wakes: the app's count of what arrived, and
+        /// whether their journal is incomplete, which this wake's ticket carries on.
+        var seededAppHandled: UInt32?
+        var seededJournalLost = false
         /// The session was on a stream at some point, so what its counters say is the stream's.
         var reachedStream = false
         /// The extension's first resumed stream has started its catch-up, which a
@@ -589,12 +604,14 @@ public final class XMPPSession: @unchecked Sendable {
         boundResource: String? = nil,
         resumeTickets: ResumeTicketStore? = nil,
     ) throws {
+        let policy = policy ?? mode.policy
         self.resumeTickets = resumeTickets
+        self.journal = policy.resumesSharedStream ? resumeTickets.map { ResumeJournal(store: $0) } : nil
         self.callMedia = callMedia
         self.account = credentials.jid
         self.database = database
         self.mode = mode
-        self.policy = policy ?? mode.policy
+        self.policy = policy
         self.pushRelay = pushRelay
         self.fastTokens = fastTokens
         self.signInRecords = signInRecords
@@ -650,6 +667,11 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     #if DEBUG
+    /// Gives the session a stream to resume, so that suspending it leaves a ticket, for the app's tests.
+    public func seedStreamForTesting(id: String) {
+        client.module(.streamManagement).seed(.init(id: id, incoming: 1, outgoing: 1))
+    }
+
     /// Runs the stream as one with a server that has no stream management,
     /// which the dev servers all offer. Internal on purpose, for the tests.
     func withoutStreamManagementForTesting() {
@@ -802,6 +824,13 @@ public final class XMPPSession: @unchecked Sendable {
             .sink { [weak self] state in self?.clientStateChanged(state) }
             .store(in: &cancellables)
 
+        if journal != nil {
+            client.incomingObserver = { [weak self] stanza in self?.journalInbound(stanza) }
+        }
+        if policy.ownsSharedStream {
+            client.module(.streamManagement).resumedHandler = { [weak self] in self?.replayJournal() }
+        }
+
         client.module(.message).messagesPublisher
             .sink { [weak self] received in self?.handleTopLevel(received.message) }
             .store(in: &cancellables)
@@ -947,45 +976,59 @@ public final class XMPPSession: @unchecked Sendable {
             $0.savedTicketGeneration = nil
         }
         if policy.usesResumeTickets { resumeTickets?.delete() }
-        if policy.ownsSharedStream { resumeTickets?.deleteHandovers() }
+        if policy.ownsSharedStream { resumeTickets?.deleteJournal() }
         _ = client.disconnect()
     }
 
     /// Drops the connection without ending the session: the server keeps it
     /// (XEP-0198), pushes for what arrives meanwhile, and `connect()` resumes
     /// it. For when the app goes to the background.
-    public func suspend() {
+    ///
+    /// Returns once the ticket is saved, which is after Martin has reported the connection closed: what
+    /// is read or acknowledged up to then is in the counters, which a ticket saved earlier would leave
+    /// behind what the server has been told. Prosody fails such a resume. It waits suspended, so the main
+    /// actor isn't held, and not at all if the app reconnected meanwhile or the task was cancelled, as
+    /// then the stream is in use again, or `suspendImmediately()` has saved the ticket.
+    public func suspend() async {
+        beginSuspension()
+        await waitForDisconnectAsync()
+        guard !Task.isCancelled, !lock.withLock({ $0.wantsConnection }) else { return }
+        saveResumeTicket()
+    }
+
+    /// `suspend()` for when there is no time to wait: the ticket is saved at once, with the counters as
+    /// they stand. A connection still closing may then have read more than the ticket says, and a server
+    /// that checks (Prosody) refuses the resume, which the app answers with a new session.
+    public func suspendImmediately() {
+        beginSuspension()
+        saveResumeTicket()
+    }
+
+    private func beginSuspension() {
         // An away presence on its way out goes before the connection does.
         presenceQueue.sync {}
         lock.withLock { $0.wantsConnection = false }
         _ = client.disconnect(true)
-        // After the close: what is read or acknowledged up to then is in the counters, which a ticket
-        // saved earlier would leave behind what the server has been told. Prosody fails such a resume.
-        waitForDisconnect()
-        saveResumeTicket()
     }
 
-    /// How long a forced disconnect is given to finish closing.
-    private static let disconnectWait: TimeInterval = 1
-    private static let disconnectPoll: TimeInterval = 0.01
+    /// The most a forced disconnect is waited for. It is what a stalled close costs at worst: the wait
+    /// ends with Martin's report that it is disconnected, which follows the last stanza it reads, so
+    /// that the counters saved after it are the stream's. A ticket saved earlier on a slow device would
+    /// be behind what the server was told, and Prosody refuses a resumption like that.
+    private static let disconnectWait: TimeInterval = 10
 
-    private var isDisconnected: Bool {
-        if case .disconnected = client.state { return true }
-        return false
-    }
-
-    /// Until Martin has finished closing a forced disconnect, which stops reading, or a second.
-    private func waitForDisconnect() {
-        let deadline = Date().addingTimeInterval(Self.disconnectWait)
-        while Date() < deadline, !isDisconnected {
-            Thread.sleep(forTimeInterval: Self.disconnectPoll)
-        }
-    }
-
+    /// Until Martin reports the connection closed, or `disconnectWait`.
     private func waitForDisconnectAsync() async {
-        let deadline = Date().addingTimeInterval(Self.disconnectWait)
-        while Date() < deadline, !isDisconnected {
-            try? await Task.sleep(for: .seconds(Self.disconnectPoll))
+        let once = Once()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let holder = CancellableHolder()
+            holder.set(client.$state.sink { state in
+                if case .disconnected = state, once.first() { continuation.resume() }
+            })
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.disconnectWait) {
+                if once.first() { continuation.resume() }
+                holder.set(nil)
+            }
         }
     }
 
@@ -993,16 +1036,20 @@ public final class XMPPSession: @unchecked Sendable {
     /// with the counters as they stand once the connection is gone.
     private func saveResumeTicket() {
         guard policy.ownsSharedStream, let store = resumeTickets else { return }
+        // What an earlier suspension's wakes kept is no use to this one: the app's memory is as of now.
+        store.deleteJournal()
         let generation = storeResumeTicket(store, from: client.modulesManager.moduleOrNil(.streamManagement))
         lock.withLock { $0.savedTicketGeneration = generation }
     }
 
     /// Saves the stream's counters, or removes the ticket if there are none
     /// (`save` removes it itself when it can't write), and returns the generation.
-    private func storeResumeTicket(_ store: ResumeTicketStore, from sm: StreamManagementModule?) -> UInt64? {
+    private func storeResumeTicket(
+        _ store: ResumeTicketStore, from sm: StreamManagementModule?, appHandled: (_ stream: String) -> UInt32? = { _ in nil }, journalLost: Bool = false,
+    ) -> UInt64? {
         let generation: UInt64?
         if let snapshot = sm?.snapshot {
-            generation = store.save(snapshot)
+            generation = store.save(snapshot, appHandled: appHandled(snapshot.id), journalLost: journalLost)
         } else {
             store.delete()
             generation = nil
@@ -1014,55 +1061,139 @@ public final class XMPPSession: @unchecked Sendable {
     /// The app is about to use the stream, which makes the ticket stale: its
     /// counters fall behind at once, and an extension that resumed from them
     /// would have the server replay, or on ejabberd silently lose, what the
-    /// app has read since. So it goes, and if another process has written one
-    /// since the app saved its own, that process used the stream, whose
-    /// counters the app doesn't have: the app forgets the stream and starts a
-    /// new session, as it does when a resumption fails.
+    /// app has read since. So it goes.
+    ///
+    /// If another process has written one since the app saved its own, that
+    /// process used the stream: what it consumed is in its journal, and its
+    /// counters are the stream's now. The app resumes with those, after
+    /// sending again what the server never got of its own, and replays the
+    /// journal as the stream resumes (`replayJournal`), if everything allows:
+    /// the ticket names the stream the app has in memory, the extension could
+    /// say how much of the app's own it found arrived, and nothing is missing
+    /// from the journal. Otherwise, or if there is nothing in memory (the app
+    /// was evicted), the app forgets the stream and starts a new session, as
+    /// it does when a resumption fails, and rings for the calls the journal
+    /// holds, which a new session would read back from the archive without ringing.
     private func settleResumeTicket() {
         guard let store = resumeTickets else { return }
         let saved = lock.withLock { $0.savedTicketGeneration.take() }
-        let current = store.load()?.generation
+        let ticket = store.load()
+        let journal = store.readJournal()
         store.delete()
-        let calls = store.takeHandovers()
-        if !calls.isEmpty { lock.withLock { $0.handedOverCalls += calls } }
-        guard current != saved else { return }
-        client.modulesManager.moduleOrNil(.streamManagement)?.reset()
+        store.deleteJournal()
+        let sm = client.modulesManager.moduleOrNil(.streamManagement)
+        if ticket?.generation == saved {
+            // A journal without a newer ticket is an extension that didn't live to leave: the stream moved on.
+            guard !journal.entries.isEmpty || !journal.isComplete else { return }
+        } else if let ticket, let sm, saved != nil, let handled = ticket.appHandled, !ticket.journalLost, journal.isComplete,
+                  sm.snapshot?.id == ticket.stream.id, journal.entries.allSatisfy({ $0.stream == ticket.stream.id }) {
+            sm.adopt(ticket.stream, handled: handled)
+            lock.withLock {
+                $0.journaled = journal.entries
+                $0.replaysJournal = true
+            }
+            DiagLog.info(.connection, "Stream used by an extension, resuming with its counters", .int("kept", journal.entries.count))
+            return
+        }
+        sm?.reset()
+        lock.withLock { $0.journaled = journal.entries }
         DiagLog.info(.connection, "Stream used by another process, starting a new session")
     }
 
-    /// Rings for what an extension took from the stream, as a live propose
-    /// would have: consent, the tie-break and the ring are the usual ones. A
-    /// call past the ring window is over, and the extension's row stands for it.
-    private func ringHandedOverCalls() {
-        let calls = lock.withLock { state in
-            defer { state.handedOverCalls = [] }
-            return state.handedOverCalls
+    /// What the app's modules are to be fed from `entries`, in order, to catch up with the stream: all of
+    /// it in a resumed stream, only the calls in a new session, which learns the rest itself.
+    ///
+    /// A call offer is dropped if it is past the ring window, or if the journal also holds the end of it:
+    /// the extension has written the call's row, and nothing is to ring. So is its end, which has
+    /// nothing left to tell. An offer from our own account is no call to answer here.
+    static func journalReplay(
+        _ entries: [JournalEntry], account: JID, now: Date, offset: TimeInterval, isRoom: (JID) -> Bool, callsOnly: Bool,
+    ) -> [Element] {
+        let items: [(element: Element, signal: CallSignal?)] = entries.compactMap { entry in
+            let stamper = { (element: Element) -> String in
+                if let from = element.getAttribute("from").flatMap({ JID($0) }), isRoom(from) { return from.description }
+                return account.domain
+            }
+            guard let element = ResumeJournal.replayable(entry, stamper: stamper, offset: offset) else { return nil }
+            return (element, callSignal(in: element, account: account, now: now, offset: offset))
         }
-        let now = Date()
-        for call in calls where now.timeIntervalSince(call.timestamp) < CallMachine.ringWindow {
-            guard let sender = JID(call.sender), let recipient = JID(call.recipient) else { continue }
-            let media = Set(call.media.compactMap(CallSignal.Media.init(rawValue:)))
-            let signal = CallSignal(sid: call.sid, action: .propose(media: media), sender: sender, recipient: recipient, from: call.from, timestamp: call.timestamp)
-            callSignalReceived(signal, source: .live, isHistory: false)
+        var ended: Set<String> = []
+        var offered: Set<String> = []
+        for case let signal? in items.map(\.signal) {
+            switch signal.action {
+            case .propose: offered.insert(signal.sid)
+            case .proceed, .accept, .reject, .retract, .finish: ended.insert(signal.sid)
+            case .ringing: break
+            }
+        }
+        return items.compactMap { element, signal in
+            guard let signal else { return callsOnly ? nil : element }
+            if case .propose = signal.action {
+                if ended.contains(signal.sid) || signal.isFromAccount || now.timeIntervalSince(signal.timestamp) >= CallMachine.ringWindow { return nil }
+            } else if ended.contains(signal.sid), offered.contains(signal.sid) {
+                return nil
+            }
+            return element
         }
     }
 
-    /// An extension on the app's stream notes the calls it consumes, so the app can ring for them.
-    func handOverCall(_ signal: CallSignal, source: InboundMessage.Source, isHistory: Bool) {
-        guard policy.resumesSharedStream, let store = resumeTickets else { return }
-        switch signal.action {
-        case .propose(let media):
-            guard source == .live, !isHistory, !signal.isFromAccount else { return }
-            let handover = CallHandover(
-                sid: signal.sid, sender: signal.sender.description, recipient: signal.recipient.description, from: signal.from,
-                media: media.map(\.rawValue).sorted(), timestamp: signal.timestamp,
-            )
-            lock.withLock { _ in store.addHandover(handover, ringWindow: CallMachine.ringWindow) }
-        case .proceed, .accept, .reject, .retract, .finish:
-            lock.withLock { _ in store.removeHandover(sid: signal.sid) }
-        case .ringing:
-            break
+    /// The call signal a message is, also in a carbon.
+    private static func callSignal(in element: Element, account: JID, now: Date, offset: TimeInterval) -> CallSignal? {
+        guard element.name == "message", ResumeJournal.containsCallSignal(element),
+              let message = Stanza.from(element: element) as? Martin.Message else { return nil }
+        guard let carbon = message.element.children.first(where: { $0.xmlns == MessageCarbonsModule.MC_XMLNS }) else {
+            return CallSignal(message, account: account, source: .live, now: now, clockOffset: offset)
         }
+        guard let forwarded = carbon.firstChild(name: "forwarded", xmlns: "urn:xmpp:forward:0")?.firstChild(name: "message") else { return nil }
+        forwarded.addChildren(message.element.filterChildren(name: "delay", xmlns: NS.delay))
+        guard let inner = Stanza.from(element: forwarded) as? Martin.Message else { return nil }
+        return CallSignal(inner, account: account, source: .carbon(sent: carbon.name == "sent"), now: now, clockOffset: offset)
+    }
+
+    /// The stream is resumed, and what the extension consumed from it is fed to the modules before anything
+    /// the server sends next, so that the app sees it all in order: a presence it kept can't overwrite a
+    /// newer one that followed.
+    private func replayJournal() {
+        let entries = lock.withLock { state in
+            defer {
+                state.journaled = []
+                state.replaysJournal = false
+            }
+            return state.replaysJournal ? state.journaled : []
+        }
+        guard !entries.isEmpty else { return }
+        let elements = Self.journalReplay(
+            entries, account: account, now: Date(), offset: serverClockOffset, isRoom: isGroup, callsOnly: false,
+        )
+        DiagLog.info(.connection, "Replaying what an extension consumed", .int("stanzas", elements.count))
+        for element in elements { client.replayIncoming(Stanza.from(element: element)) }
+    }
+
+    /// Rings for the calls an extension took from the stream, in a session that didn't resume it, as
+    /// a live propose would have: consent, the tie-break and the ring are the usual ones.
+    private func ringJournaledCalls() {
+        let entries = lock.withLock { state in
+            defer { if !state.replaysJournal { state.journaled = [] } }
+            return state.replaysJournal ? [] : state.journaled
+        }
+        guard !entries.isEmpty else { return }
+        let elements = Self.journalReplay(
+            entries, account: account, now: Date(), offset: serverClockOffset, isRoom: isGroup, callsOnly: true,
+        )
+        for element in elements {
+            if let message = Stanza.from(element: element) as? Martin.Message { handleTopLevel(message) }
+        }
+    }
+
+    /// An extension keeps what the app needs to see live and the extension doesn't store. Of a stream that
+    /// isn't the app's, a session of its own that the app never resumes, only the calls: everything else
+    /// is read back from the archive.
+    private func journalInbound(_ stanza: Stanza) {
+        guard let journal, ResumeJournal.keeps(stanza.element, isRoom: isGroup) else { return }
+        let id = client.module(.streamManagement).snapshot?.id
+        let onAppsStream = id != nil && id == lock.withLock { $0.seededStreamId }
+        guard onAppsStream || ResumeJournal.containsCallSignal(stanza.element) else { return }
+        journal.append(JournalEntry(stream: id, at: Date(), xml: stanza.element.stringValue))
     }
 
     /// An extension's session is given the app's stream to resume, if a ticket has one.
@@ -1070,7 +1201,11 @@ public final class XMPPSession: @unchecked Sendable {
         guard policy.resumesSharedStream, let store = resumeTickets, let ticket = store.load(),
               let sm = client.modulesManager.moduleOrNil(.streamManagement) else { return }
         sm.seed(ticket.stream)
-        lock.withLock { $0.seededStreamId = ticket.stream.id }
+        lock.withLock {
+            $0.seededStreamId = ticket.stream.id
+            $0.seededAppHandled = ticket.appHandled
+            $0.seededJournalLost = ticket.journalLost
+        }
         DiagLog.info(.connection, "Resuming from a ticket")
     }
 
@@ -1103,7 +1238,13 @@ public final class XMPPSession: @unchecked Sendable {
         _ = client.disconnect(true)
         // After the close, so that what was read up to it is in the ticket.
         await waitForDisconnectAsync()
-        _ = storeResumeTicket(store, from: sm)
+        // What the app's own stanzas had reached the server by the first wake's resume is what it needs to
+        // send the rest again, and a later wake's `resumedH` counts the earlier wakes' stanzas too.
+        let (seeded, seededHandled, seededLost) = lock.withLock { ($0.seededStreamId, $0.seededAppHandled, $0.seededJournalLost) }
+        _ = storeResumeTicket(
+            store, from: sm, appHandled: { $0 == seeded ? seededHandled ?? sm.snapshot?.resumedH : nil },
+            journalLost: seededLost || (journal?.isLost ?? false),
+        )
     }
 
     /// Written before the connection closes, which would cut it off; not waited
@@ -1693,7 +1834,8 @@ public final class XMPPSession: @unchecked Sendable {
             }
             callStep(.connectionRestored)
             lock.withLock { $0.reachedStream = true }
-            if policy.ownsSharedStream { runOnceConnected(attempt: attempt) { [self] in ringHandedOverCalls() } }
+            // A resumed stream replays the journal itself, as it resumes (`replayJournal`).
+            if policy.ownsSharedStream, !resumed { runOnceConnected(attempt: attempt) { [self] in ringJournaledCalls() } }
             runOnceConnected(attempt: attempt) { [self] in resolveHeldGroupMessages() }
             runOnceConnected(attempt: attempt) { [self] in sendUnsentCallMessages() }
             // A ping sent on the old stream says nothing about this one.

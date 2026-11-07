@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import os
 import Martin
 import Testing
 @testable import Martin
@@ -17,6 +18,12 @@ private final class Clients: @unchecked Sendable {
     static let lock = NSLock()
     nonisolated(unsafe) static var all: [XMPPClient] = []
     static func keep(_ client: XMPPClient) { lock.withLock { all.append(client) } }
+}
+
+
+private final class Acked: @unchecked Sendable {
+    let ids = OSAllocatedUnfairLock(initialState: [String]())
+    var subscription: AnyCancellable?
 }
 
 struct StreamSnapshotTests {
@@ -172,5 +179,102 @@ struct StreamSnapshotTests {
         #expect(writer.written.filter { $0.name == "a" }.map { $0.getAttribute("h") } == ["1"])
         await sm.acknowledge()
         #expect(writer.written.filter { $0.name == "a" }.count == 1)
+    }
+
+    private func adopting(written ids: [String]) -> (StreamManagementModule, FeedWriter, Acked) {
+        let client = XMPPClient(eventBus: nil)
+        Clients.keep(client)
+        let writer = FeedWriter()
+        client.writer = writer
+        _ = client.modulesManager.register(StreamFeaturesModule())
+        let sm = client.modulesManager.register(StreamManagementModule())
+        sm.context = client
+        writer.module = sm
+        sm.processEnabled({
+            let enabled = Stanza(name: "enabled", xmlns: "urn:xmpp:sm:3")
+            enabled.setAttribute("id", value: "app-stream")
+            enabled.setAttribute("resume", value: "true")
+            return enabled
+        }())
+        for id in ids {
+            let message = Message()
+            message.id = id
+            sm.processOutgoing(stanza: message)
+        }
+        let acked = Acked()
+        acked.subscription = sm.ackedStanzas.sink { stanza in
+            let id = stanza.id ?? ""
+            acked.ids.withLock { $0.append(id) }
+        }
+        return (sm, writer, acked)
+    }
+
+    /// Another process used the stream: its counters are the stream's now. Of the stanzas still queued, the
+    /// ones the server had handled when it resumed are acknowledged, and the ones it never got are written
+    /// again as new stanzas after the other process's, so the server's count and ours agree.
+    @Test func adoptingTheCountersAcknowledgesWhatArrivedAndSendsWhatDidNot() {
+        let (sm, writer, acked) = adopting(written: ["A", "B", "C"])
+        let used = StreamManagementModule.Snapshot(id: "app-stream", incoming: 12, outgoing: 10, resumedH: 10)
+
+        let unsent = sm.adopt(used, handled: 2)
+
+        #expect(unsent.map(\.id) == ["C"])
+        #expect(acked.ids.withLock { $0 } == ["A", "B"])
+        #expect(sm.snapshot?.incoming == 12)
+        #expect(sm.snapshot?.outgoing == 10)
+        #expect(sm.unacknowledgedStanzas.isEmpty, "the queue still holds stanzas the server has handled")
+
+        let resumed = Stanza(name: "resumed", xmlns: "urn:xmpp:sm:3")
+        resumed.setAttribute("h", value: "10")
+        sm.processResumed(resumed)
+        #expect(writer.written.compactMap(\.id) == ["C"])
+        #expect(sm.snapshot?.outgoing == 11)
+        #expect(sm.unacknowledgedStanzas.map(\.id) == ["C"])
+    }
+
+    @Test func adoptingWhenEverythingArrivedSendsNothing() {
+        let (sm, writer, acked) = adopting(written: ["A", "B", "C"])
+        let unsent = sm.adopt(StreamManagementModule.Snapshot(id: "app-stream", incoming: 12, outgoing: 10, resumedH: 10), handled: 3)
+
+        #expect(unsent.isEmpty)
+        #expect(acked.ids.withLock { $0 } == ["A", "B", "C"])
+        let resumed = Stanza(name: "resumed", xmlns: "urn:xmpp:sm:3")
+        resumed.setAttribute("h", value: "10")
+        sm.processResumed(resumed)
+        #expect(writer.written.isEmpty)
+        #expect(sm.snapshot?.outgoing == 10)
+    }
+
+    /// A resumption that fails starts a new session, which sends what it has itself.
+    @Test func aFailedResumptionForgetsWhatWasAdoptedToSend() {
+        let (sm, writer, _) = adopting(written: ["A"])
+        sm.adopt(StreamManagementModule.Snapshot(id: "app-stream", incoming: 1, outgoing: 3), handled: 0)
+        sm.processFailed(Stanza(name: "failed", xmlns: "urn:xmpp:sm:3"))
+        sm.processEnabled({
+            let enabled = Stanza(name: "enabled", xmlns: "urn:xmpp:sm:3")
+            enabled.setAttribute("id", value: "new")
+            enabled.setAttribute("resume", value: "true")
+            return enabled
+        }())
+        let resumed = Stanza(name: "resumed", xmlns: "urn:xmpp:sm:3")
+        resumed.setAttribute("h", value: "0")
+        sm.processResumed(resumed)
+        #expect(writer.written.isEmpty)
+    }
+
+    /// The handler runs once the counters are settled, before anything that follows is read: a stanza it feeds in
+    /// is seen first.
+    @Test func theResumedHandlerRunsAfterTheResumedAndBeforeWhatFollows() {
+        let sm = module()
+        sm.seed(earlier)
+        let order = Acked()
+        sm.resumedHandler = { [unowned sm] in
+            let outgoing = sm.snapshot?.outgoing ?? 0
+            order.ids.withLock { $0.append("handler \(outgoing)") }
+        }
+        let resumed = Stanza(name: "resumed", xmlns: "urn:xmpp:sm:3")
+        resumed.setAttribute("h", value: "5")
+        _ = sm.processIncoming(stanza: resumed)
+        #expect(order.ids.withLock { $0 } == ["handler 5"])
     }
 }

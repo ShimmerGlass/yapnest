@@ -64,6 +64,13 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
     private var ackH = AckHolder();
     /// The `h` of the last `<resumed>`: how many of our stanzas the server had handled.
     private var lastResumedH: UInt32? = nil;
+    /// Stanzas that never reached the server, from a stream another process used meanwhile (see `adopt`),
+    /// which are written as new ones once the stream is resumed.
+    private var unsentAfterAdopt: [Stanza] = [];
+
+    /// Called when a resumption succeeded, after the counters are settled and the queue written again, and
+    /// before any stanza the server sends next is read. It runs on the client's dispatcher, like those.
+    open var resumedHandler: (() -> Void)? = nil;
 
     fileprivate var _ackEnabled: Bool = false;
     /// Set once `<enable>` went out. The server counts what follows it, so
@@ -379,6 +386,33 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         }
     }
     
+    /// Takes over the counters of another process that used this stream while this one was disconnected, with
+    /// `snapshot` as it left it. The server had handled `handled` of this process's stanzas when that
+    /// process resumed: the queued ones up to there are done, and are reported as acknowledged now; the rest
+    /// never arrived, and are written as new stanzas once the stream is resumed, after what the other
+    /// process wrote. The server's count then agrees with the counters, which it must for the resumption to
+    /// be taken: a server that is told fewer stanzas than it has sent either refuses (Prosody) or silently
+    /// loses what the other process consumed (ejabberd). Returns the stanzas to be sent again.
+    @discardableResult
+    open func adopt(_ snapshot: Snapshot, handled: UInt32) -> [Stanza] {
+        let (acked, unsent): ([Stanza], [Stanza]) = queue.sync {
+            let queued = outgoingQueue.values;
+            // The queued stanzas are the last ones written: the newest is numbered `outgoingCounter`.
+            let missing = max(0, min(queued.count, Int(Int32(bitPattern: ackH.outgoingCounter &- handled))));
+            outgoingQueue.clear();
+            ackH.incomingCounter = snapshot.incoming;
+            ackH.outgoingCounter = snapshot.outgoing;
+            lastSentH = snapshot.incoming;
+            lastResumedH = snapshot.resumedH;
+            unsentAfterAdopt = Array(queued.suffix(missing));
+            return (Array(queued.dropLast(missing)), unsentAfterAdopt);
+        }
+        for stanza in acked {
+            ackedStanzas.send(stanza);
+        }
+        return unsent;
+    }
+
     /// Reset all internal variables
     open func reset() {
         enablingHandler = nil;
@@ -391,6 +425,7 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         seededLocation = false;
         queue.sync {
             lastResumedH = nil;
+            unsentAfterAdopt = [];
             enableWritten = false;
             lastRequestTimestamp = Date.distantPast;
             ackH.reset();
@@ -562,6 +597,14 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
             write(s);
             resent = true;
         }
+        let unsent: [Stanza] = queue.sync {
+            defer { unsentAfterAdopt = []; }
+            return unsentAfterAdopt;
+        }
+        for s in unsent {
+            write(s);
+            resent = true;
+        }
         // Nothing else asks the server about these: the request is otherwise
         // sent after a send of ours or when over three are waiting, so they
         // would stay unacknowledged until the next message.
@@ -577,6 +620,7 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         if let context = context {
             fire(ResumedEvent(context: context, newH: newH, resumeId: stanza.getAttribute("previd")));
         }
+        resumedHandler?();
     }
     
     func processEnabled(_ stanza: Stanza) {

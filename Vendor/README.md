@@ -728,6 +728,31 @@ Each entry gives what went wrong for users, why, and what changed.
   closes the connection straight after. Stanzas the server replays with
   `<resumed>` were already counted in order; pinned by `StreamSnapshotTests`.
 
+**A stream another process used couldn't be resumed without losing what it consumed**
+(`XMPPClient.incomingObserver`, `XMPPClient.replayIncoming(_:)`,
+`StreamManagementModule.adopt(_:handled:)`, `resumedHandler`)
+- *Symptom:* the notification extension resumes the app's stream, reads what
+  the server had queued for it and leaves. The app, coming back, could only
+  start a new session (it forgot the stream), as resuming with its own
+  counters has the server resend what the extension consumed on Prosody
+  (which fails the resumption) and lose it on ejabberd (which accepts a
+  count behind its own). A new session doesn't get what only the live
+  stream carries: presences, a room's messages where it keeps no archive,
+  a call offer that has to ring.
+- *Cause:* the counters and the stanzas consumed lived in the extension's
+  process, and nothing let the app see them or take them over.
+- *Fix:* `incomingObserver` sees each stanza read, before stream management
+  counts it, so a process can keep what it needs of them. `adopt(_:handled:)`
+  takes the counters of the process that used the stream: of the stanzas still
+  queued, those the server had handled (`handled`, the `h` of that process's
+  `<resumed>`) are acknowledged, and the others, which never arrived, are
+  written as new stanzas once the stream is resumed, after that process's.
+  `resumedHandler` runs when a resumption succeeded, after the counters and the
+  queue are settled and before the next stanza is read, on the dispatcher those
+  are read on; there `replayIncoming(_:)` feeds a kept stanza to the modules as if
+  it had just arrived, without the filters, so stream management doesn't count
+  it a second time. Pinned by `StreamSnapshotTests` and `ResumedStreamTests`.
+
 ### MartinOMEMO
 
 **A device list of thousands of ids cost thousands of bundle fetches**

@@ -157,6 +157,7 @@ open class XMPPClient: Context {
             let sessionLogic: XmppSessionLogic = SocketSessionLogic(connector: socketConnector, responseManager: responseManager, context: context, seeOtherHost: lastSeeOtherHost);
             context.writer = LogicPacketWriter(sessionLogic: sessionLogic, responseManager: responseManager);
             self.sessionLogic = sessionLogic;
+            (sessionLogic as? SocketSessionLogic)?.incomingObserver = incomingObserver;
             sessionLogic.bind();
             sessionLogicCancellable = sessionLogic.statePublisher.dropFirst(1).sink(receiveValue: { [weak self] newState in
                 guard let that = self else {
@@ -186,6 +187,16 @@ open class XMPPClient: Context {
             keepaliveTimer = nil;
             sessionLogic.start();
         }
+    }
+
+    /// Sees every stanza read from the next login on, before stream management counts it or a module
+    /// handles it. It runs on the client's dispatcher, in the order the stanzas arrive.
+    open var incomingObserver: ((Stanza) -> Void)?;
+
+    /// Feeds a stanza kept earlier to the modules as if it had just arrived, without counting it again.
+    /// Call it on the client's dispatcher, which `StreamManagementModule.resumedHandler` runs on.
+    open func replayIncoming(_ stanza: Stanza) {
+        (sessionLogic as? SocketSessionLogic)?.replayIncoming(stanza);
     }
 
     private func scheduleKeepAlive() {

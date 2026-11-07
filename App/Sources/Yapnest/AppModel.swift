@@ -255,7 +255,10 @@ final class AppModel {
     @ObservationIgnored private var suspension: Task<Void, Never>?
     /// Waits for a call to end so the suspension it held back can follow.
     @ObservationIgnored private var callWatch: AnyCancellable?
-    @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    /// Gives back the time the suspension asked iOS for.
+    @ObservationIgnored private var endSuspensionTask: (@MainActor () -> Void)?
+    /// The suspension's wait for the connection to close, after which the ticket is saved and the locks go.
+    @ObservationIgnored private var closing: Task<Void, Never>?
     /// The sign-out cleanup still running. It frees state that belongs to the
     /// account being left, so a new session must not start before it ends.
     @ObservationIgnored private var signingOut: Task<Void, Never>?
@@ -674,6 +677,9 @@ final class AppModel {
         if active {
             suspension?.cancel()
             suspension = nil
+            // Back before the connection finished closing: the session is in use again, with nothing to save.
+            closing?.cancel()
+            closing = nil
             callWatch = nil
             endBackgroundTask()
             // Before connecting, so a new session starts with what was chosen.
@@ -810,8 +816,8 @@ final class AppModel {
         guard !holdsForCall(session) else { return }
         // Sent now, while the connection is still up to carry it.
         session.setAway(true)
-        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Suspend session") { [weak self] in
-            MainActor.assumeIsolated { self?.suspend(session) }
+        endSuspensionTask = environment.beginBackgroundTask("Suspend session") { [weak self] in
+            self?.suspend(session, expired: true)
         }
         suspension = Task {
             try? await Task.sleep(for: environment.suspendDelay)
@@ -820,8 +826,9 @@ final class AppModel {
         }
     }
 
-    private func suspend(_ session: XMPPSession) {
-        guard !isActive, suspension != nil || backgroundTask != .invalid else { return }
+    /// `expired`: iOS is taking the time back, so there is none to wait for the connection to close.
+    private func suspend(_ session: XMPPSession, expired: Bool = false) {
+        guard !isActive, suspension != nil || endSuspensionTask != nil else { return }
         suspension?.cancel()
         suspension = nil
         // The audio background mode keeps the process running during a call,
@@ -830,12 +837,37 @@ final class AppModel {
             endBackgroundTask()
             return
         }
+        if expired {
+            // The ticket is saved with the counters as they stand, and the locks go with it, as an extension
+            // could take them the moment this returns. A server that checks the counters (Prosody) may refuse
+            // a resume from them, and the app then starts a new session, which is safe.
+            closing?.cancel()
+            closing = nil
+            if pendingSignIn === session { suspendedSignIn = session }
+            session.suspendImmediately()
+            finishSuspension()
+            return
+        }
+        guard closing == nil else { return }
         if pendingSignIn === session { suspendedSignIn = session }
-        session.suspend()
+        // The locks stay ours until the ticket is saved, which waits for the connection to close, so that
+        // an extension can't resume the stream before the ticket exists.
+        closing = Task {
+            await session.suspend()
+            guard !Task.isCancelled else { return }
+            closing = nil
+            finishSuspension()
+        }
+    }
+
+    private func finishSuspension() {
         DiagLog.info(.app, "Session suspended")
         DiagLog.flush()
-        releaseProcessLocks()
-        AppDatabase.suspend()
+        // Back on screen while the connection was closing: the session is in use again.
+        if !isActive {
+            releaseProcessLocks()
+            AppDatabase.suspend()
+        }
         endBackgroundTask()
     }
 
@@ -883,9 +915,8 @@ final class AppModel {
     }
 
     private func endBackgroundTask() {
-        guard backgroundTask != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(backgroundTask)
-        backgroundTask = .invalid
+        endSuspensionTask?()
+        endSuspensionTask = nil
     }
 
     // MARK: Notifications

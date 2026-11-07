@@ -204,6 +204,43 @@ struct AppModelSessionTests {
         await eventually("the session lets go of the lock") { !fixture.lock.isLocked }
     }
 
+    /// An extension that takes the locks must find the ticket it resumes from: the locks are let go
+    /// only once the session has saved it, which waits for the connection to close.
+    @Test func theLocksAreLetGoOnlyOnceTheTicketIsSaved() async throws {
+        let fixture = AppModelFixture()
+        let model = fixture.model!
+        try await model.signIn(fixture.credentialsToSignIn)
+        let session = try #require(fixture.connects.last)
+        session.seedStreamForTesting(id: "stream")
+        let tickets = ResumeTicketStore(directory: AccountDirectory(url: fixture.root.appending(path: fixture.account.description)))
+
+        model.scenePhaseChanged(active: false, background: true)
+        await eventually("the session lets go of the lock") { !fixture.lock.isLocked }
+
+        #expect(tickets.load()?.stream.id == "stream", "the lock was free before the ticket was saved")
+        await eventually("the time to be given back") { fixture.openBackgroundTasks == 0 }
+    }
+
+    /// iOS takes the time back before the connection has closed: the ticket is saved with the counters as
+    /// they stand and the locks go at once, without waiting.
+    @Test func whenTheTimeRunsOutTheTicketIsSavedAndTheLocksGoAtOnce() async throws {
+        let fixture = AppModelFixture(suspendDelay: .seconds(30))
+        let model = fixture.model!
+        try await model.signIn(fixture.credentialsToSignIn)
+        let session = try #require(fixture.connects.last)
+        session.seedStreamForTesting(id: "stream")
+        let tickets = ResumeTicketStore(directory: AccountDirectory(url: fixture.root.appending(path: fixture.account.description)))
+        model.scenePhaseChanged(active: false, background: true)
+        let expiry = try #require(fixture.suspensionExpiry)
+        #expect(fixture.lock.isLocked)
+
+        expiry()
+
+        #expect(!fixture.lock.isLocked)
+        #expect(tickets.load()?.stream.id == "stream")
+        #expect(fixture.openBackgroundTasks == 0)
+    }
+
     @Test func leavingTheAppAsUIKitPostsItSuspendsTheSession() async throws {
         // SwiftUI's scene phase can come after iOS suspended the app, which
         // kills one holding the lock; UIKit's notification comes before.

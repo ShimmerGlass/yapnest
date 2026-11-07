@@ -179,7 +179,7 @@ extension LiveServer {
             try await waitUntil("stream management") { s.client.module(.streamManagement).resumptionEnabled }
             let bound = s.client.context.boundJid
 
-            s.suspend()
+            await s.suspend()
             try await waitUntil("the connection to drop") { if case .disconnected = s.client.state { true } else { false } }
             s.connect()
             // Prosody sends features after resuming and ejabberd doesn't, so

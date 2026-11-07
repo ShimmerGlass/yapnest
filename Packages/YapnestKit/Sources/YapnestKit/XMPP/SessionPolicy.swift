@@ -44,10 +44,11 @@ extension XMPPSession {
         var verifiesLiveness: Bool
         /// Takes over the app's stream, saved as a resume ticket, instead of
         /// opening a session whose close the server would announce to it, and
-        /// leaves it open for the next one (see `ResumeTicket`).
+        /// leaves it open for the next one, keeping in a journal what the app
+        /// needs of what it consumed (see `ResumeTicket`, `ResumeJournal`).
         var resumesSharedStream: Bool
-        /// Owns that stream: saves the ticket as it suspends, settles it when
-        /// it returns, and rings for the calls an extension consumed meanwhile.
+        /// Owns that stream: saves the ticket as it suspends, and when it returns
+        /// resumes it with the extension's counters and replays the journal.
         var ownsSharedStream: Bool
 
         /// Whether the session is given a ticket store at all. The share
