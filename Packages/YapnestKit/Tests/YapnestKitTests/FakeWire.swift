@@ -111,9 +111,9 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
     func write<Failure: Error>(
         _ iq: Iq, timeout: TimeInterval, errorDecoder: @escaping PacketErrorDecoder<Failure>, completionHandler: ((Result<Iq, Failure>) -> Void)?,
     ) {
-        let (responder, holds, later, holdsOthers) = lock.withLock {
+        let responder = lock.withLock {
             stanzas.append(iq)
-            return (self.responder, holding, self.later, self.holdsOthers)
+            return self.responder
         }
         let isPing = iq.firstChild(name: "ping", xmlns: "urn:xmpp:ping") != nil
         guard let response = responder?(iq) ?? (isPing ? FakeWire.result(to: iq) : nil), let completionHandler else { return }
@@ -124,9 +124,16 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
                 completionHandler(.success(response))
             }
         }
-        if (isPing && holds) || holdsOthers?(iq) == true {
-            lock.withLock { held.append(reply) }
-        } else if later {
+        // Decided and kept in one step: a reply that read the hold before `holdReplies(to: nil)` and
+        // was kept after `releasePings()` took the held ones would never be delivered, which happens
+        // when a session sends several requests at once and a thread is slow to get here.
+        let held = lock.withLock {
+            guard (isPing && holding) || holdsOthers?(iq) == true else { return false }
+            self.held.append(reply)
+            return true
+        }
+        if held { return }
+        if lock.withLock({ later }) {
             DispatchQueue.global().async(execute: reply)
         } else {
             reply()

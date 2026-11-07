@@ -101,6 +101,8 @@ extension LiveServer {
             try await waitUntil("the session") { session.state.value == .connected(isSyncing: false) }
             try await waitUntil("stream management") { session.client.module(.streamManagement).resumptionEnabled }
             let room = try await session.createGroup(name: "Cut \(UUID().uuidString.prefix(4))", inviting: [])
+            // Plain: nobody else is in the room, and an encrypted message has no one to be encrypted for.
+            try session.setEncrypted(false, with: room)
 
             proxy.isRefusing = true
             proxy.cut()
