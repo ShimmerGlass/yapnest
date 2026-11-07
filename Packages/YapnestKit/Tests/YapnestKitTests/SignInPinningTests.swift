@@ -16,13 +16,6 @@ private final class RecordingWriter: PacketWriter {
     }
 }
 
-private func element(_ name: String, _ xmlns: String, _ attributes: [String: String] = [:], _ children: [Element] = []) -> Element {
-    let e = Element(name: name, xmlns: xmlns)
-    for (k, v) in attributes { e.setAttribute(k, value: v) }
-    for c in children { e.addChild(c) }
-    return e
-}
-
 private func hmac(_ token: String, _ label: String, _ bindingData: Data) -> Data {
     Data(HMAC<SHA256>.authenticationCode(for: Data(label.utf8) + bindingData, using: SymmetricKey(data: Data(token.utf8))))
 }

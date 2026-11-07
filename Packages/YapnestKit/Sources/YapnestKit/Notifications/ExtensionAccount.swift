@@ -21,6 +21,22 @@ struct ExtensionAccount: Sendable {
     /// decrypt; nil for the keychain's.
     var identityKeys: (any IdentityKeyStore)?
 
+    /// `appResource` is `resource` unless given: a session that isn't taking
+    /// the app's place binds its own.
+    init(
+        credentials: XMPPSession.Credentials, directory: URL, resource: String, appResource: String? = nil,
+        lock: ProcessLock = SharedContainer.sessionLock, appLock: ProcessLock = SharedContainer.appLock,
+        identityKeys: (any IdentityKeyStore)? = nil,
+    ) {
+        self.credentials = credentials
+        self.directory = directory
+        self.resource = resource
+        self.appResource = appResource ?? resource
+        self.lock = lock
+        self.appLock = appLock
+        self.identityKeys = identityKeys
+    }
+
     var files: AccountDirectory { AccountDirectory(url: directory) }
 
     /// Nil if the app hasn't been signed in. `role` tells the extension's

@@ -48,7 +48,7 @@ extension XMPPSession {
             callMedia: callMedia,
             identityKeys: identityKeys,
             boundResource: boundResource,
-            resumeTickets: mode == .share ? nil : ResumeTicketStore(directory: directory),
+            resumeTickets: mode.policy.usesResumeTickets ? ResumeTicketStore(directory: directory) : nil,
         )
     }
 }

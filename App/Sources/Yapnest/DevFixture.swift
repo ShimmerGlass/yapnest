@@ -380,7 +380,7 @@ enum DevFixture: String, CaseIterable {
         _ = try database.insert(message)
         // An answered call has its end as a row of its own, as the session writes it.
         if outcome == .answered, let duration {
-            message.remoteId = "\(sid)/end"
+            message.remoteId = AppDatabase.endId(sid: sid)
             message.timestamp = time.addingTimeInterval(duration)
             message.callEnded = true
             _ = try database.insert(message)

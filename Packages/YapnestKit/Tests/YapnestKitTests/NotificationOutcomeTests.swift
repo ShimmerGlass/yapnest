@@ -44,43 +44,32 @@ struct NotificationOutcomeTests {
     }
 
     @Test func aWakeThatFoundNothingNewAnswersNoDataAndPostsNothing() {
-        let outcome = NotificationFetcher.Outcome.notifications([], edited: [], badge: 2)
-
-        #expect(BackgroundPush.result(for: outcome) == .noData)
-        #expect(BackgroundPush.loud(in: outcome).isEmpty)
+        #expect(BackgroundPush.result(for: .notifications([], edited: [], badge: 2)) == .noData)
+        #expect(MessageNotification.loud(among: []).isEmpty)
     }
 
     @Test func aWakeThatFoundMessagesAnswersNewDataAndPostsTheLoudOnes() {
-        let outcome = NotificationFetcher.Outcome.notifications([note, muted], edited: [], badge: 1)
-
-        #expect(BackgroundPush.result(for: outcome) == .newData)
-        #expect(BackgroundPush.loud(in: outcome) == [note])
+        #expect(BackgroundPush.result(for: .notifications([note, muted], edited: [], badge: 1)) == .newData)
+        #expect(MessageNotification.loud(among: [note, muted]) == [note])
     }
 
     @Test func onlyMutedMessagesAreNewDataButPostNothingLoud() {
-        let outcome = NotificationFetcher.Outcome.notifications([muted], edited: [], badge: 1)
-
-        #expect(BackgroundPush.result(for: outcome) == .newData)
-        #expect(BackgroundPush.loud(in: outcome).isEmpty)
+        #expect(BackgroundPush.result(for: .notifications([muted], edited: [], badge: 1)) == .newData)
+        #expect(MessageNotification.loud(among: [muted]).isEmpty)
     }
 
-    @Test func aCorrectionAloneIsNewDataButPostsNoNewNotification() {
-        let outcome = NotificationFetcher.Outcome.notifications([], edited: [note], badge: 1)
-
-        #expect(BackgroundPush.result(for: outcome) == .newData)
-        #expect(BackgroundPush.loud(in: outcome).isEmpty)
+    @Test func aCorrectionAloneIsNewData() {
+        #expect(BackgroundPush.result(for: .notifications([], edited: [note], badge: 1)) == .newData)
     }
 
     @Test func anUnfinishedCatchUpThatFoundNothingFails() {
         #expect(BackgroundPush.result(for: .incomplete(edited: [], badge: 1)) == .failed)
         #expect(BackgroundPush.result(for: .incomplete(edited: [note], badge: 1)) == .newData)
-        #expect(BackgroundPush.loud(in: .incomplete(edited: [note], badge: 1)).isEmpty)
     }
 
     @Test func anotherProcessDoingTheWorkOrAFailureMapToNoDataAndFailed() {
         #expect(BackgroundPush.result(for: .appIsRunning) == .noData)
         #expect(BackgroundPush.result(for: .busy) == .noData)
         #expect(BackgroundPush.result(for: .failed("x")) == .failed)
-        #expect(BackgroundPush.loud(in: .busy).isEmpty)
     }
 }

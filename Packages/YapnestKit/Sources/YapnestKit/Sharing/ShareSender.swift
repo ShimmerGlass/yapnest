@@ -54,7 +54,7 @@ public struct ShareSender: Sendable {
         identityKeys: (any IdentityKeyStore)? = nil,
     ) {
         self.init(account: ExtensionAccount(
-            credentials: credentials, directory: directory, resource: resource, appResource: resource, lock: lock, appLock: appLock, identityKeys: identityKeys,
+            credentials: credentials, directory: directory, resource: resource, lock: lock, appLock: appLock, identityKeys: identityKeys,
         ))
     }
 

@@ -16,6 +16,14 @@ struct CallControllerTests {
         CallState(sid: "s", peer: peer, direction: direction, phase: phase, isVideo: video, isCameraOn: video)
     }
 
+    /// With the audio session left alone: it is the process's, and one left active in a call's category
+    /// can't start the playback of the tests that play clips.
+    private func makeController() -> CallController {
+        let controller = CallController()
+        controller.systemAudio = (activate: { _ in }, deactivate: {})
+        return controller
+    }
+
     private let phases: [CallPhase] = [
         .proposing, .ringing, .incoming, .accepted, .connecting, .active, .ended(.completed), .ended(.failed),
     ]
@@ -107,7 +115,7 @@ struct CallControllerTests {
     }
 
     @Test func minimizingAndExpandingARoundTripsAndANewCallResetsIt() {
-        let controller = CallController()
+        let controller = makeController()
         controller.setScreen(state(.active, video: true))
         #expect(controller.isExpanded)
         controller.minimize()
@@ -162,7 +170,7 @@ struct CallControllerTests {
     }
 
     @Test func aVideoCallWithoutCameraAccessSaysSoAndStartsNothing() async throws {
-        let controller = CallController()
+        let controller = makeController()
         controller.cameraAccess = { false }
 
         controller.startCall(to: peer, video: true)
@@ -173,8 +181,7 @@ struct CallControllerTests {
     }
 
     @Test func anAudioCallNeverAsksForTheCamera() async throws {
-        let controller = CallController()
-        controller.systemAudio = (activate: { _ in }, deactivate: {})
+        let controller = makeController()
         var asked = false
         controller.cameraAccess = { asked = true; return false }
 
@@ -186,7 +193,7 @@ struct CallControllerTests {
 
     @Test func aPeerWhoIsNoLongerCallableIsNotRung() async throws {
         let fixture = try ConversationFixture()
-        let controller = CallController()
+        let controller = makeController()
         controller.prepareCall = { _, _, video in throw CallError.peerNotCallable(video: video) }
         controller.attach(fixture.session)
         defer { controller.detach() }
@@ -201,8 +208,7 @@ struct CallControllerTests {
 
     @Test func aCallWaitsForTheConnectionBeforeAskingAnythingOfTheSystem() async throws {
         let fixture = try ConversationFixture()
-        let controller = CallController()
-        controller.systemAudio = (activate: { _ in }, deactivate: {})
+        let controller = makeController()
         let release = AsyncStream<Void>.makeStream()
         controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }
         controller.attach(fixture.session)
@@ -224,7 +230,7 @@ struct CallControllerTests {
     // session's call would then be cut, or an error blamed on this one.
     @Test func aCallThatBecameBusyDuringTheWaitIsNotStarted() async throws {
         let fixture = try ConversationFixture()
-        let controller = CallController()
+        let controller = makeController()
         let release = AsyncStream<Void>.makeStream()
         controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }
         controller.attach(fixture.session)
@@ -242,8 +248,7 @@ struct CallControllerTests {
 
     @Test func theCallButtonsAreOffForEveryChatWhileOneCallIsPrepared() async throws {
         let fixture = try ConversationFixture()
-        let controller = CallController()
-        controller.systemAudio = (activate: { _ in }, deactivate: {})
+        let controller = makeController()
         let release = AsyncStream<Void>.makeStream()
         controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }
         controller.attach(fixture.session)
@@ -259,8 +264,7 @@ struct CallControllerTests {
 
     @Test func onlyTheButtonThatWasTappedSpins() async throws {
         let fixture = try ConversationFixture()
-        let controller = CallController()
-        controller.systemAudio = (activate: { _ in }, deactivate: {})
+        let controller = makeController()
         let release = AsyncStream<Void>.makeStream()
         controller.cameraAccess = { true }
         controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }
@@ -279,7 +283,7 @@ struct CallControllerTests {
 
     @Test func aFailedCallHasItsErrorWhenTheSpinnerStops() async throws {
         let fixture = try ConversationFixture()
-        let controller = CallController()
+        let controller = makeController()
         controller.prepareCall = { _, _, _ in throw CallError.notConnected }
         controller.attach(fixture.session)
         defer { controller.detach() }
@@ -294,7 +298,7 @@ struct CallControllerTests {
 
     @Test func aCallThatCantBePreparedShowsWhyAndStopsSpinning() async throws {
         let fixture = try ConversationFixture()
-        let controller = CallController()
+        let controller = makeController()
         controller.prepareCall = { _, _, _ in throw CallError.notConnected }
         controller.attach(fixture.session)
         defer { controller.detach() }
@@ -308,7 +312,7 @@ struct CallControllerTests {
 
     @Test func aPeerWhoTakesOnlyAudioIsNotRungForVideo() async throws {
         let fixture = try ConversationFixture()
-        let controller = CallController()
+        let controller = makeController()
         controller.cameraAccess = { true }
         controller.prepareCall = { _, _, video in throw CallError.peerNotCallable(video: video) }
         controller.attach(fixture.session)
@@ -328,7 +332,7 @@ struct CallControllerTests {
     }
 
     @Test func aVideoCallWithoutCameraAccessLeavesAReasonInTheLog() async throws {
-        let controller = CallController()
+        let controller = makeController()
         controller.cameraAccess = { false }
         let before = try logged("Call not started reason=noCameraAccess")
 
@@ -341,7 +345,7 @@ struct CallControllerTests {
 
     @Test func aPeerWhoIsNotCallableLeavesAReasonInTheLog() async throws {
         let fixture = try ConversationFixture()
-        let controller = CallController()
+        let controller = makeController()
         controller.prepareCall = { _, _, video in throw CallError.peerNotCallable(video: video) }
         controller.attach(fixture.session)
         defer { controller.detach() }

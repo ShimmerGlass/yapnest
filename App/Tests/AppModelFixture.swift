@@ -144,14 +144,22 @@ final class AppModelFixture {
             session.state.send(.connecting)
             session.state.send(.connected(isSyncing: false))
         }
-        model = AppModel(environment: environment)
+        model = makeModel()
     }
 
     /// A new launch of the app over the same account folder and keychain,
     /// after the last one went away without signing out.
     func relaunch() {
         lock.unlock()
-        model = AppModel(environment: environment)
+        model = makeModel()
+    }
+
+    /// With the audio session left alone, as it is the process's: one left active in a call's category
+    /// can't start the playback of the tests that play clips.
+    private func makeModel() -> AppModel {
+        let model = AppModel(environment: environment)
+        model.calls.systemAudio = (activate: { _ in }, deactivate: {})
+        return model
     }
 
     deinit { try? FileManager.default.removeItem(at: root) }

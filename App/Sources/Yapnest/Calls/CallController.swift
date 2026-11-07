@@ -102,9 +102,15 @@ final class CallController {
         routeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.isOnSpeaker = CallAudioSession.isOnSpeaker }
+            MainActor.assumeIsolated { self?.refreshSpeaker() }
         }
         #endif
+    }
+
+    /// Writing the same value would still notify the views that read it.
+    private func refreshSpeaker() {
+        let onSpeaker = CallAudioSession.isOnSpeaker
+        if isOnSpeaker != onSpeaker { isOnSpeaker = onSpeaker }
     }
 
     @ObservationIgnored private var session: XMPPSession?
@@ -570,7 +576,7 @@ final class CallController {
         } catch {
             self.error = error.localizedDescription
         }
-        isOnSpeaker = CallAudioSession.isOnSpeaker
+        refreshSpeaker()
     }
 
     /// Without CallKit nobody activates the audio session, and WebRTC plays and
@@ -589,7 +595,7 @@ final class CallController {
         #endif
         try systemAudio.activate(video)
         audioActive = true
-        isOnSpeaker = CallAudioSession.isOnSpeaker
+        refreshSpeaker()
         #endif
     }
 
@@ -682,7 +688,7 @@ final class CallController {
     fileprivate func audioSession(didChange active: Bool) {
         callKitAudioActive = active
         // A call can start on the route the phone was already on, with no change to hear of.
-        isOnSpeaker = CallAudioSession.isOnSpeaker
+        refreshSpeaker()
         updateRingback()
     }
 

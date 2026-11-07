@@ -159,7 +159,13 @@ extension MessageNotification {
         await replaceDelivered(edited, badge: badge, avatars: avatars)
         await replaceHeld(notifications, badge: badge, avatars: avatars)
         if !notifications.isEmpty { await UNUserNotificationCenter.current().removePlaceholderNotifications() }
-        return notifications.filter { !$0.isQuiet }
+        return loud(among: notifications)
+    }
+
+    /// The notifications to show loudly. Muted ones, and what isn't a message
+    /// (a reaction, a key exchange), stay silent.
+    static func loud(among notifications: [MessageNotification]) -> [MessageNotification] {
+        notifications.filter { !$0.isQuiet }
     }
 
     /// Updates the loud notification of each group that has messages held back

@@ -45,13 +45,6 @@ private struct ScriptedOptions: ConnectorOptions {
     var connector: Connector.Type { ScriptedServer.self }
 }
 
-private func element(_ name: String, _ xmlns: String, _ attributes: [String: String] = [:], _ children: [Element] = []) -> Element {
-    let e = Element(name: name, xmlns: xmlns)
-    for (k, v) in attributes { e.setAttribute(k, value: v) }
-    for c in children { e.addChild(c) }
-    return e
-}
-
 /// A server on the other side of a connector: offers SASL2 with stream management, answers a sign-in the
 /// way `script` says, and answers the requests that follow so that a session can finish its catch-up.
 private final class ScriptedServer: Connector {
@@ -243,9 +236,8 @@ struct ResumedStreamTests {
 
     @Test(.timeLimit(.minutes(1)))
     func withoutATicketTheExtensionOpensASessionAndLeavesATicket() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "ticket-\(UUID().uuidString)")
+        let (store, directory) = freshStore()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = ResumeTicketStore(directory: AccountDirectory(url: directory))
         let (extensionSession, server) = try session(.notificationService, answering: .refuses, store: store)
 
         #expect(await extensionSession.catchUpOnce(timeout: 20))
@@ -440,9 +432,8 @@ struct ResumedStreamTests {
 
     @Test(.timeLimit(.minutes(1)))
     func theAppResumesFromMemoryWhenNobodyUsedTheStream() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "ticket-\(UUID().uuidString)")
+        let (store, directory) = freshStore()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = ResumeTicketStore(directory: AccountDirectory(url: directory))
         let (app, server) = try suspendedApp(store: store) {}
         defer { app.disconnect() }
 
@@ -457,9 +448,8 @@ struct ResumedStreamTests {
 
     @Test(.timeLimit(.minutes(1)))
     func theAppStartsANewSessionWhenAnExtensionUsedTheStream() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "ticket-\(UUID().uuidString)")
+        let (store, directory) = freshStore()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = ResumeTicketStore(directory: AccountDirectory(url: directory))
         let (app, server) = try suspendedApp(store: store) {
             var used = appStream
             used.incoming += 3
@@ -477,9 +467,8 @@ struct ResumedStreamTests {
     /// The extension's resume failed, so it deleted the ticket: the stream is gone.
     @Test(.timeLimit(.minutes(1)))
     func theAppStartsANewSessionWhenTheTicketWasDeleted() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "ticket-\(UUID().uuidString)")
+        let (store, directory) = freshStore()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = ResumeTicketStore(directory: AccountDirectory(url: directory))
         let (app, server) = try suspendedApp(store: store) { store.delete() }
         defer { app.disconnect() }
 

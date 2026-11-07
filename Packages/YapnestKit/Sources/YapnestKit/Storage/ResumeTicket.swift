@@ -30,8 +30,34 @@ public struct ResumeTicketStore: Sendable {
     }
 
     public func load() -> ResumeTicket? {
+        Self.read(ResumeTicket.self, at: url)
+    }
+
+    static func read<T: Decodable>(_ type: T.Type, at url: URL) -> T? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(ResumeTicket.self, from: data)
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    /// Writes atomically, with the account's protection, and out of backups.
+    /// A file that couldn't be written is removed, so no stale one is left.
+    private func store(_ value: some Encodable, at file: URL) -> Bool {
+        do {
+            try FileManager.default.createProtectedDirectory(at: file.deletingLastPathComponent())
+            try JSONEncoder().encode(value).write(to: file, options: .atomic)
+            FileProtection.apply(to: file)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            var excluded = file
+            try? excluded.setResourceValues(values)
+            return true
+        } catch {
+            try? FileManager.default.removeItem(at: file)
+            return false
+        }
+    }
+
+    fileprivate func storeHandovers(_ handovers: [CallHandover]) {
+        _ = store(handovers, at: handoverURL)
     }
 
     /// Writes the stream atomically and returns the generation it got, or nil
@@ -42,18 +68,7 @@ public struct ResumeTicketStore: Sendable {
         let previous = load()?.generation ?? 0
         let now = UInt64(max(0, Date().timeIntervalSince1970 * 1000))
         let ticket = ResumeTicket(generation: max(previous &+ 1, now), stream: stream)
-        do {
-            try FileManager.default.createProtectedDirectory(at: url.deletingLastPathComponent())
-            try JSONEncoder().encode(ticket).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            var values = URLResourceValues()
-            values.isExcludedFromBackup = true
-            var file = url
-            try? file.setResourceValues(values)
-            return ticket.generation
-        } catch {
-            delete()
-            return nil
-        }
+        return store(ticket, at: url) ? ticket.generation : nil
     }
 
     public func delete() {
@@ -89,22 +104,12 @@ extension ResumeTicketStore {
     var handoverURL: URL { url.deletingLastPathComponent().appending(path: "call-handover.json") }
 
     public func handovers() -> [CallHandover] {
-        guard let data = try? Data(contentsOf: handoverURL) else { return [] }
-        return (try? JSONDecoder().decode([CallHandover].self, from: data)) ?? []
+        Self.read([CallHandover].self, at: handoverURL) ?? []
     }
 
     private func write(_ handovers: [CallHandover]) {
         guard !handovers.isEmpty else { return deleteHandovers() }
-        do {
-            try FileManager.default.createProtectedDirectory(at: handoverURL.deletingLastPathComponent())
-            try JSONEncoder().encode(handovers).write(to: handoverURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            var values = URLResourceValues()
-            values.isExcludedFromBackup = true
-            var file = handoverURL
-            try? file.setResourceValues(values)
-        } catch {
-            deleteHandovers()
-        }
+        storeHandovers(handovers)
     }
 
     /// Adds a call, forgetting those too old to ring and any earlier note of the same one.

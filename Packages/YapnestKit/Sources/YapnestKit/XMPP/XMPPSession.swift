@@ -903,7 +903,7 @@ public final class XMPPSession: @unchecked Sendable {
         lock.withLock { $0.wantsConnection = true }
         if case .disconnected = client.state {
             // Before anything can arrive, so an offer of this session isn't swept.
-            if mode == .app {
+            if policy.ownsSharedStream {
                 expireFileOffers()
                 settleResumeTicket()
             }
@@ -946,9 +946,8 @@ public final class XMPPSession: @unchecked Sendable {
             $0.wantsConnection = false
             $0.savedTicketGeneration = nil
         }
-        // The share extension's session is a different one, whose end says nothing of the app's stream.
-        if mode != .share { resumeTickets?.delete() }
-        if mode == .app { resumeTickets?.deleteHandovers() }
+        if policy.usesResumeTickets { resumeTickets?.delete() }
+        if policy.ownsSharedStream { resumeTickets?.deleteHandovers() }
         _ = client.disconnect()
     }
 
@@ -966,28 +965,50 @@ public final class XMPPSession: @unchecked Sendable {
         saveResumeTicket()
     }
 
+    /// How long a forced disconnect is given to finish closing.
+    private static let disconnectWait: TimeInterval = 1
+    private static let disconnectPoll: TimeInterval = 0.01
+
+    private var isDisconnected: Bool {
+        if case .disconnected = client.state { return true }
+        return false
+    }
+
     /// Until Martin has finished closing a forced disconnect, which stops reading, or a second.
     private func waitForDisconnect() {
-        let deadline = Date().addingTimeInterval(1)
-        while Date() < deadline {
-            if case .disconnected = client.state { return }
-            Thread.sleep(forTimeInterval: 0.01)
+        let deadline = Date().addingTimeInterval(Self.disconnectWait)
+        while Date() < deadline, !isDisconnected {
+            Thread.sleep(forTimeInterval: Self.disconnectPoll)
+        }
+    }
+
+    private func waitForDisconnectAsync() async {
+        let deadline = Date().addingTimeInterval(Self.disconnectWait)
+        while Date() < deadline, !isDisconnected {
+            try? await Task.sleep(for: .seconds(Self.disconnectPoll))
         }
     }
 
     /// Leaves the stream where the notification extension can take it over,
     /// with the counters as they stand once the connection is gone.
     private func saveResumeTicket() {
-        guard mode == .app, let store = resumeTickets else { return }
+        guard policy.ownsSharedStream, let store = resumeTickets else { return }
+        let generation = storeResumeTicket(store, from: client.modulesManager.moduleOrNil(.streamManagement))
+        lock.withLock { $0.savedTicketGeneration = generation }
+    }
+
+    /// Saves the stream's counters, or removes the ticket if there are none
+    /// (`save` removes it itself when it can't write), and returns the generation.
+    private func storeResumeTicket(_ store: ResumeTicketStore, from sm: StreamManagementModule?) -> UInt64? {
         let generation: UInt64?
-        if let snapshot = client.modulesManager.moduleOrNil(.streamManagement)?.snapshot {
+        if let snapshot = sm?.snapshot {
             generation = store.save(snapshot)
         } else {
             store.delete()
             generation = nil
         }
-        lock.withLock { $0.savedTicketGeneration = generation }
         DiagLog.info(.connection, "Resume ticket saved", .bool("saved", generation != nil))
+        return generation
     }
 
     /// The app is about to use the stream, which makes the ticket stale: its
@@ -999,10 +1020,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// new session, as it does when a resumption fails.
     private func settleResumeTicket() {
         guard let store = resumeTickets else { return }
-        let saved = lock.withLock { state in
-            defer { state.savedTicketGeneration = nil }
-            return state.savedTicketGeneration
-        }
+        let saved = lock.withLock { $0.savedTicketGeneration.take() }
         let current = store.load()?.generation
         store.delete()
         let calls = store.takeHandovers()
@@ -1060,10 +1078,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// server no longer has it, or no longer does stream management at all, in
     /// which case it never replaced what the seed put in the module.
     private func ticketFailed() {
-        guard let id = lock.withLock({ state in
-            defer { state.seededStreamId = nil }
-            return state.seededStreamId
-        }) else { return }
+        guard let id = lock.withLock({ $0.seededStreamId.take() }) else { return }
         DiagLog.info(.connection, "Resume refused, new session")
         resumeTickets?.delete()
         if let sm = client.modulesManager.moduleOrNil(.streamManagement), sm.snapshot?.id == id { sm.reset() }
@@ -1087,14 +1102,8 @@ public final class XMPPSession: @unchecked Sendable {
         if isConnected { await sendFinalAcknowledgement(sm) }
         _ = client.disconnect(true)
         // After the close, so that what was read up to it is in the ticket.
-        let deadline = Date().addingTimeInterval(1)
-        while Date() < deadline {
-            if case .disconnected = client.state { break }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        let saved = sm.snapshot.flatMap { store.save($0) } != nil
-        if !saved { store.delete() }
-        DiagLog.info(.connection, "Resume ticket saved", .bool("saved", saved))
+        await waitForDisconnectAsync()
+        _ = storeResumeTicket(store, from: sm)
     }
 
     /// Written before the connection closes, which would cut it off; not waited
@@ -1684,7 +1693,7 @@ public final class XMPPSession: @unchecked Sendable {
             }
             callStep(.connectionRestored)
             lock.withLock { $0.reachedStream = true }
-            if mode == .app { runOnceConnected(attempt: attempt) { [self] in ringHandedOverCalls() } }
+            if policy.ownsSharedStream { runOnceConnected(attempt: attempt) { [self] in ringHandedOverCalls() } }
             runOnceConnected(attempt: attempt) { [self] in resolveHeldGroupMessages() }
             runOnceConnected(attempt: attempt) { [self] in sendUnsentCallMessages() }
             // A ping sent on the old stream says nothing about this one.

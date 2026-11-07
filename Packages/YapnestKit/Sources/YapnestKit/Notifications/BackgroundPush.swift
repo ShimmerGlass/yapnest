@@ -6,16 +6,10 @@ import UserNotifications
 /// there is no relay alert to replace.
 public enum BackgroundPush {
     /// What iOS is told, as `UIBackgroundFetchResult`.
-    public enum Result: Sendable, Equatable, CaseIterable, DiagEnum {
+    public enum Result: String, Sendable, Equatable, CaseIterable, DiagEnum {
         case newData, noData, failed
 
-        public var description: String {
-            switch self {
-            case .newData: "newData"
-            case .noData: "noData"
-            case .failed: "failed"
-            }
-        }
+        public var description: String { rawValue }
     }
 
     /// Under the 30 seconds iOS gives, with room to post what was found.
@@ -31,14 +25,6 @@ public enum BackgroundPush {
         case .appIsRunning, .busy: .noData
         case .failed: .failed
         }
-    }
-
-    /// The notifications to show loudly. Muted ones, and what isn't a message
-    /// (a reaction, a key exchange), stay silent, and with nothing new there
-    /// is nothing.
-    static func loud(in outcome: NotificationFetcher.Outcome) -> [MessageNotification] {
-        guard case .notifications(let new, _, _) = outcome else { return [] }
-        return new.filter { !$0.isQuiet }
     }
 
     /// Catches up as the signed-in account and posts what's new. `.noData` if
@@ -58,8 +44,8 @@ public enum BackgroundPush {
         let center = UNUserNotificationCenter.current()
         switch outcome {
         case .notifications(let new, let edited, let badge):
-            _ = await MessageNotification.settleFetched(new, edited: edited, badge: badge, avatars: avatars)
-            for notification in loud(in: outcome) {
+            let loud = await MessageNotification.settleFetched(new, edited: edited, badge: badge, avatars: avatars)
+            for notification in loud {
                 try? await center.add(await notification.request(badge: badge, avatars: avatars))
             }
             if !new.isEmpty { try? await center.setBadgeCount(badge) }

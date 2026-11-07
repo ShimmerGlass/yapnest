@@ -141,7 +141,7 @@ extension AppDatabase {
     /// The end row's id, which isn't the call's: it would be taken for a copy
     /// of the start on insert, and found in its place by whatever looks the
     /// call up.
-    private static func endId(sid: String) -> String { "\(sid)/end" }
+    public static func endId(sid: String) -> String { "\(sid)/end" }
 
     /// Inserts the call's row, or brings the one it has up to date. Returns the
     /// row if it is new.

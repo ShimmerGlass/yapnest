@@ -36,7 +36,7 @@ public struct NotificationFetcher: Sendable {
         identityKeys: (any IdentityKeyStore)? = nil,
     ) {
         self.init(account: ExtensionAccount(
-            credentials: credentials, directory: directory, resource: resource, appResource: appResource ?? resource,
+            credentials: credentials, directory: directory, resource: resource, appResource: appResource,
             lock: lock, appLock: appLock, identityKeys: identityKeys,
         ))
     }

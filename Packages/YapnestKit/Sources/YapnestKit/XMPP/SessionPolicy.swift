@@ -46,6 +46,14 @@ extension XMPPSession {
         /// opening a session whose close the server would announce to it, and
         /// leaves it open for the next one (see `ResumeTicket`).
         var resumesSharedStream: Bool
+        /// Owns that stream: saves the ticket as it suspends, settles it when
+        /// it returns, and rings for the calls an extension consumed meanwhile.
+        var ownsSharedStream: Bool
+
+        /// Whether the session is given a ticket store at all. The share
+        /// extension's session is a different one, whose end says nothing of
+        /// the app's stream.
+        var usesResumeTickets: Bool { ownsSharedStream || resumesSharedStream }
 
         #if targetEnvironment(macCatalyst)
         private static let reportsInactiveHere = false
@@ -58,7 +66,7 @@ extension XMPPSession {
             catchesUpOnConnect: true, syncsAccountState: true, prunesContactRequests: true,
             readsRoomHistory: true, checksRoomMembership: true, sendsChatStates: true,
             publishesOMEMOKeys: true, registersPush: true, fetchesImages: true, donatesSuggestions: true,
-            resendsPending: true, verifiesLiveness: true, resumesSharedStream: false,
+            resendsPending: true, verifiesLiveness: true, resumesSharedStream: false, ownsSharedStream: true,
         )
 
         /// Catches up without telling anyone it's here, so the server keeps
@@ -68,7 +76,7 @@ extension XMPPSession {
             catchesUpOnConnect: true, syncsAccountState: false, prunesContactRequests: false,
             readsRoomHistory: true, checksRoomMembership: false, sendsChatStates: false,
             publishesOMEMOKeys: false, registersPush: false, fetchesImages: false, donatesSuggestions: false,
-            resendsPending: false, verifiesLiveness: false, resumesSharedStream: true,
+            resendsPending: false, verifiesLiveness: false, resumesSharedStream: true, ownsSharedStream: false,
         )
 
         /// Only writes: it skips the catch-up and the history of rooms it joins.
@@ -77,7 +85,7 @@ extension XMPPSession {
             catchesUpOnConnect: false, syncsAccountState: false, prunesContactRequests: false,
             readsRoomHistory: false, checksRoomMembership: false, sendsChatStates: false,
             publishesOMEMOKeys: false, registersPush: false, fetchesImages: false, donatesSuggestions: false,
-            resendsPending: false, verifiesLiveness: false, resumesSharedStream: false,
+            resendsPending: false, verifiesLiveness: false, resumesSharedStream: false, ownsSharedStream: false,
         )
     }
 }
