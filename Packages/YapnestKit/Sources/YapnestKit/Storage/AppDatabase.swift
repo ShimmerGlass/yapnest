@@ -982,6 +982,28 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v62-call-ended") { db in
+            // An answered call is two rows: its start and, when it ended, an
+            // end that carries the length. Calls already stored get theirs,
+            // or they would lose the length the start no longer shows. The
+            // chats' last activity stays, so none reorders.
+            try db.alter(table: "message") { t in
+                t.add(column: "callEnded", .boolean).notNull().defaults(to: false)
+            }
+            // Timestamps are text in GRDB's format, and the modifier keeps
+            // the fraction of a second. One it can't read stays as it is: a
+            // NULL here would fail the migration and lock the account out.
+            try db.execute(sql: """
+                INSERT INTO message (conversationId, direction, sender, body, timestamp, status, isRead, encryption,
+                                     remoteId, callOutcome, callDuration, callAnsweredAt, callIsVideo, callEnded)
+                SELECT conversationId, direction, sender, '',
+                       COALESCE(strftime('%Y-%m-%d %H:%M:%f', COALESCE(callAnsweredAt, timestamp), '+' || callDuration || ' seconds'), timestamp),
+                       status, 1, encryption, remoteId || '/end', callOutcome, callDuration, callAnsweredAt, callIsVideo, 1
+                FROM message
+                WHERE callOutcome = 'answered' AND callDuration IS NOT NULL
+                """)
+        }
+
         return migrator
     }
 

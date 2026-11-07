@@ -47,6 +47,26 @@ struct DelayTrustTests {
         #expect(!m.isDelayed)
     }
 
+    /// The end of a call is stamped by our clock when it ends, and what the
+    /// peer sent during the call belongs before it.
+    @Test func theEndOfACallIsntAFloorForADelayedMessage() throws {
+        let db = try AppDatabase.inMemory()
+        let chat = try db.conversation(with: alice)
+        let now = Date()
+        var end = YapnestKit.Message(conversationId: chat.id!, direction: .incoming, sender: alice, body: "", timestamp: now, isRead: true, remoteId: "s/end")
+        end.callOutcome = .answered
+        end.callEnded = true
+        try db.insert(end)
+        let stamp = now.addingTimeInterval(-60)
+        let sent = try #require(InboundMessage(stanza("""
+            <message from='alice@example.org/phone' type='chat' id='d'><body>said during the call</body>
+              <delay xmlns='urn:xmpp:delay' from='example.org' stamp='\(ISO8601DateFormatter().string(from: stamp))'/>
+            </message>
+            """), account: me, source: .live, now: now))
+        let stored = try #require(try db.ingest(sent).newMessage)
+        #expect(stored.timestamp < end.timestamp)
+    }
+
     @Test func aForgedDelayIsntBackdatedAndStillNotifies() throws {
         let db = try AppDatabase.inMemory()
         let chat = try db.conversation(with: alice)

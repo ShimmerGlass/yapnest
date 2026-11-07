@@ -256,8 +256,9 @@ struct CallSessionOutgoingTests {
 
         h.session.hangUpCall()
         #expect(h.phase == .ended(.completed))
-        await eventually("the call to be recorded") { (try? h.rows().count) == 1 }
+        await eventually("the call to be recorded") { (try? h.rows().count) == 2 }
         let row = try #require(try h.rows().first)
+        #expect(try h.rows().map(\.callEnded) == [false, true])
         #expect(row.callOutcome == .answered)
         #expect(row.direction == .outgoing)
         #expect(row.remoteId == sid)
@@ -638,8 +639,9 @@ struct CallSessionIncomingTests {
             <iq from='\(aliceDevice)' to='me@example.org/phone' type='set' id='x'><jingle xmlns='urn:xmpp:jingle:1' action='session-terminate' sid='s1'><reason><success/></reason></jingle></iq>
             """)
         #expect(h.phase == .ended(.completed))
-        await eventually("the call to be recorded") { (try? h.rows().count) == 1 }
+        await eventually("the call to be recorded") { (try? h.rows().count) == 2 }
         let row = try #require(try h.rows().first)
+        #expect(try h.rows().map(\.callEnded) == [false, true])
         #expect(row.callOutcome == .answered)
         #expect(row.direction == .incoming)
         #expect(row.isRead)
@@ -1102,14 +1104,16 @@ struct CallSessionHistoryTests {
         #expect(h.session.flushArchive())
 
         let rows = try h.rows()
-        #expect(rows.map(\.remoteId) == ["a1", "a2"])
-        #expect(rows.map(\.callOutcome) == [.answered, .missed])
+        #expect(rows.map(\.remoteId) == ["a1", "a1/end", "a2"])
+        #expect(rows.map(\.callOutcome) == [.answered, .answered, .missed])
+        #expect(rows.map(\.callEnded) == [false, true, false])
+        #expect(abs(rows[1].timestamp.timeIntervalSince(at.addingTimeInterval(65))) < 0.01)
         #expect(abs((rows.first?.callDuration ?? 0) - 60) < 0.01)
         // The count before, and once for the whole page.
         #expect(changes <= 2)
         // Nothing is left to store.
         #expect(h.session.flushArchive())
-        #expect(try h.rows().count == 2)
+        #expect(try h.rows().count == 3)
     }
 
     @Test func aReadableMessageStillGoesThroughTheNormalPath() throws {

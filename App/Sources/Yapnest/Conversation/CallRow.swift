@@ -2,9 +2,13 @@ import SwiftUI
 import YapnestKit
 
 extension CallSummary {
-    /// "Missed call", "Outgoing call · 2:31" and so on.
+    /// "Missed call", "Outgoing call", "Call ended · 2:31" and so on.
     var title: String {
-        let base: String = switch outcome {
+        if isEnd {
+            let ended = String(localized: "Call ended")
+            return duration.map { "\(ended) · \(Duration.seconds($0.rounded()).formatted(.time(pattern: .minuteSecond(padMinuteToLength: 1))))" } ?? ended
+        }
+        return switch outcome {
         case .answered where isVideo: direction == .outgoing ? String(localized: "Outgoing video call") : String(localized: "Incoming video call")
         case .answered: direction == .outgoing ? String(localized: "Outgoing call") : String(localized: "Incoming call")
         case .missed where isVideo: String(localized: "Missed video call")
@@ -14,12 +18,11 @@ extension CallSummary {
         case .busy: String(localized: "Busy")
         case .failed: String(localized: "Call failed")
         }
-        guard outcome == .answered, let duration else { return base }
-        return "\(base) · \(Duration.seconds(duration.rounded()).formatted(.time(pattern: .minuteSecond(padMinuteToLength: 1))))"
     }
 
     var symbol: String {
-        switch outcome {
+        if isEnd { return "phone.down" }
+        return switch outcome {
         case .answered where isVideo, .cancelled where isVideo: "video"
         case .answered, .cancelled: direction == .outgoing ? "phone.arrow.up.right" : "phone.arrow.down.left"
         case .missed where isVideo: "video.slash"

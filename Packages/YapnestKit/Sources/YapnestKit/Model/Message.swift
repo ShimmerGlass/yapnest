@@ -125,6 +125,11 @@ public struct Message: Codable, Hashable, Sendable, Identifiable, FetchableRecor
     public var callAnsweredAt: Date?
     /// Whether the call was proposed with video.
     public var callIsVideo = false
+    /// The second row of an answered call, at the moment it ended: it says
+    /// how long the call lasted, and messages sent during the call sit
+    /// between it and the first. It keeps the call's outcome and duration, so
+    /// everything that treats a row as a call's treats it the same.
+    public var callEnded = false
 
     /// Set on the rows that mark something that happened rather than say
     /// something: see `MessageEvent`. Their `body` is empty and they are

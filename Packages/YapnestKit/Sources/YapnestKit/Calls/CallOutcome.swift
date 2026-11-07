@@ -32,19 +32,22 @@ public struct CallSummary: Sendable, Hashable {
     public var direction: Message.Direction
     public var duration: TimeInterval?
     public var isVideo: Bool
+    /// The row that marks the end of an answered call, rather than its start.
+    public var isEnd: Bool
 
-    public init(outcome: CallOutcome, direction: Message.Direction, duration: TimeInterval?, isVideo: Bool = false) {
+    public init(outcome: CallOutcome, direction: Message.Direction, duration: TimeInterval?, isVideo: Bool = false, isEnd: Bool = false) {
         self.outcome = outcome
         self.direction = direction
         self.duration = duration
         self.isVideo = isVideo
+        self.isEnd = isEnd
     }
 }
 
 extension Message {
     /// Set on the rows that stand for a call, which have no body.
     public var call: CallSummary? {
-        callOutcome.map { CallSummary(outcome: $0, direction: direction, duration: callDuration, isVideo: callIsVideo) }
+        callOutcome.map { CallSummary(outcome: $0, direction: direction, duration: callDuration, isVideo: callIsVideo, isEnd: callEnded) }
     }
 
     /// What a notification for a call row says.

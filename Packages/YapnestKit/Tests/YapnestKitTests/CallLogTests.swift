@@ -147,7 +147,7 @@ struct CallLogTests {
             signal(.finish(.success), at: 94),
         )
         let row = try #require(try rows().first)
-        #expect(try rows().count == 1)
+        #expect(try rows().map(\.callEnded) == [false, true])
         #expect(row.callOutcome == .answered)
         #expect(row.callAnsweredAt == long_ago + 4)
         #expect(row.callDuration == 90)
@@ -285,6 +285,171 @@ struct CallLogTests {
     @Test func ringingSaysNothing() throws {
         try apply(signal(.ringing))
         #expect(try rows().isEmpty)
+    }
+
+    // MARK: The end of a call
+
+    private func ends() throws -> [Message] { try rows().filter(\.callEnded) }
+
+    private func answered(sid: String = "s1", duration: TimeInterval? = 90, endedAt: Date? = long_ago + 100) -> CallRecord {
+        CallRecord(peer: alice, account: me, sid: sid, direction: .outgoing, outcome: .answered, startedAt: long_ago, answeredAt: long_ago + 10, duration: duration, endedAt: endedAt)
+    }
+
+    @Test func anAnsweredCallGetsAnEndRowWhenItEnds() throws {
+        let inserted = try db.recordCall(answered())
+        let logged = try rows()
+        #expect(logged.map(\.callEnded) == [false, true])
+        #expect(inserted?.id == logged.first?.id)
+        let end = try #require(logged.last)
+        #expect(end.timestamp == long_ago + 100)
+        #expect(end.remoteId == "s1/end")
+        #expect(end.callOutcome == .answered)
+        #expect(end.callDuration == 90)
+        #expect(end.direction == .outgoing && end.sender == me && end.status == .sent)
+        #expect(end.isRead)
+        #expect(end.call == CallSummary(outcome: .answered, direction: .outgoing, duration: 90, isEnd: true))
+        #expect(logged.first?.call?.isEnd == false)
+    }
+
+    @Test func theEndRowIsReadEvenForAnIncomingCallAndIsNeverClaimed() throws {
+        _ = try db.conversation(with: alice)
+        try db.recordCall(CallRecord(peer: alice, account: me, sid: "s1", direction: .incoming, outcome: .answered, startedAt: Date(), answeredAt: Date(), duration: 4, endedAt: Date()))
+        #expect(try ends().first?.isRead == true)
+        #expect(try db.claimNotifications().isEmpty)
+        #expect(try db.unreadCount() == 0)
+    }
+
+    @Test func aReplayedFinishMakesTheEndRowAtItsOwnTime() throws {
+        try apply(signal(propose), signal(.proceed, fromAccount: true, at: 4), signal(.finish(.success), at: 94))
+        let end = try #require(try ends().first)
+        #expect(end.timestamp == long_ago + 94)
+        #expect(end.callDuration == 90)
+    }
+
+    @Test func aReplayedFinishCompletesARowThatHasItsLengthButNoEnd() throws {
+        try apply(signal(propose), signal(.proceed, fromAccount: true, at: 4))
+        try db.writer.write { try $0.execute(sql: "UPDATE message SET callDuration = 90") }
+        #expect(try ends().isEmpty)
+        try apply(signal(.finish(.success), at: 94))
+        #expect(try ends().map(\.timestamp) == [long_ago + 94])
+    }
+
+    @Test func applyingTheSamePageTwiceAddsNothing() throws {
+        let page = [signal(propose), signal(.proceed, fromAccount: true, at: 4), signal(.finish(.success), at: 94)]
+        try apply(page[0], page[1], page[2], isHistory: true)
+        let first = try rows()
+        try apply(page[0], page[1], page[2], isHistory: true)
+        try apply(page[2], isHistory: true)
+        #expect(try rows() == first)
+        #expect(first.count == 2)
+    }
+
+    /// Archive pages come newest first, so the propose that says it was video
+    /// can follow both rows.
+    @Test func anOlderPageSayingItWasVideoReachesTheEndRow() throws {
+        try apply(signal(.proceed, fromAccount: true, at: 4), signal(.finish(.success), at: 94), isHistory: true)
+        #expect(try rows().map(\.callIsVideo) == [false, false])
+        try apply(signal(.propose(media: [.audio, .video])), isHistory: true)
+        #expect(try rows().map(\.callIsVideo) == [true, true])
+    }
+
+    /// A peer knows the call's id, so can send a message named like its end.
+    @Test func aMessageNamedLikeTheEndRowIsntTakenForIt() throws {
+        let chat = try db.conversation(with: alice)
+        let text = try db.insert(Message(conversationId: chat.id!, direction: .incoming, sender: alice, body: "hi", timestamp: long_ago + 1, remoteId: "s1/end"))
+        try apply(signal(propose), signal(.proceed, fromAccount: true, at: 4))
+        try db.recordCall(CallRecord(peer: alice, account: me, sid: "s1", direction: .outgoing, outcome: .failed, startedAt: long_ago))
+        #expect(try db.reader.read { try Message.fetchOne($0, key: text.id) }?.body == "hi")
+    }
+
+    @Test func recordingAfterAReplayAddsNoSecondEndRowAndMovesTheFirst() throws {
+        try apply(signal(propose), signal(.proceed, fromAccount: true, at: 4), signal(.finish(.success), at: 94))
+        try db.recordCall(answered(duration: 95, endedAt: long_ago + 99))
+        let end = try #require(try ends().first)
+        #expect(try ends().count == 1)
+        #expect(end.timestamp == long_ago + 99)
+        #expect(end.callDuration == 95)
+        #expect(try rows().first?.callDuration == 95)
+    }
+
+    @Test func recordingTwiceAddsNoSecondEndRow() throws {
+        try db.recordCall(answered())
+        try db.recordCall(answered())
+        #expect(try rows().count == 2)
+    }
+
+    @Test func aFailedEndingHasNoEndRowAndRemovesOne() throws {
+        try db.recordCall(CallRecord(peer: alice, account: me, sid: "f", direction: .outgoing, outcome: .failed, startedAt: long_ago, answeredAt: long_ago + 1, duration: 5, endedAt: long_ago + 6))
+        #expect(try rows().count == 1)
+
+        try apply(signal(propose, sid: "s2"), signal(.proceed, sid: "s2", fromAccount: true, at: 4), signal(.finish(.success), sid: "s2", at: 94))
+        #expect(try ends().count == 1)
+        try apply(signal(.finish(.failedApplication), sid: "s2", at: 95))
+        #expect(try rows().filter { $0.remoteId?.hasPrefix("s2") == true }.map(\.callOutcome) == [.failed])
+        #expect(try ends().isEmpty)
+    }
+
+    @Test func callsThatWereNotAnsweredOrHaveNoLengthHaveNoEndRow() throws {
+        try db.recordCall(CallRecord(peer: alice, account: me, sid: "m", direction: .incoming, outcome: .missed, startedAt: long_ago, endedAt: long_ago + 5))
+        try db.recordCall(CallRecord(peer: alice, account: me, sid: "d", direction: .incoming, outcome: .declined, startedAt: long_ago, endedAt: long_ago + 5))
+        try db.recordCall(answered(sid: "n", duration: nil))
+        try db.recordCall(answered(sid: "e", endedAt: nil))
+        #expect(try ends().isEmpty)
+    }
+
+    @Test func aLiveEndMovesTheChatUpAndHistoryDoesNot() throws {
+        try db.recordCall(answered())
+        let chat = try #require(try db.reader.read { try Conversation.filter(Column("peer") == alice).fetchOne($0) })
+        #expect(chat.lastActivityAt == long_ago + 100)
+
+        let other = try db.conversation(with: bob)
+        let before = try #require(try db.reader.read { try Conversation.fetchOne($0, key: other.id!) })
+        try db.writer.write { try Contact(jid: bob, subscription: .both, isInRoster: true).insert($0) }
+        try apply(signal(propose, sid: "h", peer: bob), signal(.proceed, sid: "h", fromAccount: true, peer: bob, at: 4), signal(.finish(.success), sid: "h", peer: bob, at: 94), isHistory: true)
+        let after = try #require(try db.reader.read { try Conversation.fetchOne($0, key: other.id!) })
+        #expect(after.lastActivityAt == before.lastActivityAt)
+        #expect(try ends().filter { $0.remoteId == "h/end" }.count == 1)
+    }
+
+    @Test func aSelfAddressedFinishFindsTheStartRow() throws {
+        try db.recordCall(CallRecord(peer: alice, account: me, sid: "s1", direction: .incoming, outcome: .answered, startedAt: long_ago, answeredAt: long_ago + 2))
+        let finish = CallSignal(sid: "s1", action: .finish(.success), sender: me, recipient: me, from: "me@example.org/tablet", isFromAccount: true, timestamp: long_ago + 50)
+        try apply(finish)
+        #expect(try ends().count == 1)
+        try apply(finish)
+        #expect(try rows().count == 2)
+    }
+
+    @Test func theMigrationGivesStoredAnsweredCallsAnEndRow() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v61-pending-roster-preauth")
+        try queue.write { db in
+            try db.execute(sql: "INSERT INTO conversation (peer, kind, lastActivityAt) VALUES ('alice@example.org', 'chat', '2025-01-01 10:00:00.000')")
+            let columns = "conversationId, direction, sender, body, timestamp, status, isRead, encryption, remoteId, callOutcome, callDuration, callAnsweredAt, callIsVideo"
+            try db.execute(sql: """
+                INSERT INTO message (\(columns)) VALUES
+                (1, 'outgoing', 'me@example.org', '', '2025-01-01 10:00:00.000', 'sent', 1, 'none', 'a', 'answered', 90.5, '2025-01-01 10:00:10.250', 1),
+                (1, 'incoming', 'alice@example.org', '', '2025-01-01 10:05:00.000', 'received', 1, 'none', 'b', 'answered', 30, NULL, 0),
+                (1, 'incoming', 'alice@example.org', '', '2025-01-01 10:06:00.000', 'received', 0, 'none', 'c', 'missed', NULL, NULL, 0),
+                (1, 'incoming', 'alice@example.org', '', '2025-01-01 10:07:00.000', 'received', 1, 'none', 'd', 'answered', NULL, NULL, 0)
+                """)
+        }
+        try AppDatabase.migrator.migrate(queue)
+        let (ends, count, activity) = try queue.read { db in
+            (try Message.filter(Column("callEnded") == true).order(Column("remoteId")).fetchAll(db),
+             try Message.fetchCount(db),
+             try Conversation.fetchOne(db, key: 1)?.lastActivityAt)
+        }
+        #expect(count == 6)
+        #expect(ends.map(\.remoteId) == ["a/end", "b/end"])
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        #expect(ends[0].timestamp == formatter.date(from: "2025-01-01T10:00:10.250Z")!.addingTimeInterval(90.5))
+        #expect(ends[1].timestamp == formatter.date(from: "2025-01-01T10:05:30.000Z")!)
+        #expect(ends.allSatisfy { $0.isRead && $0.callOutcome == .answered })
+        #expect(ends[0].callDuration == 90.5 && ends[0].callIsVideo && ends[0].direction == .outgoing && ends[0].sender == me)
+        #expect(ends[1].direction == .incoming && ends[1].callAnsweredAt == nil)
+        #expect(activity == formatter.date(from: "2025-01-01T10:00:00.000Z"))
     }
 
     // MARK: Elsewhere

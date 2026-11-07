@@ -11,6 +11,9 @@ struct CallRecord: Sendable, Equatable {
     var startedAt: Date
     var answeredAt: Date?
     var duration: TimeInterval?
+    /// When it ended, which the row that marks the end sits at. Without it an
+    /// answered call has no such row.
+    var endedAt: Date?
     var isVideo = false
 }
 
@@ -103,6 +106,7 @@ extension AppDatabase {
             guard let existing, existing.callOutcome == .answered else { return nil }
             record.outcome = .answered
             record.answeredAt = existing.callAnsweredAt
+            record.endedAt = signal.timestamp
             switch reason {
             case .connectivityError, .failedApplication, .generalError:
                 record.outcome = .failed
@@ -134,6 +138,11 @@ extension AppDatabase {
             .fetchOne(db)
     }
 
+    /// The end row's id, which isn't the call's: it would be taken for a copy
+    /// of the start on insert, and found in its place by whatever looks the
+    /// call up.
+    private static func endId(sid: String) -> String { "\(sid)/end" }
+
     /// Inserts the call's row, or brings the one it has up to date. Returns the
     /// row if it is new.
     ///
@@ -164,14 +173,16 @@ extension AppDatabase {
                 row.callIsVideo = row.callIsVideo || record.isVideo
                 // Never news again once it was read.
                 row.isRead = row.isRead || isRead
+                try row.update(db)
             } else if record.isVideo && !row.callIsVideo {
                 // A replayed proposal knows the call was video but not how it
                 // ended, so it must not undo an outcome we already have.
                 row.callIsVideo = true
-            } else {
-                return nil
+                try row.update(db)
             }
-            try row.update(db)
+            // Also when nothing was refined: a replayed finish finds the
+            // length already there, from a row made before the end existed.
+            try syncEnd(db, start: row, record, isAuthoritative: isAuthoritative, isHistory: isHistory)
             return nil
         }
 
@@ -196,6 +207,42 @@ extension AppDatabase {
             try moved.update(db)
         }
         try unarchive(db, conversationId: conversationId, ifNewerThan: record.startedAt)
+        try syncEnd(db, start: row, record, isAuthoritative: isAuthoritative, isHistory: isHistory)
         return row
+    }
+
+    /// Keeps the row that marks the end of an answered call in step with its
+    /// start: made once the length and the end are known, moved when this
+    /// device, which knows best, says otherwise, and gone if the call turned
+    /// out to have failed. It is never news, so it neither counts as unread
+    /// nor is returned for a notification.
+    private static func syncEnd(_ db: Database, start: Message, _ record: CallRecord, isAuthoritative: Bool, isHistory: Bool) throws {
+        let id = endId(sid: record.sid)
+        // Its id alone could be a peer's: they know the call's.
+        let inCall = Message.filter(Column("conversationId") == start.conversationId && Column("remoteId") == id && Column("callEnded") == true)
+        guard start.callOutcome == .answered else {
+            try inCall.deleteAll(db)
+            return
+        }
+        // An older archive page can say it was video after both rows exist.
+        if start.callIsVideo {
+            try inCall.filter(Column("callIsVideo") == false).updateAll(db, Column("callIsVideo").set(to: true))
+        }
+        guard let duration = start.callDuration, let endedAt = record.endedAt else { return }
+        if var existing = try inCall.fetchOne(db) {
+            if isAuthoritative, existing.timestamp != endedAt || existing.callDuration != duration {
+                existing.timestamp = endedAt
+                existing.callDuration = duration
+                try existing.update(db)
+            }
+            return
+        }
+        var row = start
+        row.id = nil
+        row.remoteId = id
+        row.timestamp = endedAt
+        row.isRead = true
+        row.callEnded = true
+        _ = try insert(db, row, quietly: isHistory)
     }
 }

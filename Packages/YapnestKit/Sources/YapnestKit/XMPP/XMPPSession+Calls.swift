@@ -657,10 +657,11 @@ extension XMPPSession {
     }
 
     private func record(_ machine: CallMachine, reason: CallEndReason) {
+        let now = Date()
         record(CallRecord(
             peer: machine.peer, account: account, sid: machine.sid, direction: machine.direction,
             outcome: reason.outcome, startedAt: machine.proposedAt, answeredAt: machine.answeredAt,
-            duration: machine.activeSince.map { max(0, Date().timeIntervalSince($0)) },
+            duration: machine.activeSince.map { max(0, now.timeIntervalSince($0)) }, endedAt: now,
             isVideo: machine.wantsVideo,
         ))
     }

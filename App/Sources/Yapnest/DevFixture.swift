@@ -378,6 +378,13 @@ enum DevFixture: String, CaseIterable {
         message.callOutcome = outcome
         message.callDuration = duration
         _ = try database.insert(message)
+        // An answered call has its end as a row of its own, as the session writes it.
+        if outcome == .answered, let duration {
+            message.remoteId = "\(sid)/end"
+            message.timestamp = time.addingTimeInterval(duration)
+            message.callEnded = true
+            _ = try database.insert(message)
+        }
     }
 
     private static func fillTallHistory(_ database: AppDatabase) throws {

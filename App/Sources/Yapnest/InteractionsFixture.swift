@@ -208,6 +208,8 @@ enum InteractionsFixture {
         ]
         for (index, (outcome, direction, duration)) in kinds.enumerated() {
             try DevFixture.addCall(database, conversation, peer: calls, outcome: outcome, direction: direction, duration: duration, at: clock.next(), sid: "calls-\(index)")
+            // The end of an answered call is its own row, which the next call follows.
+            if outcome == .answered { clock.time.addTimeInterval(duration ?? 0) }
         }
     }
 

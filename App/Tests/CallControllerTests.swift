@@ -381,6 +381,19 @@ struct CallSummaryTests {
         #expect(summary(.missed, video: false).snippet.hasPrefix("📞 "))
     }
 
+    @Test func anAnsweredCallIsTwoLinesAndOnlyTheEndHasTheLength() {
+        let start = CallSummary(outcome: .answered, direction: .outgoing, duration: 151)
+        #expect(start.title == "Outgoing call")
+        #expect(CallSummary(outcome: .answered, direction: .incoming, duration: 42, isVideo: true).title == "Incoming video call")
+        for video in [false, true] {
+            let end = CallSummary(outcome: .answered, direction: .outgoing, duration: 151, isVideo: video, isEnd: true)
+            #expect(end.title == "Call ended · 2:31")
+            #expect(end.symbol == "phone.down")
+            #expect(end.snippet == "\(video ? "📹" : "📞") Call ended · 2:31")
+        }
+        #expect(CallSummary(outcome: .answered, direction: .incoming, duration: 42, isEnd: true).title == "Call ended · 0:42")
+    }
+
     @Test func aCallBackHasVideoOnlyIfTheCallDidAndThePeerTakesIt() {
         #expect(summary(.answered, video: true).callsBackWithVideo(peerTakesVideo: true))
         #expect(!summary(.answered, video: true).callsBackWithVideo(peerTakesVideo: false))
