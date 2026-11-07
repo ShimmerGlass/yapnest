@@ -708,6 +708,26 @@ Each entry gives what went wrong for users, why, and what changed.
   when its timeout is up) and the keepalive a tenth of its interval, at most
   15 s. Not covered by a test: a timer's tolerance can't be observed.
 
+**A resumable stream couldn't be handed to another process**
+(`StreamManagementModule.snapshot`, `seed(_:)`, `acknowledge()`)
+- *Symptom:* the notification extension had to open a session of its own for
+  every push, and closing it made ejabberd (with `notify_on: all`) tell the
+  app's hibernated session that a resource went away, which published a
+  push, which woke the extension again: 35 publishes in 5 minutes on a
+  quiet account.
+- *Cause:* a stream's resumption state lived only in the process that
+  enabled it. A fresh client that resumed it also had no bound JID, as a
+  resumed stream binds nothing, so account discovery never finished.
+- *Fix:* `snapshot` gives what resuming needs (the id, the location, the
+  negotiated timeout, both counters, the bound JID and the `h` of the last
+  `<resumed>`, not the outgoing queue) and `seed(_:)` puts one into a client
+  before it logs in, so `resume()` and the SASL2 `<resume>` use it and the
+  JID is set. The location is turned into an endpoint when asked for, as
+  the connector doesn't exist before the login. `acknowledge()` is
+  `sendAck()` that returns once the `<a/>` is written, for a client that
+  closes the connection straight after. Stanzas the server replays with
+  `<resumed>` were already counted in order; pinned by `StreamSnapshotTests`.
+
 ### MartinOMEMO
 
 **A device list of thousands of ids cost thousands of bundle fetches**

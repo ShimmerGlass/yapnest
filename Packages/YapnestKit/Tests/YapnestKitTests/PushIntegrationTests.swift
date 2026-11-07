@@ -23,7 +23,7 @@ extension LiveServer {
             .init(jid: jid, password: "password", host: "127.0.0.1", port: LiveServer.target.port, disableTLS: true)
         }
 
-        private func session(_ jid: JID, device: String) throws -> XMPPSession {
+        private func session(_ jid: JID, device: String, callMedia: (any CallMediaFactory)? = nil) throws -> XMPPSession {
             let account = AccountDirectory(url: directory(device))
             let database = try account.openDatabase()
             return try XMPPSession(
@@ -31,14 +31,21 @@ extension LiveServer {
                 database: database,
                 attachments: account.attachments,
                 pushRelay: Self.relay,
+                callMedia: callMedia,
                 identityKeys: testIdentityKeys(for: database),
+                resumeTickets: tickets(device),
             )
+        }
+
+        /// Where the app leaves its stream for the extension.
+        private func tickets(_ device: String) -> ResumeTicketStore {
+            ResumeTicketStore(directory: AccountDirectory(url: directory(device)))
         }
 
         /// The extension's, with the app's identity, as on a phone.
         private func fetcher(_ jid: JID, device: String) -> NotificationFetcher {
             NotificationFetcher(
-                credentials: credentials(jid), directory: directory(device), resource: "\(device)-push",
+                credentials: credentials(jid), directory: directory(device), resource: "\(device)-push", appResource: device,
                 lock: ProcessLock(url: directory(device).appending(path: "session.lock")),
                 identityKeys: testIdentityKeys(forAccountAt: directory(device)),
             )
@@ -113,6 +120,128 @@ extension LiveServer {
                 try Message.filter(Column("encryption") == "omemoUndecryptable" && Column("timestamp") > sent.timestamp.addingTimeInterval(-1)).fetchCount($0)
             }
             #expect(undecryptable == 0)
+        }
+
+        /// The extension takes over the app's stream, and leaves it for the next wake, so the server never
+        /// sees a second session come and go; the app then starts a new session, losing and doubling nothing.
+        @Test func extensionResumesTheAppsStreamWakeAfterWake() async throws {
+            let a = try session(alice, device: "alice-push"), b = try session(bob, device: "bob-push")
+            try await connected(a, b)
+            defer { a.disconnect(); b.disconnect() }
+            _ = try a.database.claimNotifications()
+            let store = tickets("alice-push")
+            let started = Date()
+
+            a.suspend()
+            try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
+            let appsStream = try #require(store.load()).stream
+            // Over SASL2 the server picks the resource, so only the account is known.
+            #expect(appsStream.boundJid?.hasPrefix("\(alice)/") == true)
+
+            let tag = UUID().uuidString.prefix(6)
+            var bodies: [String] = []
+            var generation = try #require(store.load()).generation
+            for n in 1...2 {
+                let secret = "resumed wake #\(n) \(tag)"
+                bodies.append(secret)
+                try b.send(secret, to: alice)
+                try await waitUntil("bob's message to go out") { try message(secret, in: b).first?.status == .sent }
+
+                let outcome = await fetcher(alice, device: "alice-push").fetch(timeout: 15)
+                guard case .notifications(let notifications, _, _) = outcome else {
+                    Issue.record("Fetch \(n) failed: \(outcome)")
+                    return
+                }
+                #expect(notifications.contains { $0.body == secret }, "notification \(n)")
+                #expect(try message(secret, in: a).count == 1, "stored once after wake \(n)")
+                let ticket = try #require(store.load(), "wake \(n) left no ticket")
+                #expect(ticket.stream.id == appsStream.id, "wake \(n) opened a session of its own instead of resuming the app's")
+                #expect(ticket.stream.resumedH != nil)
+                #expect(ticket.generation > generation)
+                generation = ticket.generation
+            }
+
+            a.connect()
+            try await waitUntil("alice to come back") { a.state.value == .connected(isSyncing: false) }
+            try await Task.sleep(for: .seconds(2))
+            for body in bodies { #expect(try message(body, in: a).count == 1, "\(body) after the app returned") }
+            let undecryptable = try await a.database.reader.read {
+                try Message.filter(Column("encryption") == "omemoUndecryptable" && Column("timestamp") > started.addingTimeInterval(-1)).fetchCount($0)
+            }
+            #expect(undecryptable == 0)
+            // The app uses the stream now, so what the extension kept of it is stale.
+            #expect(store.load() == nil)
+        }
+
+        /// A ticket for a stream the server doesn't have: the extension falls back to a session on the app's
+        /// resource, and leaves that one's ticket, which the next wake resumes.
+        @Test func aTicketForAnUnknownStreamFallsBackCleanly() async throws {
+            let a = try session(alice, device: "alice-push"), b = try session(bob, device: "bob-push")
+            try await connected(a, b)
+            defer { a.disconnect(); b.disconnect() }
+            _ = try a.database.claimNotifications()
+            let store = tickets("alice-push")
+            a.suspend()
+            try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
+            let bogus = "no-such-stream-\(UUID().uuidString.prefix(8))"
+            store.save(.init(id: bogus, incoming: 3, outgoing: 3, boundJid: "\(alice)/Yapnest-gone"))
+
+            let secret = "after a bad ticket \(UUID().uuidString.prefix(6))"
+            try b.send(secret, to: alice)
+            try await waitUntil("bob's message to go out") { try message(secret, in: b).first?.status == .sent }
+            let outcome = await fetcher(alice, device: "alice-push").fetch(timeout: 15)
+            guard case .notifications(let notifications, _, _) = outcome else {
+                Issue.record("Fetch failed: \(outcome)")
+                return
+            }
+            #expect(notifications.contains { $0.body == secret })
+            let fallback = try #require(store.load()?.stream, "the fallback session left no ticket")
+            #expect(fallback.id != bogus)
+            #expect(fallback.resumedH == nil)
+
+            // The next wake resumes what the fallback left.
+            let again = "and the next wake \(UUID().uuidString.prefix(6))"
+            try b.send(again, to: alice)
+            try await waitUntil("bob's message to go out") { try message(again, in: b).first?.status == .sent }
+            guard case .notifications(let next, _, _) = await fetcher(alice, device: "alice-push").fetch(timeout: 15) else {
+                Issue.record("The second fetch failed")
+                return
+            }
+            #expect(next.contains { $0.body == again })
+            #expect(try #require(store.load()).stream.id == fallback.id)
+            #expect(try message(again, in: a).count == 1)
+        }
+
+        /// iOS rings only for a live `propose`, and an extension that resumed the app's stream consumed it: the
+        /// app, back with a new session, rings for it from what the extension handed over.
+        @Test func aCallAnExtensionConsumedRingsWhenTheAppReturns() async throws {
+            let a = try session(alice, device: "alice-push", callMedia: FakeCallMediaFactory())
+            let b = try session(bob, device: "bob-push", callMedia: FakeCallMediaFactory())
+            try await connected(a, b)
+            defer { a.disconnect(); b.disconnect() }
+            a.addContact(bob)
+            b.addContact(alice)
+            try await waitUntil("each other in the roster") { try a.database.isInRoster(bob) && b.database.isInRoster(alice) }
+            try await waitUntil("bob to be able to call alice") { b.canCall(alice) }
+            _ = try a.database.claimNotifications()
+            let store = tickets("alice-push")
+
+            a.suspend()
+            try await waitUntil("alice to drop the connection") { if case .disconnected = a.state.value { true } else { false } }
+            try b.startCall(to: alice)
+            let sid = try #require(b.callState.value?.sid)
+
+            let outcome = await fetcher(alice, device: "alice-push").fetch(timeout: 15)
+            guard case .notifications = outcome else {
+                Issue.record("Fetch failed: \(outcome)")
+                return
+            }
+            #expect(store.handovers().map(\.sid) == [sid], "the extension consumed the propose and left nothing to ring for")
+
+            a.connect()
+            try await waitUntil("alice's phone to ring") { a.callState.value?.phase == .incoming }
+            #expect(a.callState.value?.sid == sid)
+            b.hangUpCall()
         }
 
         /// Servers push for more than messages, in bursts: the extension

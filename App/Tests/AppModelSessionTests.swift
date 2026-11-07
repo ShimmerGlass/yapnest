@@ -53,6 +53,21 @@ struct AppModelSessionTests {
         }
     }
 
+    /// The ticket resumes the stream it names, so one that outlives the session would let an extension
+    /// take over a session the app has ended. Closing the session for another reason than signing out
+    /// leaves the folder, and the ticket in it, in place.
+    @Test func endingTheSessionDeletesTheResumeTicket() async throws {
+        let fixture = AppModelFixture()
+        try await fixture.model.signIn(fixture.credentialsToSignIn)
+        let tickets = ResumeTicketStore(directory: AccountDirectory(url: fixture.root.appending(path: fixture.account.description)))
+        tickets.save(.init(id: "stream", incoming: 1, outgoing: 1))
+        #expect(tickets.load() != nil)
+
+        await fixture.model.replaceEncryptionDevice()
+
+        #expect(tickets.load() == nil)
+    }
+
     /// They are made from the account's files, encrypted chats' among them,
     /// but kept outside its folder.
     @Test func signingOutDeletesTheCopiesOfReceivedFiles() async throws {

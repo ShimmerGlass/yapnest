@@ -23,6 +23,8 @@ public struct AccountDirectory: Sendable {
 
     public var avatars: AvatarStore { AvatarStore(directory: url.appending(path: "avatars")) }
     public var attachments: AttachmentStore { AttachmentStore(directory: url.appending(path: "attachments")) }
+    /// What an extension needs to resume the app's stream (`ResumeTicket`).
+    public var resumeTicketURL: URL { url.appending(path: "resume-ticket.json") }
     public var previews: URL { url.appending(path: "previews") }
 }
 
@@ -35,6 +37,7 @@ extension XMPPSession {
         credentials: Credentials, resource: String, directory: AccountDirectory, database: AppDatabase,
         mode: Mode = .app, pushRelay: JID = XMPPSession.defaultPushRelay,
         callMedia: (any CallMediaFactory)? = nil, identityKeys: (any IdentityKeyStore)? = nil,
+        boundResource: String? = nil,
     ) throws {
         try self.init(
             credentials: credentials, resource: resource, database: database,
@@ -44,6 +47,8 @@ extension XMPPSession {
             signInRecords: KeychainSignInRecordStore(account: credentials.jid),
             callMedia: callMedia,
             identityKeys: identityKeys,
+            boundResource: boundResource,
+            resumeTickets: mode == .share ? nil : ResumeTicketStore(directory: directory),
         )
     }
 }

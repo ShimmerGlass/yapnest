@@ -138,7 +138,7 @@ What Yapnest implements, and where it stops short.
 | XEP-0176 | Jingle ICE-UDP Transport Method | Audio and video calls: candidates are trickled in `transport-info`. |
 | XEP-0184 | Message Delivery Receipts | Full. |
 | XEP-0191 | Blocking Command | Full. |
-| XEP-0198 | Stream Management | Full: acks and resumption, inline with SASL2. |
+| XEP-0198 | Stream Management | Full: acks and resumption, inline with SASL2. The notification extension resumes the app's stream instead of opening a session of its own. |
 | XEP-0199 | XMPP Ping | Full. Also confirms a sent message on a server without stream management. |
 | XEP-0202 | Entity Time | Ask the account's server for its time, once per connection, to tell how far this device's clock is from it. Times in the synced settings (when a chat was archived) cross between devices in the server's clock, so devices whose clocks differ agree. Requests to us aren't answered. A server that doesn't answer leaves the estimate as it was. |
 | XEP-0203 | Delayed Delivery | Read. |

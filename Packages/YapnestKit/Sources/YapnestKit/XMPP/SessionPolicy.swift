@@ -42,6 +42,10 @@ extension XMPPSession {
         /// changes. The other modes are short-lived and have a timeout of
         /// their own.
         var verifiesLiveness: Bool
+        /// Takes over the app's stream, saved as a resume ticket, instead of
+        /// opening a session whose close the server would announce to it, and
+        /// leaves it open for the next one (see `ResumeTicket`).
+        var resumesSharedStream: Bool
 
         #if targetEnvironment(macCatalyst)
         private static let reportsInactiveHere = false
@@ -54,7 +58,7 @@ extension XMPPSession {
             catchesUpOnConnect: true, syncsAccountState: true, prunesContactRequests: true,
             readsRoomHistory: true, checksRoomMembership: true, sendsChatStates: true,
             publishesOMEMOKeys: true, registersPush: true, fetchesImages: true, donatesSuggestions: true,
-            resendsPending: true, verifiesLiveness: true,
+            resendsPending: true, verifiesLiveness: true, resumesSharedStream: false,
         )
 
         /// Catches up without telling anyone it's here, so the server keeps
@@ -64,7 +68,7 @@ extension XMPPSession {
             catchesUpOnConnect: true, syncsAccountState: false, prunesContactRequests: false,
             readsRoomHistory: true, checksRoomMembership: false, sendsChatStates: false,
             publishesOMEMOKeys: false, registersPush: false, fetchesImages: false, donatesSuggestions: false,
-            resendsPending: false, verifiesLiveness: false,
+            resendsPending: false, verifiesLiveness: false, resumesSharedStream: true,
         )
 
         /// Only writes: it skips the catch-up and the history of rooms it joins.
@@ -73,7 +77,7 @@ extension XMPPSession {
             catchesUpOnConnect: false, syncsAccountState: false, prunesContactRequests: false,
             readsRoomHistory: false, checksRoomMembership: false, sendsChatStates: false,
             publishesOMEMOKeys: false, registersPush: false, fetchesImages: false, donatesSuggestions: false,
-            resendsPending: false, verifiesLiveness: false,
+            resendsPending: false, verifiesLiveness: false, resumesSharedStream: false,
         )
     }
 }

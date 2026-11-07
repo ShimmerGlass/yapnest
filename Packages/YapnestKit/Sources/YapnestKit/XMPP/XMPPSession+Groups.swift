@@ -1604,6 +1604,12 @@ extension XMPPSession {
         // Leaving was the user's decision, which a room's service can't undo
         // by going on sending. Paging its archive is the user's own request.
         if case .live = source, group.hasLeft { return }
+        // An extension on the app's stream is sent what the room said while the app was away, without
+        // the occupants that say who wrote it, so an encrypted message would be kept as undecryptable
+        // and the archive's copy of it dropped as a duplicate. Its read of the room's archive, which
+        // follows, has every message with what it needs. A room without an archive loses what arrives while
+        // the app sleeps and an extension wakes, until a journal of what the extension consumed replays it.
+        if case .live = source, policy.resumesSharedStream { return }
         reportSubjectOutcome(of: stanza, in: room)
         if stanza.type == .groupchat, stanza.from?.resource == nil {
             // The room itself: 104 announces a configuration change, and 170-174

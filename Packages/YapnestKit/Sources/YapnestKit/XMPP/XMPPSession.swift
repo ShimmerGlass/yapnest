@@ -91,6 +91,7 @@ public final class XMPPSession: @unchecked Sendable {
     public let database: AppDatabase
     public let mode: Mode
     let policy: Policy
+    let resumeTickets: ResumeTicketStore?
     /// The XEP-0357 app server that wakes this device.
     let pushRelay: JID
     public let state = CurrentValueSubject<State, Never>(.disconnected(error: nil))
@@ -319,6 +320,18 @@ public final class XMPPSession: @unchecked Sendable {
         var probationTimeout = XMPPSession.confirmationTimeout
         /// Whether we should be connected; drives automatic reconnection.
         var wantsConnection = false
+        /// The generation of the resume ticket the app saved as it suspended:
+        /// a ticket of another is one an extension wrote, which used the stream.
+        var savedTicketGeneration: UInt64?
+        /// Calls an extension took from the live stream while the app was away, to ring for once connected.
+        var handedOverCalls: [CallHandover] = []
+        /// The stream an extension's session was given to resume, until it knows whether the server took it.
+        var seededStreamId: String?
+        /// The session was on a stream at some point, so what its counters say is the stream's.
+        var reachedStream = false
+        /// The extension's first resumed stream has started its catch-up, which a
+        /// resumed stream doesn't start by itself.
+        var resumedCatchUpStarted = false
         var reconnectAttempt = 0
         /// Identifies the pending backoff timer, so one that a path change
         /// overtook doesn't log in again later.
@@ -545,15 +558,21 @@ public final class XMPPSession: @unchecked Sendable {
         signInRecords: SignInRecordStore = MemorySignInRecordStore(),
         callMedia: (any CallMediaFactory)? = nil,
         identityKeys: (any IdentityKeyStore)? = nil,
+        boundResource: String? = nil,
+        resumeTickets: ResumeTicketStore? = nil,
     ) throws {
         try self.init(
             credentials: credentials, resource: resource, database: database, avatars: avatars, attachments: attachments,
             mode: mode, policy: nil, pushRelay: pushRelay, fastTokens: fastTokens, signInRecords: signInRecords,
-            callMedia: callMedia, identityKeys: identityKeys,
+            callMedia: callMedia, identityKeys: identityKeys, boundResource: boundResource, resumeTickets: resumeTickets,
         )
     }
 
     /// `policy` replaces the mode's, for a test to run as another platform.
+    /// `resource` names the client for sign-in (its FAST token and user agent);
+    /// `boundResource`, if given, is the one the session binds, as an extension
+    /// that takes the place of the app's session binds the app's. `resumeTickets`
+    /// is where the app's stream is handed between the app and an extension.
     init(
         credentials: Credentials,
         resource: String,
@@ -567,7 +586,10 @@ public final class XMPPSession: @unchecked Sendable {
         signInRecords: SignInRecordStore = MemorySignInRecordStore(),
         callMedia: (any CallMediaFactory)? = nil,
         identityKeys: (any IdentityKeyStore)? = nil,
+        boundResource: String? = nil,
+        resumeTickets: ResumeTicketStore? = nil,
     ) throws {
+        self.resumeTickets = resumeTickets
         self.callMedia = callMedia
         self.account = credentials.jid
         self.database = database
@@ -584,7 +606,7 @@ public final class XMPPSession: @unchecked Sendable {
 
         client.connectionConfiguration.userJid = credentials.jid.martin
         client.connectionConfiguration.credentials = .password(password: credentials.password)
-        client.connectionConfiguration.resource = resource
+        client.connectionConfiguration.resource = boundResource ?? resource
         client.connectionConfiguration.disableTLS = credentials.disableTLS
         let domain = credentials.jid.domain
         client.connectionConfiguration.modifyConnectorOptions(type: SocketConnectorNetwork.Options.self) { options in
@@ -881,7 +903,10 @@ public final class XMPPSession: @unchecked Sendable {
         lock.withLock { $0.wantsConnection = true }
         if case .disconnected = client.state {
             // Before anything can arrive, so an offer of this session isn't swept.
-            if mode == .app { expireFileOffers() }
+            if mode == .app {
+                expireFileOffers()
+                settleResumeTicket()
+            }
             login()
         }
     }
@@ -914,8 +939,16 @@ public final class XMPPSession: @unchecked Sendable {
         for attachment in try database.deleteConversation(id: id) { attachments.remove(attachment) }
     }
 
+    /// Ends the session for good: the server forgets it, and so does the
+    /// ticket the extensions would resume it from.
     public func disconnect() {
-        lock.withLock { $0.wantsConnection = false }
+        lock.withLock {
+            $0.wantsConnection = false
+            $0.savedTicketGeneration = nil
+        }
+        // The share extension's session is a different one, whose end says nothing of the app's stream.
+        if mode != .share { resumeTickets?.delete() }
+        if mode == .app { resumeTickets?.deleteHandovers() }
         _ = client.disconnect()
     }
 
@@ -927,11 +960,165 @@ public final class XMPPSession: @unchecked Sendable {
         presenceQueue.sync {}
         lock.withLock { $0.wantsConnection = false }
         _ = client.disconnect(true)
+        // After the close: what is read or acknowledged up to then is in the counters, which a ticket
+        // saved earlier would leave behind what the server has been told. Prosody fails such a resume.
+        waitForDisconnect()
+        saveResumeTicket()
     }
 
-    /// For the notification extension: connects, catches up on the archives
-    /// and disconnects. False if that didn't finish within `timeout`.
+    /// Until Martin has finished closing a forced disconnect, which stops reading, or a second.
+    private func waitForDisconnect() {
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline {
+            if case .disconnected = client.state { return }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+    }
+
+    /// Leaves the stream where the notification extension can take it over,
+    /// with the counters as they stand once the connection is gone.
+    private func saveResumeTicket() {
+        guard mode == .app, let store = resumeTickets else { return }
+        let generation: UInt64?
+        if let snapshot = client.modulesManager.moduleOrNil(.streamManagement)?.snapshot {
+            generation = store.save(snapshot)
+        } else {
+            store.delete()
+            generation = nil
+        }
+        lock.withLock { $0.savedTicketGeneration = generation }
+        DiagLog.info(.connection, "Resume ticket saved", .bool("saved", generation != nil))
+    }
+
+    /// The app is about to use the stream, which makes the ticket stale: its
+    /// counters fall behind at once, and an extension that resumed from them
+    /// would have the server replay, or on ejabberd silently lose, what the
+    /// app has read since. So it goes, and if another process has written one
+    /// since the app saved its own, that process used the stream, whose
+    /// counters the app doesn't have: the app forgets the stream and starts a
+    /// new session, as it does when a resumption fails.
+    private func settleResumeTicket() {
+        guard let store = resumeTickets else { return }
+        let saved = lock.withLock { state in
+            defer { state.savedTicketGeneration = nil }
+            return state.savedTicketGeneration
+        }
+        let current = store.load()?.generation
+        store.delete()
+        let calls = store.takeHandovers()
+        if !calls.isEmpty { lock.withLock { $0.handedOverCalls += calls } }
+        guard current != saved else { return }
+        client.modulesManager.moduleOrNil(.streamManagement)?.reset()
+        DiagLog.info(.connection, "Stream used by another process, starting a new session")
+    }
+
+    /// Rings for what an extension took from the stream, as a live propose
+    /// would have: consent, the tie-break and the ring are the usual ones. A
+    /// call past the ring window is over, and the extension's row stands for it.
+    private func ringHandedOverCalls() {
+        let calls = lock.withLock { state in
+            defer { state.handedOverCalls = [] }
+            return state.handedOverCalls
+        }
+        let now = Date()
+        for call in calls where now.timeIntervalSince(call.timestamp) < CallMachine.ringWindow {
+            guard let sender = JID(call.sender), let recipient = JID(call.recipient) else { continue }
+            let media = Set(call.media.compactMap(CallSignal.Media.init(rawValue:)))
+            let signal = CallSignal(sid: call.sid, action: .propose(media: media), sender: sender, recipient: recipient, from: call.from, timestamp: call.timestamp)
+            callSignalReceived(signal, source: .live, isHistory: false)
+        }
+    }
+
+    /// An extension on the app's stream notes the calls it consumes, so the app can ring for them.
+    func handOverCall(_ signal: CallSignal, source: InboundMessage.Source, isHistory: Bool) {
+        guard policy.resumesSharedStream, let store = resumeTickets else { return }
+        switch signal.action {
+        case .propose(let media):
+            guard source == .live, !isHistory, !signal.isFromAccount else { return }
+            let handover = CallHandover(
+                sid: signal.sid, sender: signal.sender.description, recipient: signal.recipient.description, from: signal.from,
+                media: media.map(\.rawValue).sorted(), timestamp: signal.timestamp,
+            )
+            lock.withLock { _ in store.addHandover(handover, ringWindow: CallMachine.ringWindow) }
+        case .proceed, .accept, .reject, .retract, .finish:
+            lock.withLock { _ in store.removeHandover(sid: signal.sid) }
+        case .ringing:
+            break
+        }
+    }
+
+    /// An extension's session is given the app's stream to resume, if a ticket has one.
+    private func seedFromTicket() {
+        guard policy.resumesSharedStream, let store = resumeTickets, let ticket = store.load(),
+              let sm = client.modulesManager.moduleOrNil(.streamManagement) else { return }
+        sm.seed(ticket.stream)
+        lock.withLock { $0.seededStreamId = ticket.stream.id }
+        DiagLog.info(.connection, "Resuming from a ticket")
+    }
+
+    /// A new session came up where the ticket's stream was to be resumed: the
+    /// server no longer has it, or no longer does stream management at all, in
+    /// which case it never replaced what the seed put in the module.
+    private func ticketFailed() {
+        guard let id = lock.withLock({ state in
+            defer { state.seededStreamId = nil }
+            return state.seededStreamId
+        }) else { return }
+        DiagLog.info(.connection, "Resume refused, new session")
+        resumeTickets?.delete()
+        if let sm = client.modulesManager.moduleOrNil(.streamManagement), sm.snapshot?.id == id { sm.reset() }
+    }
+
+    /// Ends an extension's session the way that doesn't make the server tell
+    /// the app's session that this one left: the final acknowledgement, then
+    /// the connection closed without `</stream>`, which keeps the stream for
+    /// the next wake, and the ticket updated. A server that can't resume
+    /// streams gets the usual close.
+    private func leave() async {
+        lock.withLock { $0.wantsConnection = false }
+        guard policy.resumesSharedStream, let store = resumeTickets,
+              let sm = client.modulesManager.moduleOrNil(.streamManagement), sm.resumptionEnabled else { return disconnect() }
+        // A session that never got onto a stream knows nothing the ticket doesn't, so it stays as it was.
+        guard lock.withLock({ $0.reachedStream }) else {
+            _ = client.disconnect(true)
+            return
+        }
+        // Over, if the connection dropped meanwhile: the counters are still what this process handled.
+        if isConnected { await sendFinalAcknowledgement(sm) }
+        _ = client.disconnect(true)
+        // After the close, so that what was read up to it is in the ticket.
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline {
+            if case .disconnected = client.state { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let saved = sm.snapshot.flatMap { store.save($0) } != nil
+        if !saved { store.delete() }
+        DiagLog.info(.connection, "Resume ticket saved", .bool("saved", saved))
+    }
+
+    /// Written before the connection closes, which would cut it off; not waited
+    /// for beyond a moment, as a stalled connection never completes the write.
+    private func sendFinalAcknowledgement(_ sm: StreamManagementModule) async {
+        let once = Once()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            // Detached, so a cancelled fetch still sends it.
+            Task.detached {
+                await sm.acknowledge()
+                if once.first() { continuation.resume() }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                if once.first() { continuation.resume() }
+            }
+        }
+    }
+
+    /// For the notification extension: resumes the app's stream if the
+    /// ticket has one, otherwise connects as the app's resource, catches up on
+    /// the archives and leaves the stream for the next wake (`leave`). False if
+    /// that didn't finish within `timeout`.
     public func catchUpOnce(timeout: TimeInterval) async -> Bool {
+        seedFromTicket()
         connect()
         let finished = (try? await withTimeout(timeout) { [self] in
             for await value in state.values {
@@ -942,7 +1129,7 @@ public final class XMPPSession: @unchecked Sendable {
             }
             return false
         }) ?? false
-        disconnect()
+        await leave()
         return finished
     }
 
@@ -1496,17 +1683,35 @@ public final class XMPPSession: @unchecked Sendable {
                 return $0.attempt
             }
             callStep(.connectionRestored)
+            lock.withLock { $0.reachedStream = true }
+            if mode == .app { runOnceConnected(attempt: attempt) { [self] in ringHandedOverCalls() } }
             runOnceConnected(attempt: attempt) { [self] in resolveHeldGroupMessages() }
             runOnceConnected(attempt: attempt) { [self] in sendUnsentCallMessages() }
             // A ping sent on the old stream says nothing about this one.
             livenessPending.send(false)
-            if resumed {
+            if resumed, policy.resumesSharedStream, lock.withLock({ state in
+                defer { state.resumedCatchUpStarted = true }
+                return !state.resumedCatchUpStarted
+            }) {
+                // The stream was the app's: the server asks nothing and sends
+                // no features again, so what a new session starts at connect
+                // is started here, and the extension waits for it.
+                DiagLog.info(.connection, "Resumed the app's stream")
+                lock.withLock {
+                    $0.isSyncing = true
+                    $0.awaitsAccountDiscovery = true
+                    $0.catchUpInterrupted = false
+                }
+                self.state.send(.connected(isSyncing: true))
+                runOnceConnected(attempt: attempt) { [self] in discoverAndCatchUp() }
+            } else if resumed {
                 self.state.send(.connected(isSyncing: lock.withLock { $0.isSyncing }))
                 // Martin publishes the state before it holds it, so in here the
                 // client still reads as connecting and everything that checks
                 // `isConnected` would do nothing.
                 runOnceConnected(attempt: attempt) { [self] in resumeWork() }
             } else {
+                ticketFailed()
                 // A resumed session keeps the server's presence and room
                 // state, which it won't send again; only a new one starts over.
                 clearPresences()
@@ -1607,6 +1812,21 @@ public final class XMPPSession: @unchecked Sendable {
                 DispatchQueue.global().asyncAfter(deadline: .now() + wait) { [weak self] in
                     self?.runOnceConnected(attempt: attempt, tries: max(tries - 1, 0), work)
                 }
+            }
+        }
+    }
+
+    /// What Martin starts itself at a new session's bind, and a resumed
+    /// stream doesn't: finding out what the server offers, which the archive
+    /// query needs to know, then the catch-up.
+    private func discoverAndCatchUp() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await discoverAccountFeatures()
+                accountDiscovered(client.module(.disco).accountDiscoResult)
+            } catch {
+                accountDiscoveryFailed(error)
             }
         }
     }

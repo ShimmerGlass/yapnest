@@ -30,12 +30,14 @@ public struct NotificationFetcher: Sendable {
     public var directory: URL { account.directory }
 
     public init(
-        credentials: XMPPSession.Credentials, directory: URL, resource: String, lock: ProcessLock = SharedContainer.sessionLock,
+        credentials: XMPPSession.Credentials, directory: URL, resource: String, appResource: String? = nil,
+        lock: ProcessLock = SharedContainer.sessionLock,
         appLock: ProcessLock = SharedContainer.appLock,
         identityKeys: (any IdentityKeyStore)? = nil,
     ) {
         self.init(account: ExtensionAccount(
-            credentials: credentials, directory: directory, resource: resource, lock: lock, appLock: appLock, identityKeys: identityKeys,
+            credentials: credentials, directory: directory, resource: resource, appResource: appResource ?? resource,
+            lock: lock, appLock: appLock, identityKeys: identityKeys,
         ))
     }
 
@@ -148,7 +150,7 @@ public struct NotificationFetcher: Sendable {
             let database = try account.files.openDatabase()
             let session = try XMPPSession(
                 credentials: account.credentials, resource: account.resource, directory: account.files, database: database, mode: .notificationService,
-                identityKeys: account.identityKeys,
+                identityKeys: account.identityKeys, boundResource: account.appResource,
             )
             session.savesConfirmedPassword(to: CredentialStore())
             let caughtUp = await session.catchUpOnce(timeout: timeout)

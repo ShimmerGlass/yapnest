@@ -8,6 +8,12 @@ struct ExtensionAccount: Sendable {
     var credentials: XMPPSession.Credentials
     var directory: URL
     var resource: String
+    /// The resource the app's session binds, which an extension's session asks
+    /// to bind too when it has to open one: it takes over the app's stream or,
+    /// if that is gone, its place, so the server never sees a second session
+    /// come and go. Over SASL2 the server picks the resource and this is
+    /// ignored. Its own `resource` still names it for sign-in, keeping its FAST token.
+    var appResource: String
     var lock: ProcessLock = SharedContainer.sessionLock
     /// Held by the app while it holds or waits for `lock`.
     var appLock: ProcessLock = SharedContainer.appLock
@@ -25,6 +31,7 @@ struct ExtensionAccount: Sendable {
             credentials: credentials,
             directory: SharedContainer.directory(for: credentials.jid),
             resource: "yapnest-\(deviceId)-\(role)",
+            appResource: "yapnest-\(deviceId)",
         )
     }
 }
