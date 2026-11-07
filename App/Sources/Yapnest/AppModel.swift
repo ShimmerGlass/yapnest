@@ -183,12 +183,21 @@ final class AppModel {
             try await $0.accepts(password: $1)
         }
         /// Asks iOS for time to finish something after the app leaves the screen;
-        /// the result gives the time back.
-        var beginBackgroundTask: @MainActor (_ name: String) -> @MainActor () -> Void = { name in
+        /// the result gives the time back. `onExpiry` runs when iOS takes the
+        /// time back first, and the task ends right after it.
+        var beginBackgroundTask: @MainActor (_ name: String, _ onExpiry: @escaping @MainActor () -> Void) -> @MainActor () -> Void = { name, onExpiry in
             let task = BackgroundTaskBox()
-            task.id = UIApplication.shared.beginBackgroundTask(withName: name) { task.end() }
+            task.id = UIApplication.shared.beginBackgroundTask(withName: name) {
+                MainActor.assumeIsolated { onExpiry() }
+                task.end()
+            }
             return { task.end() }
         }
+        /// Whether the app is in the background as it starts, which a push can
+        /// launch it into. The Mac never is.
+        var launchesInBackground: @MainActor () -> Bool = { !Platform.staysConnected && UIApplication.shared.applicationState == .background }
+        /// The catch-up a silent push asks for, and the notifications it posts.
+        var catchUpForPush: @MainActor () async -> BackgroundPush.Result = { await BackgroundPush.run() }
         /// Drops every client's FAST token: the app's and the extensions'. The
         /// server may have invalidated them with the old password, and none of
         /// them can tell the others that the password changed.
@@ -351,11 +360,21 @@ final class AppModel {
     /// before answering is shown again.
     @discardableResult
     func restoreSession(_ saved: XMPPSession.Credentials) async -> Error? {
+        // Opening the database can migrate it, and a suspended app that holds
+        // the file mid-migration is killed. A background launch has no other
+        // task covering it until `applyScenePhase` starts the suspension's.
+        let endBackgroundTask = isBackground ? environment.beginBackgroundTask("Open account", {}) : {}
+        defer { endBackgroundTask() }
         do {
             let session = try await makeSession(saved)
             showsWelcome = await offMain { (try? session.database.setting(.welcomeShown)) == "pending" }
             phase = .signedIn(session)
-            connect(session)
+            // A launch into the background (a silent push) doesn't take the
+            // session or the locks: a notification extension woken for a real
+            // message would find the app running, stay quiet and leave the
+            // alert to an app that is about to be suspended. The first move
+            // to active connects, through `scenePhaseChanged`.
+            if !isBackground || Platform.staysConnected { connect(session) }
             didSignIn(session)
             applyScenePhase(to: session)
             return nil
@@ -555,7 +574,7 @@ final class AppModel {
         guard sessionLock.isLocked else { return stillOpening }
         // No session handles the app leaving the screen while this runs, and
         // it holds the lock and the database.
-        let endBackgroundTask = environment.beginBackgroundTask("Reset encryption")
+        let endBackgroundTask = environment.beginBackgroundTask("Reset encryption", {})
         defer { endBackgroundTask() }
         phase = .loading
         loadingIsSlow = true
@@ -689,6 +708,13 @@ final class AppModel {
     /// UIKit's "active" only while AppKit agrees. Only UIKit's say whether
     /// the app is in the background, so a lost focus leaves that as it was.
     func followLifecycle(of center: NotificationCenter = .default) {
+        // Before any notification: a launch into the background posts none
+        // until the app comes forward. A foreground launch is inactive, which
+        // counts as active here, as `didBecomeActive` follows.
+        if environment.launchesInBackground() {
+            isActive = false
+            isBackground = true
+        }
         let phases: [(Notification.Name, active: Bool, background: Bool?)] = [
             (UIApplication.didBecomeActiveNotification, true, false),
             (UIApplication.willResignActiveNotification, false, false),
@@ -830,6 +856,30 @@ final class AppModel {
                 }
             }
         return true
+    }
+
+    /// A silent push woke the app, which may have been launched for it. If the
+    /// app is on screen or holds the connection it has everything already.
+    /// Otherwise it catches up as the notification extension does, in a
+    /// session of its own under the session lock only: the app lock stays
+    /// free, so an extension woken for a real message after this still runs
+    /// and doesn't find an app that is about to be suspended.
+    ///
+    /// A suspended session of the model is left alone; it connects on return.
+    func receivedBackgroundPush() async -> BackgroundPush.Result {
+        let holdsLocks = appLock.isLocked || sessionLock.isLocked
+        DiagLog.info(.push, "Background push", .bool("active", isActive), .bool("holdsLocks", holdsLocks))
+        guard !isActive, !holdsLocks, signingOut == nil else { return .noData }
+        let work = Task { await environment.catchUpForPush() }
+        // Cancelled on expiry, so the catch-up lets go of the lock and its
+        // database before the completion handler is called.
+        let endBackgroundTask = environment.beginBackgroundTask("Background push") { work.cancel() }
+        defer { endBackgroundTask() }
+        let result = await work.value
+        // The catch-up's own database is a database of this process: left
+        // open past suspension it would get the app killed.
+        if !isActive { AppDatabase.suspend() }
+        return result
     }
 
     private func endBackgroundTask() {

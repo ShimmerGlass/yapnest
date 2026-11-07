@@ -148,6 +148,20 @@ extension MessageNotification {
         }
     }
 
+    /// What a fetch's outcome changes in the notifications already delivered,
+    /// in the order both the extension and the app's background wake do it:
+    /// corrected messages, held groups' summaries, then the relay's stand-in
+    /// alerts come down once something real replaces them. Returns the ones
+    /// to show loudly, which each caller posts its own way.
+    public static func settleFetched(
+        _ notifications: [MessageNotification], edited: [MessageNotification], badge: Int?, avatars: AvatarStore,
+    ) async -> [MessageNotification] {
+        await replaceDelivered(edited, badge: badge, avatars: avatars)
+        await replaceHeld(notifications, badge: badge, avatars: avatars)
+        if !notifications.isEmpty { await UNUserNotificationCenter.current().removePlaceholderNotifications() }
+        return notifications.filter { !$0.isQuiet }
+    }
+
     /// Updates the loud notification of each group that has messages held back
     /// by its notification interval, without a sound or a banner, to say how
     /// many came in. A group whose loud notification was dismissed is left

@@ -44,8 +44,10 @@ public struct NotificationFetcher: Sendable {
     }
 
     /// For the signed-in account, or nil if the app hasn't been signed in.
-    public static func current() -> NotificationFetcher? {
-        ExtensionAccount.current(role: "push").map { NotificationFetcher(account: $0) }
+    /// `role` keeps the session's resource apart from the others': the
+    /// extension's is "push", the app's own background wake's "background".
+    public static func current(role: String = "push") -> NotificationFetcher? {
+        ExtensionAccount.current(role: role).map { NotificationFetcher(account: $0) }
     }
 
     private static let logger = Logger(subsystem: "Yapnest", category: "Notifications")

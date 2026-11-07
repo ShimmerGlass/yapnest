@@ -115,6 +115,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         model.receivedPushToken(deviceToken)
     }
 
+    /// The relay's silent pushes, for publishes that don't need an alert. The
+    /// app may have been launched in the background for one.
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        nonisolated(unsafe) let completion = completionHandler
+        Task { @MainActor in
+            switch await model.receivedBackgroundPush() {
+            case .newData: completion(.newData)
+            case .noData: completion(.noData)
+            case .failed: completion(.failed)
+            }
+        }
+    }
+
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         DiagLog.error(.push, "No push token", .error(error))
     }

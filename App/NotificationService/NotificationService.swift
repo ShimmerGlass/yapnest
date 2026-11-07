@@ -50,10 +50,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         let avatars = AccountDirectory(url: fetcher.directory).avatars
         switch await fetcher.fetch() {
         case .notifications(let notifications, let edited, let badge):
-            await MessageNotification.replaceDelivered(edited, badge: badge, avatars: avatars)
-            await MessageNotification.replaceHeld(notifications, badge: badge, avatars: avatars)
-            if !notifications.isEmpty { await UNUserNotificationCenter.current().removePlaceholderNotifications() }
-            let loud = notifications.filter { !$0.isQuiet }
+            let loud = await MessageNotification.settleFetched(notifications, edited: edited, badge: badge, avatars: avatars)
             guard let first = loud.first else {
                 // Muted groups, or something without a message (a reaction, a
                 // key exchange). An empty notification would leave the relay's

@@ -74,6 +74,11 @@ final class AppModelFixture {
     /// The names of the background tasks the model asked for, and how many are still open.
     private(set) var backgroundTasks: [String] = []
     private(set) var openBackgroundTasks = 0
+    /// Whether the app starts in the background, as a silent push launches it.
+    var launchesInBackground = false
+    /// How many catch-ups a silent push ran, and what they answer.
+    private(set) var pushCatchUps = 0
+    var pushResult = BackgroundPush.Result.noData
     private(set) var fastTokenWipes = 0
     private(set) var diagnosticsWipes = 0
 
@@ -103,10 +108,15 @@ final class AppModelFixture {
             if let replacementError { throw replacementError }
             try await session.replaceEncryptionDevice()
         }
-        environment.beginBackgroundTask = { [unowned self] name in
+        environment.beginBackgroundTask = { [unowned self] name, _ in
             backgroundTasks.append(name)
             openBackgroundTasks += 1
             return { [unowned self] in openBackgroundTasks -= 1 }
+        }
+        environment.launchesInBackground = { [unowned self] in launchesInBackground }
+        environment.catchUpForPush = { [unowned self] in
+            pushCatchUps += 1
+            return pushResult
         }
         environment.suspendDelay = suspendDelay
         environment.slowStatusDelay = slowStatusDelay

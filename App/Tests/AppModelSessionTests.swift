@@ -326,6 +326,97 @@ struct AppModelSessionTests {
         await eventually("the session lets go of the lock") { !fixture.lock.isLocked }
     }
 
+    // MARK: Launching in the background
+
+    /// A silent push can launch the app without anyone looking at it. Holding
+    /// the locks then makes a notification extension woken for a real message
+    /// treat the app as running, and the app is about to be suspended.
+    @Test func launchingInTheBackgroundDoesntConnectOrTakeEitherLock() async throws {
+        let fixture = AppModelFixture()
+        fixture.launchesInBackground = true
+        let model = fixture.model!
+        model.followLifecycle(of: NotificationCenter())
+
+        let error = await model.restoreSession(fixture.credentialsToSignIn)
+
+        #expect(error == nil)
+        #expect(model.session != nil)
+        #expect(await stays(for: .milliseconds(400)) {
+            fixture.connects.isEmpty && !fixture.lock.isLocked && !fixture.appLock.isLocked && !fixture.appIsRunning()
+        })
+        #expect(fixture.otherProcess.tryLock(), "an extension can run its own session")
+        fixture.otherProcess.unlock()
+        await eventually("the background task that covered the open is over") { fixture.openBackgroundTasks == 0 }
+    }
+
+    @Test func theFirstMoveToActiveAfterABackgroundLaunchConnects() async throws {
+        let fixture = AppModelFixture()
+        fixture.launchesInBackground = true
+        let model = fixture.model!
+        model.followLifecycle(of: NotificationCenter())
+        await model.restoreSession(fixture.credentialsToSignIn)
+        #expect(fixture.connects.isEmpty)
+
+        model.scenePhaseChanged(active: true, background: false)
+
+        await eventually("it connects") { fixture.connects.count == 1 }
+        #expect(fixture.lock.isLocked)
+        #expect(fixture.appIsRunning())
+    }
+
+    @Test func launchingInTheForegroundStillConnectsAtOnce() async throws {
+        let fixture = AppModelFixture()
+        let model = fixture.model!
+        model.followLifecycle(of: NotificationCenter())
+
+        await model.restoreSession(fixture.credentialsToSignIn)
+
+        #expect(fixture.connects.count == 1)
+        #expect(fixture.lock.isLocked)
+    }
+
+    // MARK: Silent pushes
+
+    @Test func aSilentPushWhileActiveAnswersNoDataWithoutTouchingTheLocks() async throws {
+        let fixture = AppModelFixture()
+        fixture.pushResult = .newData
+        let model = fixture.model!
+
+        let result = await model.receivedBackgroundPush()
+
+        #expect(result == .noData)
+        #expect(fixture.pushCatchUps == 0)
+        #expect(!fixture.lock.isLocked && !fixture.appLock.isLocked && !fixture.appIsRunning())
+    }
+
+    @Test func aSilentPushWhileTheAppHoldsTheConnectionAnswersNoData() async throws {
+        let fixture = AppModelFixture()
+        fixture.pushResult = .newData
+        let model = fixture.model!
+        try await model.signIn(fixture.credentialsToSignIn)
+        model.scenePhaseChanged(active: false, background: false)
+
+        #expect(await model.receivedBackgroundPush() == .noData)
+        #expect(fixture.pushCatchUps == 0)
+        #expect(fixture.lock.isLocked, "the connection is left alone")
+    }
+
+    @Test func aSilentPushInTheBackgroundCatchesUpAndLeavesNothingHeld() async throws {
+        let fixture = AppModelFixture()
+        fixture.launchesInBackground = true
+        fixture.pushResult = .newData
+        let model = fixture.model!
+        model.followLifecycle(of: NotificationCenter())
+
+        let result = await model.receivedBackgroundPush()
+
+        #expect(result == .newData)
+        #expect(fixture.pushCatchUps == 1)
+        #expect(!fixture.lock.isLocked && !fixture.appLock.isLocked && !fixture.appIsRunning())
+        #expect(fixture.openBackgroundTasks == 0)
+        #expect(fixture.backgroundTasks == ["Background push"])
+    }
+
     // MARK: Leaving the app during sign-in
 
     /// A sign-in the app suspended in the background, its connection dropped.
