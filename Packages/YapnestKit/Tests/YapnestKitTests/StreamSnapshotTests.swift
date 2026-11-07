@@ -84,6 +84,17 @@ struct StreamSnapshotTests {
         #expect(seeded.snapshot == nil)
     }
 
+    /// The id alone, for what asks of every stanza, follows the snapshot's.
+    @Test func theStreamIdIsTheSnapshotsId() {
+        let seeded = module()
+        #expect(seeded.streamId == nil)
+        seeded.seed(earlier)
+        #expect(seeded.streamId == seeded.snapshot?.id)
+        #expect(seeded.streamId == earlier.id)
+        seeded.reset()
+        #expect(seeded.streamId == nil)
+    }
+
     /// How many of our stanzas the server had handled, as it said when it resumed the stream: what a
     /// process that takes the stream over after this one needs to tell its own count from the server's.
     @Test func theServersCountFromResumedIsKeptUntilANewStream() {

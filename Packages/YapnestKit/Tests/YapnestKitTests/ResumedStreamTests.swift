@@ -37,6 +37,9 @@ private final class ServerScript: @unchecked Sendable {
     func recordStop(force: Bool) { lock.withLock { _stops.append(force) } }
 
     var authentications: [Stanza] { sent.filter { $0.name == "authenticate" } }
+    var blocklistRequests: [Iq] {
+        sent.compactMap { $0 as? Iq }.filter { $0.type == .get && $0.firstChild(name: "blocklist", xmlns: "urn:xmpp:blocking") != nil }
+    }
     var archiveQueries: [Iq] {
         sent.compactMap { $0 as? Iq }.filter { $0.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") != nil }
     }
@@ -160,6 +163,7 @@ private final class ScriptedServer: Connector {
             reply.addChild(element("query", "http://jabber.org/protocol/disco#info", [:], [
                 element("identity", "http://jabber.org/protocol/disco#info", ["category": "account", "type": "registered"]),
                 element("feature", "http://jabber.org/protocol/disco#info", ["var": "urn:xmpp:mam:2"]),
+                element("feature", "http://jabber.org/protocol/disco#info", ["var": "urn:xmpp:blocking"]),
             ]))
         } else if iq.firstChild(name: "query", xmlns: "urn:xmpp:mam:2") != nil {
             reply.addChild(element("fin", "urn:xmpp:mam:2", ["complete": "true"], [element("set", "http://jabber.org/protocol/rsm")]))
@@ -292,11 +296,19 @@ struct ResumedStreamTests {
     /// What the room said while the app was away reaches the extension in the resumed stream's queue, but
     /// without the occupants that say who wrote it. Stored from there an encrypted message was kept as
     /// undecryptable, and its archive copy, which the extension reads next, dropped as a duplicate.
-    @Test func anExtensionLeavesTheRoomsLiveMessagesToItsArchiveRead() throws {
+    @Test func anExtensionOnTheAppsStreamLeavesTheRoomsLiveMessagesToItsArchiveRead() throws {
         let room = YapnestKit.JID("cake@rooms.example.org")!
-        func stored(by mode: XMPPSession.Mode, source: InboundMessage.Source) throws -> Int {
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        /// `seeded`: the extension resumes the ticket's stream. Otherwise it has a stream of its own, which
+        /// journals no room messages, so storing them is all that is left to do with them.
+        func stored(by mode: XMPPSession.Mode, seeded: Bool = false, source: InboundMessage.Source) throws -> Int {
             let database = try AppDatabase.inMemory()
-            let session = try makeSession(JID("me@example.org")!, database: database, mode: mode)
+            let session = try XMPPSession(
+                credentials: .init(jid: YapnestKit.JID("me@example.org")!, password: "x"), resource: "t", database: database, mode: mode,
+                identityKeys: testIdentityKeys(for: database), boundResource: mode == .app ? nil : "app", resumeTickets: store,
+            )
+            if seeded { session.seedFromTicket() }
             try database.joinGroupChat(room, nickname: "me")
             session.reloadKnownRooms()
             session.updateRoom(room) { $0 = RoomStatus(phase: .joined, nickname: "me") }
@@ -308,8 +320,9 @@ struct ResumedStreamTests {
             return try database.reader.read { try YapnestKit.Message.fetchCount($0) }
         }
         #expect(try stored(by: .app, source: .live) == 1)
-        #expect(try stored(by: .notificationService, source: .live) == 0)
-        #expect(try stored(by: .notificationService, source: .archive(serverId: "s1", timestamp: Date())) == 1)
+        #expect(try stored(by: .notificationService, seeded: true, source: .live) == 0)
+        #expect(try stored(by: .notificationService, seeded: false, source: .live) == 1, "a session off the app's stream dropped the room's message, which nothing keeps")
+        #expect(try stored(by: .notificationService, seeded: true, source: .archive(serverId: "s1", timestamp: Date())) == 1)
     }
 
 
@@ -431,6 +444,7 @@ struct ResumedStreamTests {
             xml("<iq from='localhost' to='alice@localhost/app' type='get' id='v1'><query xmlns='jabber:iq:version'/></iq>"),
             xml("<iq from='localhost' to='alice@localhost/app' type='result' id='x1'/>"),
             xml("<iq from='alice@localhost' type='set' id='ro1'><query xmlns='jabber:iq:roster'><item jid='bob@localhost' subscription='both'/></query></iq>"),
+            xml("<iq from='alice@localhost' type='set' id='bl1'><block xmlns='urn:xmpp:blocking'><item jid='spam@localhost'/></block></iq>"),
             xml("<message from='bob@localhost' to='alice@localhost' type='headline' id='e1'><event xmlns='http://jabber.org/protocol/pubsub#event'><items node='urn:xmpp:avatar:metadata'/></event></message>"),
             xml("<message from='cake@rooms.localhost' to='alice@localhost/app' id='mam1'><result xmlns='urn:xmpp:mam:2' queryid='q' id='1'><forwarded xmlns='urn:xmpp:forward:0'><message type='groupchat' from='cake@rooms.localhost/x'><body>archived</body></message></forwarded></result></message>"),
             proposal(sid: "j1"),
@@ -443,7 +457,7 @@ struct ResumedStreamTests {
         let journal = store.readJournal()
         #expect(journal.isComplete)
         let kept = try journal.entries.map { try #require(Element.from(string: $0.xml)) }.map { "\($0.name)/\($0.getAttribute("id") ?? "-")" }
-        #expect(kept == ["presence/-", "message/g1", "iq/ro1", "message/e1", "message/p-j1", "message/k1"])
+        #expect(kept == ["presence/-", "message/g1", "message/e1", "message/p-j1", "message/k1"], "an iq was kept, which the app's modules would answer a second time")
         #expect(Set(journal.entries.map(\.stream)) == ["app-stream"])
         #expect(journal.entries.allSatisfy { abs($0.at.timeIntervalSinceNow) < 60 })
     }
@@ -507,11 +521,18 @@ struct ResumedStreamTests {
     @Test(.timeLimit(.minutes(1)))
     func theAppResumesAfterAnExtensionAndReplaysWhatItConsumed() async throws {
         let scene = try await scene(
-            replayed: [presence("away"), roomMessage("g1", body: "hello room"), proposal(sid: "call-1")], calls: true,
+            replayed: [
+                presence("away"), roomMessage("g1", body: "hello room"), proposal(sid: "call-1"),
+                xml("<iq from='alice@localhost' type='set' id='ro1'><query xmlns='jabber:iq:roster'><item jid='bob@localhost' subscription='both'/></query></iq>"),
+                xml("<iq from='alice@localhost' type='set' id='bl1'><block xmlns='urn:xmpp:blocking'><item jid='spam@localhost'/></block></iq>"),
+            ], calls: true,
         )
         defer { try? FileManager.default.removeItem(at: scene.directory); scene.app.disconnect() }
         let ticket = try #require(scene.store.load())
         #expect(scene.app.presence(of: Self.bob) == .online, "the extension's read reached the app before it returned")
+        let blocklistReads = scene.appServer.blocklistRequests.count
+        let answered = { (id: String) in scene.extensionServer.sent.contains { ($0 as? Iq)?.type == .result && $0.id == id } }
+        #expect(answered("bl1"), "the extension answers the push on the stream itself")
 
         try await returning(scene)
 
@@ -529,6 +550,100 @@ struct ResumedStreamTests {
         #expect(try copies() == 1)
         #expect(scene.store.load() == nil)
         #expect(scene.store.readJournal() == JournalContents(entries: [], isComplete: true), "the journal was left to be replayed again")
+        // The extension answered the roster and block pushes, and the app's modules would have answered them
+        // again, or bounced an error for one they refuse. The block list, which only the app holds, is read again.
+        #expect(!scene.appServer.sent.contains { ($0 as? Iq).map { $0.type != .get && $0.type != .set && ["ro1", "bl1"].contains($0.id) } ?? false }, "a journaled iq was answered a second time")
+        #expect(scene.appServer.blocklistRequests.count == blocklistReads + 1)
+    }
+
+    /// The server refused the resumption the app adopted the extension's counters for: it is a new session, which
+    /// reads the archive for most of what the journal holds but only rings for what it holds of calls, and the
+    /// journal is not kept for a later resumption of the new stream.
+    @Test(.timeLimit(.minutes(1)))
+    func aResumptionTheServerRefusesAfterTheAppAdoptedTheCountersStillRingsAndForgetsTheJournal() async throws {
+        let scene = try await scene(replayed: [presence("away"), proposal(sid: "call-6")], calls: true)
+        defer { try? FileManager.default.removeItem(at: scene.directory); scene.app.disconnect() }
+        #expect(scene.store.readJournal().entries.count == 2)
+
+        scene.appServer.answer = .refuses
+        scene.app.connect()
+
+        await eventually("the call to ring") { scene.app.callState.value?.phase == .incoming }
+        #expect(resumeRequest(scene.appServer) != nil, "the app didn't try to resume")
+        #expect(scene.app.lock.withLock { $0.journaled.isEmpty && !$0.replaysJournal }, "the journal waits for another stream")
+        #expect(scene.app.presence(of: Self.bob) == .offline, "a presence of the old stream was replayed into the new one")
+    }
+
+    /// An app that never connected has nothing to say of the stream, and the extension that holds the session
+    /// lock is using it: the ticket and the journal it is writing are not the app's to delete.
+    @Test(.timeLimit(.minutes(1)))
+    func anAppThatNeverConnectedLeavesTheTicketAndJournalToTheExtension() async throws {
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        ResumeJournal(store: store).append(JournalEntry(stream: "app-stream", at: Date(), xml: "<presence from='bob@localhost/phone'/>"))
+        let before = try #require(store.load())
+        let (app, _) = try session(.app, answering: .refuses, store: store)
+
+        await app.suspend()
+        app.suspendImmediately()
+
+        #expect(store.load() == before, "the ticket an extension may be using was changed")
+        #expect(store.readJournal().entries.count == 1, "the journal an extension is writing was deleted")
+    }
+
+    /// A drop and a second resumption in one wake: the server's count at the second includes what this wake sent,
+    /// so the app, taking it for what of its own stanzas arrived, would never send the ones that didn't.
+    @Test(.timeLimit(.minutes(1)))
+    func aWakeThatResumedTwiceKeepsWhatTheFirstFoundOfTheAppsStanzas() async throws {
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (woken, server) = try session(.notificationService, answering: .accepts(h: 3), store: store)
+        woken.seedFromTicket()
+        woken.connect()
+        await eventually("the first resume") { woken.state.value == .connected(isSyncing: false) }
+        server.answer = .accepts(h: 9)
+
+        _ = woken.client.disconnect(true)
+        await eventually("the second resume") { server.authentications.count == 2 && woken.state.value == .connected(isSyncing: false) }
+        await woken.leave()
+
+        let ticket = try #require(store.load())
+        #expect(ticket.stream.resumedH == 9)
+        #expect(ticket.appHandled == 3)
+    }
+
+    /// What the stream handles while the extension's connection closes is in the ticket it leaves, as for the app.
+    @Test(.timeLimit(.minutes(1)))
+    func theExtensionsTicketHoldsWhatTheStreamHandledWhileClosing() async throws {
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (woken, server) = try session(.notificationService, answering: .accepts(h: 5), store: store)
+        server.stopDelay = 1
+        server.duringStop = [presence("away")]
+        let before = try #require(store.load()).stream.incoming
+
+        #expect(await woken.catchUpOnce(timeout: 20))
+
+        let ticket = try #require(store.load())
+        #expect(ticket.stream.incoming == (try #require(woken.client.module(.streamManagement).snapshot)).incoming)
+        #expect(ticket.stream.incoming > before + 1, "the stanza that came while closing wasn't counted")
+        #expect(store.readJournal().entries.contains { $0.xml.contains("presence") }, "the stanza read while closing wasn't kept")
+    }
+
+    @Test func theJournalIsKeptOpenForAWakeAndReopensAfterIt() throws {
+        let (store, directory) = freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func entry(_ n: Int) -> JournalEntry { JournalEntry(stream: "s", at: Date(), xml: "<presence from='bob@localhost/\(n)'/>") }
+        let journal = ResumeJournal(store: store)
+        journal.append(entry(1))
+        journal.append(entry(2))
+        #expect(store.readJournal().entries.count == 2, "a line waited for the file to be closed")
+
+        journal.close()
+        journal.append(entry(3))
+
+        #expect(store.readJournal().entries.count == 3)
+        #expect(store.readJournal().isComplete)
     }
 
     /// Counted stanzas the server sent after the extension left arrive live, after the replay: a newer
@@ -760,12 +875,15 @@ struct ResumedStreamTests {
 
     // MARK: The app coming back
 
-    /// Suspends an app session holding `appStream` in memory, then lets `extensionWrites` happen to the ticket.
+    /// Suspends an app session that resumed `appStream` and holds it in memory, then lets `extensionWrites`
+    /// happen to the ticket. The session has to have connected: only then is the stream its own to save.
     private func suspendedApp(
         store: ResumeTicketStore, callMedia: (any CallMediaFactory)? = nil, extensionWrites: () -> Void,
     ) async throws -> (XMPPSession, ServerScript) {
-        let (app, server) = try session(.app, answering: .refuses, store: store, callMedia: callMedia)
+        let (app, server) = try session(.app, answering: .accepts(h: appStream.outgoing), store: store, callMedia: callMedia)
         app.client.module(.streamManagement).seed(appStream)
+        app.connect()
+        await eventually("the app to resume") { app.isConnected }
         await app.suspend()
         #expect(store.load()?.stream == app.client.module(.streamManagement).snapshot, "suspend left no ticket of its stream")
         extensionWrites()
@@ -780,9 +898,9 @@ struct ResumedStreamTests {
         defer { app.disconnect() }
 
         app.connect()
-        await eventually("the sign-in") { !server.authentications.isEmpty }
+        await eventually("the sign-in") { server.authentications.count == 2 }
 
-        let resume = server.authentications.first?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3")
+        let resume = server.authentications.last?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3")
         #expect(resume?.getAttribute("previd") == "app-stream")
         // The ticket is stale as soon as the app uses the stream, so it goes.
         #expect(store.load() == nil)
@@ -800,9 +918,9 @@ struct ResumedStreamTests {
         defer { app.disconnect() }
 
         app.connect()
-        await eventually("the sign-in") { !server.authentications.isEmpty }
+        await eventually("the sign-in") { server.authentications.count == 2 }
 
-        #expect(server.authentications.first?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3") == nil, "the app resumed with counters from before the extension")
+        #expect(server.authentications.last?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3") == nil, "the app resumed with counters from before the extension")
         #expect(store.load() == nil)
     }
 
@@ -815,9 +933,9 @@ struct ResumedStreamTests {
         defer { app.disconnect() }
 
         app.connect()
-        await eventually("the sign-in") { !server.authentications.isEmpty }
+        await eventually("the sign-in") { server.authentications.count == 2 }
 
-        #expect(server.authentications.first?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3") == nil)
+        #expect(server.authentications.last?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3") == nil)
     }
 
     @Test func endingTheSessionDeletesTheTicketButTheShareExtensionsDoesNot() throws {

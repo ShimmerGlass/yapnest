@@ -219,12 +219,6 @@ public final class XMPPSession: @unchecked Sendable {
         init(_ subscription: AnyCancellable) { self.subscription = subscription }
     }
 
-    final class CancellableHolder: @unchecked Sendable {
-        private let lock = NSLock()
-        private var cancellable: AnyCancellable?
-        func set(_ new: AnyCancellable?) { lock.withLock { cancellable = new } }
-    }
-
     struct Probation {
         var id: String
         var token: Int
@@ -344,6 +338,15 @@ public final class XMPPSession: @unchecked Sendable {
         var seededJournalLost = false
         /// The session was on a stream at some point, so what its counters say is the stream's.
         var reachedStream = false
+        /// The `h` of the first `<resumed>` of the app's stream in this process, which says how many of the
+        /// app's own stanzas had arrived by then. A drop and a second resume in the same wake would
+        /// move the stream's own `resumedH` on, to a count that includes this wake's stanzas.
+        var firstResumedH: UInt32?
+        /// The app's session has been asked to connect since it last saved the ticket, so it has the
+        /// session lock and the stream is its own to leave: what `saveResumeTicket` may write. A session
+        /// that never connected (the app opened while an extension held the lock, or woken in the
+        /// background, which doesn't connect) knows nothing the ticket and journal don't.
+        var holdsStream = false
         /// The extension's first resumed stream has started its catch-up, which a
         /// resumed stream doesn't start by itself.
         var resumedCatchUpStarted = false
@@ -667,9 +670,11 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     #if DEBUG
-    /// Gives the session a stream to resume, so that suspending it leaves a ticket, for the app's tests.
+    /// Gives the session a stream to resume, as one that connected, so that suspending it leaves a ticket,
+    /// for the app's tests, whose session is only handed to a stand-in for `connect()`.
     public func seedStreamForTesting(id: String) {
         client.module(.streamManagement).seed(.init(id: id, incoming: 1, outgoing: 1))
+        lock.withLock { $0.holdsStream = true }
     }
 
     /// Runs the stream as one with a server that has no stream management,
@@ -829,6 +834,8 @@ public final class XMPPSession: @unchecked Sendable {
         }
         if policy.ownsSharedStream {
             client.module(.streamManagement).resumedHandler = { [weak self] in self?.replayJournal() }
+        } else if policy.resumesSharedStream {
+            client.module(.streamManagement).resumedHandler = { [weak self] in self?.noteResumedAppStream() }
         }
 
         client.module(.message).messagesPublisher
@@ -929,7 +936,10 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Connects, and keeps reconnecting with backoff until `disconnect()`.
     public func connect() {
-        lock.withLock { $0.wantsConnection = true }
+        lock.withLock {
+            $0.wantsConnection = true
+            if policy.ownsSharedStream { $0.holdsStream = true }
+        }
         if case .disconnected = client.state {
             // Before anything can arrive, so an offer of this session isn't swept.
             if policy.ownsSharedStream {
@@ -1018,24 +1028,30 @@ public final class XMPPSession: @unchecked Sendable {
     private static let disconnectWait: TimeInterval = 10
 
     /// Until Martin reports the connection closed, or `disconnectWait`.
+    ///
+    /// Detached, so that a caller that is cancelled (a fetch iOS cut short) still waits for the close:
+    /// the counters saved before it would be behind what the server was told. The bound is what ends a
+    /// close that stalls.
     private func waitForDisconnectAsync() async {
-        let once = Once()
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            let holder = CancellableHolder()
-            holder.set(client.$state.sink { state in
-                if case .disconnected = state, once.first() { continuation.resume() }
-            })
-            DispatchQueue.global().asyncAfter(deadline: .now() + Self.disconnectWait) {
-                if once.first() { continuation.resume() }
-                holder.set(nil)
+        await Task.detached { [self] in
+            _ = try? await withTimeout(Self.disconnectWait) { [self] in
+                for await state in client.$state.values {
+                    if case .disconnected = state { return }
+                }
             }
-        }
+        }.value
     }
 
     /// Leaves the stream where the notification extension can take it over,
     /// with the counters as they stand once the connection is gone.
     private func saveResumeTicket() {
         guard policy.ownsSharedStream, let store = resumeTickets else { return }
+        // Once per connect: after this the ticket is the stream's, which an extension may be using.
+        let holdsStream = lock.withLock { state in
+            defer { state.holdsStream = false }
+            return state.holdsStream
+        }
+        guard holdsStream else { return }
         // What an earlier suspension's wakes kept is no use to this one: the app's memory is as of now.
         store.deleteJournal()
         let generation = storeResumeTicket(store, from: client.modulesManager.moduleOrNil(.streamManagement))
@@ -1154,12 +1170,20 @@ public final class XMPPSession: @unchecked Sendable {
     /// the server sends next, so that the app sees it all in order: a presence it kept can't overwrite a
     /// newer one that followed.
     private func replayJournal() {
-        let entries = lock.withLock { state in
+        let (entries, adopted) = lock.withLock { state in
             defer {
                 state.journaled = []
                 state.replaysJournal = false
             }
-            return state.replaysJournal ? state.journaled : []
+            return (state.replaysJournal ? state.journaled : [], state.replaysJournal)
+        }
+        guard adopted else { return }
+        // A block list push is no use to the extension, which doesn't hold the list, so it isn't in the
+        // journal, and replaying an iq would have the modules answer it twice: read the list again.
+        let blocking = client.module(.blockingCommand)
+        if blocking.isAvailable {
+            blocking.reset(scopes: [.session])
+            blocking.retrieveBlockedJids(completionHandler: nil)
         }
         guard !entries.isEmpty else { return }
         let elements = Self.journalReplay(
@@ -1171,10 +1195,17 @@ public final class XMPPSession: @unchecked Sendable {
 
     /// Rings for the calls an extension took from the stream, in a session that didn't resume it, as
     /// a live propose would have: consent, the tie-break and the ring are the usual ones.
+    ///
+    /// Only called for a new session, so a replay still pending is for a resumption that failed after the
+    /// app adopted the extension's counters: left set, a later resumption of this new stream would feed
+    /// the old stream's journal into it.
     private func ringJournaledCalls() {
         let entries = lock.withLock { state in
-            defer { if !state.replaysJournal { state.journaled = [] } }
-            return state.replaysJournal ? [] : state.journaled
+            defer {
+                state.journaled = []
+                state.replaysJournal = false
+            }
+            return state.journaled
         }
         guard !entries.isEmpty else { return }
         let elements = Self.journalReplay(
@@ -1190,14 +1221,20 @@ public final class XMPPSession: @unchecked Sendable {
     /// is read back from the archive.
     private func journalInbound(_ stanza: Stanza) {
         guard let journal, ResumeJournal.keeps(stanza.element, isRoom: isGroup) else { return }
-        let id = client.module(.streamManagement).snapshot?.id
-        let onAppsStream = id != nil && id == lock.withLock { $0.seededStreamId }
-        guard onAppsStream || ResumeJournal.containsCallSignal(stanza.element) else { return }
+        let id = client.module(.streamManagement).streamId
+        guard (id != nil && id == lock.withLock { $0.seededStreamId }) || ResumeJournal.containsCallSignal(stanza.element) else { return }
         journal.append(JournalEntry(stream: id, at: Date(), xml: stanza.element.stringValue))
     }
 
+    /// An extension's session is on the app's stream: it resumed the ticket's, and the server hasn't
+    /// refused it since. What it reads there is kept for the app (`journalInbound`) rather than stored.
+    var isOnAppsStream: Bool {
+        guard journal != nil, let seeded = lock.withLock({ $0.seededStreamId }) else { return false }
+        return client.module(.streamManagement).streamId == seeded
+    }
+
     /// An extension's session is given the app's stream to resume, if a ticket has one.
-    private func seedFromTicket() {
+    func seedFromTicket() {
         guard policy.resumesSharedStream, let store = resumeTickets, let ticket = store.load(),
               let sm = client.modulesManager.moduleOrNil(.streamManagement) else { return }
         sm.seed(ticket.stream)
@@ -1207,6 +1244,16 @@ public final class XMPPSession: @unchecked Sendable {
             $0.seededJournalLost = ticket.journalLost
         }
         DiagLog.info(.connection, "Resuming from a ticket")
+    }
+
+    /// The server took the ticket's stream: what it says it had handled of the app's own stanzas is kept
+    /// from the first time, as a drop and a second resumption in the same wake would count this wake's own.
+    private func noteResumedAppStream() {
+        guard let snapshot = client.module(.streamManagement).snapshot else { return }
+        lock.withLock { state in
+            guard state.seededStreamId == snapshot.id, state.firstResumedH == nil else { return }
+            state.firstResumedH = snapshot.resumedH
+        }
     }
 
     /// A new session came up where the ticket's stream was to be resumed: the
@@ -1224,8 +1271,10 @@ public final class XMPPSession: @unchecked Sendable {
     /// the connection closed without `</stream>`, which keeps the stream for
     /// the next wake, and the ticket updated. A server that can't resume
     /// streams gets the usual close.
-    private func leave() async {
+    func leave() async {
         lock.withLock { $0.wantsConnection = false }
+        // What is read while the connection closes is still kept, so it is closed after that.
+        defer { journal?.close() }
         guard policy.resumesSharedStream, let store = resumeTickets,
               let sm = client.modulesManager.moduleOrNil(.streamManagement), sm.resumptionEnabled else { return disconnect() }
         // A session that never got onto a stream knows nothing the ticket doesn't, so it stays as it was.
@@ -1239,16 +1288,20 @@ public final class XMPPSession: @unchecked Sendable {
         // After the close, so that what was read up to it is in the ticket.
         await waitForDisconnectAsync()
         // What the app's own stanzas had reached the server by the first wake's resume is what it needs to
-        // send the rest again, and a later wake's `resumedH` counts the earlier wakes' stanzas too.
-        let (seeded, seededHandled, seededLost) = lock.withLock { ($0.seededStreamId, $0.seededAppHandled, $0.seededJournalLost) }
+        // send the rest again, and a later resume's `resumedH` counts the earlier ones' stanzas too, whether
+        // it is another wake's or this wake's after a drop.
+        let (seeded, seededHandled, seededLost, firstResumedH) = lock.withLock {
+            ($0.seededStreamId, $0.seededAppHandled, $0.seededJournalLost, $0.firstResumedH)
+        }
         _ = storeResumeTicket(
-            store, from: sm, appHandled: { $0 == seeded ? seededHandled ?? sm.snapshot?.resumedH : nil },
+            store, from: sm, appHandled: { $0 == seeded ? seededHandled ?? firstResumedH : nil },
             journalLost: seededLost || (journal?.isLost ?? false),
         )
     }
 
     /// Written before the connection closes, which would cut it off; not waited
-    /// for beyond a moment, as a stalled connection never completes the write.
+    /// for beyond a moment, as a stalled connection never completes the write. Not `withTimeout`: its
+    /// group waits for the operation to end, and a write that never completes ignores cancellation.
     private func sendFinalAcknowledgement(_ sm: StreamManagementModule) async {
         let once = Once()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in

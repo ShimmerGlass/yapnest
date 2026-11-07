@@ -366,6 +366,12 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         };
     }
 
+    /// The stream's id as `snapshot` would give it, for a caller that asks per stanza and has no use for
+    /// the counters, which `snapshot` reads under the queue.
+    open var streamId: String? {
+        return resumptionId;
+    }
+
     /// Makes a client that hasn't logged in resume `snapshot`'s stream: `sasl2ResumeRequest()` and
     /// `resume(completionHandler:)` send its id and incoming count, and the bound JID is set, as the
     /// resumed stream won't announce it. Counting starts with `<resumed>`, as on any resumption.

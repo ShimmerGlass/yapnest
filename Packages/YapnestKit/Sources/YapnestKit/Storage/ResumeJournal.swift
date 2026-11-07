@@ -44,6 +44,8 @@ public final class ResumeJournal: @unchecked Sendable {
     private let lock = NSLock()
     private var size: Int?
     private var lostState = false
+    /// Open for the wake, as a stanza a second is a write each.
+    private var handle: FileHandle?
 
     public init(store: ResumeTicketStore, capacity: Int = ResumeJournal.defaultCapacity) {
         self.store = store
@@ -71,18 +73,34 @@ public final class ResumeJournal: @unchecked Sendable {
         if let line = Self.line(JournalLine(lost: true)) { _ = write(line) }
     }
 
+    /// Lets go of the file once the wake is over. A later `append` opens it again.
+    public func close() {
+        lock.withLock {
+            try? handle?.close()
+            handle = nil
+        }
+    }
+
     private func write(_ line: Data) -> Bool {
         let file = store.journalURL
-        if FileManager.default.fileExists(atPath: file.path) {
-            do {
-                let handle = try FileHandle(forWritingTo: file)
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                try handle.write(contentsOf: line)
-            } catch {
-                return false
+        do {
+            if handle == nil {
+                if FileManager.default.fileExists(atPath: file.path) {
+                    handle = try FileHandle(forWritingTo: file)
+                    try handle?.seekToEnd()
+                } else {
+                    // Created whole, with its protection and out of backups, which the handle then adds to.
+                    guard store.writeProtected(line, at: file) else { return false }
+                    handle = try FileHandle(forWritingTo: file)
+                    try handle?.seekToEnd()
+                    size = (size ?? 0) + line.count
+                    return true
+                }
             }
-        } else if !store.writeProtected(line, at: file) {
+            try handle?.write(contentsOf: line)
+        } catch {
+            try? handle?.close()
+            handle = nil
             return false
         }
         size = (size ?? 0) + line.count
@@ -133,13 +151,15 @@ extension ResumeJournal {
     ///
     /// Kept: presences (contacts', and rooms' occupants, which decide who a room message came from);
     /// messages of a room we are in and its errors; pubsub events (avatars, nicknames, bookmarks, device
-    /// lists, settings, read state), which the modules apply live; call signals, also in a carbon; and a
-    /// roster or block list push, which the app's modules hold in memory.
+    /// lists, settings, read state), which the modules apply live; and call signals, also in a carbon.
     ///
     /// Not kept: a 1:1 message, which the extension stores like the app would (a chat state or receipt
-    /// in it is moot by the time the app returns); an iq request, which the extension answers on the
-    /// stream, so that the app answering as well would be a second answer; an iq result or error, which
-    /// answers the extension's own request; and anything of the stream itself (`r`, `a`, `resumed`).
+    /// in it is moot by the time the app returns); any iq, as the modules answer a request, so replayed
+    /// it would be answered a second time, and an error bounced for one that was long since handled.
+    /// The extension answers them on the stream itself, and its roster module has written a roster push
+    /// to the database, which the app's reads; the block list is only held in memory, so the app reads
+    /// it again when it resumes after an extension (`replayJournal`). An iq result or error answers the
+    /// extension's own request; and anything of the stream itself (`r`, `a`, `resumed`) is no one's.
     public static func keeps(_ element: Element, isRoom: (JID) -> Bool) -> Bool {
         switch element.name {
         case "presence":
@@ -152,18 +172,12 @@ extension ResumeJournal {
             if let from = element.getAttribute("from").flatMap({ JID($0) }), isRoom(from) { return true }
             if element.findChild(name: "event", xmlns: pubsubEvent) != nil { return true }
             return containsCallSignal(element)
-        case "iq":
-            guard element.getAttribute("type") == "set" else { return false }
-            return element.findChild(name: "query", xmlns: "jabber:iq:roster") != nil
-                || element.findChild(name: "block", xmlns: blocking) != nil
-                || element.findChild(name: "unblock", xmlns: blocking) != nil
         default:
             return false
         }
     }
 
     static let pubsubEvent = "http://jabber.org/protocol/pubsub#event"
-    static let blocking = "urn:xmpp:blocking"
 
     /// A Jingle message, bare or in a carbon's forwarded copy.
     static func containsCallSignal(_ element: Element) -> Bool {

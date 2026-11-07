@@ -1608,8 +1608,9 @@ extension XMPPSession {
         // the occupants that say who wrote it, so an encrypted message would be kept as undecryptable
         // and the archive's copy of it dropped as a duplicate. It leaves the live stanza to the journal
         // (`ResumeJournal`), which the app replays with its own room state, and stores the room's
-        // messages from the archive read that follows, if the room has one.
-        if case .live = source, policy.resumesSharedStream { return }
+        // messages from the archive read that follows, if the room has one. A session of its own, with
+        // no ticket or one the server refused, journals no room messages, and has the occupants itself.
+        if case .live = source, isOnAppsStream { return }
         reportSubjectOutcome(of: stanza, in: room)
         if stanza.type == .groupchat, stanza.from?.resource == nil {
             // The room itself: 104 announces a configuration change, and 170-174

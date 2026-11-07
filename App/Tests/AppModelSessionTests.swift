@@ -469,6 +469,76 @@ struct AppModelSessionTests {
         #expect(fixture.backgroundTasks == ["Background push"])
     }
 
+    /// A catch-up the test holds, until `release()`.
+    @MainActor private final class HeldCatchUp {
+        private var continuation: CheckedContinuation<Void, Never>?
+        func wait() async { await withCheckedContinuation { continuation = $0 } }
+        func release() { continuation?.resume(); continuation = nil }
+    }
+
+    /// The model's own suspension, eight seconds after a background launch, cuts every database in the
+    /// process off, among them the one a running push's catch-up is writing to.
+    @Test func theModelsSuspensionLeavesTheDatabasesToARunningBackgroundPush() async throws {
+        let fixture = AppModelFixture()
+        fixture.launchesInBackground = true
+        fixture.pushResult = .newData
+        let held = HeldCatchUp()
+        fixture.pushWork = { await held.wait() }
+        let model = fixture.model!
+        model.followLifecycle(of: NotificationCenter())
+        let push = Task { await model.receivedBackgroundPush() }
+        await eventually("the catch-up to start") { fixture.pushCatchUps == 1 }
+        await model.restoreSession(fixture.credentialsToSignIn)
+
+        // Past the model's suspension delay and the close that follows.
+        #expect(await stays(for: .milliseconds(600)) { fixture.databaseSuspensions == 0 }, "the databases were cut off mid-fetch")
+        held.release()
+
+        #expect(await push.value == .newData)
+        #expect(fixture.databaseSuspensions == 1, "the push left the databases open past its end")
+    }
+
+    /// Cancelling is cooperative, so the task is kept until the catch-up has let go of its lock and database.
+    @Test func aBackgroundPushsTaskOutlivesItsExpiryUntilTheCatchUpLetsGo() async throws {
+        let fixture = AppModelFixture()
+        fixture.launchesInBackground = true
+        let held = HeldCatchUp()
+        fixture.pushWork = { await held.wait() }
+        let model = fixture.model!
+        model.followLifecycle(of: NotificationCenter())
+        let push = Task { await model.receivedBackgroundPush() }
+        await eventually("the catch-up to start") { fixture.pushCatchUps == 1 }
+
+        let expire = try #require(fixture.pushExpiry)
+        expire()
+
+        #expect(await stays(for: .milliseconds(300)) { fixture.openBackgroundTasks == 1 && fixture.databaseSuspensions == 0 })
+        held.release()
+        _ = await push.value
+        #expect(fixture.openBackgroundTasks == 0)
+        #expect(fixture.databaseSuspensions == 1)
+    }
+
+    /// A catch-up that doesn't let go is cut off from its databases and the task ended, as iOS gives no more time.
+    @Test func aBackgroundPushThatDoesntLetGoIsCutOffAfterTheGrace() async throws {
+        let fixture = AppModelFixture(pushExpiryGrace: .milliseconds(200))
+        fixture.launchesInBackground = true
+        let held = HeldCatchUp()
+        fixture.pushWork = { await held.wait() }
+        let model = fixture.model!
+        model.followLifecycle(of: NotificationCenter())
+        let push = Task { await model.receivedBackgroundPush() }
+        await eventually("the catch-up to start") { fixture.pushCatchUps == 1 }
+
+        let expire = try #require(fixture.pushExpiry)
+        expire()
+
+        await eventually("the task to end") { fixture.openBackgroundTasks == 0 }
+        #expect(fixture.databaseSuspensions == 1)
+        held.release()
+        _ = await push.value
+    }
+
     // MARK: Leaving the app during sign-in
 
     /// A sign-in the app suspended in the background, its connection dropped.

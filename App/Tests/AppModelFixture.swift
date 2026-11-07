@@ -76,6 +76,12 @@ final class AppModelFixture {
     private(set) var openBackgroundTasks = 0
     /// What iOS runs when it takes the suspension's time back.
     private(set) var suspensionExpiry: (@MainActor () -> Void)?
+    /// What iOS runs when it takes a background push's time back.
+    private(set) var pushExpiry: (@MainActor () -> Void)?
+    /// What a silent push's catch-up waits for, if a test holds it.
+    var pushWork: (@MainActor () async -> Void)?
+    /// How many times the databases were cut off from the process.
+    private(set) var databaseSuspensions = 0
     /// Whether the app starts in the background, as a silent push launches it.
     var launchesInBackground = false
     /// How many catch-ups a silent push ran, and what they answer.
@@ -86,7 +92,7 @@ final class AppModelFixture {
 
     init(
         lockTimeout: TimeInterval = 0.2, suspendDelay: Duration = .milliseconds(100), slowStatusDelay: Duration = .milliseconds(150),
-        typingLifetime: TimeInterval = 30, disablePush: @escaping @MainActor (XMPPSession) async -> Void = { _ in },
+        typingLifetime: TimeInterval = 30, pushExpiryGrace: Duration = .seconds(30), disablePush: @escaping @MainActor (XMPPSession) async -> Void = { _ in },
     ) {
         lock = ProcessLock(url: root.appending(path: "session.lock"))
         otherProcess = ProcessLock(url: root.appending(path: "session.lock"))
@@ -110,18 +116,30 @@ final class AppModelFixture {
             if let replacementError { throw replacementError }
             try await session.replaceEncryptionDevice()
         }
-        environment.beginBackgroundTask = { [unowned self] name, onExpiry in
+        environment.beginBackgroundTask = { [unowned self] name, holdsPastExpiry, onExpiry in
             backgroundTasks.append(name)
             if name == "Suspend session" { suspensionExpiry = onExpiry }
+            if name == "Background push" {
+                pushExpiry = onExpiry
+                #expect(holdsPastExpiry, "the push's task ended at its expiry, before the catch-up let go")
+            }
             openBackgroundTasks += 1
-            return { [unowned self] in openBackgroundTasks -= 1 }
+            var open = true
+            return { [unowned self] in
+                guard open else { return }
+                open = false
+                openBackgroundTasks -= 1
+            }
         }
         environment.launchesInBackground = { [unowned self] in launchesInBackground }
         environment.catchUpForPush = { [unowned self] in
             pushCatchUps += 1
+            await pushWork?()
             return pushResult
         }
         environment.suspendDelay = suspendDelay
+        environment.pushExpiryGrace = pushExpiryGrace
+        environment.suspendDatabases = { [unowned self] in databaseSuspensions += 1 }
         environment.slowStatusDelay = slowStatusDelay
         environment.typingLifetime = typingLifetime
         environment.typingSweepInterval = .milliseconds(50)

@@ -752,6 +752,7 @@ Each entry gives what went wrong for users, why, and what changed.
   are read on; there `replayIncoming(_:)` feeds a kept stanza to the modules as if
   it had just arrived, without the filters, so stream management doesn't count
   it a second time. Pinned by `StreamSnapshotTests` and `ResumedStreamTests`.
+  `streamId` is the id alone, for the observer that asks it of every stanza.
 
 ### MartinOMEMO
 

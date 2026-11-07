@@ -184,15 +184,23 @@ final class AppModel {
         }
         /// Asks iOS for time to finish something after the app leaves the screen;
         /// the result gives the time back. `onExpiry` runs when iOS takes the
-        /// time back first, and the task ends right after it.
-        var beginBackgroundTask: @MainActor (_ name: String, _ onExpiry: @escaping @MainActor () -> Void) -> @MainActor () -> Void = { name, onExpiry in
+        /// time back first, and the task ends right after it, unless `holdsPastExpiry`:
+        /// then the caller ends it, soon, once what the expiry set going has let go.
+        var beginBackgroundTask: @MainActor (
+            _ name: String, _ holdsPastExpiry: Bool, _ onExpiry: @escaping @MainActor () -> Void,
+        ) -> @MainActor () -> Void = { name, holdsPastExpiry, onExpiry in
             let task = BackgroundTaskBox()
             task.id = UIApplication.shared.beginBackgroundTask(withName: name) {
                 MainActor.assumeIsolated { onExpiry() }
-                task.end()
+                if !holdsPastExpiry { task.end() }
             }
             return { task.end() }
         }
+        /// Lets go of every database's file locks before the app is suspended.
+        var suspendDatabases: @MainActor () -> Void = { AppDatabase.suspend() }
+        /// How long a background push's catch-up is given to let go of the locks and databases it holds
+        /// once iOS takes its time back, before the task ends regardless.
+        var pushExpiryGrace: Duration = .seconds(2)
         /// Whether the app is in the background as it starts, which a push can
         /// launch it into. The Mac never is.
         var launchesInBackground: @MainActor () -> Bool = { !Platform.staysConnected && UIApplication.shared.applicationState == .background }
@@ -259,6 +267,8 @@ final class AppModel {
     @ObservationIgnored private var endSuspensionTask: (@MainActor () -> Void)?
     /// The suspension's wait for the connection to close, after which the ticket is saved and the locks go.
     @ObservationIgnored private var closing: Task<Void, Never>?
+    /// Background pushes whose catch-up is running, each with a database of its own open.
+    @ObservationIgnored private var backgroundPushes = 0
     /// The sign-out cleanup still running. It frees state that belongs to the
     /// account being left, so a new session must not start before it ends.
     @ObservationIgnored private var signingOut: Task<Void, Never>?
@@ -366,7 +376,7 @@ final class AppModel {
         // Opening the database can migrate it, and a suspended app that holds
         // the file mid-migration is killed. A background launch has no other
         // task covering it until `applyScenePhase` starts the suspension's.
-        let endBackgroundTask = isBackground ? environment.beginBackgroundTask("Open account", {}) : {}
+        let endBackgroundTask = isBackground ? beginBackgroundTask("Open account") {} : {}
         defer { endBackgroundTask() }
         do {
             let session = try await makeSession(saved)
@@ -577,7 +587,7 @@ final class AppModel {
         guard sessionLock.isLocked else { return stillOpening }
         // No session handles the app leaving the screen while this runs, and
         // it holds the lock and the database.
-        let endBackgroundTask = environment.beginBackgroundTask("Reset encryption", {})
+        let endBackgroundTask = beginBackgroundTask("Reset encryption") {}
         defer { endBackgroundTask() }
         phase = .loading
         loadingIsSlow = true
@@ -816,7 +826,7 @@ final class AppModel {
         guard !holdsForCall(session) else { return }
         // Sent now, while the connection is still up to carry it.
         session.setAway(true)
-        endSuspensionTask = environment.beginBackgroundTask("Suspend session") { [weak self] in
+        endSuspensionTask = beginBackgroundTask("Suspend session") { [weak self] in
             self?.suspend(session, expired: true)
         }
         suspension = Task {
@@ -866,7 +876,9 @@ final class AppModel {
         // Back on screen while the connection was closing: the session is in use again.
         if !isActive {
             releaseProcessLocks()
-            AppDatabase.suspend()
+            // A background push's catch-up has its own database open and watches for this: cutting it off
+            // mid-fetch would fail its writes. It suspends when it is done.
+            if backgroundPushes == 0 { environment.suspendDatabases() }
         }
         endBackgroundTask()
     }
@@ -902,16 +914,37 @@ final class AppModel {
         let holdsLocks = appLock.isLocked || sessionLock.isLocked
         DiagLog.info(.push, "Background push", .bool("active", isActive), .bool("holdsLocks", holdsLocks))
         guard !isActive, !holdsLocks, signingOut == nil else { return .noData }
+        backgroundPushes += 1
         let work = Task { await environment.catchUpForPush() }
-        // Cancelled on expiry, so the catch-up lets go of the lock and its
-        // database before the completion handler is called.
-        let endBackgroundTask = environment.beginBackgroundTask("Background push") { work.cancel() }
-        defer { endBackgroundTask() }
+        let push = BackgroundPushTask()
+        // On expiry the catch-up is cancelled, which it answers by letting go of the lock and its database,
+        // but cooperatively: the task is held until it has, or for the grace iOS can be expected to allow,
+        // after which the databases are cut off, which is what the system would kill the app for holding.
+        push.end = beginBackgroundTask("Background push", holdsPastExpiry: true) { [weak self] in
+            work.cancel()
+            Task { @MainActor in
+                guard let self else { return }
+                try? await Task.sleep(for: self.environment.pushExpiryGrace)
+                guard !push.finished else { return }
+                if !self.isActive { self.environment.suspendDatabases() }
+                push.end()
+            }
+        }
         let result = await work.value
+        push.finished = true
+        backgroundPushes -= 1
         // The catch-up's own database is a database of this process: left
-        // open past suspension it would get the app killed.
-        if !isActive { AppDatabase.suspend() }
+        // open past suspension it would get the app killed. The model's own suspension
+        // (`finishSuspension`) leaves this to the last push running.
+        if !isActive, backgroundPushes == 0 { environment.suspendDatabases() }
+        push.end()
         return result
+    }
+
+    private func beginBackgroundTask(
+        _ name: String, holdsPastExpiry: Bool = false, onExpiry: @escaping @MainActor () -> Void,
+    ) -> @MainActor () -> Void {
+        environment.beginBackgroundTask(name, holdsPastExpiry, onExpiry)
     }
 
     private func endBackgroundTask() {
@@ -1393,6 +1426,13 @@ final class BadgeSync: Sendable {
         forget()
         try? database.notifyExternalChanges()
     }
+}
+
+/// A background push's task, which its expiry handler ends late, and not at all if the push is over.
+@MainActor
+private final class BackgroundPushTask {
+    var finished = false
+    var end: @MainActor () -> Void = {}
 }
 
 /// A background task that can be ended from the system's expiry handler and
