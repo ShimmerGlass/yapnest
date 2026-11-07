@@ -45,7 +45,10 @@ final class GrowingBelowUITests: XCTestCase {
         // and is drawn grown there.
         let end = driver.message(containing: "End of the late content.")
         tries = 0
-        while !(end.exists && end.isHittable) {
+        // Hittable is not enough: a drag that stops a little short leaves the
+        // newest message partly under the composer, which is the list resting
+        // elsewhere, not a fault in it.
+        while !(end.exists && end.isHittable && end.frame.maxY <= driver.composer.frame.minY + 1) {
             tries += 1
             XCTAssertLessThan(tries, 8, "never got back to the newest message: \(driver.recorderSummary())")
             driver.drag(towardsOlder: false, times: 1, hold: 0.2)
