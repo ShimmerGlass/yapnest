@@ -119,6 +119,14 @@ struct CallBar: View {
             .menuStyle(.button)
             .menuIndicator(.hidden)
             .accessibilityLabel("Devices")
+            #else
+            // Under CallKit an audio call has no screen of ours, so this is the
+            // only speaker button in the app.
+            Button(action: controller.toggleSpeaker) {
+                disc("speaker.wave.3.fill", fill: controller.isOnSpeaker ? Color.primary : Color(.secondarySystemFill), foreground: controller.isOnSpeaker ? Color(.systemBackground) : Color.primary)
+            }
+            .accessibilityLabel("Speaker")
+            .accessibilityAddTraits(controller.isOnSpeaker ? .isSelected : [])
             #endif
             Button {
                 controller.endCall()

@@ -14,7 +14,6 @@ struct CallView: View {
     let state: CallState
 
     @State private var contact: Contact?
-    @State private var speakerOn = false
     @State private var media: (any CallMedia)?
     /// Which camera is in use, as the preview is mirrored for the front one.
     @State private var usesFrontCamera = true
@@ -71,6 +70,12 @@ struct CallView: View {
         }
     }
 
+    #if !targetEnvironment(macCatalyst)
+    private var speakerButton: some View {
+        CallButton(title: "Speaker", symbol: "speaker.wave.3.fill", isOn: controller.isOnSpeaker, action: controller.toggleSpeaker)
+    }
+    #endif
+
     private var endButton: some View {
         CallButton(title: "End", symbol: "phone.down.fill", tint: .red, isProminent: true) {
             controller.endCall()
@@ -84,10 +89,7 @@ struct CallView: View {
             // The Mac has no earpiece to choose against, but speakers to choose among.
             CallDevicesButton(showsCamera: false)
             #else
-            CallButton(title: "Speaker", symbol: "speaker.wave.3.fill", isOn: speakerOn) {
-                speakerOn.toggle()
-                controller.setSpeaker(speakerOn)
-            }
+            speakerButton
             #endif
             endButton
         }
@@ -117,6 +119,7 @@ extension CallView {
             VStack(spacing: 0) {
                 header
                     .overlay(alignment: .topLeading) { MinimizeButton(controller: controller).padding(.leading, -8) }
+                    .overlay(alignment: .topTrailing) { flipButton.padding(.trailing, -8) }
                 Spacer()
                 videoControls
                     .padding(.top, 32)
@@ -194,6 +197,20 @@ extension CallView {
         .allowsHitTesting(false)
     }
 
+    /// In the corner, as five buttons in a row don't fit a phone's width.
+    @ViewBuilder
+    private var flipButton: some View {
+        #if !targetEnvironment(macCatalyst)
+        if WebRTCCallMedia.cameraCount > 1 {
+            CallCornerButton(symbol: "arrow.triangle.2.circlepath.camera", label: "Flip") {
+                usesFrontCamera.toggle()
+                controller.switchCamera()
+            }
+            .disabled(!state.isCameraOn || state.isOver)
+        }
+        #endif
+    }
+
     private var videoControls: some View {
         HStack(spacing: 20) {
             muteButton
@@ -205,13 +222,7 @@ extension CallView {
             // and the camera is picked from the list instead of flipped to.
             CallDevicesButton(showsCamera: true)
             #else
-            if WebRTCCallMedia.cameraCount > 1 {
-                CallButton(title: "Flip", symbol: "arrow.triangle.2.circlepath.camera") {
-                    usesFrontCamera.toggle()
-                    controller.switchCamera()
-                }
-                .disabled(!state.isCameraOn)
-            }
+            speakerButton
             #endif
             endButton
         }
@@ -224,16 +235,24 @@ private struct MinimizeButton: View {
     let controller: CallController
 
     var body: some View {
-        Button {
-            controller.minimize()
-        } label: {
-            Image(systemName: "chevron.down")
+        CallCornerButton(symbol: "chevron.down", label: "Minimize", action: controller.minimize)
+    }
+}
+
+private struct CallCornerButton: View {
+    let symbol: String
+    let label: LocalizedStringKey
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
                 .font(.headline)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Minimize")
+        .accessibilityLabel(label)
     }
 }
 

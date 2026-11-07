@@ -1,5 +1,7 @@
+import AVFAudio
 import Foundation
 import Testing
+import YapnestCallMedia
 import YapnestKit
 @testable import Yapnest
 
@@ -399,5 +401,28 @@ struct CallSummaryTests {
         #expect(!summary(.answered, video: true).callsBackWithVideo(peerTakesVideo: false))
         #expect(!summary(.answered, video: false).callsBackWithVideo(peerTakesVideo: true))
         #expect(!summary(.answered, video: false).callsBackWithVideo(peerTakesVideo: false))
+    }
+}
+
+/// Off has to reach the earpiece from a video call too.
+@MainActor
+struct CallSpeakerTests {
+    /// Video chat's default route is the loudspeaker, so without leaving it a
+    /// video call can't be taken off the speaker.
+    @Test func turningTheSpeakerOffLeavesVideoChat() throws {
+        // The session is the process's own, shared with every test that plays
+        // a clip, and one left in a call's category can't start playback.
+        let shared = AVAudioSession.sharedInstance()
+        let (category, mode, options) = (shared.category, shared.mode, shared.categoryOptions)
+        defer { try? shared.setCategory(category, mode: mode, options: options) }
+        try CallAudioSession.configure(video: true)
+        #expect(AVAudioSession.sharedInstance().mode == .videoChat)
+        try CallAudioSession.setSpeaker(false, video: true)
+        let session = AVAudioSession.sharedInstance()
+        #expect(session.mode == .voiceChat)
+        #expect(!session.categoryOptions.contains(.defaultToSpeaker))
+        try CallAudioSession.setSpeaker(true, video: true)
+        #expect(session.mode == .videoChat)
+        #expect(session.categoryOptions.contains(.defaultToSpeaker))
     }
 }

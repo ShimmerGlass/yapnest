@@ -91,6 +91,21 @@ final class CallController {
     }
     /// A failed request to CallKit, for an alert.
     var error: String?
+    /// Read from the route rather than remembered, as a video call starts on
+    /// the loudspeaker unless there's a headset, and one can connect at any moment.
+    private(set) var isOnSpeaker = false
+    @ObservationIgnored private var routeObserver: NSObjectProtocol?
+
+    init() {
+        // The Mac picks its devices itself, with no route to follow.
+        #if !targetEnvironment(macCatalyst)
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.isOnSpeaker = CallAudioSession.isOnSpeaker }
+        }
+        #endif
+    }
 
     @ObservationIgnored private var session: XMPPSession?
     @ObservationIgnored private var subscription: AnyCancellable?
@@ -532,8 +547,13 @@ final class CallController {
         request(CXAnswerCallAction(call: uuid))
     }
 
-    func setSpeaker(_ on: Bool) {
-        do { try CallAudioSession.setSpeaker(on) } catch { self.error = error.localizedDescription }
+    func toggleSpeaker() {
+        do {
+            try CallAudioSession.setSpeaker(!CallAudioSession.isOnSpeaker, video: screen?.isVideo ?? false)
+        } catch {
+            self.error = error.localizedDescription
+        }
+        isOnSpeaker = CallAudioSession.isOnSpeaker
     }
 
     /// Without CallKit nobody activates the audio session, and WebRTC plays and
@@ -555,6 +575,7 @@ final class CallController {
         try audioSession.setActive(true)
         CallAudioSession.audioSessionDidActivate(audioSession)
         audioActive = true
+        isOnSpeaker = CallAudioSession.isOnSpeaker
         #endif
     }
 
@@ -648,6 +669,8 @@ final class CallController {
 
     fileprivate func audioSession(didChange active: Bool) {
         callKitAudioActive = active
+        // A call can start on the route the phone was already on, with no change to hear of.
+        isOnSpeaker = CallAudioSession.isOnSpeaker
         updateRingback()
     }
 
