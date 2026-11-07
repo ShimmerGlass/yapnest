@@ -429,6 +429,7 @@ extension OutboundStanza {
         message.addChild(element)
         if case .propose = call {
             message.addChild(Element(name: "request", xmlns: NS.receipts))
+            message.addChild(Element(name: "encrypted", xmlns: NS.callWake, children: [Element(name: "payload")]))
         }
         message.addChild(Element(name: "store", xmlns: NS.hints))
         return message

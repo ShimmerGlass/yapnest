@@ -24,6 +24,12 @@ enum NS {
     static let legacyBookmarks = "storage:bookmarks"
     static let notificationSettings = "urn:xmpp:notification-settings:1"
     static let omemoLegacy = "eu.siacs.conversations.axolotl"
+    /// A marker with nothing in it, added to a call's `propose`. ejabberd's
+    /// `mod_push` with `notify_on: messages` only pushes a message with a body
+    /// or an `encrypted` child holding a `payload` (it checks the names, not the
+    /// namespace), and a `propose` has neither, so a sleeping phone never rang.
+    /// No client looks for this namespace, so it is ignored everywhere.
+    static let callWake = "urn:yapnest:call-wake:0"
     static let push = "urn:xmpp:push:0"
     static let commands = "http://jabber.org/protocol/commands"
     static let dataForms = "jabber:x:data"

@@ -30,6 +30,20 @@ struct CallSignalTests {
         #expect(video.action == .propose(media: [.audio, .video]))
     }
 
+    @Test func aProposeWithTheWakeMarkerIsStillTheCall() throws {
+        let marker = "<encrypted xmlns='urn:yapnest:call-wake:0'><payload/></encrypted>"
+        let parsed = try #require(signal(wrap("<propose xmlns='urn:xmpp:jingle-message:0' id='s1'>\(audio)</propose>", extra: marker)))
+        #expect(parsed.action == .propose(media: [.audio]))
+        #expect(parsed.sid == "s1")
+    }
+
+    @Test func theWakeMarkerIsNotOMEMO() {
+        let marker = "<encrypted xmlns='urn:yapnest:call-wake:0'><payload/></encrypted>"
+        let message: Martin.Message = parseStanza(wrap("", extra: marker))
+        #expect(message.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) == nil)
+        #expect(message.firstChild(name: "encrypted", xmlns: NS.callWake) != nil)
+    }
+
     @Test func aProposeOfSomethingElseIsNotACall() {
         #expect(signal(wrap("<propose xmlns='urn:xmpp:jingle-message:0' id='s1'><description xmlns='urn:xmpp:jingle:apps:file-transfer:5'/></propose>")) == nil)
         #expect(signal(wrap("<propose xmlns='urn:xmpp:jingle-message:0' id='s1'/>")) == nil)
@@ -145,6 +159,23 @@ struct CallMessageTests {
         #expect(propose.getChildren(name: "description").count == 1)
         #expect(message.firstChild(name: "request", xmlns: "urn:xmpp:receipts") != nil)
         #expect(message.firstChild(name: "store", xmlns: "urn:xmpp:hints") != nil)
+    }
+
+    @Test func proposeCarriesTheWakeMarkerAndNoOtherCallMessageDoes() throws {
+        for video in [false, true] {
+            let marker = try #require(xml(.propose(to: "alice@example.org", video: video)).firstChild(name: "encrypted", xmlns: "urn:yapnest:call-wake:0"))
+            #expect(marker.children.map(\.name) == ["payload"])
+            #expect(marker.firstChild(name: "payload")?.children.isEmpty == true)
+            #expect(marker.firstChild(name: "payload")?.value == nil)
+        }
+        let others: [CallMessage] = [
+            .retract(to: "alice@example.org", reason: .cancel), .ringing(to: "alice@example.org/phone"),
+            .proceed(to: "alice@example.org/phone"), .accept(to: "me@example.org"),
+            .reject(to: "alice@example.org/phone", reason: .busy), .finish(to: "alice@example.org/phone", reason: .success),
+        ]
+        for message in others {
+            #expect(xml(message).firstChild(name: "encrypted") == nil)
+        }
     }
 
     @Test func aVideoProposeHasADescriptionForEachMedium() throws {
