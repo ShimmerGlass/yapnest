@@ -28,32 +28,48 @@ struct CallDevicePickers: View {
     private func audio(
         _ title: LocalizedStringKey, symbol: String, list: [CallAudioDevice], selection: Binding<String?>
     ) -> some View {
-        picker(title, symbol: symbol, selection: selection) {
-            Text("System default").tag(String?.none)
-            ForEach(list) { Text($0.name).tag(String?.some($0.uid)) }
-        }
+        picker(
+            title, symbol: symbol, selection: selection,
+            choices: [Choice(id: nil, name: String(localized: "System default"))] + list.map { Choice(id: $0.uid, name: $0.name) })
     }
 
     private var camera: some View {
-        picker("Camera", symbol: "video", selection: Binding(
-            get: { devices.selectedCamera }, set: { devices.cameraID = $0 })
-        ) {
-            ForEach(devices.cameras) { Text($0.name).tag(String?.some($0.id)) }
-        }
+        picker(
+            "Camera", symbol: "video", selection: Binding(get: { devices.selectedCamera }, set: { devices.cameraID = $0 }),
+            choices: devices.cameras.map { Choice(id: $0.id, name: $0.name) })
+    }
+
+    private struct Choice: Identifiable {
+        /// What's stored for it, nil for the system's default.
+        let id: String?
+        let name: String
     }
 
     @ViewBuilder
-    private func picker<Choices: View>(
-        _ title: LocalizedStringKey, symbol: String, selection: Binding<String?>, @ViewBuilder choices: () -> Choices
+    private func picker(
+        _ title: LocalizedStringKey, symbol: String, selection: Binding<String?>, choices: [Choice]
     ) -> some View {
         if inMenu {
+            // Buttons, not a Picker: in a Catalyst menu an inline Picker ignores
+            // its style and becomes a submenu, whose row is blank once
+            // `labelsHidden` takes its title.
             Section(title) {
-                Picker(title, selection: selection, content: choices)
-                    .pickerStyle(.inline)
-                    .labelsHidden()
+                ForEach(choices) { choice in
+                    Button {
+                        selection.wrappedValue = choice.id
+                    } label: {
+                        if selection.wrappedValue == choice.id {
+                            Label(choice.name, systemImage: "checkmark")
+                        } else {
+                            Text(choice.name)
+                        }
+                    }
+                }
             }
         } else {
-            Picker(title, systemImage: symbol, selection: selection, content: choices)
+            Picker(title, systemImage: symbol, selection: selection) {
+                ForEach(choices) { Text($0.name).tag($0.id) }
+            }
         }
     }
 }
