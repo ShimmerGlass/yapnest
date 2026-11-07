@@ -112,6 +112,7 @@ struct AppModelEncryptionResetTests {
         let (fixture, session) = try await signedIn()
         let release = AsyncStream<Void>.makeStream()
         fixture.model.calls.prepareCall = { _, _, _ in for await _ in release.stream { return } }
+        fixture.model.calls.systemAudio = (activate: { _ in }, deactivate: {})
         fixture.model.calls.startCall(to: JID("bob@example.org")!)
 
         let refusal = await fixture.model.replaceEncryptionDevice()

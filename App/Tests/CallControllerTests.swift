@@ -174,6 +174,7 @@ struct CallControllerTests {
 
     @Test func anAudioCallNeverAsksForTheCamera() async throws {
         let controller = CallController()
+        controller.systemAudio = (activate: { _ in }, deactivate: {})
         var asked = false
         controller.cameraAccess = { asked = true; return false }
 
@@ -201,6 +202,7 @@ struct CallControllerTests {
     @Test func aCallWaitsForTheConnectionBeforeAskingAnythingOfTheSystem() async throws {
         let fixture = try ConversationFixture()
         let controller = CallController()
+        controller.systemAudio = (activate: { _ in }, deactivate: {})
         let release = AsyncStream<Void>.makeStream()
         controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }
         controller.attach(fixture.session)
@@ -241,6 +243,7 @@ struct CallControllerTests {
     @Test func theCallButtonsAreOffForEveryChatWhileOneCallIsPrepared() async throws {
         let fixture = try ConversationFixture()
         let controller = CallController()
+        controller.systemAudio = (activate: { _ in }, deactivate: {})
         let release = AsyncStream<Void>.makeStream()
         controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }
         controller.attach(fixture.session)
@@ -257,6 +260,7 @@ struct CallControllerTests {
     @Test func onlyTheButtonThatWasTappedSpins() async throws {
         let fixture = try ConversationFixture()
         let controller = CallController()
+        controller.systemAudio = (activate: { _ in }, deactivate: {})
         let release = AsyncStream<Void>.makeStream()
         controller.cameraAccess = { true }
         controller.prepareCall = { _, _, _ in for await _ in release.stream { return } }

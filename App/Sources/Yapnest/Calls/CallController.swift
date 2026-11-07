@@ -381,6 +381,23 @@ final class CallController {
     /// real one waits on a connection.
     @ObservationIgnored var prepareCall: (XMPPSession, JID, Bool) async throws -> Void = { try await $0.prepareCall(to: $1, video: $2) }
 
+    /// What takes and gives back the app's audio session without CallKit.
+    /// Tests replace it: the session is the process's, shared with the tests
+    /// that play clips, and one left active in a call's category can't start playback.
+    @ObservationIgnored var systemAudio: (activate: (Bool) throws -> Void, deactivate: () -> Void) = (
+        activate: { video in
+            try CallAudioSession.configure(video: video)
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setActive(true)
+            CallAudioSession.audioSessionDidActivate(audioSession)
+        },
+        deactivate: {
+            let audioSession = AVAudioSession.sharedInstance()
+            CallAudioSession.audioSessionDidDeactivate(audioSession)
+            try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    )
+
     /// Who a call is being started to, while it waits for the connection and
     /// for the contact to be known to take calls, and whether it is a video
     /// call, so only the button that was tapped spins.
@@ -570,10 +587,7 @@ final class CallController {
         // is enabled, so the call still connects, silently.
         if Self.devEnvironment["YAPNEST_DEV_NO_AUDIO"] == "1" { return }
         #endif
-        try CallAudioSession.configure(video: video)
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setActive(true)
-        CallAudioSession.audioSessionDidActivate(audioSession)
+        try systemAudio.activate(video)
         audioActive = true
         isOnSpeaker = CallAudioSession.isOnSpeaker
         #endif
@@ -582,9 +596,7 @@ final class CallController {
     private func deactivateAudio() {
         guard audioActive else { return }
         audioActive = false
-        let audioSession = AVAudioSession.sharedInstance()
-        CallAudioSession.audioSessionDidDeactivate(audioSession)
-        try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+        systemAudio.deactivate()
     }
 
     private var currentUUID: UUID? {
