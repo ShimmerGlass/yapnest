@@ -404,6 +404,17 @@ struct CallSummaryTests {
         #expect(CallSummary(outcome: .answered, direction: .incoming, duration: 42, isEnd: true).title == "Call ended · 0:42")
     }
 
+    @Test func theEndEventReadsLikeTheEndLine() throws {
+        for video in [false, true] {
+            var line = Message(conversationId: 1, direction: .event, sender: JID("a@example.org")!, body: "")
+            line.event = .callEnded(sid: "s", duration: 151, isVideo: video)
+            let call = try #require(line.call)
+            #expect(call.title == "Call ended · 2:31")
+            #expect(call.symbol == "phone.down")
+            #expect(call.snippet == "\(video ? "📹" : "📞") Call ended · 2:31")
+        }
+    }
+
     @Test func aCallBackHasVideoOnlyIfTheCallDidAndThePeerTakesIt() {
         #expect(summary(.answered, video: true).callsBackWithVideo(peerTakesVideo: true))
         #expect(!summary(.answered, video: true).callsBackWithVideo(peerTakesVideo: false))

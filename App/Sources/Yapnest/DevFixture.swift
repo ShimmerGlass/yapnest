@@ -378,12 +378,14 @@ enum DevFixture: String, CaseIterable {
         message.callOutcome = outcome
         message.callDuration = duration
         _ = try database.insert(message)
-        // An answered call has its end as a row of its own, as the session writes it.
+        // An answered call has its end as an event, as the session writes it.
         if outcome == .answered, let duration {
-            message.remoteId = AppDatabase.endId(sid: sid)
-            message.timestamp = time.addingTimeInterval(duration)
-            message.callEnded = true
-            _ = try database.insert(message)
+            var end = Message(
+                conversationId: conversation.id!, direction: .event, sender: message.sender, body: "",
+                timestamp: time.addingTimeInterval(duration), status: .received, isRead: true,
+            )
+            end.event = .callEnded(sid: sid, duration: duration, isVideo: false)
+            _ = try database.insert(end)
         }
     }
 

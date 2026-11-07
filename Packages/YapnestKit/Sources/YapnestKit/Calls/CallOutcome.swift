@@ -45,9 +45,13 @@ public struct CallSummary: Sendable, Hashable {
 }
 
 extension Message {
-    /// Set on the rows that stand for a call, which have no body.
+    /// Set on the rows that stand for a call, which have no body: its start,
+    /// and the event that marks its end.
     public var call: CallSummary? {
-        callOutcome.map { CallSummary(outcome: $0, direction: direction, duration: callDuration, isVideo: callIsVideo, isEnd: callEnded) }
+        if case .callEnded(_, let duration, let isVideo) = event {
+            return CallSummary(outcome: .answered, direction: direction, duration: duration, isVideo: isVideo, isEnd: true)
+        }
+        return callOutcome.map { CallSummary(outcome: $0, direction: direction, duration: callDuration, isVideo: callIsVideo) }
     }
 
     /// What a notification for a call row says.

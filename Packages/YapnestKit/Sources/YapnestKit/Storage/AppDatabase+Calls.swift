@@ -138,11 +138,6 @@ extension AppDatabase {
             .fetchOne(db)
     }
 
-    /// The end row's id, which isn't the call's: it would be taken for a copy
-    /// of the start on insert, and found in its place by whatever looks the
-    /// call up.
-    public static func endId(sid: String) -> String { "\(sid)/end" }
-
     /// Inserts the call's row, or brings the one it has up to date. Returns the
     /// row if it is new.
     ///
@@ -217,32 +212,34 @@ extension AppDatabase {
     /// out to have failed. It is never news, so it neither counts as unread
     /// nor is returned for a notification.
     private static func syncEnd(_ db: Database, start: Message, _ record: CallRecord, isAuthoritative: Bool, isHistory: Bool) throws {
-        let id = endId(sid: record.sid)
-        // Its id alone could be a peer's: they know the call's.
-        let inCall = Message.filter(Column("conversationId") == start.conversationId && Column("remoteId") == id && Column("callEnded") == true)
+        // Spelled as the index on it is, so SQLite uses that.
+        let inCall = Message
+            .filter(Column("conversationId") == start.conversationId)
+            .filter(sql: "event IS NOT NULL AND json_extract(event, '$.callEnded.sid') = ?", arguments: [record.sid])
         guard start.callOutcome == .answered else {
             try inCall.deleteAll(db)
             return
         }
-        // An older archive page can say it was video after both rows exist.
-        if start.callIsVideo {
-            try inCall.filter(Column("callIsVideo") == false).updateAll(db, Column("callIsVideo").set(to: true))
-        }
-        guard let duration = start.callDuration, let endedAt = record.endedAt else { return }
-        if var existing = try inCall.fetchOne(db) {
-            if isAuthoritative, existing.timestamp != endedAt || existing.callDuration != duration {
-                existing.timestamp = endedAt
-                existing.callDuration = duration
+        if var existing = try inCall.fetchOne(db), case .callEnded(let sid, var duration, var isVideo)? = existing.event {
+            var timestamp = existing.timestamp
+            // An older archive page can say it was video after both rows exist.
+            isVideo = isVideo || start.callIsVideo
+            if isAuthoritative, let length = start.callDuration, let endedAt = record.endedAt {
+                timestamp = endedAt
+                duration = length
+            }
+            if timestamp != existing.timestamp || existing.event != .callEnded(sid: sid, duration: duration, isVideo: isVideo) {
+                existing.timestamp = timestamp
+                existing.event = .callEnded(sid: sid, duration: duration, isVideo: isVideo)
                 try existing.update(db)
             }
             return
         }
-        var row = start
-        row.id = nil
-        row.remoteId = id
-        row.timestamp = endedAt
-        row.isRead = true
-        row.callEnded = true
+        guard let duration = start.callDuration, let endedAt = record.endedAt else { return }
+        let row = Message.eventLine(
+            conversationId: start.conversationId, sender: start.sender,
+            event: .callEnded(sid: record.sid, duration: duration, isVideo: start.callIsVideo), at: endedAt,
+        )
         _ = try insert(db, row, quietly: isHistory)
     }
 }

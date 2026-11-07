@@ -1004,13 +1004,42 @@ public final class AppDatabase: Sendable {
                 """)
         }
 
+        migrator.registerMigration("v63-call-ended-event") { db in
+            // The end of a call is an event, not a copy of the call's row
+            // that every query about calls had to leave out. It keeps its
+            // time and that it was read; the call's sid is its remoteId
+            // without the "/end", and what it says of the call moves into the
+            // event. Nothing else of the call stays on it. The search
+            // triggers fire on body, encryption and isRetracted only, and an
+            // end row has an empty body, so it was never indexed.
+            try db.execute(sql: """
+                UPDATE message SET
+                    event = json_object('callEnded', json_object(
+                        'sid', COALESCE(substr(remoteId, 1, length(remoteId) - 4), ''),
+                        'duration', COALESCE(callDuration, 0),
+                        'isVideo', json(CASE WHEN callIsVideo THEN 'true' ELSE 'false' END))),
+                    direction = 'event', status = 'received', isRead = 1,
+                    remoteId = NULL, callOutcome = NULL, callDuration = NULL, callAnsweredAt = NULL, callIsVideo = 0
+                WHERE callEnded = 1
+                """)
+            try db.alter(table: "message") { t in
+                t.drop(column: "callEnded")
+            }
+            // The row that closes a call is found by the call's sid.
+            try db.execute(sql: """
+                CREATE INDEX message_on_call_end ON message(json_extract(event, '$.callEnded.sid')) WHERE event IS NOT NULL
+                """)
+        }
+
         return migrator
     }
 
     /// SQL for a message that is not an event row: what "a message in the
     /// chat" means for the preview, the newest and oldest, and whether a chat
-    /// has any. Events are rows, but nobody said them.
-    static let isNotEvent = "message.event IS NULL"
+    /// has any. Events are rows, but nobody said them, except the end of a
+    /// call, which closes a row that is there as a message too and is shown
+    /// as the chat's last line.
+    static let isNotEvent = "(message.event IS NULL OR json_type(message.event, '$.callEnded') IS NOT NULL)"
 
     /// SQL for whether the message row `row` belongs in the search index:
     /// readable text that is still there, and not a file or place, which
@@ -1030,7 +1059,7 @@ public final class AppDatabase: Sendable {
 
 extension DerivableRequest<Message> {
     /// Without the rows that only mark something that happened: see `AppDatabase.isNotEvent`.
-    func excludingEvents() -> Self { filter(Column("event") == nil) }
+    func excludingEvents() -> Self { filter(sql: AppDatabase.isNotEvent) }
 
     // These three are written into the SQL rather than bound as values:
     // SQLite uses a partial index only for a condition the query spells out

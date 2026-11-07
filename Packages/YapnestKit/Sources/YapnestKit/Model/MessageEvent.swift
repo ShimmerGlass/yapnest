@@ -17,12 +17,18 @@ public enum MessageEvent: Codable, Hashable, Sendable {
     /// see each other's addresses), so new messages there go out unencrypted.
     /// The author is the group.
     case stoppedEncrypting
+    /// An answered call ended. It is drawn and listed like the call it
+    /// closes (`Message.call`), but is an event so that no query about calls
+    /// or about what someone said has to leave it out by hand. `sid` names
+    /// the call's row, `duration` is its length in seconds, as
+    /// `Message.callDuration` has it, and the row is at the moment it ended.
+    case callEnded(sid: String, duration: TimeInterval, isVideo: Bool)
 
     /// Whether this is about someone joining or leaving a group.
     public var isGroupPeople: Bool {
         switch self {
         case .joinedGroup, .leftGroup: true
-        case .newDevice, .stoppedEncrypting: false
+        case .newDevice, .stoppedEncrypting, .callEnded: false
         }
     }
 }

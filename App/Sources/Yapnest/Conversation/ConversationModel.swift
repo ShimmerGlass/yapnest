@@ -1751,6 +1751,13 @@ final class ConversationModel {
         )
 
         let time = message.timestamp.formatted(date: .omitted, time: .shortened)
+        if let call = message.call {
+            let content = MessageRow.Content(
+                item: item, kind: .call(call), layout: layout, quoteAuthor: "", quoteText: "", time: time,
+                security: message.security, preview: .none, accessibilityLabel: [call.title, time].joined(separator: ", "),
+            )
+            return (content, nil)
+        }
         if let event = message.event {
             var name = authorName(for: message.author, in: environment)
             // A nickname is anyone's to take, so the address that came with
@@ -1762,13 +1769,6 @@ final class ConversationModel {
             let content = MessageRow.Content(
                 item: item, kind: .event(event, name: name), layout: layout, quoteAuthor: "", quoteText: "", time: time,
                 security: message.security, preview: .none, accessibilityLabel: words,
-            )
-            return (content, nil)
-        }
-        if let call = message.call {
-            let content = MessageRow.Content(
-                item: item, kind: .call(call), layout: layout, quoteAuthor: "", quoteText: "", time: time,
-                security: message.security, preview: .none, accessibilityLabel: [call.title, time].joined(separator: ", "),
             )
             return (content, nil)
         }

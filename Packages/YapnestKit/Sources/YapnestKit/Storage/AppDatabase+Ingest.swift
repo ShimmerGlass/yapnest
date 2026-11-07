@@ -176,10 +176,8 @@ extension AppDatabase {
                 // what's stored and the last notification claim is a floor
                 // they never fall under.
                 // What we sent doesn't count: a peer's offline message was
-                // written before it, whatever we sent meanwhile. Nor does the
-                // end of a call, which our clock stamps: what was sent during
-                // the call belongs before it.
-                let newest = try Date.fetchOne(db, Message.filter(Column("conversationId") == conversationId && Column("callEnded") == false && Column("direction") == Message.Direction.incoming).excludingEvents().select(max(Column("timestamp"))))
+                // written before it, whatever we sent meanwhile.
+                let newest = try Date.fetchOne(db, Message.filter(Column("conversationId") == conversationId && Column("direction") == Message.Direction.incoming).excludingEvents().select(max(Column("timestamp"))))
                 let claimed = try Self.date(db, .lastNotifiedAt)
                 if let floor = [newest, claimed].compactMap({ $0 }).max() { timestamp = max(timestamp, floor) }
             }

@@ -184,7 +184,7 @@ struct CallSessionHarness {
     var phase: CallPhase? { session.callState.value?.phase }
 
     func rows() throws -> [YapnestKit.Message] {
-        try database.reader.read { try YapnestKit.Message.filter(Column("callOutcome") != nil).order(Column("id")).fetchAll($0) }
+        try database.reader.read { try YapnestKit.Message.filter(sql: "callOutcome IS NOT NULL OR json_type(event, '$.callEnded') IS NOT NULL").order(Column("id")).fetchAll($0) }
     }
 
     func sessionInitiate(sid: String = "s1", from: String = aliceDevice) -> String {
@@ -258,7 +258,7 @@ struct CallSessionOutgoingTests {
         #expect(h.phase == .ended(.completed))
         await eventually("the call to be recorded") { (try? h.rows().count) == 2 }
         let row = try #require(try h.rows().first)
-        #expect(try h.rows().map(\.callEnded) == [false, true])
+        #expect(try h.rows().map(\.endsACall) == [false, true])
         #expect(row.callOutcome == .answered)
         #expect(row.direction == .outgoing)
         #expect(row.remoteId == sid)
@@ -641,7 +641,7 @@ struct CallSessionIncomingTests {
         #expect(h.phase == .ended(.completed))
         await eventually("the call to be recorded") { (try? h.rows().count) == 2 }
         let row = try #require(try h.rows().first)
-        #expect(try h.rows().map(\.callEnded) == [false, true])
+        #expect(try h.rows().map(\.endsACall) == [false, true])
         #expect(row.callOutcome == .answered)
         #expect(row.direction == .incoming)
         #expect(row.isRead)
@@ -1098,15 +1098,17 @@ struct CallSessionHistoryTests {
         #expect(try h.rows().isEmpty)
 
         var changes = 0
-        let observation = ValueObservation.tracking { try YapnestKit.Message.filter(Column("callOutcome") != nil).fetchCount($0) }
+        let observation = ValueObservation.tracking { try YapnestKit.Message.filter(sql: "callOutcome IS NOT NULL OR json_type(event, '$.callEnded') IS NOT NULL").fetchCount($0) }
         let cancellable = observation.publisher(in: h.database.reader).sink(receiveCompletion: { _ in }, receiveValue: { _ in changes += 1 })
         defer { cancellable.cancel() }
         #expect(h.session.flushArchive())
 
         let rows = try h.rows()
-        #expect(rows.map(\.remoteId) == ["a1", "a1/end", "a2"])
-        #expect(rows.map(\.callOutcome) == [.answered, .answered, .missed])
-        #expect(rows.map(\.callEnded) == [false, true, false])
+        #expect(rows.map(\.remoteId) == ["a1", nil, "a2"])
+        #expect(rows.map(\.callOutcome) == [.answered, nil, .missed])
+        guard case .callEnded("a1", let length, false)? = rows[1].event else { Issue.record("wrong end event \(String(describing: rows[1].event))"); return }
+        #expect(abs(length - 60) < 0.01)
+        #expect(rows.map(\.endsACall) == [false, true, false])
         #expect(abs(rows[1].timestamp.timeIntervalSince(at.addingTimeInterval(65))) < 0.01)
         #expect(abs((rows.first?.callDuration ?? 0) - 60) < 0.01)
         // The count before, and once for the whole page.

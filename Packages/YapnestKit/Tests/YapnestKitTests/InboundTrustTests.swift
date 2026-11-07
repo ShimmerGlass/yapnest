@@ -53,9 +53,7 @@ struct DelayTrustTests {
         let db = try AppDatabase.inMemory()
         let chat = try db.conversation(with: alice)
         let now = Date()
-        var end = YapnestKit.Message(conversationId: chat.id!, direction: .incoming, sender: alice, body: "", timestamp: now, isRead: true, remoteId: "s/end")
-        end.callOutcome = .answered
-        end.callEnded = true
+        let end = YapnestKit.Message.eventLine(conversationId: chat.id!, sender: alice, event: .callEnded(sid: "s", duration: 90, isVideo: false), at: now)
         try db.insert(end)
         let stamp = now.addingTimeInterval(-60)
         let sent = try #require(InboundMessage(stanza("""

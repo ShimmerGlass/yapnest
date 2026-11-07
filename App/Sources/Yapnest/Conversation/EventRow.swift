@@ -9,6 +9,7 @@ extension MessageEvent {
         case .joinedGroup: String(localized: "\(name) joined the group")
         case .leftGroup: String(localized: "\(name) left the group")
         case .stoppedEncrypting: String(localized: "This group is no longer private, so new messages here aren't encrypted.")
+        case .callEnded(_, let duration, let isVideo): CallSummary(outcome: .answered, direction: .event, duration: duration, isVideo: isVideo, isEnd: true).title
         }
     }
 }
@@ -35,7 +36,7 @@ struct EventRowView: View {
             .accessibilityLabel(row.content.accessibilityLabel)
             .accessibilityHint("Opens their devices")
             .accessibilityIdentifier("newDeviceEvent")
-        case .joinedGroup, .leftGroup, .stoppedEncrypting:
+        case .joinedGroup, .leftGroup, .stoppedEncrypting, .callEnded:
             Text(event.words(of: name))
                 .eventLineStyle()
                 .accessibilityElement(children: .ignore)
