@@ -115,6 +115,9 @@ open class XMPPClient: Context {
         }
     }
     private let responseManager:ResponseManager;
+
+    /// How many of the requests sent on this client still wait for their answer.
+    public var pendingRequests: Int { responseManager.pendingCount }
     
     fileprivate var keepaliveTimer: Timer?;
     open var keepaliveTimeout: TimeInterval = (3 * 60) - 5;

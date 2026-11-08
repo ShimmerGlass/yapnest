@@ -31,6 +31,14 @@ private final class ServerScript: @unchecked Sendable {
     /// The error types the next requests for the block list are answered with, one each, before one that works.
     var blocklistFailures: [String] = []
     func nextBlocklistFailure() -> String? { lock.withLock { blocklistFailures.isEmpty ? nil : blocklistFailures.removeFirst() } }
+    /// Requests in this namespace are answered only after this long, as over a slow network.
+    var slowNamespace: String?
+    var slowDelay: TimeInterval = 0
+    private var _lateAnswers = 0
+    /// Answers that were ready only once the client had closed the connection: a real server queues them
+    /// for the session it keeps, and one set to push for everything (ejabberd's `notify_on: all`) pushes.
+    var lateAnswers: Int { lock.withLock { _lateAnswers } }
+    func recordLateAnswer() { lock.withLock { _lateAnswers += 1 } }
     init(_ answer: ResumeAnswer) { self.answer = answer }
 
     var sent: [Stanza] { lock.withLock { _sent } }
@@ -130,7 +138,13 @@ private final class ScriptedServer: Connector {
             if stanza.name == "authenticate" {
                 signedIn(resuming: stanza.findChild(name: "resume", xmlns: "urn:xmpp:sm:3"))
             } else if let iq = stanza as? Iq, iq.type == .get || iq.type == .set {
-                events.send(.stanza(result(to: iq)))
+                let slow = script.slowNamespace.map { ns in iq.element.children.contains { $0.xmlns == ns } } ?? false
+                guard slow else { return events.send(.stanza(result(to: iq))) }
+                let stopsBefore = script.stops.count
+                DispatchQueue.global().asyncAfter(deadline: .now() + script.slowDelay) { [self] in
+                    if script.stops.count > stopsBefore { return script.recordLateAnswer() }
+                    events.send(.stanza(result(to: iq)))
+                }
             }
         }
     }
@@ -234,6 +248,33 @@ struct ResumedStreamTests {
         #expect(after.stream.boundJid == "alice@localhost/app")
         // The server counted the extension's own requests and the extension its answers.
         #expect(after.stream.outgoing > appStream.outgoing)
+    }
+
+    /// A request still unanswered when the extension leaves is answered into the stream the server keeps,
+    /// after the final acknowledgement: ejabberd set to push everything then pushes for it, which wakes the
+    /// extension again, which leaves another behind. Every wake on a phone made the next one, ten seconds apart.
+    @Test(.timeLimit(.minutes(1)))
+    func theExtensionLeavesOnlyOnceItsRequestsAreAnswered() async throws {
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (extensionSession, server) = try session(.notificationService, answering: .accepts(h: 5), store: store)
+        // A request of the wake's still out when its catch-up ends, as a room's server answers late.
+        server.slowNamespace = "urn:example:slow"
+        server.slowDelay = 0.4
+        let asked = Task {
+            for await state in extensionSession.state.values where state == .connected(isSyncing: false) || state == .connected(isSyncing: true) { break }
+            let iq = Iq()
+            iq.type = .get
+            iq.addChild(Element(name: "query", xmlns: "urn:example:slow"))
+            extensionSession.client.context.writer.write(iq, completionHandler: { _ in })
+        }
+        let finished = await extensionSession.catchUpOnce(timeout: 20)
+        await asked.value
+        #expect(finished)
+        #expect(server.sent.contains { $0.findChild(name: "query", xmlns: "urn:example:slow") != nil }, "the slow request was never sent")
+        // Past the answer's delay, so one that came after the close is counted.
+        try await Task.sleep(for: .seconds(0.6))
+        #expect(server.lateAnswers == 0, "the extension left before its requests were answered")
     }
 
     @Test(.timeLimit(.minutes(1)))

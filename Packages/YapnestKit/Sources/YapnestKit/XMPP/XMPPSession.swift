@@ -1442,6 +1442,17 @@ public final class XMPPSession: @unchecked Sendable {
             return
         }
         let remaining = { deadline.map { max(0, $0.timeIntervalSinceNow) } ?? .infinity }
+        // An answer that comes after the final acknowledgement waits in the stream the server keeps, unacknowledged,
+        // and a server set to push for everything (ejabberd's `notify_on: all`) pushes for it when the stream goes to
+        // sleep: the next wake, which leaves another behind. So what was asked is waited for, within the budget.
+        if isConnected {
+            let pending = client.pendingRequests
+            if pending > 0 {
+                let waitStarted = Date()
+                await waitForAnswers(upTo: min(Self.answersWait, remaining() * 0.3))
+                DiagLog.info(.notificationExtension, "Waited for answers before leaving", .int("pending", pending), .int("left", client.pendingRequests), .duration("took", since: waitStarted))
+            }
+        }
         // Over, if the connection dropped meanwhile: the counters are still what this process handled.
         if isConnected { await sendFinalAcknowledgement(sm, wait: min(Self.finalAcknowledgementWait, remaining() * 0.3, Task.isCancelled ? 0.5 : .infinity)) }
         _ = client.disconnect(true)
@@ -1462,6 +1473,18 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     private static let finalAcknowledgementWait: TimeInterval = 2
+
+    /// The most `leave` waits for answers to what the wake asked: a request the server never answers (a room's
+    /// server that is down) mustn't cost the extension its budget.
+    static let answersWait: TimeInterval = 1.5
+
+    /// Until every request sent on the stream has its answer, or `limit`.
+    func waitForAnswers(upTo limit: TimeInterval) async {
+        let deadline = Date().addingTimeInterval(limit)
+        while client.pendingRequests > 0, Date() < deadline, isConnected {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+    }
 
     /// Written before the connection closes, which would cut it off; not waited
     /// for beyond a moment, as a stalled connection never completes the write. Not `withTimeout`: its

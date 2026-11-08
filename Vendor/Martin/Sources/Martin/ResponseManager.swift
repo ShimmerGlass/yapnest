@@ -60,6 +60,9 @@ open class ResponseManager {
     private var handlers = [Key: Entry]();
     
     public var accountJID: JID = JID("");
+
+    /// How many requests still wait for their answer.
+    public var pendingCount: Int { queue.sync { handlers.count } }
     
     open weak var context: Context?;
     

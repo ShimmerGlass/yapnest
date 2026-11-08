@@ -755,6 +755,18 @@ Each entry gives what went wrong for users, why, and what changed.
   it a second time. Pinned by `StreamSnapshotTests` and `ResumedStreamTests`.
   `streamId` is the id alone, for the observer that asks it of every stanza.
 
+**Nothing told whether a request was still waiting for its answer**
+(`XMPPClient.pendingRequests`, `ResponseManager.pendingCount`)
+- *Symptom:* on ejabberd with `notify_on: all`, the notification extension
+  woke every 10 seconds with nothing to fetch.
+- *Cause:* an answer to one of its requests that arrived after its final
+  `<a/>` stayed unacknowledged in the stream the server kept, and ejabberd
+  pushes for unacknowledged stanzas when a stream goes to sleep. Nothing let
+  the extension see that requests were still out before leaving.
+- *Fix:* `pendingRequests` counts the requests whose answers haven't come, so
+  the extension waits for them, within a bound, before acknowledging and
+  leaving. Pinned by `ResumedStreamTests`.
+
 **A process that died while connected left no stream to resume**
 (`StreamManagementModule.acknowledgedHandler`)
 - *Symptom:* when iOS killed the app while it was connected (swiped away just
