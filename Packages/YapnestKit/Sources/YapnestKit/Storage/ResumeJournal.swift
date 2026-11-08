@@ -59,9 +59,8 @@ public final class ResumeJournal: @unchecked Sendable {
     public func append(_ entry: JournalEntry) {
         lock.withLock {
             if size == nil {
-                let existing = store.readJournal()
                 size = (try? FileManager.default.attributesOfItem(atPath: store.journalURL.path)[.size] as? Int) ?? 0
-                if !existing.isComplete { lostState = true }
+                if store.journalEndsIncomplete() { lostState = true }
             }
             guard !lostState, let line = Self.line(JournalLine(entry: entry)) else { return }
             if (size ?? 0) + line.count > capacity || !write(line) { markLost() }
@@ -140,6 +139,31 @@ extension ResumeTicketStore {
         return JournalContents(entries: entries, isComplete: isComplete)
     }
 
+    /// Whether an earlier wake left the journal cut off or marked lost, from its end alone: a lost marker
+    /// is the last line written, and nothing is appended after one or after a torn line, so the whole file
+    /// needn't be decoded to know.
+    func journalEndsIncomplete() -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: journalURL) else { return false }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd(), size > 0 else { return false }
+        guard (try? handle.seek(toOffset: size - 1)) != nil, let last = try? handle.read(upToCount: 1), last == Data([0x0A]) else { return true }
+        // The last line: back to the newline before it, in chunks, as an entry can be thousands of bytes.
+        var end = size - 1
+        var line = Data()
+        while end > 0 {
+            let start = end > 4096 ? end - 4096 : 0
+            guard (try? handle.seek(toOffset: start)) != nil, let chunk = try? handle.read(upToCount: Int(end - start)) else { return true }
+            if let newline = chunk.lastIndex(of: 0x0A) {
+                line = chunk[(newline + 1)...] + line
+                break
+            }
+            line = chunk + line
+            end = start
+        }
+        guard let decoded = try? JSONDecoder().decode(ResumeJournal.JournalLine.self, from: line) else { return true }
+        return decoded.lost == true
+    }
+
     public func deleteJournal() {
         try? FileManager.default.removeItem(at: journalURL)
     }
@@ -189,18 +213,45 @@ extension ResumeJournal {
             .children.contains { $0.xmlns == CallSignal.namespace } ?? false
     }
 
-    /// The element to feed the app's modules, with the time it was read in a `<delay>` if it came without
-    /// one it trusts, as its timestamp and a call's freshness are read from there: made now, a message read hours ago
-    /// would sort after what came since and a call offer would ring. `stamper` is the one that vouches
-    /// for it (the room, or the account's server), `offset` how far the server's clock is ahead of ours.
-    static func replayable(_ entry: JournalEntry, stamper: (Element) -> String, offset: TimeInterval) -> Element? {
-        guard let element = Element.from(string: entry.xml) else { return nil }
+    /// Names the stamps this process wrote when it replayed a journal, which a sender can't guess and
+    /// so can't forge: it is made when the app starts and never stored or sent.
+    private static let replayToken = UUID().uuidString
+
+    /// Whether `delay` is a stamp `replayable` wrote. It dates a stanza the app is handling as live, which
+    /// a room's or a server's own delay (history on joining) says it is not.
+    static func isReplayStamp(_ delay: Element) -> Bool {
+        delay.getAttribute("replay") == replayToken
+    }
+
+    /// The element to feed the app's modules, dated by when it was read, as its timestamp and a call's
+    /// freshness are read from its `<delay>`: made now, a message read hours ago would sort after what
+    /// came since and a call offer would ring. `stamper` is the one that vouches for it (the room, or the
+    /// account's server), `offset` how far the server's clock is ahead of ours.
+    ///
+    /// The delays that stamper's name is on, and those of `server` (which stamps what it held for a stream
+    /// it resumes, on any stanza, whoever vouches for its time), are replaced by one, the earlier of the time it was read and
+    /// what they said: a sender can write a stamp in the future with the server's name, and the latest of
+    /// the trusted stamps is the one that counts. The stamp is a replay's (`isReplayStamp`), so that the
+    /// stanza, which the app would have been sent live, isn't taken for history as a delayed one is.
+    static func replayable(_ entry: JournalEntry, stamper: (Element) -> String, server: String? = nil, offset: TimeInterval) -> Element? {
+        guard let element = Element.from(string: entry.xml), element.name == "message" else { return Element.from(string: entry.xml) }
         let vouching = stamper(element)
-        let isStamped = element.filterChildren(name: "delay", xmlns: NS.delay).contains { $0.getAttribute("from").flatMap { JID($0)?.description } == vouching }
-        guard element.name == "message", !isStamped else { return element }
+        let read = entry.at.addingTimeInterval(offset)
+        func source(_ delay: Element) -> String? { delay.getAttribute("from").flatMap { JID($0)?.description } }
+        // A carbon's inner message is the sender's too, and takes the wrapper's stamp when it is handled.
+        let inner = element.children.first { $0.xmlns == "urn:xmpp:carbons:2" }?
+            .firstChild(name: "forwarded", xmlns: "urn:xmpp:forward:0")?.firstChild(name: "message")
+        var earliest = read
+        for holder in [element, inner].compactMap({ $0 }) {
+            for delay in holder.filterChildren(name: "delay", xmlns: NS.delay) where source(delay) == vouching || source(delay) == server {
+                if source(delay) == vouching, let stamp = Delay(element: delay).stamp { earliest = min(earliest, stamp) }
+                holder.removeChild(delay)
+            }
+        }
         let delay = Element(name: "delay", xmlns: NS.delay)
         delay.setAttribute("from", value: vouching)
-        delay.setAttribute("stamp", value: ISO8601DateFormatter().string(from: entry.at.addingTimeInterval(offset)))
+        delay.setAttribute("stamp", value: ISO8601DateFormatter().string(from: earliest))
+        delay.setAttribute("replay", value: replayToken)
         element.addChild(delay)
         return element
     }

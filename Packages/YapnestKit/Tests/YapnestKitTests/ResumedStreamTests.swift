@@ -28,6 +28,9 @@ private final class ServerScript: @unchecked Sendable {
     /// How long the close takes to finish, as on a loaded device: the stanzas above arrive, and the
     /// connection is reported closed, only then.
     var stopDelay: TimeInterval = 0
+    /// The error types the next requests for the block list are answered with, one each, before one that works.
+    var blocklistFailures: [String] = []
+    func nextBlocklistFailure() -> String? { lock.withLock { blocklistFailures.isEmpty ? nil : blocklistFailures.removeFirst() } }
     init(_ answer: ResumeAnswer) { self.answer = answer }
 
     var sent: [Stanza] { lock.withLock { _sent } }
@@ -159,7 +162,10 @@ private final class ScriptedServer: Connector {
         reply.type = .result
         reply.id = iq.id
         reply.from = iq.to
-        if iq.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#info") != nil {
+        if iq.type == .get, iq.firstChild(name: "blocklist", xmlns: "urn:xmpp:blocking") != nil, let type = script.nextBlocklistFailure() {
+            reply.type = .error
+            reply.addChild(element("error", "jabber:client", ["type": type], [element("forbidden", "urn:ietf:params:xml:ns:xmpp-stanzas")]))
+        } else if iq.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#info") != nil {
             reply.addChild(element("query", "http://jabber.org/protocol/disco#info", [:], [
                 element("identity", "http://jabber.org/protocol/disco#info", ["category": "account", "type": "registered"]),
                 element("feature", "http://jabber.org/protocol/disco#info", ["var": "urn:xmpp:mam:2"]),
@@ -936,6 +942,300 @@ struct ResumedStreamTests {
         await eventually("the sign-in") { server.authentications.count == 2 }
 
         #expect(server.authentications.last?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3") == nil)
+    }
+
+    // MARK: Review fixes
+
+    private func stamped(_ element: Element) throws -> Date {
+        let message = try #require(Stanza.from(element: element) as? Martin.Message)
+        return try #require(InboundMessage.trustedStamp(in: message, stamper: YapnestKit.JID("localhost")!, account: aliceJid))
+    }
+
+    /// The close `suspendImmediately()` started may still be going when the user returns: `connect()` then
+    /// doesn't log in, and the reconnect that follows has to read the extension's ticket and journal itself.
+    @Test(.timeLimit(.minutes(1)))
+    func aReconnectAfterAnImmediateSuspensionStillAdoptsTheExtensionsCounters() async throws {
+        let (store, directory) = freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (app, server) = try session(.app, answering: .refuses, store: store)
+        defer { app.disconnect() }
+        try await app.database.writer.write { try Contact(jid: Self.bob, subscription: .both, isInRoster: true).insert($0) }
+        app.connect()
+        await eventually("the app to sync") { app.state.value == .connected(isSyncing: false) }
+        app.client.replayIncoming(Stanza.from(element: presence(nil)))
+        await eventually("bob online") { app.presence(of: Self.bob) == .online }
+        server.stopDelay = 1.5
+        app.suspendImmediately()
+        let mine = try #require(app.client.module(.streamManagement).snapshot)
+        // The extension used the stream: it saw bob go away, and the server handled all the app wrote.
+        var used = mine
+        used.incoming += 3
+        used.outgoing += 2
+        store.save(used, appHandled: mine.outgoing)
+        ResumeJournal(store: store).append(JournalEntry(stream: mine.id, at: Date(), xml: presence("away").stringValue))
+        server.answer = .accepts(h: used.outgoing)
+
+        app.connect()
+        #expect(app.client.state != .disconnected(), "the close had finished, so connect() settled by itself")
+        await eventually("the reconnect") { server.authentications.count == 2 }
+
+        let resume = try #require(resumeRequest(server))
+        #expect(resume.getAttribute("h") == String(used.incoming), "the app resumed with the counters from before the extension")
+        await eventually("the journal replayed") { app.presence(of: Self.bob) == .away }
+        #expect(store.load() == nil)
+    }
+
+    /// The app adopted a wake's journal, never reached the stream, and was suspended again: the next adoption
+    /// goes on from what the first held, in order.
+    @Test(.timeLimit(.minutes(1)))
+    func aSecondAdoptionKeepsWhatTheFirstHadNotReplayed() async throws {
+        let scene = try await scene(replayed: [presence("away")])
+        defer { try? FileManager.default.removeItem(at: scene.directory) }
+        scene.app.settleResumeTicket()
+        #expect(scene.app.lock.withLock { $0.journaled.count } == 1)
+
+        scene.app.lock.withLock { $0.holdsStream = true }
+        scene.app.suspendImmediately()
+        let ticket = try #require(scene.store.load())
+        let (woken, server) = try session(.notificationService, answering: .accepts(h: ticket.stream.outgoing), store: scene.store)
+        server.afterSignIn = [presence("dnd")]
+        #expect(await woken.catchUpOnce(timeout: 20))
+        scene.app.settleResumeTicket()
+
+        let kept = scene.app.lock.withLock { ($0.journaled, $0.replaysJournal) }
+        #expect(kept.1)
+        #expect(kept.0.compactMap { Element.from(string: $0.xml)?.firstChild(name: "show")?.value } == ["away", "dnd"])
+    }
+
+    /// The stanzas the server never got stay owed across an adoption that never resumed.
+    @Test(.timeLimit(.minutes(1)))
+    func aSecondAdoptionStillSendsAgainWhatTheServerNeverGot() async throws {
+        let (store, directory) = freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (app, _) = try session(.app, answering: .refuses, store: store)
+        defer { app.disconnect() }
+        app.connect()
+        await eventually("the app to sync") { app.state.value == .connected(isSyncing: false) }
+        await app.suspend()
+        let sm = app.client.module(.streamManagement)
+        let snapshot = try #require(sm.snapshot)
+
+        let first = sm.adopt(snapshot, handled: snapshot.outgoing - 2)
+        let second = sm.adopt(snapshot, handled: snapshot.outgoing - 2)
+
+        #expect(first.count == 2)
+        #expect(second.compactMap(\.id) == first.compactMap(\.id), "the second adoption dropped what the first still owed")
+    }
+
+    /// The offer is past the ring window: nothing rings, but the call is a missed one in the log, which the
+    /// extension didn't write (it stores nothing for an offer that may still be answered).
+    @Test(.timeLimit(.minutes(1)))
+    func aProposeThatIsPastTheRingWindowIsLoggedAsMissed() async throws {
+        let scene = try await scene(replayed: [proposal(sid: "old-2", delayedBy: 120)], calls: true)
+        defer { try? FileManager.default.removeItem(at: scene.directory); scene.app.disconnect() }
+
+        try await returning(scene)
+
+        func missed() throws -> Int {
+            try scene.app.database.reader.read { try YapnestKit.Message.filter(Column("callOutcome") == CallOutcome.missed.rawValue).fetchCount($0) }
+        }
+        try await eventually("the missed call's row") { try missed() == 1 }
+        #expect(scene.app.callState.value == nil)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aStaleProposeIsLoggedAsMissedByANewSessionToo() async throws {
+        let scene = try await scene(replayed: [proposal(sid: "old-3", delayedBy: 120)], calls: true)
+        defer { try? FileManager.default.removeItem(at: scene.directory) }
+        let (reborn, _) = try session(.app, answering: .refuses, store: scene.store, callMedia: FakeCallMediaFactory())
+        defer { reborn.disconnect() }
+        try await reborn.database.writer.write { try Contact(jid: Self.bob, subscription: .both, isInRoster: true).insert($0) }
+
+        reborn.connect()
+
+        func missed() throws -> Int {
+            try reborn.database.reader.read { try YapnestKit.Message.filter(Column("callOutcome") == CallOutcome.missed.rawValue).fetchCount($0) }
+        }
+        try await eventually("the missed call's row") { try missed() == 1 }
+        #expect(reborn.callState.value == nil)
+    }
+
+    private func replayed(_ elements: [Element], callsOnly: Bool = true) -> [Element] {
+        XMPPSession.journalReplay(
+            elements.map { JournalEntry(stream: "s", at: Date(), xml: $0.stringValue) }, account: aliceJid, now: Date(), offset: 0,
+            isRoom: { $0 == Self.room }, callsOnly: callsOnly,
+        )
+    }
+
+    /// Only the caller's retraction, or one of our devices answering, ends an offer: anyone else's would
+    /// only silence a call.
+    @Test func onlyAnEndTheCallMachineWouldTakeSilencesAnOffer() {
+        let forged = xml("<message from='mallory@localhost/x' to='alice@localhost' type='chat'><retract xmlns='urn:xmpp:jingle-message:0' id='f1'/></message>")
+        let kept = replayed([proposal(sid: "f1"), forged]).compactMap { $0.getAttribute("id") }
+        #expect(kept.contains("p-f1"), "a third party's retraction ended the call")
+        let answeredElsewhere = xml("<message from='alice@localhost/tablet' to='alice@localhost' type='chat'><accept xmlns='urn:xmpp:jingle-message:0' id='f2'/></message>")
+        #expect(!replayed([proposal(sid: "f2"), answeredElsewhere]).contains { $0.getAttribute("id") == "p-f2" })
+        #expect(!replayed([proposal(sid: "f3"), retraction(sid: "f3")]).contains { $0.getAttribute("id") == "p-f3" })
+        let asPeersAccept = xml("<message from='bob@localhost/phone' to='alice@localhost' type='chat'><accept xmlns='urn:xmpp:jingle-message:0' id='f4'/></message>")
+        #expect(replayed([proposal(sid: "f4"), asPeersAccept]).contains { $0.getAttribute("id") == "p-f4" }, "the caller's own accept is no device of ours")
+    }
+
+    /// A carbon is only ours if our server sent it: the same check as for a live one.
+    @Test func aForgedCarbonIsNoCallSignalInTheJournalEither() {
+        let forged = xml("<message from='mallory@localhost' to='alice@localhost/app'><received xmlns='urn:xmpp:carbons:2'><forwarded xmlns='urn:xmpp:forward:0'><message from='bob@localhost/phone' to='alice@localhost' type='chat' id='fc'><propose xmlns='urn:xmpp:jingle-message:0' id='fc1'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='audio'/></propose></message></forwarded></received></message>")
+        let real = xml("<message from='alice@localhost' to='alice@localhost/app'><received xmlns='urn:xmpp:carbons:2'><forwarded xmlns='urn:xmpp:forward:0'><message from='bob@localhost/phone' to='alice@localhost' type='chat' id='fc'><propose xmlns='urn:xmpp:jingle-message:0' id='fc2'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='audio'/></propose></message></forwarded></received></message>")
+        #expect(replayed([forged]).isEmpty)
+        #expect(replayed([real]).count == 1)
+    }
+
+    /// A stamp in the future from the server's name, written by the sender, would make a stale offer ring.
+    @Test func aForgedFutureStampDoesNotOutlastWhenTheExtensionReadIt() throws {
+        let at = Date().addingTimeInterval(-3600)
+        let future = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let forged = "<message from='bob@localhost/phone' to='alice@localhost' type='chat' id='p-x'><propose xmlns='urn:xmpp:jingle-message:0' id='x'><description xmlns='urn:xmpp:jingle:apps:rtp:1' media='audio'/></propose><delay xmlns='urn:xmpp:delay' from='localhost' stamp='\(future)'/></message>"
+        let element = try #require(ResumeJournal.replayable(JournalEntry(stream: "s", at: at, xml: forged), stamper: { _ in "localhost" }, offset: 0))
+        #expect(abs(try stamped(element).timeIntervalSince(at)) < 2)
+
+        let earlier = Date().addingTimeInterval(-7200)
+        let queued = forged.replacingOccurrences(of: future, with: ISO8601DateFormatter().string(from: earlier))
+        let kept = try #require(ResumeJournal.replayable(JournalEntry(stream: "s", at: at, xml: queued), stamper: { _ in "localhost" }, offset: 0))
+        #expect(abs(try stamped(kept).timeIntervalSince(earlier)) < 2, "the server's own earlier stamp is the better date")
+    }
+
+    /// A stanza replayed from the journal is live as far as the app is concerned, whatever delay it came with.
+    @Test func aReplayedStanzaIsNotTakenForHistory() throws {
+        let queued = "<message from='cake@rooms.localhost' to='alice@localhost/app' id='a1'><x xmlns='http://jabber.org/protocol/muc#user'><item jid='zed@localhost' affiliation='member'/></x><delay xmlns='urn:xmpp:delay' from='localhost' stamp='2026-01-01T00:00:00Z'/></message>"
+        let element = try #require(ResumeJournal.replayable(
+            JournalEntry(stream: "s", at: Date(), xml: queued), stamper: { _ in Self.room.description }, server: "localhost", offset: 0,
+        ))
+        let message = try #require(Stanza.from(element: element) as? Martin.Message)
+        #expect(!XMPPSession.isDelayed(message))
+        #expect(!InboundMessage.isReplayed(message, source: .live))
+        let history = try #require(Stanza.from(element: xml(queued)) as? Martin.Message)
+        #expect(XMPPSession.isDelayed(history))
+        // A sender can't write the stamp: it carries a token only this process knows.
+        let forged = try #require(Stanza.from(element: xml("<message from='cake@rooms.localhost/x' type='groupchat'><delay xmlns='urn:xmpp:delay' replay='guess' from='cake@rooms.localhost' stamp='2026-01-01T00:00:00Z'/></message>")) as? Martin.Message)
+        #expect(XMPPSession.isDelayed(forged))
+    }
+
+    /// The room's notice of an affiliation change is acted on only if it is live; a replay of it is, though
+    /// the journal gave it a stamp.
+    @Test func aJournaledAffiliationNoticeAppliesOnReplay() throws {
+        let (store, directory) = freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (app, _) = try session(.app, answering: .refuses, store: store)
+        try app.database.joinGroupChat(Self.room, nickname: "alice")
+        app.reloadKnownRooms()
+        app.updateRoom(Self.room) { $0 = RoomStatus(phase: .joined, nickname: "alice") }
+        let notice = "<message from='cake@rooms.localhost' to='alice@localhost/app' id='aff1'><x xmlns='http://jabber.org/protocol/muc#user'><item jid='zed@localhost' affiliation='member'/></x></message>"
+        let element = try #require(ResumeJournal.replayable(
+            JournalEntry(stream: "s", at: Date().addingTimeInterval(-30), xml: notice), stamper: { _ in Self.room.description }, server: "localhost", offset: 0,
+        ))
+
+        app.handleTopLevel(try #require(Stanza.from(element: element) as? Martin.Message))
+
+        #expect(app.roomStatus(Self.room)?.memberAffiliations[YapnestKit.JID("zed@localhost")!] == .member)
+    }
+
+    /// Settling reads files and, adopting, acknowledges stanzas into the database: not on the main thread.
+    @Test(.timeLimit(.minutes(1)))
+    func theAppSettlesATicketOffTheMainThread() async throws {
+        let (store, directory) = freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (app, appServer) = try session(.app, answering: .refuses, store: store)
+        defer { app.disconnect() }
+        app.connect()
+        await eventually("the app to sync") { app.state.value == .connected(isSyncing: false) }
+        await app.suspend()
+        let queued = app.client.module(.streamManagement).unacknowledgedStanzas
+        let written = try #require(app.client.module(.streamManagement).snapshot).outgoing
+        let (woken, _) = try session(.notificationService, answering: .accepts(h: written), store: store)
+        #expect(await woken.catchUpOnce(timeout: 20))
+        let ticket = try #require(store.load())
+        appServer.answer = .accepts(h: ticket.stream.outgoing)
+        let threads = OSAllocatedUnfairLock(initialState: [Bool]())
+        let sink = app.client.module(.streamManagement).ackedStanzas.sink { _ in threads.withLock { $0.append(Thread.isMainThread) } }
+        defer { sink.cancel() }
+
+        await MainActor.run { app.connect() }
+
+        await eventually("the app to resume") { app.isConnected && appServer.authentications.count == 2 }
+        let seen = threads.withLock { $0 }
+        #expect(seen.count == queued.count, "the app's stanzas weren't acknowledged by the adoption")
+        #expect(!seen.contains(true), "the adoption ran on the main thread, where the database may not be touched")
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aBlocklistThatCannotBeReadAgainIsShownAndOneThatPassesIsRetried() async throws {
+        let scene = try await scene(replayed: [presence("away")])
+        defer { try? FileManager.default.removeItem(at: scene.directory); scene.app.disconnect() }
+        scene.app.lock.withLock { $0.retryBackoff = 0.05 }
+        scene.appServer.blocklistFailures = ["wait", "cancel", "cancel", "cancel"]
+        let before = scene.appServer.blocklistRequests.count
+
+        try await returning(scene)
+
+        await eventually("the warning") { scene.app.warnings.current.contains { $0.key == "blocklist" } }
+        #expect(scene.appServer.blocklistRequests.count == before + 2, "the wait error wasn't retried, or the final one was")
+        #expect(scene.app.warnings.current.first { $0.key == "blocklist" }?.retry != nil)
+    }
+
+    /// The extension is cut off at its caller's timeout: a close that stalls can't push the ticket past it.
+    @Test(.timeLimit(.minutes(1)))
+    func aStalledCloseDoesNotExtendTheCatchUpPastItsTimeout() async throws {
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let before = try #require(store.load())
+        let (woken, server) = try session(.notificationService, answering: .accepts(h: 5), store: store)
+        server.stopDelay = 60
+        let started = Date()
+
+        let finished = await woken.catchUpOnce(timeout: 6)
+
+        #expect(finished)
+        #expect(Date().timeIntervalSince(started) < 7, "leaving waited out the close")
+        #expect(try #require(store.load()).generation > before.generation, "the ticket wasn't saved in time")
+    }
+
+    /// A caller iOS has cancelled is about to be suspended: it lets go within moments, ticket saved.
+    @Test(.timeLimit(.minutes(1)))
+    func aCancelledCatchUpLeavesPromptly() async throws {
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let before = try #require(store.load())
+        let (woken, server) = try session(.notificationService, answering: .accepts(h: 5), store: store)
+        server.stopDelay = 60
+        let run = Task { await woken.catchUpOnce(timeout: 600) }
+        await eventually("the stream") { woken.state.value == .connected(isSyncing: false) }
+        let cancelled = Date()
+
+        run.cancel()
+        _ = await run.value
+
+        #expect(Date().timeIntervalSince(cancelled) < 5)
+        #expect(try #require(store.load()).generation > before.generation)
+    }
+
+    /// Only the trailing line says whether an earlier wake left the journal incomplete.
+    @Test func aJournalCutOffMidLineIsNotAppendedTo() throws {
+        let (store, directory) = freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let big = JournalEntry(stream: "s", at: Date(), xml: "<presence from='bob@localhost/x'><status>\(String(repeating: "x", count: 9000))</status></presence>")
+        ResumeJournal(store: store).append(big)
+        let complete = ResumeJournal(store: store)
+        complete.append(JournalEntry(stream: "s", at: Date(), xml: "<presence/>"))
+        #expect(!complete.isLost, "a long last line was taken for a torn one")
+        let handle = try FileHandle(forWritingTo: store.journalURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"entry\":{\"xml\":".utf8))
+        try handle.close()
+        let size = try Data(contentsOf: store.journalURL).count
+
+        let next = ResumeJournal(store: store)
+        next.append(JournalEntry(stream: "s", at: Date(), xml: "<presence/>"))
+
+        #expect(next.isLost)
+        #expect(try Data(contentsOf: store.journalURL).count == size)
     }
 
     @Test func endingTheSessionDeletesTheTicketButTheShareExtensionsDoesNot() throws {

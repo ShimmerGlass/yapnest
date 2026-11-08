@@ -163,6 +163,8 @@ public final class XMPPSession: @unchecked Sendable {
     /// session's own: a queue shared by every session would make one that waits out a timeout
     /// hold up all the others.
     let legacyBookmarkQueue = DispatchQueue(label: "Yapnest.XMPPSession.legacyBookmarks")
+    /// Where `connect()` settles the resume ticket and logs in, off the caller's thread.
+    let loginQueue = DispatchQueue(label: "Yapnest.XMPPSession.login")
     /// Orders what `reportClientState` decides and writes.
     private let clientStateLock = NSLock()
     /// Keep a snapshot's sends in the order the snapshots were built: see
@@ -948,9 +950,16 @@ public final class XMPPSession: @unchecked Sendable {
             // Before anything can arrive, so an offer of this session isn't swept.
             if policy.ownsSharedStream {
                 expireFileOffers()
-                settleResumeTicket()
+                // Settling reads and decodes files and, adopting counters, acknowledges stanzas into the
+                // database, which the caller's thread (the main one) mustn't. `loginQueue` is serial, so
+                // two calls don't log in twice.
+                loginQueue.async { [self] in
+                    guard lock.withLock({ $0.wantsConnection }), case .disconnected = client.state else { return }
+                    login()
+                }
+            } else {
+                login()
             }
-            login()
         }
     }
 
@@ -962,6 +971,11 @@ public final class XMPPSession: @unchecked Sendable {
     }
 
     private func login() {
+        // On every attempt, not only the first after a suspension: the close that `suspendImmediately()`
+        // started may still be in flight when the user returns, so the attempt that follows it is a
+        // reconnect, and the app would otherwise resume with the counters from before an extension used
+        // the stream. A no-op when no other process wrote a ticket.
+        if policy.ownsSharedStream { settleResumeTicket() }
         let token = fastTokens.load()
         client.module(.sasl2).fastToken = token
         // Likewise the latest record: another client may have raised it.
@@ -1031,19 +1045,53 @@ public final class XMPPSession: @unchecked Sendable {
     /// be behind what the server was told, and Prosody refuses a resumption like that.
     private static let disconnectWait: TimeInterval = 10
 
-    /// Until Martin reports the connection closed, or `disconnectWait`.
+    /// Until Martin reports the connection closed, or `limit`.
     ///
     /// Detached, so that a caller that is cancelled (a fetch iOS cut short) still waits for the close:
     /// the counters saved before it would be behind what the server was told. The bound is what ends a
-    /// close that stalls.
-    private func waitForDisconnectAsync() async {
-        await Task.detached { [self] in
-            _ = try? await withTimeout(Self.disconnectWait) { [self] in
-                for await state in client.$state.values {
-                    if case .disconnected = state { return }
+    /// close that stalls. With `cutShortOnCancel` a cancelled caller waits a second more instead, for one
+    /// that has to let go of what it holds before the process is suspended or killed (`leave`).
+    private func waitForDisconnectAsync(upTo limit: TimeInterval = disconnectWait, cutShortOnCancel: Bool = false) async {
+        let wait = CloseWait()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                wait.arm(continuation)
+                Task.detached { [self] in
+                    _ = try? await withTimeout(limit) { [self] in
+                        for await state in client.$state.values {
+                            if case .disconnected = state { return }
+                        }
+                    }
+                    wait.finish()
                 }
             }
-        }.value
+        } onCancel: {
+            if cutShortOnCancel { DispatchQueue.global().asyncAfter(deadline: .now() + 1) { wait.finish() } }
+        }
+    }
+
+    /// A wait that one of several things ends: the first to call `finish` resumes it.
+    private final class CloseWait: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var finished = false
+
+        func arm(_ continuation: CheckedContinuation<Void, Never>) {
+            let ended = lock.withLock {
+                if !finished { self.continuation = continuation }
+                return finished
+            }
+            if ended { continuation.resume() }
+        }
+
+        func finish() {
+            let continuation = lock.withLock {
+                finished = true
+                defer { self.continuation = nil }
+                return self.continuation
+            }
+            continuation?.resume()
+        }
     }
 
     /// Leaves the stream where the notification extension can take it over,
@@ -1094,7 +1142,7 @@ public final class XMPPSession: @unchecked Sendable {
     /// was evicted), the app forgets the stream and starts a new session, as
     /// it does when a resumption fails, and rings for the calls the journal
     /// holds, which a new session would read back from the archive without ringing.
-    private func settleResumeTicket() {
+    func settleResumeTicket() {
         guard let store = resumeTickets else { return }
         let saved = lock.withLock { $0.savedTicketGeneration.take() }
         let ticket = store.load()
@@ -1108,24 +1156,35 @@ public final class XMPPSession: @unchecked Sendable {
         } else if let ticket, let sm, saved != nil, let handled = ticket.appHandled, !ticket.journalLost, journal.isComplete,
                   sm.snapshot?.id == ticket.stream.id, journal.entries.allSatisfy({ $0.stream == ticket.stream.id }) {
             sm.adopt(ticket.stream, handled: handled)
+            // After what an earlier adoption holds that never reached a resumption (the app was suspended
+            // again first): those stanzas are still unseen, and the journal that held them is gone.
             lock.withLock {
-                $0.journaled = journal.entries
+                $0.journaled += journal.entries
                 $0.replaysJournal = true
             }
             DiagLog.info(.connection, "Stream used by an extension, resuming with its counters", .int("kept", journal.entries.count))
             return
         }
         sm?.reset()
-        lock.withLock { $0.journaled = journal.entries }
+        // Of a stream that is gone, so only the calls in it are rung for; the earlier ones' too, if none was.
+        lock.withLock {
+            $0.journaled += journal.entries
+            $0.replaysJournal = false
+        }
         DiagLog.info(.connection, "Stream used by another process, starting a new session")
     }
 
     /// What the app's modules are to be fed from `entries`, in order, to catch up with the stream: all of
     /// it in a resumed stream, only the calls in a new session, which learns the rest itself.
     ///
-    /// A call offer is dropped if it is past the ring window, or if the journal also holds the end of it:
-    /// the extension has written the call's row, and nothing is to ring. So is its end, which has
-    /// nothing left to tell. An offer from our own account is no call to answer here.
+    /// A call offer is dropped if the journal also holds the end of it: the extension has written the
+    /// call's row, and nothing is to ring. So is its end, which has nothing left to tell. An offer from our
+    /// own account is no call to answer here. One past the ring window is not dropped: the extension stores
+    /// nothing for a fresh offer, since a device may still answer it, so the live path writes the missed
+    /// call's row, as it does for any stale offer, and doesn't ring.
+    ///
+    /// An end only counts for the offer if the machine would take it: a retraction from the caller, or an
+    /// answer or turning down from one of our devices. Anyone else's would only silence a call.
     static func journalReplay(
         _ entries: [JournalEntry], account: JID, now: Date, offset: TimeInterval, isRoom: (JID) -> Bool, callsOnly: Bool,
     ) -> [Element] {
@@ -1134,23 +1193,24 @@ public final class XMPPSession: @unchecked Sendable {
                 if let from = element.getAttribute("from").flatMap({ JID($0) }), isRoom(from) { return from.description }
                 return account.domain
             }
-            guard let element = ResumeJournal.replayable(entry, stamper: stamper, offset: offset) else { return nil }
+            guard let element = ResumeJournal.replayable(entry, stamper: stamper, server: account.domain, offset: offset) else { return nil }
             return (element, callSignal(in: element, account: account, now: now, offset: offset))
         }
-        var ended: Set<String> = []
-        var offered: Set<String> = []
-        for case let signal? in items.map(\.signal) {
-            switch signal.action {
-            case .propose: offered.insert(signal.sid)
-            case .proceed, .accept, .reject, .retract, .finish: ended.insert(signal.sid)
-            case .ringing: break
+        let signals = items.compactMap(\.signal)
+        let proposes = signals.filter { if case .propose = $0.action { true } else { false } }
+        func ends(_ end: CallSignal, _ propose: CallSignal) -> Bool {
+            guard end.sid == propose.sid else { return false }
+            switch end.action {
+            case .retract, .finish: return !end.isFromAccount && end.sender == propose.sender
+            case .proceed, .accept, .reject: return end.isFromAccount
+            case .propose, .ringing: return false
             }
         }
         return items.compactMap { element, signal in
             guard let signal else { return callsOnly ? nil : element }
             if case .propose = signal.action {
-                if ended.contains(signal.sid) || signal.isFromAccount || now.timeIntervalSince(signal.timestamp) >= CallMachine.ringWindow { return nil }
-            } else if ended.contains(signal.sid), offered.contains(signal.sid) {
+                if signal.isFromAccount || signals.contains(where: { ends($0, signal) }) { return nil }
+            } else if proposes.contains(where: { ends(signal, $0) }) {
                 return nil
             }
             return element
@@ -1161,13 +1221,11 @@ public final class XMPPSession: @unchecked Sendable {
     private static func callSignal(in element: Element, account: JID, now: Date, offset: TimeInterval) -> CallSignal? {
         guard element.name == "message", ResumeJournal.containsCallSignal(element),
               let message = Stanza.from(element: element) as? Martin.Message else { return nil }
-        guard let carbon = message.element.children.first(where: { $0.xmlns == MessageCarbonsModule.MC_XMLNS }) else {
-            return CallSignal(message, account: account, source: .live, now: now, clockOffset: offset)
+        switch unwrapCarbon(message, account: account) {
+        case .plain: return CallSignal(message, account: account, source: .live, now: now, clockOffset: offset)
+        case .dropped: return nil
+        case .carbon(let inner, let sent): return CallSignal(inner, account: account, source: .carbon(sent: sent), now: now, clockOffset: offset)
         }
-        guard let forwarded = carbon.firstChild(name: "forwarded", xmlns: "urn:xmpp:forward:0")?.firstChild(name: "message") else { return nil }
-        forwarded.addChildren(message.element.filterChildren(name: "delay", xmlns: NS.delay))
-        guard let inner = Stanza.from(element: forwarded) as? Martin.Message else { return nil }
-        return CallSignal(inner, account: account, source: .carbon(sent: carbon.name == "sent"), now: now, clockOffset: offset)
     }
 
     /// The stream is resumed, and what the extension consumed from it is fed to the modules before anything
@@ -1187,7 +1245,7 @@ public final class XMPPSession: @unchecked Sendable {
         let blocking = client.module(.blockingCommand)
         if blocking.isAvailable {
             blocking.reset(scopes: [.session])
-            blocking.retrieveBlockedJids(completionHandler: nil)
+            Task { [self] in await readBlocklistAgain() }
         }
         guard !entries.isEmpty else { return }
         let elements = Self.journalReplay(
@@ -1195,6 +1253,29 @@ public final class XMPPSession: @unchecked Sendable {
         )
         DiagLog.info(.connection, "Replaying what an extension consumed", .int("stanzas", elements.count))
         for element in elements { client.replayIncoming(Stanza.from(element: element)) }
+    }
+
+    /// Reads the block list the app lost the copy of, as a new session's module does when the server
+    /// announces blocking, but with the error shown: a list that stays unread leaves blocked contacts
+    /// looking unblocked. What can pass is retried; a final error is a warning with a Retry.
+    private func readBlocklistAgain() async {
+        let key = "blocklist"
+        do {
+            try await retryingPassingErrors(callback: { [client] done in
+                client.module(.blockingCommand).retrieveBlockedJids { done($0.map { _ in () }.mapError { $0 }) }
+            })
+            warnings.clear(key)
+        } catch {
+            // A session that ended meanwhile redoes this on its own.
+            guard !(error is CancellationError) else { return }
+            warnings.post(key, title: String(localized: "Block list not loaded"), friendly: String(localized: "The server wouldn't give the list of blocked contacts"), error: error) { [weak self] in
+                guard let self else { return }
+                try await retryingPassingErrors(callback: { [client] done in
+                    client.module(.blockingCommand).retrieveBlockedJids { done($0.map { _ in () }.mapError { $0 }) }
+                })
+                warnings.clear(key)
+            }
+        }
     }
 
     /// Rings for the calls an extension took from the stream, in a session that didn't resume it, as
@@ -1275,7 +1356,11 @@ public final class XMPPSession: @unchecked Sendable {
     /// the connection closed without `</stream>`, which keeps the stream for
     /// the next wake, and the ticket updated. A server that can't resume
     /// streams gets the usual close.
-    func leave() async {
+    ///
+    /// Done by `deadline` if there is one, as what runs it is cut off when its time is up: the final
+    /// acknowledgement and the close share what is left of it, and the ticket, which is quick, is saved
+    /// after. A caller that is cancelled has iOS about to suspend it, so it only waits a moment.
+    func leave(by deadline: Date? = nil) async {
         lock.withLock { $0.wantsConnection = false }
         // What is read while the connection closes is still kept, so it is closed after that.
         defer { journal?.close() }
@@ -1286,11 +1371,14 @@ public final class XMPPSession: @unchecked Sendable {
             _ = client.disconnect(true)
             return
         }
+        let remaining = { deadline.map { max(0, $0.timeIntervalSinceNow) } ?? .infinity }
         // Over, if the connection dropped meanwhile: the counters are still what this process handled.
-        if isConnected { await sendFinalAcknowledgement(sm) }
+        if isConnected { await sendFinalAcknowledgement(sm, wait: min(Self.finalAcknowledgementWait, remaining() * 0.3, Task.isCancelled ? 0.5 : .infinity)) }
         _ = client.disconnect(true)
-        // After the close, so that what was read up to it is in the ticket.
-        await waitForDisconnectAsync()
+        // After the close, so that what was read up to it is in the ticket. Not none at all when there is no
+        // time left: the close is written at once, and what it reads then is not in the counters, which a
+        // server that checks (Prosody) answers by refusing the resume, and the app by a new session.
+        await waitForDisconnectAsync(upTo: min(Self.disconnectWait, max(0.25, remaining())), cutShortOnCancel: true)
         // What the app's own stanzas had reached the server by the first wake's resume is what it needs to
         // send the rest again, and a later resume's `resumedH` counts the earlier ones' stanzas too, whether
         // it is another wake's or this wake's after a drop.
@@ -1303,10 +1391,12 @@ public final class XMPPSession: @unchecked Sendable {
         )
     }
 
+    private static let finalAcknowledgementWait: TimeInterval = 2
+
     /// Written before the connection closes, which would cut it off; not waited
     /// for beyond a moment, as a stalled connection never completes the write. Not `withTimeout`: its
     /// group waits for the operation to end, and a write that never completes ignores cancellation.
-    private func sendFinalAcknowledgement(_ sm: StreamManagementModule) async {
+    private func sendFinalAcknowledgement(_ sm: StreamManagementModule, wait: TimeInterval = finalAcknowledgementWait) async {
         let once = Once()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             // Detached, so a cancelled fetch still sends it.
@@ -1314,7 +1404,7 @@ public final class XMPPSession: @unchecked Sendable {
                 await sm.acknowledge()
                 if once.first() { continuation.resume() }
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + wait) {
                 if once.first() { continuation.resume() }
             }
         }
@@ -1323,11 +1413,15 @@ public final class XMPPSession: @unchecked Sendable {
     /// For the notification extension: resumes the app's stream if the
     /// ticket has one, otherwise connects as the app's resource, catches up on
     /// the archives and leaves the stream for the next wake (`leave`). False if
-    /// that didn't finish within `timeout`.
+    /// that didn't finish within `timeout`, which is for all of it: the catch-up gets the part that leaves
+    /// `leaveReserve` for the final acknowledgement, the close and the ticket, as a caller that is cut
+    /// off after `timeout` (the extension's 30 seconds, a background task) would otherwise be killed
+    /// before the ticket is saved, or the session lock released.
     public func catchUpOnce(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
         seedFromTicket()
         connect()
-        let finished = (try? await withTimeout(timeout) { [self] in
+        let finished = (try? await withTimeout(timeout - min(Self.leaveReserve, timeout / 2)) { [self] in
             for await value in state.values {
                 // A catch-up cut off by a drop never reaches this state, but a
                 // stale one could be read just as the stream goes.
@@ -1336,9 +1430,13 @@ public final class XMPPSession: @unchecked Sendable {
             }
             return false
         }) ?? false
-        await leave()
+        await leave(by: deadline)
         return finished
     }
+
+    /// What `catchUpOnce` keeps for leaving: more than a close takes when the network is good, less than
+    /// `disconnectWait`, which a stalled one would use.
+    static let leaveReserve: TimeInterval = 5
 
     /// Drops the current attempt, reporting `failure` instead of Martin's reason.
     private func abort(_ failure: Failure, because cause: AbortCause) {
@@ -2176,26 +2274,42 @@ public final class XMPPSession: @unchecked Sendable {
     /// A stanza addressed to this resource: either a carbon wrapper, an archive
     /// result (handled by the MAM module), or a plain message.
     func handleTopLevel(_ stanza: Martin.Message) {
-        if let carbon = stanza.element.children.first(where: { $0.xmlns == MessageCarbonsModule.MC_XMLNS }) {
-            // Only our own server may send carbons: from our bare JID, or no from.
-            if let from = stanza.from, from.resource != nil || JID(from) != account {
-                logger.warning("Dropping forged carbon from \(from.stringValue, privacy: .private)")
-                return
-            }
-            guard carbon.name == "sent" || carbon.name == "received",
-                  let forwarded = carbon.firstChild(name: "forwarded", xmlns: "urn:xmpp:forward:0")?.firstChild(name: "message") else { return }
-            // A resumed stream replays what the server held for it with a
-            // `<delay>` on the wrapper. Without it the message, and a call
-            // offer in it, would read as happening now.
-            forwarded.addChildren(stanza.element.filterChildren(name: "delay", xmlns: NS.delay))
-            guard let inner = Stanza.from(element: forwarded) as? Martin.Message else { return }
-            handle(inner, source: .carbon(sent: carbon.name == "sent"))
+        switch Self.unwrapCarbon(stanza, account: account) {
+        case .carbon(let inner, let sent):
+            handle(inner, source: .carbon(sent: sent))
             return
+        case .dropped:
+            if let from = stanza.from { logger.warning("Dropping forged carbon from \(from.stringValue, privacy: .private)") }
+            return
+        case .plain:
+            break
         }
         if stanza.element.children.contains(where: { $0.name == "result" && ($0.xmlns?.hasPrefix("urn:xmpp:mam:") ?? false) }) {
             return
         }
         handle(stanza, source: .live)
+    }
+
+    /// What a top-level message is as a carbon.
+    enum CarbonUnwrap {
+        case plain
+        /// A forged or malformed carbon, which is nobody's to act on.
+        case dropped
+        case carbon(Martin.Message, sent: Bool)
+    }
+
+    /// The message a carbon wraps, if `stanza` is one. Only our own server may send carbons: from our bare
+    /// JID, or no `from`. A resumed stream replays what the server held for it with a `<delay>` on the
+    /// wrapper, which is copied onto the inner message: without it the message, and a call offer in it,
+    /// would read as happening now.
+    static func unwrapCarbon(_ stanza: Martin.Message, account: JID) -> CarbonUnwrap {
+        guard let carbon = stanza.element.children.first(where: { $0.xmlns == MessageCarbonsModule.MC_XMLNS }) else { return .plain }
+        if let from = stanza.from, from.resource != nil || JID(from) != account { return .dropped }
+        guard carbon.name == "sent" || carbon.name == "received",
+              let forwarded = carbon.firstChild(name: "forwarded", xmlns: "urn:xmpp:forward:0")?.firstChild(name: "message") else { return .dropped }
+        forwarded.addChildren(stanza.element.filterChildren(name: "delay", xmlns: NS.delay))
+        guard let inner = Stanza.from(element: forwarded) as? Martin.Message else { return .dropped }
+        return .carbon(inner, sent: carbon.name == "sent")
     }
 
     func handle(_ stanza: Martin.Message, source: InboundMessage.Source, isHistory: Bool = false, query: String = "") {

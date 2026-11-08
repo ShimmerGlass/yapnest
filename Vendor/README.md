@@ -746,7 +746,8 @@ Each entry gives what went wrong for users, why, and what changed.
   takes the counters of the process that used the stream: of the stanzas still
   queued, those the server had handled (`handled`, the `h` of that process's
   `<resumed>`) are acknowledged, and the others, which never arrived, are
-  written as new stanzas once the stream is resumed, after that process's.
+  written as new stanzas once the stream is resumed, after that process's (also
+  those an earlier adoption left unsent, if the stream was never resumed between).
   `resumedHandler` runs when a resumption succeeded, after the counters and the
   queue are settled and before the next stanza is read, on the dispatcher those
   are read on; there `replayIncoming(_:)` feeds a kept stanza to the modules as if

@@ -1737,9 +1737,10 @@ extension XMPPSession {
 
     /// The room's history on joining arrives as live stanzas, told apart only
     /// by their XEP-0203 delay. Any delay counts: ignoring a notice wrongly is
-    /// the safe mistake.
+    /// the safe mistake. Except the stamp of a replayed journal, which dates a stanza the app would have
+    /// had live.
     static func isDelayed(_ stanza: Martin.Message) -> Bool {
-        !stanza.element.filterChildren(name: "delay", xmlns: NS.delay).isEmpty
+        stanza.element.filterChildren(name: "delay", xmlns: NS.delay).contains { !ResumeJournal.isReplayStamp($0) }
     }
 
     /// Not after a catch-up that gave up: the cursor would skip what it missed.

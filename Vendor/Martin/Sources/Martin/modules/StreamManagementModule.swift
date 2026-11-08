@@ -410,7 +410,8 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
             ackH.outgoingCounter = snapshot.outgoing;
             lastSentH = snapshot.incoming;
             lastResumedH = snapshot.resumedH;
-            unsentAfterAdopt = Array(queued.suffix(missing));
+            // After those of an earlier adoption the stream never resumed on: they are older, and still unsent.
+            unsentAfterAdopt += Array(queued.suffix(missing));
             return (Array(queued.dropLast(missing)), unsentAfterAdopt);
         }
         for stanza in acked {
