@@ -39,6 +39,9 @@ private final class ServerScript: @unchecked Sendable {
     /// for the session it keeps, and one set to push for everything (ejabberd's `notify_on: all`) pushes.
     var lateAnswers: Int { lock.withLock { _lateAnswers } }
     func recordLateAnswer() { lock.withLock { _lateAnswers += 1 } }
+    /// Run once, when the client first acknowledges: what a stanza read just before the final `<a/>` makes it do.
+    var onFirstAck: (() -> Void)?
+    func takeOnFirstAck() -> (() -> Void)? { lock.withLock { defer { onFirstAck = nil }; return onFirstAck } }
     init(_ answer: ResumeAnswer) { self.answer = answer }
 
     var sent: [Stanza] { lock.withLock { _sent } }
@@ -127,6 +130,7 @@ private final class ScriptedServer: Connector {
             DispatchQueue.global().async { [self] in events.send(.stanza(features(signIn: true))) }
         case .stanza(let stanza):
             script.record(stanza)
+            if stanza.name == "a", let hook = script.takeOnFirstAck() { hook() }
             respond(to: stanza)
         default:
             break
@@ -275,6 +279,27 @@ struct ResumedStreamTests {
         // Past the answer's delay, so one that came after the close is counted.
         try await Task.sleep(for: .seconds(0.6))
         #expect(server.lateAnswers == 0, "the extension left before its requests were answered")
+    }
+
+    /// A stanza read just before the final acknowledgement can start a request of its own, as vault's log
+    /// showed: a key bundle fetched after the `<a/>`, answered after the close, and pushed for.
+    @Test(.timeLimit(.minutes(1)))
+    func aRequestStartedAsTheExtensionAcknowledgesIsWaitedForToo() async throws {
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (extensionSession, server) = try session(.notificationService, answering: .accepts(h: 5), store: store)
+        server.slowNamespace = "urn:example:slow"
+        server.slowDelay = 0.3
+        server.onFirstAck = { [weak extensionSession] in
+            let iq = Iq()
+            iq.type = .get
+            iq.addChild(Element(name: "query", xmlns: "urn:example:slow"))
+            extensionSession?.client.context.writer.write(iq, completionHandler: { _ in })
+        }
+        #expect(await extensionSession.catchUpOnce(timeout: 20))
+        #expect(server.sent.contains { $0.findChild(name: "query", xmlns: "urn:example:slow") != nil }, "the request was never sent")
+        try await Task.sleep(for: .seconds(0.5))
+        #expect(server.lateAnswers == 0, "the extension left before the request it started while acknowledging was answered")
     }
 
     @Test(.timeLimit(.minutes(1)))

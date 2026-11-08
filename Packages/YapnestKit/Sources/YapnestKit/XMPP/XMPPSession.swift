@@ -1444,17 +1444,27 @@ public final class XMPPSession: @unchecked Sendable {
         let remaining = { deadline.map { max(0, $0.timeIntervalSinceNow) } ?? .infinity }
         // An answer that comes after the final acknowledgement waits in the stream the server keeps, unacknowledged,
         // and a server set to push for everything (ejabberd's `notify_on: all`) pushes for it when the stream goes to
-        // sleep: the next wake, which leaves another behind. So what was asked is waited for, within the budget.
-        if isConnected {
+        // sleep: the next wake, which leaves another behind. So what was asked is waited for, within the budget, and
+        // again after the acknowledgement, as a stanza read just before it can start a request (a key bundle fetched
+        // for a device a room message names), which vault's log showed answered after the close.
+        for round in 0..<Self.leavingRounds {
+            guard isConnected else { break }
             let pending = client.pendingRequests
             if pending > 0 {
                 let waitStarted = Date()
                 await waitForAnswers(upTo: min(Self.answersWait, remaining() * 0.3))
-                DiagLog.info(.notificationExtension, "Waited for answers before leaving", .int("pending", pending), .int("left", client.pendingRequests), .duration("took", since: waitStarted))
+                DiagLog.info(
+                    .notificationExtension, "Waited for answers before leaving",
+                    .int("round", round), .int("pending", pending), .int("left", client.pendingRequests), .duration("took", since: waitStarted),
+                )
+            } else if round > 0 {
+                break
             }
+            // Over, if the connection dropped meanwhile: the counters are still what this process handled.
+            guard isConnected else { break }
+            await sendFinalAcknowledgement(sm, wait: min(Self.finalAcknowledgementWait, remaining() * 0.3, Task.isCancelled ? 0.5 : .infinity))
+            guard client.pendingRequests > 0 else { break }
         }
-        // Over, if the connection dropped meanwhile: the counters are still what this process handled.
-        if isConnected { await sendFinalAcknowledgement(sm, wait: min(Self.finalAcknowledgementWait, remaining() * 0.3, Task.isCancelled ? 0.5 : .infinity)) }
         _ = client.disconnect(true)
         // After the close, so that what was read up to it is in the ticket. Not none at all when there is no
         // time left: the close is written at once, and what it reads then is not in the counters, which a
@@ -1477,6 +1487,10 @@ public final class XMPPSession: @unchecked Sendable {
     /// The most `leave` waits for answers to what the wake asked: a request the server never answers (a room's
     /// server that is down) mustn't cost the extension its budget.
     static let answersWait: TimeInterval = 1.5
+
+    /// How many times `leave` waits and acknowledges again for requests started while it did: bounded, as a
+    /// busy stream could otherwise keep the extension from ever leaving.
+    static let leavingRounds = 3
 
     /// Until every request sent on the stream has its answer, or `limit`.
     func waitForAnswers(upTo limit: TimeInterval) async {
