@@ -343,6 +343,8 @@ public final class XMPPSession: @unchecked Sendable {
         /// an extension left, to the suspension. An ack the closing stream still reads after that, while
         /// the user returns, would otherwise write over a ticket an extension saved meanwhile.
         var ticketFollowsStream = false
+        /// The groups an extension's stream delivered something from, whose archives its catch-up reads.
+        var roomsHeardLive: Set<JID> = []
         /// What an extension kept of the stream while the app was away (`ResumeJournal`), until it is replayed
         /// into the resumed stream, or its calls are rung for in a new session.
         var journaled: [JournalEntry] = []
@@ -1370,6 +1372,9 @@ public final class XMPPSession: @unchecked Sendable {
     /// is read back from the archive.
     private func journalInbound(_ stanza: Stanza) {
         streamTally.count(stanza.element, account: account, isRoom: isGroup)
+        if stanza.name == "message", let from = stanza.from.flatMap({ JID($0.description) }), isGroup(from) {
+            lock.withLock { _ = $0.roomsHeardLive.insert(from) }
+        }
         guard let journal, ResumeJournal.keeps(stanza.element, isRoom: isGroup) else { return }
         let id = client.module(.streamManagement).streamId
         guard (id != nil && id == lock.withLock { $0.seededStreamId }) || ResumeJournal.containsCallSignal(stanza.element) else { return }

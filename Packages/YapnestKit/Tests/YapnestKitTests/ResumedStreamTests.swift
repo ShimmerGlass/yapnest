@@ -281,6 +281,46 @@ struct ResumedStreamTests {
         #expect(server.lateAnswers == 0, "the extension left before its requests were answered")
     }
 
+    /// On the app's stream the device is still in its groups, so a wake reads the archive of those that sent
+    /// something, not of all of them: some 50 requests a wake on a real account, every ten seconds on a server
+    /// that pushes for everything.
+    @Test(.timeLimit(.minutes(1)))
+    func aWakeOnTheAppsStreamReadsOnlyTheGroupsThatSentSomething() async throws {
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (extensionSession, server) = try session(.notificationService, answering: .accepts(h: 5), store: store)
+        let busy = YapnestKit.JID("cake@rooms.localhost")!, quiet = YapnestKit.JID("pie@rooms.localhost")!
+        try extensionSession.database.joinGroupChat(busy, nickname: "alice")
+        try extensionSession.database.joinGroupChat(quiet, nickname: "alice")
+        extensionSession.reloadKnownRooms()
+        try extensionSession.database.setSetting(.lastRoomSweep, String(Date().timeIntervalSince1970))
+        server.afterSignIn = [Element.from(string: "<message from='cake@rooms.localhost/anna' to='alice@localhost/app' type='groupchat' id='m'><displayed xmlns='urn:xmpp:chat-markers:0' id='x'/></message>")!]
+
+        #expect(await extensionSession.catchUpOnce(timeout: 20))
+
+        let asked = Set(server.archiveQueries.compactMap { $0.to.map { YapnestKit.JID($0.bareJid.description) } })
+        #expect(asked.contains(busy), "the group that sent something wasn't read")
+        #expect(!asked.contains(quiet), "a group that sent nothing was read")
+    }
+
+    /// Now and then every group is read, as one that dropped the device while it slept sends nothing.
+    @Test func everyGroupIsReadWhenTheSweepIsDueOrOffTheAppsStream() throws {
+        let database = try AppDatabase.inMemory()
+        try database.joinGroupChat(YapnestKit.JID("cake@rooms.localhost")!, nickname: "alice")
+        try database.joinGroupChat(YapnestKit.JID("pie@rooms.localhost")!, nickname: "alice")
+        let groups = try database.groupChats().sorted { $0.jid.description < $1.jid.description }
+        let heard: Set<YapnestKit.JID> = [groups[0].jid]
+        let now = Date()
+        let fresh = XMPPSession.roomsForWake(groups, heardLive: heard, onAppsStream: true, lastSweep: now.addingTimeInterval(-60), now: now)
+        #expect(fresh.groups.map(\.jid) == [groups[0].jid])
+        #expect(!fresh.isSweep)
+        #expect(XMPPSession.roomsForWake(groups, heardLive: heard, onAppsStream: true, lastSweep: now.addingTimeInterval(-16 * 60), now: now).groups.count == 2)
+        #expect(XMPPSession.roomsForWake(groups, heardLive: heard, onAppsStream: true, lastSweep: nil, now: now).isSweep)
+        #expect(XMPPSession.roomsForWake(groups, heardLive: heard, onAppsStream: false, lastSweep: now, now: now).groups.count == 2)
+        // A sweep dated ahead of the clock, as after the clock was set back, is due.
+        #expect(XMPPSession.roomsForWake(groups, heardLive: heard, onAppsStream: true, lastSweep: now.addingTimeInterval(3600), now: now).isSweep)
+    }
+
     /// A stanza read just before the final acknowledgement can start a request of its own, as vault's log
     /// showed: a key bundle fetched after the `<a/>`, answered after the close, and pushed for.
     @Test(.timeLimit(.minutes(1)))

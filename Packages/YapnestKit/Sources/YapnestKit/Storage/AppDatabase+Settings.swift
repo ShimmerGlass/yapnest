@@ -6,6 +6,9 @@ extension AppDatabase {
     public enum SettingKey: String, Sendable {
         /// Id of the newest MAM result we've processed.
         case lastArchiveId
+        /// When the notification extension last read every group's archive, as seconds since 1970: on the
+        /// app's stream it reads only the groups that sent something, and all of them now and then.
+        case lastRoomSweep
         /// `pending` from a sync that began without a cursor until the chats
         /// older than its window are restored: see `XMPPSession.restoreChats`.
         case historyRestore

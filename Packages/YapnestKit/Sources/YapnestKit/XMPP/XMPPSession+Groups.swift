@@ -1434,7 +1434,12 @@ extension XMPPSession {
     /// completed for the next push's decision.
     func catchUpRoomArchives(timeout: TimeInterval = 5, then done: @escaping @Sendable () -> Void) {
         let pending = DispatchGroup()
-        let groups = Self.roomsToCatchUpForNotifications((try? database.groupChats()) ?? [])
+        let all = Self.roomsToCatchUpForNotifications((try? database.groupChats()) ?? [])
+        let lastSweep = (try? database.setting(.lastRoomSweep)).flatMap { TimeInterval($0) }.map { Date(timeIntervalSince1970: $0) }
+        let (groups, isSweep) = Self.roomsForWake(
+            all, heardLive: lock.withLock { $0.roomsHeardLive }, onAppsStream: isOnAppsStream, lastSweep: lastSweep, now: Date(),
+        )
+        DiagLog.info(.notificationExtension, "Reading group archives", .int("groups", groups.count), .int("of", all.count), .bool("sweep", isSweep))
         // A room with nothing archived yet: from when it last had news
         // here, if ever. A new conversation's placeholder date isn't one,
         // and ejabberd refuses it.
@@ -1448,7 +1453,27 @@ extension XMPPSession {
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { deadline.finish() }
             fetchRoomArchiveForNotifications(group.jid, after: group.lastArchiveId, since: since, pagesLeft: 3, deadline: deadline)
         }
-        pending.notify(queue: .global(), execute: done)
+        pending.notify(queue: .global()) { [database] in
+            // Rooms that didn't answer in time count too: they are read at the next sweep, or by the app.
+            if isSweep { try? database.setSetting(.lastRoomSweep, String(Date().timeIntervalSince1970)) }
+            done()
+        }
+    }
+
+    /// How often a wake on the app's stream reads every group's archive, not only those that sent something:
+    /// a group that dropped this device while it slept (its server was unreachable, say) sends nothing.
+    static let roomSweepInterval: TimeInterval = 15 * 60
+
+    /// The groups a wake reads the archive of. On the app's stream the device is still in its groups, so what
+    /// they sent came with the stream, and only those groups need reading: reading all of them was some 50
+    /// requests a wake, every ten seconds on a busy server that pushes for everything. A session of the
+    /// extension's own is in no group, and reads them all, as does a wake once `roomSweepInterval` has passed.
+    static func roomsForWake(
+        _ groups: [GroupChat], heardLive: Set<JID>, onAppsStream: Bool, lastSweep: Date?, now: Date,
+    ) -> (groups: [GroupChat], isSweep: Bool) {
+        let sweepDue = lastSweep.map { now.timeIntervalSince($0) >= roomSweepInterval || $0 > now } ?? true
+        if !onAppsStream || sweepDue { return (groups, true) }
+        return (groups.filter { heardLive.contains($0.jid) }, false)
     }
 
     /// The rooms whose archive a push reads. A room set to never notify
