@@ -755,6 +755,22 @@ Each entry gives what went wrong for users, why, and what changed.
   it a second time. Pinned by `StreamSnapshotTests` and `ResumedStreamTests`.
   `streamId` is the id alone, for the observer that asks it of every stanza.
 
+**A process that died while connected left no stream to resume**
+(`StreamManagementModule.acknowledgedHandler`)
+- *Symptom:* when iOS killed the app while it was connected (swiped away just
+  after leaving it), the notification extension had no ticket and opened a
+  session of its own. A call offer then waited in the app's hibernated session,
+  which nothing resumed, and the caller found no device that rang.
+- *Cause:* the stream's state could only be taken with `snapshot` once the
+  connection was gone, which a killed process never reaches.
+- *Fix:* `acknowledgedHandler` is called, in order and on a queue of its own,
+  with the stream as the server was last told it stands: after `<enabled>`,
+  after `<resumed>` and after each `<a>` written. Its incoming count is the one
+  acknowledged rather than read, so a process that resumes from it is sent
+  again what was read but not acknowledged, and is never behind what the server
+  was told, which Prosody refuses and ejabberd answers by dropping stanzas.
+  Pinned by `ResumedStreamTests`.
+
 ### MartinOMEMO
 
 **A device list of thousands of ids cost thousands of bundle fetches**

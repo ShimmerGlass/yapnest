@@ -72,6 +72,14 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
     /// before any stanza the server sends next is read. It runs on the client's dispatcher, like those.
     open var resumedHandler: (() -> Void)? = nil;
 
+    /// Called with the stream as the server was last told it stands, each time that changes: once stream
+    /// management is enabled or the stream resumed, and after each `<a>` written. Its incoming count is the
+    /// one acknowledged, not the one read, so another process that resumes from it after this one died is
+    /// sent again what this one read but never acknowledged, rather than the server dropping it. Called in
+    /// order, on a queue of its own.
+    open var acknowledgedHandler: ((Snapshot) -> Void)? = nil;
+    private let acknowledgedQueue = DispatchQueue(label: "StreamManagementAcknowledged");
+
     fileprivate var _ackEnabled: Bool = false;
     /// Set once `<enable>` went out. The server counts what follows it, so
     /// the counting can't wait for `<enabled>`.
@@ -366,6 +374,15 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         };
     }
 
+    /// `snapshot` with the incoming count last acknowledged. Call only from the internal queue.
+    private func reportAcknowledged() {
+        guard let handler = acknowledgedHandler, let id = resumptionId else {
+            return;
+        }
+        let snapshot = Snapshot(id: id, location: resumptionLocationName, timeout: _resumptionTime, incoming: lastSentH, outgoing: ackH.outgoingCounter, boundJid: context?.boundJid?.description, resumedH: lastResumedH);
+        acknowledgedQueue.async { handler(snapshot) };
+    }
+
     /// The stream's id as `snapshot` would give it, for a caller that asks per stanza and has no use for
     /// the counters, which `snapshot` reads under the queue.
     open var streamId: String? {
@@ -508,6 +525,7 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         
         let value = ackH.incomingCounter;
         lastSentH = value;
+        reportAcknowledged();
         
         let a = Stanza(name: "a", xmlns: StreamManagementModule.SM_XMLNS);
         a.setAttribute("h", value: String(value));
@@ -592,6 +610,7 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
             // write counts itself, so start from what the server handled.
             ackH.outgoingCounter = newH;
             lastResumedH = newH;
+            reportAcknowledged();
             return acked;
         }
         for stanza in acked {
@@ -642,6 +661,7 @@ open class StreamManagementModule: XmppModuleBase, XmppModule, XmppStanzaFilter,
         resumptionId = id;
         queue.sync {
             lastResumedH = nil;
+            reportAcknowledged();
         }
         _ackEnabled = true;
         if mx != nil {

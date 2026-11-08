@@ -129,7 +129,8 @@ final class CallController {
     static let endedLinger: Duration = .milliseconds(1500)
 
     func attach(_ session: XMPPSession) {
-        detach()
+        // A call iOS was handed before the session existed waits for it.
+        detach(keepingHandoffs: true)
         self.session = session
         // Without media the session has no calls, and a provider would only
         // make CallKit list the app as one that takes them.
@@ -167,7 +168,9 @@ final class CallController {
         state.map { $0.isVideo && !$0.isOver } ?? false
     }
 
-    func detach() {
+    func detach() { detach(keepingHandoffs: false) }
+
+    private func detach(keepingHandoffs: Bool) {
         subscription = nil
         if let session, session.callState.value?.isOver == false { session.hangUpCall() }
         session = nil
@@ -179,9 +182,11 @@ final class CallController {
         #endif
         ringer.stop()
         ringback.stop()
-        reportAllEnded()
-        calls = [:]
-        locallyEnded = []
+        let kept = keepingHandoffs ? calls.filter { handoffs[$0.key] != nil } : [:]
+        if !keepingHandoffs { endHandoffs() }
+        reportAllEnded(except: Set(kept.values))
+        calls = kept
+        locallyEnded = locallyEnded.intersection(kept.values)
         callKitAudioActive = false
         if !Self.usesCallKit { deactivateAudio() }
     }
@@ -189,9 +194,9 @@ final class CallController {
     /// Tells CallKit every call it holds is over. The subscription is gone by
     /// then, so the session's own ending would never reach `handle`, and the
     /// system would keep showing a call nothing is behind.
-    private func reportAllEnded() {
+    private func reportAllEnded(except kept: Set<UUID> = []) {
         guard Self.usesCallKit, !calls.isEmpty else { return }
-        for uuid in calls.values where !locallyEnded.contains(uuid) {
+        for uuid in calls.values where !locallyEnded.contains(uuid) && !kept.contains(uuid) {
             provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
         }
     }
@@ -271,9 +276,21 @@ final class CallController {
         updateRingback()
         guard let state, let session else { return }
         let uuid = calls[state.sid]
+        if handoffs[state.sid] != nil { settleHandoff(state.sid) }
         switch state.phase {
         case .incoming:
-            guard uuid == nil, !reporting.contains(state.sid) else { return }
+            // Already on CallKit's screen, handed over by the extension: the
+            // user may have answered or turned it down before the session heard of it.
+            if let uuid {
+                if declinedHandoffs.remove(state.sid) != nil {
+                    session.hangUpCall()
+                } else if let held = heldAnswer, held.callUUID == uuid {
+                    heldAnswer = nil
+                    answer(state, in: session, action: held)
+                }
+                return
+            }
+            guard !reporting.contains(state.sid) else { return }
             reporting.insert(state.sid)
             guard Self.usesCallKit else {
                 ring(for: state, session: session)
@@ -294,6 +311,11 @@ final class CallController {
             #endif
         case .ended(let reason):
             reporting.remove(state.sid)
+            declinedHandoffs.remove(state.sid)
+            if let held = heldAnswer, held.callUUID == uuid {
+                heldAnswer = nil
+                held.fail()
+            }
             if !Self.usesCallKit { deactivateAudio() }
             guard let uuid else { return }
             calls[state.sid] = nil
@@ -338,14 +360,7 @@ final class CallController {
                 reporting.remove(sid)
                 return
             }
-            let update = CXCallUpdate()
-            update.remoteHandle = CXHandle(type: .generic, value: peer.description)
-            update.localizedCallerName = name
-            update.supportsHolding = false
-            update.supportsGrouping = false
-            update.supportsUngrouping = false
-            update.supportsDTMF = false
-            update.hasVideo = state.isVideo
+            let update = Self.incomingUpdate(peer: peer, name: name, video: state.isVideo)
             calls[sid] = uuid
             do {
                 try await provider.reportNewIncomingCall(with: uuid, update: update)
@@ -663,8 +678,19 @@ final class CallController {
 
     fileprivate func perform(answer action: CXAnswerCallAction) {
         guard let session, let state = session.callState.value, calls[state.sid] == action.callUUID, state.phase == .incoming else {
+            // A call handed over by the extension, answered before the session
+            // has connected and heard its propose: answered when it has.
+            if handoffSid(for: action.callUUID) != nil {
+                heldAnswer?.fail()
+                heldAnswer = action
+                return
+            }
             return action.fail()
         }
+        answer(state, in: session, action: action)
+    }
+
+    private func answer(_ state: CallState, in session: XMPPSession, action: CXAnswerCallAction) {
         do {
             try CallAudioSession.configure(video: state.isVideo)
         } catch {
@@ -680,6 +706,15 @@ final class CallController {
             locallyEnded.insert(action.callUUID)
             // Declines the call if it is still ringing here.
             session.hangUpCall()
+        } else if let sid = handoffSid(for: action.callUUID) {
+            // Turned down before the session heard of it: declined once it has,
+            // so the caller hears so and the user's other devices stop ringing.
+            locallyEnded.insert(action.callUUID)
+            declinedHandoffs.insert(sid)
+            if let held = heldAnswer, held.callUUID == action.callUUID {
+                heldAnswer = nil
+                held.fail()
+            }
         }
         action.fulfill()
     }
@@ -698,9 +733,120 @@ final class CallController {
 
     fileprivate func reset() {
         session?.hangUpCall()
+        endHandoffs()
         calls = [:]
         locallyEnded = []
         reporting = []
+    }
+
+    // MARK: Calls handed over by the notification extension
+
+    /// Calls the notification extension handed to iOS (PushKit), which
+    /// CallKit shows before the session has connected and heard of them, with
+    /// what gives up on each if it never does.
+    @ObservationIgnored private var handoffs: [String: Task<Void, Never>] = [:]
+    /// The answer to a handed-over call, held until the session has the call.
+    @ObservationIgnored private var heldAnswer: CXAnswerCallAction?
+    /// Handed-over calls the user turned down before the session had them.
+    @ObservationIgnored private var declinedHandoffs: Set<String> = []
+    /// Told when a handed-over call is in the session's hands, or given up on:
+    /// the model keeps the session connected in the background until then.
+    @ObservationIgnored var handoffSettled: (@MainActor () -> Void)?
+
+    /// How long a handed-over call waits for the session to connect and hear
+    /// its propose. Past it the caller has likely given up, or the call ended
+    /// while the extension was handing it over, which the session then never rings.
+    static let handoffWait: Duration = .seconds(20)
+
+    var isWaitingForHandoff: Bool { !handoffs.isEmpty }
+
+    /// Reports a call the extension handed over to CallKit at once, as iOS
+    /// requires for every push it delivers through PushKit, or it stops
+    /// delivering them. `completion` is PushKit's, called once CallKit has it.
+    func reportHandedOff(_ call: IncomingCall, completion: @escaping @Sendable () -> Void) {
+        guard Self.usesCallKit, calls[call.sid] == nil else { return completion() }
+        let uuid = UUID(), sid = call.sid
+        calls[sid] = uuid
+        reporting.insert(sid)
+        handoffs[sid] = Task { [weak self] in
+            try? await Task.sleep(for: Self.handoffWait)
+            guard !Task.isCancelled else { return }
+            self?.handoffExpired(sid)
+        }
+        provider.reportNewIncomingCall(with: uuid, update: Self.incomingUpdate(peer: call.peer, name: call.name, video: call.isVideo)) { [weak self] error in
+            if let error {
+                DiagLog.error(.calls, "Handed-over call not reported", .error(error))
+                // Do Not Disturb, or another call: nothing to wait for. The
+                // session still hears the propose and decides as it would.
+                Task { @MainActor in self?.dropHandoff(sid) }
+            }
+            completion()
+        }
+    }
+
+    /// A push PushKit delivered with nothing we can read must still show a call,
+    /// or iOS stops delivering them: one that ends at once.
+    func reportUnreadableHandoff(completion: @escaping @Sendable () -> Void) {
+        guard Self.usesCallKit else { return completion() }
+        let uuid = UUID()
+        let update = CXCallUpdate()
+        update.localizedCallerName = "Yapnest"
+        provider.reportNewIncomingCall(with: uuid, update: update) { [provider] error in
+            if error == nil { provider.reportCall(with: uuid, endedAt: Date(), reason: .failed) }
+            completion()
+        }
+    }
+
+    static func incomingUpdate(peer: JID, name: String, video: Bool) -> CXCallUpdate {
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: peer.description)
+        update.localizedCallerName = name
+        update.supportsHolding = false
+        update.supportsGrouping = false
+        update.supportsUngrouping = false
+        update.supportsDTMF = false
+        update.hasVideo = video
+        return update
+    }
+
+    private func handoffSid(for uuid: UUID) -> String? {
+        handoffs.keys.first { calls[$0] == uuid }
+    }
+
+    /// The session has the call now, and its states drive CallKit as for any other.
+    private func settleHandoff(_ sid: String) {
+        handoffs.removeValue(forKey: sid)?.cancel()
+        handoffSettled?()
+    }
+
+    /// The report failed: CallKit shows nothing, so nothing waits.
+    private func dropHandoff(_ sid: String) {
+        guard let task = handoffs.removeValue(forKey: sid) else { return }
+        task.cancel()
+        calls[sid] = nil
+        reporting.remove(sid)
+        declinedHandoffs.remove(sid)
+        handoffSettled?()
+    }
+
+    private func handoffExpired(_ sid: String) {
+        guard handoffs.removeValue(forKey: sid) != nil else { return }
+        declinedHandoffs.remove(sid)
+        reporting.remove(sid)
+        if let uuid = calls.removeValue(forKey: sid) {
+            if let held = heldAnswer, held.callUUID == uuid {
+                heldAnswer = nil
+                held.fail()
+            }
+            if locallyEnded.remove(uuid) == nil { provider.reportCall(with: uuid, endedAt: Date(), reason: .unanswered) }
+        }
+        handoffSettled?()
+    }
+
+    /// Ends every call still waiting for the session, on CallKit's screen too.
+    private func endHandoffs() {
+        let sids = Array(handoffs.keys)
+        for sid in sids { handoffExpired(sid) }
     }
 
     #if DEBUG

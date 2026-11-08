@@ -1,3 +1,6 @@
+#if !targetEnvironment(macCatalyst)
+import PushKit
+#endif
 import SwiftUI
 import UserNotifications
 import YapnestKit
@@ -100,8 +103,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     @MainActor let model = AppModel()
     @MainActor let diagnostics = DiagnosticsExporter()
 
+    #if !targetEnvironment(macCatalyst)
+    /// Where the notification extension's calls arrive (`CXProvider.reportNewIncomingVoIPPushPayload`).
+    /// Set up at every launch, before it returns, as iOS delivers the call that launched the app to it.
+    private var voipRegistry: PKPushRegistry?
+    #endif
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        #if !targetEnvironment(macCatalyst)
+        let registry = PKPushRegistry(queue: .main)
+        registry.delegate = self
+        registry.desiredPushTypes = [.voIP]
+        voipRegistry = registry
+        #endif
         MainActor.assumeIsolated {
             model.followLifecycle()
             // The Mac shows windows live in Mission Control, and a cover there
@@ -160,3 +175,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         completionHandler()
     }
 }
+
+#if !targetEnvironment(macCatalyst)
+extension AppDelegate: PKPushRegistryDelegate {
+    /// No server sends VoIP pushes: calls come only from the notification
+    /// extension, on this device, so the token goes nowhere.
+    nonisolated func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {}
+
+    /// The registry's queue is the main one.
+    nonisolated func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
+        nonisolated(unsafe) let completion = completion
+        nonisolated(unsafe) let dictionary = payload.dictionaryPayload
+        MainActor.assumeIsolated {
+            model.receivedHandedOffCall(dictionary) { completion() }
+        }
+    }
+}
+#endif

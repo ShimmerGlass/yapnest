@@ -1,3 +1,4 @@
+import CallKit
 import os
 import UserNotifications
 import YapnestKit
@@ -48,7 +49,16 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             return deliver(quiet: fallback, identifier)
         }
         let avatars = AccountDirectory(url: fetcher.directory).avatars
-        switch await fetcher.fetch() {
+        await handle(await fetcher.fetch(), identifier, avatars: avatars)
+    }
+
+    private func handle(_ outcome: NotificationFetcher.Outcome, _ identifier: String, avatars: AvatarStore) async {
+        switch outcome {
+        case .calling(let calls, let otherwise):
+            let handedOver = await show(calls)
+            // The call is the app's now: a stand-in "New message" beside it would only be noise.
+            if handedOver, case .incomplete(_, let badge) = otherwise { return deliver(quiet: fallback.copy(withBadge: badge), identifier) }
+            await handle(otherwise, identifier, avatars: avatars)
         case .notifications(let notifications, let edited, let badge):
             let loud = await MessageNotification.settleFetched(notifications, edited: edited, badge: badge, avatars: avatars)
             guard let first = loud.first else {
@@ -75,6 +85,37 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             deliver(fallback.placeholderCopy())
         }
     }
+
+    /// Tells the system of the calls that are ringing, ahead of what else was fetched. The first goes to
+    /// CallKit where there is one (iOS), which hands it to the app; a call it won't take, and the rest, are
+    /// banners. Returns whether CallKit took the first.
+    private func show(_ calls: [IncomingCall]) async -> Bool {
+        var banners = calls[...]
+        var handedOver = false
+        #if !targetEnvironment(macCatalyst)
+        if let first = calls.first {
+            handedOver = await Self.report(first)
+            if handedOver { banners = calls.dropFirst() }
+        }
+        #endif
+        for call in banners {
+            try? await UNUserNotificationCenter.current().add(
+                UNNotificationRequest(identifier: call.requestIdentifier, content: call.notificationContent, trigger: nil),
+            )
+        }
+        return handedOver
+    }
+
+    #if !targetEnvironment(macCatalyst)
+    private static func report(_ call: IncomingCall) async -> Bool {
+        await withCheckedContinuation { continuation in
+            CXProvider.reportNewIncomingVoIPPushPayload(call.payload) { error in
+                if let error { DiagLog.error(.notificationExtension, "CallKit refused an incoming call", .error(error)) }
+                continuation.resume(returning: error == nil)
+            }
+        }
+    }
+    #endif
 
     /// Whether the keychain has no account, as opposed to not being readable.
     private static func isSignedOut() -> Bool {

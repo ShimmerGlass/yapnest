@@ -296,6 +296,7 @@ final class AppModel {
 
     init(environment: Environment = Environment()) {
         self.environment = environment
+        calls.handoffSettled = { [weak self] in self?.callHandoffSettled() }
     }
 
     var session: XMPPSession? {
@@ -775,7 +776,11 @@ final class AppModel {
     /// suspended app for.
     private func applyScenePhase(to session: XMPPSession) {
         guard !isActive else { return }
-        if isBackground, !Platform.staysConnected { suspendSoon(session) }
+        if calls.isWaitingForHandoff {
+            connectForCall(session)
+        } else if isBackground, !Platform.staysConnected {
+            suspendSoon(session)
+        }
         session.setActive(false)
     }
 
@@ -814,7 +819,7 @@ final class AppModel {
             while true {
                 let (appLock, sessionLock, timeout) = (appLock, sessionLock, environment.lockTimeout)
                 let locked = await appLock.waitForLock(timeout: timeout) ? await sessionLock.waitForLock(timeout: timeout) : false
-                guard isActive, SessionScope.isWanted(session, signedIn: self.session, pendingSignIn: pendingSignIn) else {
+                guard isActive || calls.isWaitingForHandoff, SessionScope.isWanted(session, signedIn: self.session, pendingSignIn: pendingSignIn) else {
                     // Not if a newer session waits on the same lock: it would take it from there.
                     if lockWaiter === session { releaseProcessLocks() }
                     return
@@ -837,7 +842,7 @@ final class AppModel {
     /// the server keep the session, so it pushes, and lets go of what iOS
     /// would kill a suspended app for holding.
     private func suspendSoon(_ session: XMPPSession) {
-        guard suspension == nil, callWatch == nil else { return }
+        guard suspension == nil, callWatch == nil, !calls.isWaitingForHandoff else { return }
         guard !holdsForCall(session) else { return }
         // Sent now, while the connection is still up to carry it.
         session.setAway(true)
@@ -915,6 +920,44 @@ final class AppModel {
                 }
             }
         return true
+    }
+
+    /// The notification extension handed iOS a call, and iOS launched or woke
+    /// the app for it through PushKit. CallKit shows it at once, as iOS
+    /// requires; the session then connects in the background, resumes the
+    /// stream the extension left and hears the propose from its journal,
+    /// which the call goes on from as from any other.
+    func receivedHandedOffCall(_ payload: [AnyHashable: Any], completion: @escaping @Sendable () -> Void) {
+        guard let call = IncomingCall(payload: payload) else {
+            DiagLog.error(.calls, "Unreadable handed-over call")
+            return calls.reportUnreadableHandoff(completion: completion)
+        }
+        DiagLog.info(.calls, "Call handed over by the extension", .bool("video", call.isVideo), .bool("active", isActive))
+        calls.reportHandedOff(call, completion: completion)
+        // Launched for it, the app may not have opened the account yet; the
+        // session connects as soon as it has (`applyScenePhase`).
+        start()
+        if let session = SessionScope.current(signedIn: session, pendingSignIn: pendingSignIn), !isActive { connectForCall(session) }
+    }
+
+    /// Connects in the background for a handed-over call, taking back a
+    /// suspension under way.
+    private func connectForCall(_ session: XMPPSession) {
+        suspension?.cancel()
+        suspension = nil
+        closing?.cancel()
+        closing = nil
+        endBackgroundTask()
+        connect(session)
+    }
+
+    /// The session has the handed-over call, or it was given up on: from now
+    /// on a call in progress keeps the session (`holdsForCall`), and nothing
+    /// else does in the background.
+    private func callHandoffSettled() {
+        guard !calls.isWaitingForHandoff, !isActive, isBackground, !Platform.staysConnected,
+              let session = SessionScope.current(signedIn: session, pendingSignIn: pendingSignIn) else { return }
+        suspendSoon(session)
     }
 
     /// A silent push woke the app, which may have been launched for it. If the

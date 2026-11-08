@@ -6,7 +6,7 @@ import UserNotifications
 /// account's archives in a session of its own and returns what to notify
 /// about. The push itself says nothing; the messages come from the server.
 public struct NotificationFetcher: Sendable {
-    public enum Outcome: Sendable, Equatable {
+    public indirect enum Outcome: Sendable, Equatable {
         /// What to show (possibly nothing new), the messages corrected since
         /// whose delivered notification should change text, and the app's badge.
         case notifications([MessageNotification], edited: [MessageNotification], badge: Int)
@@ -23,6 +23,10 @@ public struct NotificationFetcher: Sendable {
         /// corrected messages are the ones to update.
         case incomplete(edited: [MessageNotification], badge: Int)
         case failed(String)
+        /// Calls still ringing that the catch-up told their callers about, over what else it found
+        /// (`.notifications` or `.incomplete`). The propose isn't a stored message, so it has no notification
+        /// of its own to claim.
+        case calling([IncomingCall], otherwise: Outcome)
     }
 
     var account: ExtensionAccount
@@ -66,6 +70,8 @@ public struct NotificationFetcher: Sendable {
     /// leaves only a stand-in alert. Counts alone say nothing of who or what.
     static func logFinished(_ outcome: Outcome, since started: Date) {
         var messages = 0, quiet = 0, edited = 0
+        var outcome = outcome
+        while case .calling(_, let rest) = outcome { outcome = rest }
         switch outcome {
         case .notifications(let new, let corrected, _):
             messages = new.count
@@ -73,7 +79,7 @@ public struct NotificationFetcher: Sendable {
             edited = corrected.count
         case .incomplete(let corrected, _):
             edited = corrected.count
-        case .appIsRunning, .busy, .failed:
+        case .appIsRunning, .busy, .failed, .calling:
             break
         }
         DiagLog.info(
@@ -159,7 +165,13 @@ public struct NotificationFetcher: Sendable {
                 Self.logger.warning("Catch-up didn't finish: \(session.state.value.caseName, privacy: .public)")
             }
             // What did arrive is worth showing even if the rest didn't.
-            return (try claimed(from: database, caughtUp: caughtUp), caughtUp)
+            let outcome = try claimed(from: database, caughtUp: caughtUp)
+            let calls = session.incomingCalls
+            guard !calls.isEmpty else { return (outcome, caughtUp) }
+            switch outcome {
+            case .notifications, .incomplete: return (.calling(calls, otherwise: outcome), caughtUp)
+            default: return (outcome, caughtUp)
+            }
         } catch {
             DiagLog.error(.notificationExtension, "Fetching failed", .error(error))
             Self.logger.error("Fetching for notifications failed: \(error)")
@@ -359,7 +371,7 @@ extension UNUserNotificationCenter {
 
 /// How a fetch ended, for the diagnostics log.
 enum FetchResult: String, DiagEnum {
-    case notifications, appIsRunning, busy, incomplete, failed
+    case notifications, appIsRunning, busy, incomplete, failed, calling
 
     init(_ outcome: NotificationFetcher.Outcome) {
         switch outcome {
@@ -368,6 +380,7 @@ enum FetchResult: String, DiagEnum {
         case .busy: self = .busy
         case .incomplete: self = .incomplete
         case .failed: self = .failed
+        case .calling: self = .calling
         }
     }
 }

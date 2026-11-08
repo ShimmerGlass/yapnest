@@ -393,6 +393,13 @@ struct ResumedStreamTests {
         xml("<message from='cake@rooms.localhost/anna' to='alice@localhost/app' type='groupchat' id='\(id)'><body>\(body)</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.localhost' id='s-\(id)'/></message>")
     }
 
+    /// The only ticket left once the app uses the stream is the one the app keeps current for it, if any:
+    /// an extension's, with its `appHandled`, would be resumed again.
+    private func ownTicket(_ store: ResumeTicketStore, of app: XMPPSession) -> Bool {
+        guard let ticket = store.load() else { return true }
+        return ticket.appHandled == nil && ticket.stream.id == app.client.module(.streamManagement).streamId
+    }
+
     private func freshStore() -> (ResumeTicketStore, URL) {
         let directory = FileManager.default.temporaryDirectory.appending(path: "ticket-\(UUID().uuidString)")
         return (ResumeTicketStore(directory: AccountDirectory(url: directory)), directory)
@@ -469,6 +476,67 @@ struct ResumedStreamTests {
 
     private func resumeRequest(_ server: ServerScript) -> Element? {
         server.authentications.last?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3")
+    }
+
+    /// The extension is what a push wakes while the app is away, so it is the one that tells the caller their
+    /// call is ringing, and the push's alert is told what is ringing.
+    private func callsHeard(
+        _ wake: [Element], consented: Bool = true,
+    ) async throws -> (calls: [IncomingCall], ringing: [Martin.Message]) {
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (woken, server) = try session(.notificationService, answering: .accepts(h: 5), store: store)
+        server.afterSignIn = wake
+        if consented {
+            try await woken.database.writer.write { db in
+                try Contact(jid: Self.bob, name: "Bob", subscription: .both, isInRoster: true).insert(db)
+            }
+        }
+        #expect(await woken.catchUpOnce(timeout: 20))
+        let ringing = server.sent.compactMap { $0 as? Martin.Message }.filter { $0.findChild(name: "ringing", xmlns: "urn:xmpp:jingle-message:0") != nil }
+        return (woken.incomingCalls, ringing)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func anExtensionTellsTheCallerAConsentedContactsCallIsRinging() async throws {
+        let (calls, ringing) = try await callsHeard([proposal(sid: "j1")])
+
+        #expect(calls == [IncomingCall(sid: "j1", peer: Self.bob, name: "Bob", isVideo: false)])
+        #expect(ringing.map { $0.to?.stringValue } == [Self.caller])
+        #expect(ringing.first?.findChild(name: "ringing", xmlns: "urn:xmpp:jingle-message:0")?.getAttribute("id") == "j1")
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aCallTheCallerRetractedInTheSameCatchUpIsNotRung() async throws {
+        let (calls, ringing) = try await callsHeard([proposal(sid: "j1"), retraction(sid: "j1")])
+
+        #expect(calls.isEmpty)
+        #expect(ringing.isEmpty)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aCallAnotherOfOurDevicesAnsweredIsNotRung() async throws {
+        let answered = xml("<message from='alice@localhost/tablet' to='alice@localhost' type='chat' id='a1'><accept xmlns='urn:xmpp:jingle-message:0' id='j1'/></message>")
+        let (calls, ringing) = try await callsHeard([proposal(sid: "j1"), answered])
+
+        #expect(calls.isEmpty)
+        #expect(ringing.isEmpty)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aCallFromSomeoneWhoHasNotConsentedIsNotRung() async throws {
+        let (calls, ringing) = try await callsHeard([proposal(sid: "j1")], consented: false)
+
+        #expect(calls.isEmpty)
+        #expect(ringing.isEmpty)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aCallPastTheRingWindowIsNotRung() async throws {
+        let (calls, ringing) = try await callsHeard([proposal(sid: "j1", delayedBy: CallMachine.ringWindow + 30)])
+
+        #expect(calls.isEmpty)
+        #expect(ringing.isEmpty)
     }
 
     /// What an extension keeps is what the app's modules act on and it doesn't store, in the order it came.
@@ -590,7 +658,7 @@ struct ResumedStreamTests {
         try await eventually("the room's message") { try copies() == 1 }
         try await Task.sleep(for: .seconds(1))
         #expect(try copies() == 1)
-        #expect(scene.store.load() == nil)
+        #expect(ownTicket(scene.store, of: scene.app), "the extension's ticket was left to be resumed again")
         #expect(scene.store.readJournal() == JournalContents(entries: [], isComplete: true), "the journal was left to be replayed again")
         // The extension answered the roster and block pushes, and the app's modules would have answered them
         // again, or bounced an error for one they refuse. The block list, which only the app holds, is read again.
@@ -756,7 +824,7 @@ struct ResumedStreamTests {
         await eventually("the call to ring") { reborn.callState.value?.phase == .incoming }
         #expect(!server.authentications.isEmpty)
         #expect(server.authentications.first?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3") == nil)
-        #expect(scene.store.load() == nil)
+        #expect(ownTicket(scene.store, of: reborn))
         #expect(scene.store.readJournal() == JournalContents(entries: [], isComplete: true))
     }
 
@@ -915,6 +983,58 @@ struct ResumedStreamTests {
         app.disconnect()
     }
 
+    /// iOS can kill the app while it is connected, as when it is swiped away right after leaving it, and then
+    /// it never suspends to save a ticket. The ticket follows the stream as the server was told it stands, so
+    /// the extension that wakes next resumes the app's stream, with the call offer queued in it, instead of
+    /// opening a session of its own that the offer never reaches.
+    @Test(.timeLimit(.minutes(1)))
+    func aConnectedAppLeavesTheStreamForAnExtensionIfItIsKilled() async throws {
+        let (store, directory) = freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (app, server) = try session(.app, answering: .refuses, store: store)
+        server.afterSignIn = [
+            xml("<message from='bob@localhost/x' to='alice@localhost/app' type='chat' id='m1'><body>one</body></message>"),
+            xml("<message from='bob@localhost/x' to='alice@localhost/app' type='chat' id='m2'><body>two</body></message>"),
+            element("r", "urn:xmpp:sm:3"),
+        ]
+        app.connect()
+        await eventually("the app to sync") { app.state.value == .connected(isSyncing: false) }
+        await eventually("the app's ack") { server.sent.contains { $0.name == "a" } }
+        let acked = try #require(server.sent.last { $0.name == "a" }.flatMap { $0.getAttribute("h") }.flatMap { UInt32($0) })
+        await eventually("the ticket to follow the stream") { store.load()?.stream.incoming == acked }
+        let ticket = try #require(store.load())
+        #expect(ticket.stream.id == "new-stream")
+        #expect(ticket.appHandled == nil)
+
+        // Killed: the process is gone without suspending, and the next push wakes the extension.
+        let (extensionSession, extensionServer) = try session(.notificationService, answering: .accepts(h: ticket.stream.outgoing), store: store)
+        #expect(await extensionSession.catchUpOnce(timeout: 20))
+        let resume = try #require(extensionServer.authentications.first?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3"))
+        #expect(resume.getAttribute("previd") == "new-stream")
+        #expect(resume.getAttribute("h") == String(ticket.stream.incoming))
+        #expect(ticket.stream.incoming > 0, "the ticket didn't count what the app acknowledged")
+    }
+
+    /// A suspended app's ticket is the one its suspension saved: what the stream acknowledged before
+    /// doesn't land on top of it.
+    @Test(.timeLimit(.minutes(1)))
+    func theSuspensionsTicketIsTheLastWord() async throws {
+        let (store, directory) = freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (app, server) = try session(.app, answering: .refuses, store: store)
+        server.afterSignIn = [element("r", "urn:xmpp:sm:3")]
+        app.connect()
+        await eventually("the app to sync") { app.state.value == .connected(isSyncing: false) }
+        await eventually("the ticket to follow the stream") { store.load() != nil }
+        await app.suspend()
+        let saved = try #require(store.load())
+        let final = try #require(app.client.module(.streamManagement).snapshot)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(store.load() == saved)
+        #expect(saved.stream.incoming == final.incoming)
+        app.disconnect()
+    }
+
     // MARK: The app coming back
 
     /// Suspends an app session that resumed `appStream` and holds it in memory, then lets `extensionWrites`
@@ -938,14 +1058,16 @@ struct ResumedStreamTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let (app, server) = try await suspendedApp(store: store) {}
         defer { app.disconnect() }
+        let suspended = store.load()?.generation
 
         app.connect()
         await eventually("the sign-in") { server.authentications.count == 2 }
 
         let resume = server.authentications.last?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3")
         #expect(resume?.getAttribute("previd") == "app-stream")
-        // The ticket is stale as soon as the app uses the stream, so it goes.
-        #expect(store.load() == nil)
+        // The ticket is stale as soon as the app uses the stream, so it goes; the app may write its own again.
+        #expect(store.load()?.generation != suspended)
+        #expect(ownTicket(store, of: app))
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -963,7 +1085,8 @@ struct ResumedStreamTests {
         await eventually("the sign-in") { server.authentications.count == 2 }
 
         #expect(server.authentications.last?.findChild(name: "resume", xmlns: "urn:xmpp:sm:3") == nil, "the app resumed with counters from before the extension")
-        #expect(store.load() == nil)
+        #expect(store.load()?.stream.id != "app-stream", "the extension's ticket was left")
+        #expect(ownTicket(store, of: app))
     }
 
     /// The extension's resume failed, so it deleted the ticket: the stream is gone.
@@ -1018,7 +1141,7 @@ struct ResumedStreamTests {
         let resume = try #require(resumeRequest(server))
         #expect(resume.getAttribute("h") == String(used.incoming), "the app resumed with the counters from before the extension")
         await eventually("the journal replayed") { app.presence(of: Self.bob) == .away }
-        #expect(store.load() == nil)
+        #expect(ownTicket(store, of: app))
     }
 
     /// The app adopted a wake's journal, never reached the stream, and was suspended again: the next adoption

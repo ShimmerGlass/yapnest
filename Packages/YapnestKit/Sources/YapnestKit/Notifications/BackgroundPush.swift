@@ -24,6 +24,7 @@ public enum BackgroundPush {
         case .incomplete(let edited, _): edited.isEmpty ? .failed : .newData
         case .appIsRunning, .busy: .noData
         case .failed: .failed
+        case .calling: .newData
         }
     }
 
@@ -51,6 +52,8 @@ public enum BackgroundPush {
             if !new.isEmpty { try? await center.setBadgeCount(badge) }
         case .incomplete(let edited, let badge):
             await MessageNotification.replaceDelivered(edited, badge: badge, avatars: avatars)
+        case .calling(_, let otherwise):
+            await post(otherwise, avatars: avatars)
         case .appIsRunning, .busy, .failed:
             break
         }

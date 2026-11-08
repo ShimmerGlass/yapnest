@@ -191,8 +191,9 @@ extension LiveServer {
                 try Message.filter(Column("encryption") == "omemoUndecryptable" && Column("timestamp") > started.addingTimeInterval(-1)).fetchCount($0)
             }
             #expect(undecryptable == 0)
-            // The app uses the stream now, so what the extension kept of it is stale.
-            #expect(store.load() == nil)
+            // The app uses the stream now, so what the extension kept of it is stale: only the app's own
+            // ticket, which follows its stream, may be left.
+            #expect(store.load().map { $0.appHandled == nil && $0.stream.id == a.client.module(.streamManagement).streamId } ?? true)
         }
 
         /// A ticket for a stream the server doesn't have: the extension falls back to a session on the app's
