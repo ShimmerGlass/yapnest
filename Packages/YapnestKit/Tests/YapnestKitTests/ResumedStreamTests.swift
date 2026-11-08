@@ -302,13 +302,13 @@ struct ResumedStreamTests {
     /// What the room said while the app was away reaches the extension in the resumed stream's queue, but
     /// without the occupants that say who wrote it. Stored from there an encrypted message was kept as
     /// undecryptable, and its archive copy, which the extension reads next, dropped as a duplicate.
-    @Test func anExtensionOnTheAppsStreamLeavesTheRoomsLiveMessagesToItsArchiveRead() throws {
+    @Test func anExtensionOnTheAppsStreamLeavesTheRoomsEncryptedMessagesToItsArchiveRead() throws {
         let room = YapnestKit.JID("cake@rooms.example.org")!
         let (store, directory) = ticketed(appStream)
         defer { try? FileManager.default.removeItem(at: directory) }
         /// `seeded`: the extension resumes the ticket's stream. Otherwise it has a stream of its own, which
         /// journals no room messages, so storing them is all that is left to do with them.
-        func stored(by mode: XMPPSession.Mode, seeded: Bool = false, source: InboundMessage.Source) throws -> Int {
+        func stored(by mode: XMPPSession.Mode, seeded: Bool = false, encrypted: Bool = false, source: InboundMessage.Source) throws -> Int {
             let database = try AppDatabase.inMemory()
             let session = try XMPPSession(
                 credentials: .init(jid: YapnestKit.JID("me@example.org")!, password: "x"), resource: "t", database: database, mode: mode,
@@ -319,16 +319,52 @@ struct ResumedStreamTests {
             session.reloadKnownRooms()
             session.updateRoom(room) { $0 = RoomStatus(phase: .joined, nickname: "me") }
             session.handleRoomStanza(parseStanza(
-                "<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>hi</body><stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='s1'/></message>",
+                "<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>hi</body>\(encrypted ? "<encrypted xmlns='eu.siacs.conversations.axolotl'/>" : "")<stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='s1'/></message>",
             ), source: source)
             // The archive's results wait for the end of their page.
             _ = session.flushArchive()
             return try database.reader.read { try YapnestKit.Message.fetchCount($0) }
         }
         #expect(try stored(by: .app, source: .live) == 1)
-        #expect(try stored(by: .notificationService, seeded: true, source: .live) == 0)
+        #expect(try stored(by: .notificationService, seeded: true, encrypted: true, source: .live) == 0)
         #expect(try stored(by: .notificationService, seeded: false, source: .live) == 1, "a session off the app's stream dropped the room's message, which nothing keeps")
         #expect(try stored(by: .notificationService, seeded: true, source: .archive(serverId: "s1", timestamp: Date())) == 1)
+    }
+
+    /// A room without an archive has nothing to read after the journal, so the extension stores a plain
+    /// message itself, for its notification to say who wrote what. The app replays the same stanza, which
+    /// must not add a second copy, with or without the room's stanza-id.
+    @Test(arguments: [true, false])
+    func aPlainRoomMessageTheExtensionStoredIsNotStoredAgainByTheReplay(withStanzaId: Bool) throws {
+        let room = YapnestKit.JID("cake@rooms.example.org")!
+        let (store, directory) = ticketed(appStream)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try AppDatabase.inMemory()
+        func session(_ mode: XMPPSession.Mode) throws -> XMPPSession {
+            let session = try XMPPSession(
+                credentials: .init(jid: YapnestKit.JID("me@example.org")!, password: "x"), resource: "t", database: database, mode: mode,
+                identityKeys: testIdentityKeys(for: database), boundResource: mode == .app ? nil : "app", resumeTickets: store,
+            )
+            session.reloadKnownRooms()
+            session.updateRoom(room) { $0 = RoomStatus(phase: .joined, nickname: "me") }
+            return session
+        }
+        try database.joinGroupChat(room, nickname: "me")
+        let sid = withStanzaId ? "<stanza-id xmlns='urn:xmpp:sid:0' by='cake@rooms.example.org' id='s1'/>" : ""
+        let text = "<message from='cake@rooms.example.org/anna' type='groupchat' id='m1'><body>hi</body>\(sid)</message>"
+        let woken = try session(.notificationService)
+        woken.seedFromTicket()
+        woken.handleRoomStanza(parseStanza(text), source: .live)
+        let count = { try database.reader.read { try YapnestKit.Message.fetchCount($0) } }
+        #expect(try count() == 1, "the extension left the message of a room without an archive unstored")
+
+        let replayed = XMPPSession.journalReplay(
+            [JournalEntry(stream: "app-stream", at: Date(), xml: text)], account: YapnestKit.JID("me@example.org")!, now: Date(), offset: 0,
+            isRoom: { $0 == room }, callsOnly: false,
+        )
+        let element = try #require(replayed.first)
+        try session(.app).handleRoomStanza(#require(Stanza.from(element: element) as? Martin.Message), source: .live)
+        #expect(try count() == 1, "the replay stored the message a second time")
     }
 
 

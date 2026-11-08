@@ -50,6 +50,21 @@ struct CallDeviceChoicesTests {
         #expect(CallDeviceResolution.audio(choice: "a", available: []) == nil)
     }
 
+    @Test("a picker lists the default, then each device by its name")
+    func pickerRows() {
+        let rows = CallDeviceOption.rows(defaultName: "System default", devices: [("usb-uid", "USB Microphone"), ("built-in", "MacBook Pro Microphone")])
+        #expect(rows.map(\.name) == ["System default", "USB Microphone", "MacBook Pro Microphone"])
+        #expect(rows.map(\.id) == [nil, "usb-uid", "built-in"])
+        #expect(Set(rows.map(\.id)).count == rows.count)
+    }
+
+    @Test("a device listed twice is one row, and cameras have no default")
+    func pickerRowsAreUnique() {
+        let rows = CallDeviceOption.rows(defaultName: nil, devices: [("cam", "FaceTime HD Camera"), ("cam", "FaceTime HD Camera"), ("other", "Studio Display Camera")])
+        #expect(rows.map(\.id) == ["cam", "other"])
+        #expect(rows.map(\.name) == ["FaceTime HD Camera", "Studio Display Camera"])
+    }
+
     @Test("the camera is the chosen one, else the first")
     func cameraResolution() {
         #expect(CallDeviceResolution.camera(choice: nil, available: ["x", "y"]) == "x")

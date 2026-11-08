@@ -82,6 +82,10 @@ final class AppModelFixture {
     var pushWork: (@MainActor () async -> Void)?
     /// How many times the databases were cut off from the process.
     private(set) var databaseSuspensions = 0
+    /// For each, whether the model had its session by then: a cut-off before that interrupts the opening.
+    private(set) var suspendedOnceSignedIn: [Bool] = []
+    /// Run as a background launch begins to restore the session, before the database is opened.
+    var onRestoring: (@MainActor () -> Void)?
     /// Whether the app starts in the background, as a silent push launches it.
     var launchesInBackground = false
     /// How many catch-ups a silent push ran, and what they answer.
@@ -119,6 +123,7 @@ final class AppModelFixture {
         environment.beginBackgroundTask = { [unowned self] name, holdsPastExpiry, onExpiry in
             backgroundTasks.append(name)
             if name == "Suspend session" { suspensionExpiry = onExpiry }
+            if name == "Open account" { onRestoring?() }
             if name == "Background push" {
                 pushExpiry = onExpiry
                 #expect(holdsPastExpiry, "the push's task ended at its expiry, before the catch-up let go")
@@ -139,7 +144,10 @@ final class AppModelFixture {
         }
         environment.suspendDelay = suspendDelay
         environment.pushExpiryGrace = pushExpiryGrace
-        environment.suspendDatabases = { [unowned self] in databaseSuspensions += 1 }
+        environment.suspendDatabases = { [unowned self] in
+            databaseSuspensions += 1
+            suspendedOnceSignedIn.append(model.session != nil)
+        }
         environment.slowStatusDelay = slowStatusDelay
         environment.typingLifetime = typingLifetime
         environment.typingSweepInterval = .milliseconds(50)

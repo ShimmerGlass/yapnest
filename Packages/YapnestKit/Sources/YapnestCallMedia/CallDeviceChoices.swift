@@ -53,3 +53,19 @@ public enum CallDeviceResolution {
         audio(choice: choice, available: available) ?? available.first
     }
 }
+
+/// A row of a device picker: what is stored for it, and the name it shows.
+public struct CallDeviceOption: Identifiable, Equatable, Sendable {
+    /// Nil for the system's default.
+    public let id: String?
+    public let name: String
+
+    /// The rows for `devices`, led by the system default when `defaultName` is given. A device listed
+    /// twice under one id is one row: the picker identifies its rows by id, and two with the same one
+    /// would be drawn as one or the wrong one selected.
+    public static func rows(defaultName: String?, devices: [(id: String, name: String)]) -> [CallDeviceOption] {
+        var seen = Set<String>()
+        let listed = devices.filter { seen.insert($0.id).inserted }.map { CallDeviceOption(id: $0.id, name: $0.name) }
+        return (defaultName.map { [CallDeviceOption(id: nil, name: $0)] } ?? []) + listed
+    }
+}

@@ -177,9 +177,9 @@ final class FakeWire: PacketWriter, @unchecked Sendable {
     }
 
     /// A disco#info result naming one identity.
-    static func discoInfo(to request: Iq, category: String, type: String, features: [String] = []) -> Iq {
+    static func discoInfo(to request: Iq, category: String, type: String, name: String = "x", features: [String] = []) -> Iq {
         let query = Element(name: "query", xmlns: "http://jabber.org/protocol/disco#info")
-        query.addChild(Element(name: "identity", attributes: ["category": category, "type": type, "name": "x"]))
+        query.addChild(Element(name: "identity", attributes: ["category": category, "type": type, "name": name]))
         for feature in features { query.addChild(Element(name: "feature", attributes: ["var": feature])) }
         return result(to: request, query)
     }

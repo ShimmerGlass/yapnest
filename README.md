@@ -94,7 +94,7 @@ failing: its option is simply hidden.
 | ejabberd | Works. Password change needs `mod_register`. Call signalling (ringing, answering across devices, TURN credentials from `mod_stun_disco`) is tested on it, and so is managing a group (configuration, subject, bans, owners, kick, picture, destroy) and removing members' messages as a moderator. Jingle file transfers between two accounts are tested on it and on Prosody. | Spam reports aren't tested on it, as the dev server takes none, and nor are invitation links. |
 | Openfire | Partial. Chats, groups and file upload work, but see the gaps below. | The Monitoring (archive), Push Notification and HTTP File Upload plugins. |
 
-Yapnest calls ring on ejabberd with `notify_on: messages` because a call's proposal carries an empty marker that ejabberd takes for content worth a push; calls from other clients don't ring there, as ejabberd doesn't push them.
+When your account is on an ejabberd server (it says so in its service discovery), Yapnest adds an empty marker to a call's proposal, which ejabberd with `notify_on: messages` takes for content worth a push, so calls ring a sleeping phone there. Only your own server is checked, so the marker reaches the person you call only if they are on ejabberd too, which is where it matters; calls from other clients don't ring there, as ejabberd doesn't push them.
 
 Yapnest's settings name your contacts, so before publishing them it reads the node's configuration back and only syncs if the server keeps it readable by nobody else (`whitelist`); it sets it right once, and otherwise syncs nothing that session. It never deletes the node.
 

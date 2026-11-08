@@ -213,6 +213,24 @@ struct CallSessionHarness {
 }
 
 struct CallSessionOutgoingTests {
+    /// ejabberd's `notify_on: messages` pushes a propose only with the wake marker, which nothing else needs.
+    @Test(arguments: [("ejabberd", true), ("Prosody", false), (nil, false)] as [(String?, Bool)])
+    func theWakeMarkerIsSentOnlyWhenTheAccountsServerIsEjabberd(server: String?, marked: Bool) async throws {
+        let h = try CallSessionHarness()
+        if let server {
+            h.wire.answer { iq in
+                iq.firstChild(name: "query", xmlns: "http://jabber.org/protocol/disco#info") != nil
+                    ? FakeWire.discoInfo(to: iq, category: "server", type: "im", name: server) : nil
+            }
+            h.session.client.module(.disco).discoverServerFeatures(completionHandler: nil)
+            await eventually("the server's name") { !h.session.client.module(.disco).serverDiscoResult.identities.isEmpty }
+        }
+        try h.session.startCall(to: alice)
+        await eventually("the propose") { !h.sentSignals.isEmpty }
+        let propose = try #require(h.wire.written.compactMap { $0 as? Martin.Message }.first { $0.firstChild(name: "propose") != nil })
+        #expect((propose.firstChild(name: "encrypted", xmlns: NS.callWake) != nil) == marked)
+    }
+
     @Test func aCallRingsConnectsAndEnds() async throws {
         let h = try CallSessionHarness()
         try h.session.startCall(to: alice)

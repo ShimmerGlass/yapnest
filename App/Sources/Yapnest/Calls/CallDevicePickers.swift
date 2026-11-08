@@ -30,24 +30,18 @@ struct CallDevicePickers: View {
     ) -> some View {
         picker(
             title, symbol: symbol, selection: selection,
-            choices: [Choice(id: nil, name: String(localized: "System default"))] + list.map { Choice(id: $0.uid, name: $0.name) })
+            choices: CallDeviceOption.rows(defaultName: String(localized: "System default"), devices: list.map { ($0.uid, $0.name) }))
     }
 
     private var camera: some View {
         picker(
             "Camera", symbol: "video", selection: Binding(get: { devices.selectedCamera }, set: { devices.cameraID = $0 }),
-            choices: devices.cameras.map { Choice(id: $0.id, name: $0.name) })
-    }
-
-    private struct Choice: Identifiable {
-        /// What's stored for it, nil for the system's default.
-        let id: String?
-        let name: String
+            choices: CallDeviceOption.rows(defaultName: nil, devices: devices.cameras.map { ($0.id, $0.name) }))
     }
 
     @ViewBuilder
     private func picker(
-        _ title: LocalizedStringKey, symbol: String, selection: Binding<String?>, choices: [Choice]
+        _ title: LocalizedStringKey, symbol: String, selection: Binding<String?>, choices: [CallDeviceOption]
     ) -> some View {
         if inMenu {
             // Buttons, not a Picker: in a Catalyst menu an inline Picker ignores

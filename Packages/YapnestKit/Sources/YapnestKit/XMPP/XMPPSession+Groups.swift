@@ -1606,11 +1606,14 @@ extension XMPPSession {
         if case .live = source, group.hasLeft { return }
         // An extension on the app's stream is sent what the room said while the app was away, without
         // the occupants that say who wrote it, so an encrypted message would be kept as undecryptable
-        // and the archive's copy of it dropped as a duplicate. It leaves the live stanza to the journal
-        // (`ResumeJournal`), which the app replays with its own room state, and stores the room's
-        // messages from the archive read that follows, if the room has one. A session of its own, with
-        // no ticket or one the server refused, journals no room messages, and has the occupants itself.
-        if case .live = source, isOnAppsStream { return }
+        // and the archive's copy of it dropped as a duplicate. It leaves that stanza to the journal
+        // (`ResumeJournal`), which the app replays with its own room state, and to the archive read that
+        // follows, if the room has one. A plain message is stored as well: a room without an archive
+        // has nothing to read, and the notification would be the relay's stand-in. The replay and the
+        // archive copy of it carry the same stanza-id, so the app's ingest takes them for the stored
+        // message instead of adding a second. A session of its own, with no ticket or one the server
+        // refused, journals no room messages, and has the occupants itself.
+        if case .live = source, isOnAppsStream, stanza.firstChild(name: "encrypted", xmlns: NS.omemoLegacy) != nil { return }
         reportSubjectOutcome(of: stanza, in: room)
         if stanza.type == .groupchat, stanza.from?.resource == nil {
             // The room itself: 104 announces a configuration change, and 170-174

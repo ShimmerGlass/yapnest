@@ -94,7 +94,7 @@ final class CallController {
     /// Read from the route rather than remembered, as a video call starts on
     /// the loudspeaker unless there's a headset, and one can connect at any moment.
     private(set) var isOnSpeaker = false
-    @ObservationIgnored private var routeObserver: NSObjectProtocol?
+    @ObservationIgnored nonisolated(unsafe) private var routeObserver: NSObjectProtocol?
 
     init() {
         // The Mac picks its devices itself, with no route to follow.
@@ -105,6 +105,10 @@ final class CallController {
             MainActor.assumeIsolated { self?.refreshSpeaker() }
         }
         #endif
+    }
+
+    deinit {
+        if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
     }
 
     /// Writing the same value would still notify the views that read it.

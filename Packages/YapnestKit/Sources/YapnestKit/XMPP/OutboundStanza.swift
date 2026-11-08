@@ -399,8 +399,9 @@ extension OutboundStanza {
 
     /// With `omemoDevice`, a `proceed` names our OMEMO device, which tells the
     /// caller that the call's fingerprints can be encrypted to it
-    /// (`CallFingerprints`).
-    static func call(_ call: CallMessage, sid: String, omemoDevice: UInt32? = nil) -> Martin.Message {
+    /// (`CallFingerprints`). A `propose` carries the wake marker only with
+    /// `wakesPush`, which the session sets on an ejabberd server.
+    static func call(_ call: CallMessage, sid: String, omemoDevice: UInt32? = nil, wakesPush: Bool = false) -> Martin.Message {
         let message = Martin.Message()
         message.type = .chat
         message.to = Martin.JID(call.recipient)
@@ -429,7 +430,7 @@ extension OutboundStanza {
         message.addChild(element)
         if case .propose = call {
             message.addChild(Element(name: "request", xmlns: NS.receipts))
-            message.addChild(Element(name: "encrypted", xmlns: NS.callWake, children: [Element(name: "payload")]))
+            if wakesPush { message.addChild(Element(name: "encrypted", xmlns: NS.callWake, children: [Element(name: "payload")])) }
         }
         message.addChild(Element(name: "store", xmlns: NS.hints))
         return message

@@ -498,6 +498,28 @@ struct AppModelSessionTests {
         #expect(fixture.databaseSuspensions == 1, "the push left the databases open past its end")
     }
 
+    /// A push that ends while the background launch is still opening the account's database: the cut-off
+    /// would interrupt its migration, and the restoration would fail and sign the user out.
+    @Test func aPushThatEndsWhileTheSessionIsBeingRestoredLeavesTheCutOffUntilItIsOpen() async throws {
+        let fixture = AppModelFixture()
+        fixture.launchesInBackground = true
+        let held = HeldCatchUp()
+        fixture.pushWork = { await held.wait() }
+        fixture.onRestoring = { held.release() }
+        let model = fixture.model!
+        model.followLifecycle(of: NotificationCenter())
+        let push = Task { await model.receivedBackgroundPush() }
+        await eventually("the catch-up to start") { fixture.pushCatchUps == 1 }
+
+        #expect(await model.restoreSession(fixture.credentialsToSignIn) == nil)
+        _ = await push.value
+
+        // The push's cut-off, then the model's own suspension; the fixture must outlive both.
+        await eventually("the databases to be cut off twice") { fixture.databaseSuspensions >= 2 }
+        #expect(fixture.suspendedOnceSignedIn.first == true, "the databases were cut off while the account was opening")
+        if case .signedIn = model.phase {} else { Issue.record("the restoration failed") }
+    }
+
     /// Cancelling is cooperative, so the task is kept until the catch-up has let go of its lock and database.
     @Test func aBackgroundPushsTaskOutlivesItsExpiryUntilTheCatchUpLetsGo() async throws {
         let fixture = AppModelFixture()

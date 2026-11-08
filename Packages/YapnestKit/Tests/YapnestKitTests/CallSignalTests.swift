@@ -147,6 +147,12 @@ struct CallMessageTests {
         OutboundStanza.call(message, sid: "s1")
     }
 
+    @Test func aProposeHasNoWakeMarkerUnlessTheSessionAsksForIt() {
+        let propose = CallMessage.propose(to: "alice@example.org", video: false)
+        #expect(OutboundStanza.call(propose, sid: "s1").firstChild(name: "encrypted", xmlns: NS.callWake) == nil)
+        #expect(OutboundStanza.call(propose, sid: "s1", wakesPush: true).firstChild(name: "encrypted", xmlns: NS.callWake) != nil)
+    }
+
     @Test func proposeGoesToTheBareAddressAndAsksForAReceipt() throws {
         let message = xml(.propose(to: "alice@example.org", video: false))
         #expect(message.type == .chat)
@@ -163,7 +169,7 @@ struct CallMessageTests {
 
     @Test func proposeCarriesTheWakeMarkerAndNoOtherCallMessageDoes() throws {
         for video in [false, true] {
-            let marker = try #require(xml(.propose(to: "alice@example.org", video: video)).firstChild(name: "encrypted", xmlns: "urn:yapnest:call-wake:0"))
+            let marker = try #require(OutboundStanza.call(.propose(to: "alice@example.org", video: video), sid: "s1", wakesPush: true).firstChild(name: "encrypted", xmlns: "urn:yapnest:call-wake:0"))
             #expect(marker.children.map(\.name) == ["payload"])
             #expect(marker.firstChild(name: "payload")?.children.isEmpty == true)
             #expect(marker.firstChild(name: "payload")?.value == nil)
@@ -174,7 +180,7 @@ struct CallMessageTests {
             .reject(to: "alice@example.org/phone", reason: .busy), .finish(to: "alice@example.org/phone", reason: .success),
         ]
         for message in others {
-            #expect(xml(message).firstChild(name: "encrypted") == nil)
+            #expect(OutboundStanza.call(message, sid: "s1", wakesPush: true).firstChild(name: "encrypted") == nil)
         }
     }
 

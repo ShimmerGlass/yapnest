@@ -594,13 +594,25 @@ extension XMPPSession {
         }
     }
 
+    /// Whether the account's server calls itself ejabberd in its disco#info, which Martin asks for on every
+    /// session. Only ejabberd's `notify_on: messages` needs the wake marker, and a server that says nothing
+    /// is not assumed to be one. It is our own server's word: the marker is for the one our contact's phone
+    /// is pushed by, which is the same only when both accounts are on it.
+    var serverIsEjabberd: Bool {
+        Self.isEjabberd(client.module(.disco).serverDiscoResult.identities)
+    }
+
+    static func isEjabberd(_ identities: [DiscoveryModule.Identity]) -> Bool {
+        identities.contains { $0.category == "server" && $0.name?.lowercased() == "ejabberd" }
+    }
+
     /// Writes a call message. One that ends a call, and that the stream was
     /// down for or dropped, is kept for `unsentCallMessageLifetime` and sent
     /// when the stream is back: otherwise the peer goes on ringing, and our
     /// other devices with it, until their own timers. A proposal or an answer
     /// is of no use late, and is dropped.
     func writeCall(_ message: CallMessage, sid: String) {
-        let stanza = OutboundStanza.call(message, sid: sid, omemoDevice: omemoDevice(toVerify: message))
+        let stanza = OutboundStanza.call(message, sid: sid, omemoDevice: omemoDevice(toVerify: message), wakesPush: serverIsEjabberd)
         guard message.endsACall else {
             write(stanza)
             return
@@ -645,7 +657,7 @@ extension XMPPSession {
         }
         for item in unsent where now.timeIntervalSince(item.since) <= Self.unsentCallMessageLifetime {
             DiagLog.info(.calls, "Call message sent after the reconnect", fields: [.id("sid", Redacted.id(item.sid))])
-            let stanza = OutboundStanza.call(item.message, sid: item.sid)
+            let stanza = OutboundStanza.call(item.message, sid: item.sid, wakesPush: serverIsEjabberd)
             guard isConnected else {
                 keepForReconnect(item.message, sid: item.sid, since: item.since)
                 continue

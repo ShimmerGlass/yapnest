@@ -28,7 +28,8 @@ enum NS {
     /// `mod_push` with `notify_on: messages` only pushes a message with a body
     /// or an `encrypted` child holding a `payload` (it checks the names, not the
     /// namespace), and a `propose` has neither, so a sleeping phone never rang.
-    /// No client looks for this namespace, so it is ignored everywhere.
+    /// No client looks for this namespace, so it is ignored everywhere. It is
+    /// added only when the caller's own server says it is ejabberd.
     static let callWake = "urn:yapnest:call-wake:0"
     static let push = "urn:xmpp:push:0"
     static let commands = "http://jabber.org/protocol/commands"

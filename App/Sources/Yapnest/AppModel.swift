@@ -269,6 +269,11 @@ final class AppModel {
     @ObservationIgnored private var closing: Task<Void, Never>?
     /// Background pushes whose catch-up is running, each with a database of its own open.
     @ObservationIgnored private var backgroundPushes = 0
+    /// Restorations of the saved session under way. Opening the database can migrate it, and the system-wide
+    /// suspension a push ends with would interrupt that write and fail the restoration.
+    @ObservationIgnored private var restorations = 0
+    /// A push finished while the session was being restored, and left the databases for it to suspend.
+    @ObservationIgnored private var suspendsAfterRestoration = false
     /// The sign-out cleanup still running. It frees state that belongs to the
     /// account being left, so a new session must not start before it ends.
     @ObservationIgnored private var signingOut: Task<Void, Never>?
@@ -377,7 +382,17 @@ final class AppModel {
         // the file mid-migration is killed. A background launch has no other
         // task covering it until `applyScenePhase` starts the suspension's.
         let endBackgroundTask = isBackground ? beginBackgroundTask("Open account") {} : {}
-        defer { endBackgroundTask() }
+        restorations += 1
+        defer {
+            restorations -= 1
+            // What a push left open while this ran is cut off now, if the app is still away and no other
+            // push is running; the model's own suspension does it otherwise.
+            if restorations == 0, suspendsAfterRestoration {
+                suspendsAfterRestoration = false
+                if !isActive, backgroundPushes == 0 { environment.suspendDatabases() }
+            }
+            endBackgroundTask()
+        }
         do {
             let session = try await makeSession(saved)
             showsWelcome = await offMain { (try? session.database.setting(.welcomeShown)) == "pending" }
@@ -936,7 +951,9 @@ final class AppModel {
         // The catch-up's own database is a database of this process: left
         // open past suspension it would get the app killed. The model's own suspension
         // (`finishSuspension`) leaves this to the last push running.
-        if !isActive, backgroundPushes == 0 { environment.suspendDatabases() }
+        if !isActive, backgroundPushes == 0 {
+            if restorations > 0 { suspendsAfterRestoration = true } else { environment.suspendDatabases() }
+        }
         push.end()
         return result
     }
