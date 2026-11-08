@@ -35,6 +35,18 @@ struct NotificationOutcomeTests {
         #expect(relay.userInfo[MessageNotification.placeholderKey] == nil)
     }
 
+    /// The relay marks an alert for a publish with no summary, which can't be a message: a failed wake stays
+    /// quiet for it, where any other leaves "New message".
+    @Test func theRelaysNoMessageMarkIsRead() {
+        let marked = UNMutableNotificationContent()
+        marked.userInfo = ["noMessage": true, "aps": ["mutable-content": 1]]
+        #expect(marked.announcesNoMessage)
+        #expect(!UNMutableNotificationContent().announcesNoMessage)
+        let other = UNMutableNotificationContent()
+        other.userInfo = ["noMessage": "true"]
+        #expect(!other.announcesNoMessage, "only the relay's boolean counts")
+    }
+
     // MARK: A silent push in the app
 
     private var muted: MessageNotification {

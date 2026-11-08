@@ -1533,15 +1533,25 @@ public final class XMPPSession: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(timeout)
         seedFromTicket()
         connect()
-        let finished = (try? await withTimeout(timeout - min(Self.leaveReserve, timeout / 2)) { [self] in
-            for await value in state.values {
-                // A catch-up cut off by a drop never reaches this state, but a
-                // stale one could be read just as the stream goes.
-                if value == .connected(isSyncing: false) { return isConnected }
-                if case .failed = value { return false }
+        let started = Date()
+        let outcome: Bool?
+        do {
+            outcome = try await withTimeout(timeout - min(Self.leaveReserve, timeout / 2)) { [self] in
+                for await value in state.values {
+                    // A catch-up cut off by a drop never reaches this state, but a
+                    // stale one could be read just as the stream goes.
+                    if value == .connected(isSyncing: false) { return isConnected }
+                    if case .failed = value { return false }
+                }
+                return false
             }
-            return false
-        }) ?? false
+        } catch {
+            outcome = nil
+        }
+        let finished = outcome ?? false
+        // A wake that ran past the system's 30 seconds, connected but never signed in, logged nothing between: this
+        // says whether the catch-up's own limit fired, or whether the process stalled under it.
+        if outcome == nil { DiagLog.notice(.notificationExtension, "Catch-up timed out", .bool("connected", isConnected), .duration("after", since: started)) }
         if isConnected { ringForIncomingCalls() }
         await leave(by: deadline)
         return finished

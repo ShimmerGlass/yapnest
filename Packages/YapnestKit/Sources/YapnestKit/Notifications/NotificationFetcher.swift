@@ -316,6 +316,10 @@ extension UNNotificationContent {
     /// the badge if it's known.
     /// The relay's alert comes with a sound of its own, so it loses it when
     /// sounds are off here.
+    /// The relay marked the push as one for a publish that announces no message (`"noMessage": true`): the server
+    /// sent no summary, as ejabberd does for a read marker, a reaction or a presence.
+    public var announcesNoMessage: Bool { userInfo["noMessage"] as? Bool == true }
+
     public func placeholderCopy(badge: Int? = nil, soundsOff: Bool = NotificationSound.areOff) -> UNNotificationContent {
         let copy = copy(withBadge: badge)
         copy.userInfo[MessageNotification.placeholderKey] = true

@@ -11,6 +11,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     /// The relay's own "New message", for when there's nothing better. Kept as
     /// it came, as a placeholder copy of it would mark a quiet one too.
     private var fallback: UNNotificationContent = UNNotificationContent()
+    private var requestIdentifier = ""
     private var task: Task<Void, Never>?
 
     override init() {
@@ -25,6 +26,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         self.contentHandler.withLock { $0 = { handler($0) } }
         fallback = request.content
         let identifier = request.identifier
+        requestIdentifier = identifier
         task = Task {
             await UNUserNotificationCenter.current().removeQuietNotifications()
             await handle(identifier)
@@ -33,7 +35,16 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
 
     override func serviceExtensionTimeWillExpire() {
         task?.cancel()
-        deliver(fallback.placeholderCopy())
+        deliverStandIn(requestIdentifier)
+    }
+
+    /// The relay's alert, for when the fetch couldn't say what came: left loud if it may be a message, which
+    /// mustn't go unannounced, and shown quietly for one the relay marked as announcing none (a read marker, a
+    /// reaction), which on a server that pushes for everything would otherwise ring "New message" whenever a wake
+    /// fails. What the failed wake missed is read with the next one's catch-up.
+    private func deliverStandIn(_ identifier: String, badge: Int? = nil) {
+        if fallback.announcesNoMessage { return deliver(quiet: fallback.copy(withBadge: badge), identifier) }
+        deliver(fallback.placeholderCopy(badge: badge))
     }
 
     private func handle(_ identifier: String) async {
@@ -42,7 +53,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             // read, which isn't being signed out: the relay's alert is what
             // the user gets, rather than silence.
             guard Self.isSignedOut() else {
-                deliver(fallback.placeholderCopy())
+                deliverStandIn(identifier)
                 return
             }
             // Nothing of ours to show.
@@ -80,9 +91,9 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             deliver(quiet: fallback, identifier)
         case .incomplete(let edited, let badge):
             await MessageNotification.replaceDelivered(edited, badge: badge, avatars: avatars)
-            deliver(fallback.placeholderCopy(badge: badge))
+            deliverStandIn(identifier, badge: badge)
         case .busy, .failed:
-            deliver(fallback.placeholderCopy())
+            deliverStandIn(identifier)
         }
     }
 
