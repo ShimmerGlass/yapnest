@@ -144,6 +144,40 @@ enum DockBadge {
     }
 }
 
+/// Closing the window hides the app, as Hide Yapnest does, where UIKit quits
+/// an app that has one window: the session stays connected and notifies, and
+/// the Dock icon or a notification brings the same window back.
+@MainActor
+enum WindowClose {
+    private static var observer: (any NSObjectProtocol)?
+
+    /// AppKit's window doesn't exist yet when the app has launched or its
+    /// first view appears, so this waits for it to become the main one.
+    static func hidesApp() {
+        guard observer == nil else { return }
+        let becameMain = Notification.Name("NSWindowDidBecomeMainNotification")
+        observer = NotificationCenter.default.addObserver(forName: becameMain, object: nil, queue: nil) { note in
+            nonisolated(unsafe) let window = note.object as? NSObject
+            // Posted on the main thread.
+            MainActor.assumeIsolated { answerClose(of: window) }
+        }
+    }
+
+    /// The red button and File > Close both ask the window's delegate, which
+    /// is UIKit's, whether it may close. Quit doesn't, so it still quits.
+    private static func answerClose(of window: NSObject?) {
+        let shouldClose = NSSelectorFromString("windowShouldClose:")
+        guard let delegate = window?.value(forKey: "delegate") as? NSObject, delegate.responds(to: shouldClose),
+              let delegateClass = object_getClass(delegate) else { return }
+        let hide: @convention(block) (AnyObject, AnyObject?) -> Bool = { _, _ in
+            _ = AppKit.application?.perform(NSSelectorFromString("hide:"), with: nil)
+            return false
+        }
+        class_replaceMethod(delegateClass, shouldClose, imp_implementationWithBlock(hide), "B@:@")
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+}
+
 /// AppKit's cursors.
 enum MacCursor {
     nonisolated(unsafe) static let pointingHand = cursor("pointingHandCursor")
