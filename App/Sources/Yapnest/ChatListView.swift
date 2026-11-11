@@ -224,7 +224,12 @@ struct ChatListView: View {
     /// launch reconnects in a moment, so until the banner would report the
     /// connection, the footer takes it to be up, as "Joining…" waits too.
     private var ownPresence: (presence: ContactPresence?, status: String?) {
-        switch shownConnection ?? .connected(isSyncing: false) {
+        var connection = shownConnection
+        #if DEBUG
+        // The screenshots fixture never connects, and shouldn't say so.
+        if DevFixture.requested == .screenshots { connection = nil }
+        #endif
+        switch connection ?? .connected(isSyncing: false) {
         case .connected:
             guard let ownStatus else { return (nil, nil) }
             let label = String(localized: ownStatus.availability.label)

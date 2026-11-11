@@ -36,6 +36,9 @@ enum ScreenshotsFixture {
         }
 
         try database.setAvatarHash(try saveAvatar(hue: 0.5, motif: .leaf), for: DevFixture.account)
+        // The iPad's account footer shows the account's name, which would
+        // otherwise be "fixture", from its address.
+        try database.updateRosterItem(jid: DevFixture.account, name: nickname, subscription: .none, isPending: false)
         try fillLea(database)
         try fillClimbing(database)
         try fillSam(database)
