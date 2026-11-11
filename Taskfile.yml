@@ -8,6 +8,7 @@ vars:
   IPHONE: platform=iOS Simulator,name=iPhone 17
   # The keyboard jumps reproduce only on the iOS 26 runtime (CLAUDE.md).
   IOS26: platform=iOS Simulator,name=Yapnest iOS 26,OS=26.5
+  IPAD: platform=iOS Simulator,name=iPad Air 11-inch (M4)
 
 tasks:
   project:
@@ -49,6 +50,12 @@ tasks:
           xcodebuild test -scheme YapnestUITests -destination "$destination" -parallel-testing-worker-count {{.WORKERS}} -test-timeouts-enabled YES -default-test-execution-time-allowance 240 -quiet {{.CLI_ARGS}} || failed=1
         done
         exit $failed
+
+  ui-ipad:
+    desc: The iPad layout's UI tests, on the iPad Air simulator (not part of `ui`)
+    deps: [project]
+    cmds:
+      - xcodebuild test -scheme YapnestUITests -destination '{{.IPAD}}' -only-testing:YapnestUITests/IPadLayoutUITests -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 240 -quiet {{.CLI_ARGS}}
 
   testflight:
     desc: Archive and upload both apps, and set What to Test from changelogs/ (key in keys/)

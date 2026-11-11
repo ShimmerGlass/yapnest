@@ -37,6 +37,7 @@ struct ComposerBar: UIViewRepresentable {
     }
 
     func updateUIView(_ host: ComposerHost, context: Context) {
+        host.bar.isWide = context.environment.desktopLayout
         host.onHeight = { height in
             self.height = height
         }

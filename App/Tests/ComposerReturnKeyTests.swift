@@ -2,7 +2,7 @@ import Testing
 import UIKit
 @testable import Yapnest
 
-/// On the Mac, Return sends and its modified forms start a new line.
+/// On the Mac and the iPad, a hardware Return sends and its modified forms start a new line.
 @MainActor
 struct ComposerReturnKeyTests {
     private func returnAction(_ flags: UIKeyModifierFlags) throws -> Selector? {

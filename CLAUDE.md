@@ -1,6 +1,6 @@
 # Yapnest
 
-An XMPP client for iOS 18+ and the Mac (Mac Catalyst, Mac idiom). `README.md` covers features and server support for users; `CONTRIBUTING.md` building, the dev servers and the tests. This file maps where things live.
+An XMPP client for iOS 18+, the iPad and the Mac (Mac Catalyst, Mac idiom). `README.md` covers features and server support for users; `CONTRIBUTING.md` building, the dev servers and the tests. This file maps where things live.
 
 ## Layout
 

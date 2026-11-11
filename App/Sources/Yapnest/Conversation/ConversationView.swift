@@ -16,6 +16,7 @@ struct ConversationView: View {
     var prepared: PreparedChats?
 
     @Environment(AppModel.self) private var model
+    @Environment(\.desktopLayout) private var desktopLayout
     /// SwiftUI makes this struct again whenever the parent updates, and
     /// keeps only the first holder. Everything costly is made through it,
     /// once, when the body first needs it.
@@ -125,27 +126,27 @@ struct ConversationView: View {
 
     var body: some View {
         messages
-            // Not on the Mac, whose header isn't in the bar, so resizing the
-            // window doesn't redraw the screen at every step.
-            .onGeometryChange(for: CGFloat.self) { Platform.usesChatHeader ? 0 : $0.size.width } action: { width = $0 }
+            // Not in the desktop layout, whose header isn't in the bar, so
+            // resizing the window doesn't redraw the screen at every step.
+            .onGeometryChange(for: CGFloat.self) { desktopLayout ? 0 : $0.size.width } action: { width = $0 }
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar(.hidden, for: .tabBar)
             .windowTitle(title)
-            // The Mac's header has the picture, the name and the call button.
-            .toolbar(Platform.usesChatHeader ? .hidden : .automatic, for: .navigationBar)
+            // The desktop layout's header has the picture, the name and the call button.
+            .toolbar(desktopLayout ? .hidden : .automatic, for: .navigationBar)
             .background {
                 // Shown only when back leads to the chat list (`BackButtonTitle`).
-                if !Platform.usesChatHeader { OtherChatsBackTitle(peer: peer) }
+                if !desktopLayout { OtherChatsBackTitle(peer: peer) }
             }
             .toolbar {
-                if !Platform.usesChatHeader {
+                if !desktopLayout {
                     ToolbarItem(placement: .principal) {
                         header
                             .frame(width: headerWidth)
                     }
                 }
-                if canCall, !Platform.usesChatHeader {
+                if canCall, !desktopLayout {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { model.calls.startCall(to: peer) } label: {
                             Label("Call", systemImage: "phone")
@@ -157,7 +158,7 @@ struct ConversationView: View {
             }
             .overlay(alignment: .top) {
                 VStack(spacing: 0) {
-                    if Platform.usesChatHeader { macHeader }
+                    if desktopLayout { macHeader }
                     if search.isActive { ChatSearchBar(search: search) }
                     if screen.isLoaded, group == nil, let contact, contact.hasContactRequest {
                         requestBanner(contact)
@@ -392,8 +393,20 @@ struct ConversationView: View {
     /// back without the count.
     private static let barButtonRoom: CGFloat = 112
 
-    /// Room for the three buttons at the header's trailing edge.
-    private static let macHeaderButtonsRoom: CGFloat = 112
+    /// Room for the buttons at the header's trailing edge: three on the Mac,
+    /// whatever the chat has. On the iPad, where each is a finger's 44 points
+    /// wide, three would leave a group's name a few letters in a portrait
+    /// window, and a group has only Search. It goes by the kind of chat
+    /// rather than the buttons shown, which come as the contact's
+    /// capabilities arrive, so the name doesn't move once the chat is open.
+    private var macHeaderButtonsRoom: CGFloat {
+        guard let size = Self.touchButtonSize else { return 112 }
+        let count: CGFloat = screen.conversation.isGroup || group != nil ? 1 : 3
+        return count * size + 8
+    }
+
+    /// A finger needs more than a pointer does: the Mac's buttons are their icons.
+    private static let touchButtonSize: CGFloat? = Platform.isMac ? nil : 44
 
     private func macHeaderButton(_ title: LocalizedStringKey, systemImage: String, isBusy: Bool = false, action: @escaping () -> Void) -> some View {
         // The icon stays under the spinner so the header doesn't change size.
@@ -406,6 +419,8 @@ struct ConversationView: View {
             .buttonStyle(.plain)
             .font(.title3)
             .foregroundStyle(.secondary)
+            .frame(minWidth: Self.touchButtonSize, minHeight: Self.touchButtonSize)
+            .contentShape(Rectangle())
             .pointingHandCursor()
             .help(title)
     }
@@ -423,9 +438,10 @@ struct ConversationView: View {
         .frame(maxWidth: .infinity)
         // Kept clear of the buttons on both sides, so a long name stays
         // centred and never runs under them.
-        .padding(.horizontal, Self.macHeaderButtonsRoom)
+        .padding(.horizontal, macHeaderButtonsRoom)
         .overlay(alignment: .trailing) {
-            HStack(spacing: 16) {
+            // The iPad's buttons are wider than their icons, which spaces them already.
+            HStack(spacing: Self.touchButtonSize == nil ? 16 : 0) {
                 macHeaderButton("Search", systemImage: "magnifyingglass") { search.open() }
                 if canVideoCall {
                     macHeaderButton("Video Call", systemImage: "video", isBusy: isStartingCall(video: true)) { model.calls.startCall(to: peer, video: true) }
@@ -739,9 +755,10 @@ private struct MacArrival: ViewModifier {
     let isReady: Bool
     @State private var arrived = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.desktopLayout) private var desktopLayout
 
     func body(content: Content) -> some View {
-        if Platform.isMac {
+        if desktopLayout {
             content
                 .opacity(arrived ? 1 : 0)
                 .offset(y: arrived || reduceMotion ? 0 : 8)

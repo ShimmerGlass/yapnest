@@ -72,7 +72,7 @@ marked as blocked ends the call. The server sees who calls whom and when.
 
 ## Requirements
 
-- iOS 18 or later, or macOS 15 or later.
+- iOS 18 or later (iPhone or iPad), or macOS 15 or later.
 - An account on an XMPP server. Any standard server works; see
   [Server compatibility](#server-compatibility) for what each one needs for
   every feature.

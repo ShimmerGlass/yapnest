@@ -10,6 +10,7 @@ struct ChatListView: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.desktopLayout) private var desktopLayout
     @Environment(\.scenePhase) private var scenePhase
     /// Whether the connection has been down long enough to say so.
     @State private var showsConnectionProblem = false
@@ -26,7 +27,6 @@ struct ChatListView: View {
     @State private var openedItems = OpenedItems()
     @State private var prepared = PreparedChats()
     @State private var sidebarPath: [ChatRoute] = []
-    @State private var columnVisibility = NavigationSplitViewVisibility.automatic
     @State private var sheet: ChatListSheet?
     @FocusState private var searchFocused: Bool
     #if DEBUG
@@ -51,16 +51,19 @@ struct ChatListView: View {
     var body: some View {
         Group {
             if isSplit {
-                NavigationSplitView(columnVisibility: Platform.isMac ? .constant(.all) : $columnVisibility) {
+                // Only the desktop layout is wide enough to split: the iPhone
+                // stays upright, so its size class is always compact.
+                NavigationSplitView(columnVisibility: .constant(.all)) {
                     NavigationStack(path: $sidebarPath) {
                         chats
                             .navigationDestination(for: ChatRoute.self) { route in
                                 if case .archive = route { archive }
                             }
                     }
-                    // The Mac's compact title bar loses the sidebar button
-                    // while the list is hidden, with no way to bring it back.
-                    .toolbar(removing: Platform.isMac ? .sidebarToggle : nil)
+                    // The list is always shown, as on the Mac, whose compact
+                    // title bar loses the sidebar button while the list is
+                    // hidden, with no way to bring it back.
+                    .toolbar(removing: .sidebarToggle)
                     // The Mac has the call bar at the foot of the sidebar, which needs the room.
                     .navigationSplitViewColumnWidth(min: Platform.isMac ? 300 : 280, ideal: Platform.isMac ? 380 : 340, max: Platform.isMac ? 480 : 440)
                 } detail: {
@@ -72,6 +75,7 @@ struct ChatListView: View {
                         }
                     }
                 }
+                .modifier(IPadSplitStyle())
             } else {
                 NavigationStack(path: $path) {
                     chats
@@ -85,6 +89,22 @@ struct ChatListView: View {
                         }
                 }
             }
+        }
+        // An iPad window can turn narrow or wide at any moment, and the
+        // layout it turns to must open on what the other showed. Kept in step
+        // all along rather than when the size class changes: by then the new
+        // layout has drawn a frame of what it last held.
+        .onChange(of: ChatNavigation.SplitState(sidebarPath: sidebarPath, selection: selection, selectedMessage: selectedMessage)) {
+            guard Platform.isPad, isSplit else { return }
+            var navigation = navigation
+            navigation.followSplit()
+            path = navigation.path
+        }
+        .onChange(of: path) {
+            guard Platform.isPad, !isSplit else { return }
+            var navigation = navigation
+            navigation.followStack()
+            (sidebarPath, selection, selectedMessage) = (navigation.sidebarPath, navigation.selection, navigation.selectedMessage)
         }
         .sheet(item: $sheet) { sheet in
             Group {
@@ -185,8 +205,9 @@ struct ChatListView: View {
                 me = contact
             }
         }
-        .task(id: session.account) {
-            guard Platform.isMac else { return }
+        // Only where the account footer shows it, and again if a window turns wide.
+        .task(id: desktopLayout ? session.account : nil) {
+            guard desktopLayout else { return }
             await session.database.forEachValue(of: session.observeOwnStatus(), "Own status") { status in
                 ownStatus = status
             }
@@ -235,6 +256,10 @@ struct ChatListView: View {
         return nil
     }
 
+    private var navigation: ChatNavigation {
+        ChatNavigation(path: path, sidebarPath: sidebarPath, selection: selection, selectedMessage: selectedMessage)
+    }
+
     /// Moves the open chat's list to `message`, or to the newest.
     private func reopen(at message: Int64?) {
         prepared.clear()
@@ -245,7 +270,7 @@ struct ChatListView: View {
 
     @ViewBuilder
     private var sidebarCallBar: some View {
-        if Platform.isMac, let state = model.calls.callBar {
+        if desktopLayout, let state = model.calls.callBar {
             CallBar(session: session, controller: model.calls, state: state)
         }
     }
@@ -311,8 +336,8 @@ struct ChatListView: View {
                         }
                     }
                 }
-                // The Mac's footer replaces them.
-                if !Platform.isMac {
+                // The desktop layout's account footer replaces them.
+                if !desktopLayout {
                     ToolbarItem(placement: .topBarLeading) {
                         Button { sheet = .settings } label: { Image(systemName: "gearshape") }
                             .accessibilityLabel("Settings")
@@ -481,6 +506,38 @@ struct ChatListView: View {
         }
         selectedMessage = nil
         if isSplit { selection = peer } else { path = [.conversation(peer)] }
+    }
+}
+
+/// Where the open chat is in each of the iPad's two layouts: the last chat
+/// pushed on the stack, or the one beside the list, with Archived Chats in
+/// the stack or in the sidebar's own.
+struct ChatNavigation: Equatable {
+    var path: [ChatRoute]
+    var sidebarPath: [ChatRoute]
+    var selection: JID?
+    var selectedMessage: Int64?
+
+    /// What the split shows, which the stack follows.
+    struct SplitState: Equatable {
+        var sidebarPath: [ChatRoute]
+        var selection: JID?
+        var selectedMessage: Int64?
+    }
+
+    /// The stack that shows what the split does.
+    mutating func followSplit() {
+        path = sidebarPath + (selection.map { [.conversation($0, at: selectedMessage)] } ?? [])
+    }
+
+    /// The split that shows what the stack does.
+    mutating func followStack() {
+        sidebarPath = path.contains(.archive) ? [.archive] : []
+        let open = path.last.flatMap { route -> (JID, Int64?)? in
+            if case .conversation(let peer, let message) = route { (peer, message) } else { nil }
+        }
+        selection = open?.0
+        selectedMessage = open?.1
     }
 }
 
@@ -976,13 +1033,28 @@ private struct SelectionHighlight: View {
     }
 }
 
-/// Left alone on iOS, where an explicit margin would replace the list's own.
+/// An iPad in portrait puts the chat beside the list rather than under a
+/// sidebar that covers it. The Mac and the phone keep the automatic style.
+private struct IPadSplitStyle: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if Platform.isPad {
+            content.navigationSplitViewStyle(.balanced)
+        } else {
+            content
+        }
+    }
+}
+
+/// Left alone in the phone's layout, where an explicit margin would replace the list's own.
 private struct MacTopMargin: ViewModifier {
     let margin: CGFloat
     init(_ margin: CGFloat) { self.margin = margin }
 
+    @Environment(\.desktopLayout) private var desktopLayout
+
     func body(content: Content) -> some View {
-        if Platform.isMac { content.contentMargins(.top, margin, for: .scrollContent) } else { content }
+        if desktopLayout { content.contentMargins(.top, margin, for: .scrollContent) } else { content }
     }
 }
 

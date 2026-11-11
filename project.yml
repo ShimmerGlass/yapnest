@@ -61,6 +61,8 @@ targets:
         # Notifications with a sender's picture are built from these intents.
         NSUserActivityTypes: [INSendMessageIntent]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # The iPad turns every way, which Split View and Slide Over require.
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSCameraUsageDescription: Take photos and videos to send in a conversation, and show yourself in video calls.
         NSMicrophoneUsageDescription: Talk in calls, record voice messages, and record sound with the videos you send.
         # For Save Image from the share sheet and the file preview.
@@ -113,7 +115,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX)
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         # Mac Catalyst, laid out for the Mac rather than as a scaled iPad.
         TARGETED_DEVICE_FAMILY[sdk=macosx*]: "6"
         # The same bundle id as on iOS, which the push relay's APNs topic is.
@@ -153,7 +155,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).notifications
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         TARGETED_DEVICE_FAMILY[sdk=macosx*]: "6"
         DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
         GENERATE_INFOPLIST_FILE: NO
@@ -199,7 +201,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).share
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         TARGETED_DEVICE_FAMILY[sdk=macosx*]: "6"
         DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
         GENERATE_INFOPLIST_FILE: NO

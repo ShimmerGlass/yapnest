@@ -293,6 +293,9 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         applyTextInsets()
     }
 
+    private var wideReplyConstraints: [NSLayoutConstraint] = []
+    private var narrowReplyConstraints: [NSLayoutConstraint] = []
+
     private func buildReplyPreview() {
         // A preview the stack collapses must not draw its row outside itself.
         replyPreview.clipsToBounds = true
@@ -328,16 +331,25 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
             row.bottomAnchor.constraint(equalTo: replyPreview.bottomAnchor, constant: -2),
             row.leadingAnchor.constraint(equalTo: replyPreview.leadingAnchor, constant: 10),
         ])
-        // On the Mac the bar can be very wide, so the quote keeps to its own
-        // width, up to a readable measure, with the ✕ right after it.
-        if Platform.isMac {
-            NSLayoutConstraint.activate([
-                row.trailingAnchor.constraint(lessThanOrEqualTo: replyPreview.trailingAnchor),
-                labels.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
-            ])
-        } else {
-            row.trailingAnchor.constraint(equalTo: replyPreview.trailingAnchor).isActive = true
-        }
+        // Where the bar can be very wide, the quote keeps to its own width,
+        // up to a readable measure, with the ✕ right after it.
+        wideReplyConstraints = [
+            row.trailingAnchor.constraint(lessThanOrEqualTo: replyPreview.trailingAnchor),
+            labels.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+        ]
+        narrowReplyConstraints = [row.trailingAnchor.constraint(equalTo: replyPreview.trailingAnchor)]
+        updateReplyWidth()
+    }
+
+    /// Whether the screen has the desktop layout, which `ComposerBar` passes
+    /// on from SwiftUI so the quote follows the same rule as the rest.
+    var isWide = Platform.isMac {
+        didSet { if isWide != oldValue { updateReplyWidth() } }
+    }
+
+    private func updateReplyWidth() {
+        NSLayoutConstraint.deactivate(isWide ? narrowReplyConstraints : wideReplyConstraints)
+        NSLayoutConstraint.activate(isWide ? wideReplyConstraints : narrowReplyConstraints)
     }
 
     /// Nicknames to mention and `:code` emoji matches, in a row above the text.
@@ -1058,8 +1070,10 @@ final class ComposerTextView: UITextView {
     /// re-measure. The bar's own layout runs before this view is given its
     /// frame, and a text size change can arrive before the new font is applied.
     var onWidthChange: (() -> Void)?
-    /// Whether a hardware Return sends; a test sets it off the Mac.
-    var returnSends = ProcessInfo.processInfo.isMacCatalystApp
+    /// Whether a hardware Return sends, as on the Mac and in Messages on the
+    /// iPad. Only key commands read it, which the software keyboard never
+    /// sends, so its Return still starts a line. A test sets it elsewhere.
+    var returnSends = Platform.isMac || Platform.isPad
     private var fit = FitTrigger()
 
     override func layoutSubviews() {

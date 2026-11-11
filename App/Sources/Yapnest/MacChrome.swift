@@ -1,39 +1,23 @@
 import SwiftUI
 import YapnestKit
 
-/// The Mac's window chrome, as modifiers that do nothing on iOS so the
-/// views using them have one line per seam.
+/// The Mac's window chrome, as modifiers so the views using them have one
+/// line per seam. Those of the desktop layout serve a wide iPad window too;
+/// the rest do nothing on iOS.
 extension View {
     /// Who you're signed in as, with Profile and Settings, at the foot of the
     /// sidebar, under the call bar while there is one: across the top of the
-    /// window it spanned the chat too, which has its own header there. iOS has
-    /// buttons for them in a bar at the foot of the chat list instead.
-    @ViewBuilder
+    /// window it spanned the chat too, which has its own header there. The
+    /// phone's layout has buttons for them in a bar at the foot of the chat
+    /// list instead.
     func accountFooter(name: String, seed: String, imageURL: URL?, presence: ContactPresence?, status: String?, call: some View, openProfile: @escaping () -> Void, openSettings: @escaping () -> Void) -> some View {
-        if Platform.isMac {
-            safeAreaInset(edge: .bottom, spacing: 0) {
-                AccountFooter(name: name, seed: seed, imageURL: imageURL, presence: presence, status: status, call: call, openProfile: openProfile, openSettings: openSettings)
-            }
-        } else {
-            self
-        }
+        modifier(AccountFooterModifier(footer: AccountFooter(name: name, seed: seed, imageURL: imageURL, presence: presence, status: status, call: call, openProfile: openProfile, openSettings: openSettings)))
     }
 
     /// The list's search field. A drawer search field can't have a button
-    /// beside it, so the Mac draws its own with New Chat next to it.
-    @ViewBuilder
+    /// beside it, so the desktop layout draws its own with New Chat next to it.
     func sidebarSearch(text: Binding<String>, onCompose: (() -> Void)?, focus: FocusState<Bool>.Binding? = nil) -> some View {
-        if Platform.isMac {
-            // A plain inset has no background, so rows scroll visibly under
-            // the field. A safe area bar's scroll edge effect doesn't hide
-            // them on the Mac either, so the bar is drawn solid.
-            safeAreaInset(edge: .top, spacing: 0) {
-                SidebarSearchBar(text: text, onCompose: onCompose).background(.bar)
-            }
-        } else {
-            searchable(text: text, placement: .navigationBarDrawer(displayMode: .automatic))
-                .modifier(SearchFocus(focus: focus))
-        }
+        modifier(SidebarSearchModifier(text: text, onCompose: onCompose, focus: focus))
     }
 
     /// The chat's name as the Mac window's title, for the Window menu. The
@@ -271,6 +255,43 @@ private struct AccountFooter<Call: View>: View {
     }
 }
 
+private struct AccountFooterModifier<Footer: View>: ViewModifier {
+    let footer: Footer
+    @Environment(\.desktopLayout) private var desktopLayout
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if desktopLayout {
+            content.safeAreaInset(edge: .bottom, spacing: 0) { footer }
+        } else {
+            content
+        }
+    }
+}
+
+private struct SidebarSearchModifier: ViewModifier {
+    @Binding var text: String
+    let onCompose: (() -> Void)?
+    let focus: FocusState<Bool>.Binding?
+    @Environment(\.desktopLayout) private var desktopLayout
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if desktopLayout {
+            // A plain inset has no background, so rows scroll visibly under
+            // the field. A safe area bar's scroll edge effect doesn't hide
+            // them on the Mac either, so the bar is drawn solid.
+            content.safeAreaInset(edge: .top, spacing: 0) {
+                SidebarSearchBar(text: $text, onCompose: onCompose, focus: focus).background(.bar)
+            }
+        } else {
+            content
+                .searchable(text: $text, placement: .navigationBarDrawer(displayMode: .automatic))
+                .modifier(SearchFocus(focus: focus))
+        }
+    }
+}
+
 /// Focuses the drawer's search field from the caller's state, where there is one.
 private struct SearchFocus: ViewModifier {
     let focus: FocusState<Bool>.Binding?
@@ -280,9 +301,18 @@ private struct SearchFocus: ViewModifier {
     }
 }
 
+private struct FieldFocus: ViewModifier {
+    let focus: FocusState<Bool>.Binding?
+
+    func body(content: Content) -> some View {
+        if let focus { content.focused(focus) } else { content }
+    }
+}
+
 private struct SidebarSearchBar: View {
     @Binding var text: String
     let onCompose: (() -> Void)?
+    let focus: FocusState<Bool>.Binding?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -290,6 +320,7 @@ private struct SidebarSearchBar: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search", text: $text)
                     .textFieldStyle(.plain)
+                    .modifier(FieldFocus(focus: focus))
                 if !text.isEmpty {
                     Button("Clear", systemImage: "xmark.circle.fill") { text = "" }
                         .labelStyle(.iconOnly)

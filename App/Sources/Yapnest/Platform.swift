@@ -1,7 +1,17 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    /// `Platform.usesDesktopLayout` for the window a view is in, set at the
+    /// root from its size class. The Mac's title bar can't hold a picture, so
+    /// there a chat's header takes the top of the window, as in Messages.
+    @Entry var desktopLayout = Platform.isMac
+}
+
 /// The rest of `Platform` (`isMac` is in `App/Shared`, for the share extension).
 extension Platform {
+    /// An iPad, whose window can turn wide or narrow while the app runs.
+    @MainActor static let isPad = UIDevice.current.userInterfaceIdiom == .pad
+
     /// Whether the message list is turned upside down, with each row turned
     /// back, so the newest message is where the scroll view rests. The
     /// software keyboard moves the list's room on iOS, which a list anchored to
@@ -13,9 +23,13 @@ extension Platform {
     /// in the background.
     static let staysConnected = isMac
 
-    /// The title bar can't hold a picture, so the Mac has none, and a chat's
-    /// own header takes the top of the window, as in Messages.
-    static let usesChatHeader = isMac
+    /// Whether the layout is the Mac's: the chat list always beside the open
+    /// chat, the chat's own header in place of the navigation bar, and the
+    /// account at the foot of the sidebar. An iPad has it while its window is
+    /// wide; a narrow one (Slide Over, a slim Split View) keeps the phone's stack.
+    static func usesDesktopLayout(isMac: Bool, isPad: Bool, sizeClass: UserInterfaceSizeClass?) -> Bool {
+        isMac || (isPad && sizeClass == .regular)
+    }
 
     /// Whether the chat's header goes in the title bar's band, beside the
     /// window buttons. macOS 15 draws that band over the window's content,

@@ -18,12 +18,10 @@ struct YapnestApp: App {
     var body: some Scene {
         WindowGroup {
             // Stacked rather than a safe area inset: an inset leaves the
-            // navigation bar's title where it was, under the call bar. The Mac
-            // has it in the sidebar, over the account footer.
+            // navigation bar's title where it was, under the call bar. The desktop
+            // layout has it in the sidebar, over the account footer.
             VStack(spacing: 0) {
-                if !Platform.isMac, let session = delegate.model.session, let state = delegate.model.calls.callBar {
-                    CallBar(session: session, controller: delegate.model.calls, state: state)
-                }
+                RootCallBar(model: delegate.model)
                 Group {
                     switch delegate.model.phase {
                     case .loading:
@@ -44,6 +42,7 @@ struct YapnestApp: App {
                 }
             }
             .environment(delegate.model)
+            .modifier(DesktopLayoutReader())
             // Taps on `xmpp:` links in messages stay in the app, whether or
             // not the system hands them back.
             .environment(\.openURL, OpenURLAction { url in
@@ -94,6 +93,29 @@ struct YapnestApp: App {
                     .disabled(!delegate.model.acceptsMenuCommands)
             }
         }
+    }
+}
+
+/// The call bar across the top of the window, for the layouts whose chat list
+/// has none of its own (`sidebarCallBar`), so one shows at any width.
+private struct RootCallBar: View {
+    let model: AppModel
+    @Environment(\.desktopLayout) private var desktopLayout
+
+    var body: some View {
+        if !desktopLayout, let session = model.session, let state = model.calls.callBar {
+            CallBar(session: session, controller: model.calls, state: state)
+        }
+    }
+}
+
+/// Sets `desktopLayout` from the window's width, which the iPad changes
+/// while the app runs.
+private struct DesktopLayoutReader: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    func body(content: Content) -> some View {
+        content.environment(\.desktopLayout, Platform.usesDesktopLayout(isMac: Platform.isMac, isPad: Platform.isPad, sizeClass: sizeClass))
     }
 }
 

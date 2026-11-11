@@ -97,6 +97,8 @@ The conversation's frame recorder (`ScrollRecorder.swift`) keeps what the list d
 task ui   # iPhone 17, then the iOS 26 simulator
 ```
 
+`task ui-ipad` runs `IPadLayoutUITests` on an iPad Air 11-inch simulator, in portrait and landscape: the iPad shows the Mac's layout in a wide window. `task ui` leaves the iPad out, as the other tests drive the phone's layout.
+
 `task ui -- -only-testing:YapnestUITests/MessageActionsUITests` runs some of them. Each parallel worker boots a simulator clone of up to 2.5 GB, so the Taskfile caps them at 6 (`WORKERS`); pass `-parallel-testing-worker-count 6` to any `xcodebuild test` you run by hand. `task check` runs YapnestKit's tests, both builds, the unit tests and the UI tests.
 
 The scheme runs test classes in parallel, on clones of the simulator; add `-parallel-testing-worker-count 4` to cap them (15 to 25 minutes depending on what else the Mac is doing, against 52 in one; more workers on a 12-core Mac made tests fail from load). The long fuzz and scroll checks are split over classes, and the longest climbs over tests that each check a share of the way up (`Band` in `FuzzScrollingUITests.swift`), so that none runs for much longer than the rest and each stays well inside the 240 second allowance of `task ui`; `-parallel-testing-enabled NO` runs them one by one.
