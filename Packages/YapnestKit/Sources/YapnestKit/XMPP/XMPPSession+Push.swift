@@ -36,6 +36,12 @@ extension XMPPSession {
         requestPushEnable(token: token, environment: environment, done: pushEnableFinished)
     }
 
+    /// The name the account's server gives itself in its disco#info, which Martin asks for on every session:
+    /// "Prosody", "ejabberd". Nil when it gives none, or its answer hasn't come.
+    var serverName: String? {
+        client.module(.disco).serverDiscoResult.identities.first { $0.category == "server" }?.name.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     /// One try at enabling push: the relay's node, then our server's enable.
     private func requestPushEnable(token: String, environment: String, done: @escaping @Sendable (Result<Void, Error>) -> Void) {
         let relay = pushRelay
@@ -47,7 +53,12 @@ extension XMPPSession {
         command.setAttribute("action", value: "execute")
         let form = Element(name: "x", xmlns: NS.dataForms)
         form.setAttribute("type", value: "submit")
-        for (name, value) in [("token", token), ("environment", environment)] {
+        var fields = [("token", token), ("environment", environment)]
+        // The relay treats a server's publishes by what that server is known to send (Prosody marks the
+        // important ones with a placeholder body), which it could otherwise only learn from a few of them, and
+        // again after each of its restarts. It already sees the account's domain, so the name tells it little more.
+        if let server = serverName { fields.append(("server", server)) }
+        for (name, value) in fields {
             let field = Element(name: "field", attributes: ["var": name])
             field.addChild(Element(name: "value", cdata: value))
             form.addChild(field)

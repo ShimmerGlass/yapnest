@@ -47,8 +47,8 @@ struct PushSessionTests {
     private let wire = FakeWire()
     private let relay = XMPPSession.defaultPushRelay
 
-    /// Connects, with a server that advertises push.
-    private func connect(syncing: Bool = false) {
+    /// Connects, with a server that advertises push, and gives itself `server` as its name if any.
+    private func connect(syncing: Bool = false, server: String? = nil) {
         session.connectForTesting(wire, syncing: syncing)
         wire.answer { iq in
             if let bind = iq.firstChild(name: "bind"), bind.xmlns == "urn:ietf:params:xml:ns:xmpp-bind" {
@@ -58,12 +58,39 @@ struct PushSessionTests {
             }
             let query = Element(name: "query", xmlns: "http://jabber.org/protocol/disco#info")
             query.addChild(Element(name: "feature", attributes: ["var": NS.push]))
+            if let server { query.addChild(Element(name: "identity", attributes: ["category": "server", "type": "im", "name": server])) }
             return FakeWire.result(to: iq, query)
         }
         // The discovery would otherwise start a catch-up of its own.
         session.lock.withLock { $0.awaitsAccountDiscovery = false }
         session.client.module(.resourceBind).bind()
         session.client.module(.disco).discoverAccountFeatures(completionHandler: nil)
+        if server != nil { session.client.module(.disco).discoverServerFeatures(completionHandler: nil) }
+    }
+
+    /// What the registration with the relay said, by field.
+    private func registrationFields() throws -> [String: String] {
+        let commands = wire.written.compactMap { ($0 as? Iq)?.firstChild(name: "command", xmlns: NS.commands) }
+        let command = try #require(commands.last)
+        let form = try #require(command.firstChild(name: "x", xmlns: NS.dataForms))
+        return Dictionary(uniqueKeysWithValues: form.filterChildren(name: "field", xmlns: nil).compactMap { field in
+            field.getAttribute("var").map { ($0, field.firstChild(name: "value")?.value ?? "") }
+        })
+    }
+
+    /// The relay can't tell servers apart by their publishes until it has seen a few, and forgets on a restart.
+    @Test func theRelayIsToldWhatTheServerCallsItself() throws {
+        connect(server: "Prosody")
+        serve(node: "n", enableSucceeds: true)
+        session.setPushToken(Data([0x02]), sandbox: true)
+        #expect(try registrationFields() == ["token": "02", "environment": "sandbox", "server": "Prosody"])
+    }
+
+    @Test func aServerWithoutANameIsRegisteredWithoutOne() throws {
+        connect()
+        serve(node: "n", enableSucceeds: true)
+        session.setPushToken(Data([0x02]), sandbox: true)
+        #expect(try registrationFields() == ["token": "02", "environment": "sandbox"])
     }
 
     /// The server's answers: the relay hands out `node`, and our server
