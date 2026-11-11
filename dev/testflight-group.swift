@@ -90,7 +90,15 @@ while Date() < deadline {
 }
 guard let buildID else { fail("build \(version) (\(build)) on \(platform) wasn't processed within an hour") }
 
-request("POST", "/v1/betaGroups/\(groupID)/relationships/builds", ["data": [["type": "builds", "id": buildID]]])
+// A build that has just turned valid can be unknown to the groups for a few
+// minutes more, and the request answers 404 for it meanwhile.
+for attempt in 1...10 {
+    let (status, _) = request("POST", "/v1/betaGroups/\(groupID)/relationships/builds",
+                              ["data": [["type": "builds", "id": buildID]]], allowing: attempt < 10 ? [404] : [])
+    if status != 404 { break }
+    print("\(platform) build \(build): not ready for a group yet")
+    Thread.sleep(forTimeInterval: 60)
+}
 print("\(platform) build \(build): added to \(groupName)")
 
 guard !isInternal else { exit(0) }
