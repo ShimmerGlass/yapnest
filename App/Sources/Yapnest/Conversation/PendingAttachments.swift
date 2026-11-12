@@ -13,7 +13,7 @@ struct PendingAttachment: Identifiable {
     }
 
     let id = UUID()
-    let content: Content
+    var content: Content
 }
 
 extension ConversationModel {
@@ -28,7 +28,9 @@ extension ConversationModel {
     }
 
     func stage(_ file: URL, isPhoto: Bool) {
-        pendingAttachments.append(PendingAttachment(content: .file(file, isPhoto: isPhoto)))
+        let item = PendingAttachment(content: .file(file, isPhoto: isPhoto))
+        pendingAttachments.append(item)
+        if !isPhoto, AttachmentStore.isVideo(name: file.lastPathComponent) { checkSize(ofVideo: file, id: item.id) }
     }
 
     func stageLocation(_ location: GeoLocation) {
@@ -102,7 +104,106 @@ extension ConversationModel {
     func removePendingAttachment(_ id: PendingAttachment.ID) {
         guard let item = pendingAttachments.first(where: { $0.id == id }) else { return }
         pendingAttachments.removeAll { $0.id == id }
+        oversizedVideos.removeAll { $0 == id }
+        // The task takes its folder away as it stops.
+        shrinks.removeValue(forKey: id)?.task.cancel()
         if case .file(let file, _) = item.content { AttachmentPicker.discardCopy(file) }
+    }
+}
+
+/// A smaller copy of a staged video being made.
+struct VideoShrinkRun {
+    var task: Task<URL?, Never>
+    var progress: Double = 0
+}
+
+typealias ShrinkVideo = @Sendable (_ source: URL, _ folder: URL, _ limit: Int64, _ progress: @escaping @Sendable (Double) -> Void) async throws -> URL
+
+extension ConversationModel {
+    /// Asks the server's limit for a video just staged. Nothing happens when
+    /// it isn't known, as offline: the video goes as it always did.
+    func checkSize(ofVideo file: URL, id: PendingAttachment.ID) {
+        let lookup = uploadLimitLookup, session = session, encrypted = chatIsEncrypted
+        // Weak: the answer can take as long as the server does, and is of no use once the chat is left.
+        Task { [weak self] in
+            guard let limit = await lookup(session, encrypted), let self, file.fileSize > limit,
+                  pendingAttachments.contains(where: { $0.id == id }) else { return }
+            oversizedLimit = limit
+            oversizedVideos.append(id)
+            raiseVideoPrompt()
+        }
+    }
+
+    /// One alert for every video waiting. Another prompt that is showing
+    /// isn't replaced, and raising this one as that one closes could leave
+    /// neither on screen: the videos wait for the next one found too large,
+    /// or go as they are.
+    private func raiseVideoPrompt() {
+        guard prompt == nil, !oversizedVideos.isEmpty else { return }
+        prompt = .videoTooLarge(limit: oversizedLimit)
+    }
+
+    func keepOriginalVideos() {
+        oversizedVideos = []
+        if case .videoTooLarge? = prompt { prompt = nil }
+    }
+
+    func sendSmallerVideos() {
+        let ids = oversizedVideos, limit = oversizedLimit
+        oversizedVideos = []
+        if case .videoTooLarge? = prompt { prompt = nil }
+        for id in ids { startShrink(id, limit: limit) }
+    }
+
+    private func startShrink(_ id: PendingAttachment.ID, limit: Int64) {
+        guard let item = pendingAttachments.first(where: { $0.id == id }), case .file(let original, _) = item.content else { return }
+        // A folder of its own directly under the temporary one, which is what `discardCopy` takes away.
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let shrink = shrinkVideo
+        let task = Task<URL?, Never> { [weak self] in
+            // The export is stopped when the app is suspended, so it asks for the time iOS gives to finish.
+            let background = BackgroundTaskBox()
+            background.id = UIApplication.shared.beginBackgroundTask(withName: "Shrink video") { background.end() }
+            defer { background.end() }
+            let result: Result<URL, Error>
+            do {
+                result = .success(try await shrink(original, folder, limit) { fraction in
+                    Task { @MainActor in self?.shrinkProgressed(fraction, for: id) }
+                })
+            } catch {
+                result = .failure(error)
+            }
+            if let self, !Task.isCancelled, let smaller = shrinkFinished(id, result, replacing: original) { return smaller }
+            try? FileManager.default.removeItem(at: folder)
+            return nil
+        }
+        shrinks[id] = VideoShrinkRun(task: task)
+        composer.bar?.setShrinkProgress(0, for: id)
+    }
+
+    /// Ends a shrink that wasn't stopped. Returns the copy if it was staged in the original's place.
+    private func shrinkFinished(_ id: PendingAttachment.ID, _ result: Result<URL, Error>, replacing original: URL) -> URL? {
+        // Removing the video took its entry away, and its copy isn't wanted.
+        guard shrinks.removeValue(forKey: id) != nil else { return nil }
+        composer.bar?.setShrinkProgress(nil, for: id)
+        switch result {
+        case .success(let smaller):
+            guard let index = pendingAttachments.firstIndex(where: { $0.id == id }) else { return nil }
+            pendingAttachments[index].content = .file(smaller, isPhoto: false)
+            AttachmentPicker.discardCopy(original)
+            return smaller
+        case .failure(let error):
+            if !(error is CancellationError) {
+                prompt = .notice(title: String(localized: "Couldn't make the video smaller"), message: error.localizedDescription)
+            }
+            return nil
+        }
+    }
+
+    private func shrinkProgressed(_ fraction: Double, for id: PendingAttachment.ID) {
+        guard shrinks[id] != nil else { return }
+        shrinks[id]?.progress = fraction
+        composer.bar?.setShrinkProgress(fraction, for: id)
     }
 }
 

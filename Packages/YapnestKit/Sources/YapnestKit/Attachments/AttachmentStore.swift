@@ -175,7 +175,7 @@ public final class AttachmentStore: Sendable {
         }
     }
 
-    private static func isOutOfSpace(_ error: Error) -> Bool {
+    static func isOutOfSpace(_ error: Error) -> Bool {
         let ns = error as NSError
         switch (ns.domain, ns.code) {
         case (NSCocoaErrorDomain, NSFileWriteOutOfSpaceError): return true
@@ -339,7 +339,7 @@ public final class AttachmentStore: Sendable {
         return isVideo(name: name) ? await videoSize(of: file) : nil
     }
 
-    static func isVideo(name: String) -> Bool {
+    public static func isVideo(name: String) -> Bool {
         UTTypeLookup.type(forName: name)?.conforms(to: .movie) ?? false
     }
 

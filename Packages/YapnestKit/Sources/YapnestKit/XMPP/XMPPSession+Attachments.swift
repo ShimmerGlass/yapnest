@@ -232,9 +232,23 @@ extension XMPPSession {
         if let service = lock.withLock({ $0.uploadService }) { return service }
         let components = try await client.module(.httpFileUpload).findHttpUploadComponents()
         guard let component = components.first else { throw AttachmentError.noUploadService }
-        let service = UploadService(jid: component.jid, maxSize: component.maxSize > 0 ? component.maxSize : nil)
+        // Martin reports a service that announces no limit as Int.max.
+        let service = UploadService(jid: component.jid, maxSize: component.maxSize > 0 && component.maxSize != .max ? component.maxSize : nil)
         lock.withLock { $0.uploadService = service }
         return service
+    }
+
+    /// The largest file, in bytes as stored before sealing, that an upload in
+    /// a chat can carry, or nil when that isn't known. The server's limit
+    /// applies to what is sent, which is the sealed file in an encrypted chat,
+    /// and an encrypted file over `maxDownloadSize` is refused whatever the
+    /// server says. Offline, nothing is discovered: the answer is what is known.
+    public func uploadLimit(encrypted: Bool) async -> Int64? {
+        var service = lock.withLock { $0.uploadService }
+        if service == nil, isConnected { service = try? await uploadService() }
+        let server = service?.maxSize.map(Int64.init)
+        guard encrypted else { return server }
+        return min(server.map { max($0 - FileCrypto.tagLength, 0) } ?? Self.maxDownloadSize, Self.maxDownloadSize)
     }
 
     /// Downloads (and decrypts) a received file, or accepts a contact's offer

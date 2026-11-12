@@ -32,9 +32,15 @@ final class AttachmentTray: UIScrollView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    func setProgress(_ fraction: Double?, for id: PendingAttachment.ID) {
+        tiles[id]?.setProgress(fraction)
+    }
+
     /// Keeps the tiles that are still there, so their thumbnails aren't read again.
     func set(_ items: [PendingAttachment]) {
         let ids = Set(items.map(\.id))
+        // A file swapped for another in place adds nothing to show, so the tray stays where the user scrolled it.
+        let sameTiles = ids == Set(tiles.keys)
         for (id, tile) in tiles where !ids.contains(id) {
             tile.removeFromSuperview()
             tiles[id] = nil
@@ -51,6 +57,7 @@ final class AttachmentTray: UIScrollView {
             if stack.arrangedSubviews.indices.contains(index), stack.arrangedSubviews[index] === tile { continue }
             stack.insertArrangedSubview(tile, at: index)
         }
+        guard !sameTiles else { return }
         // A new tile is at the end, which is where the user wants to see it:
         // the right edge, or the left one when the layout is mirrored.
         layoutIfNeeded()
@@ -126,6 +133,29 @@ private final class AttachmentTile: UIView {
 
     deinit { loading?.cancel() }
 
+    private var progressOverlay: ProgressOverlay?
+
+    /// Dims the tile with a ring that fills as the file is made smaller; nil takes it off.
+    func setProgress(_ fraction: Double?) {
+        guard let fraction else {
+            progressOverlay?.removeFromSuperview()
+            progressOverlay = nil
+            content.accessibilityValue = nil
+            return
+        }
+        let overlay: ProgressOverlay
+        if let existing = progressOverlay {
+            overlay = existing
+        } else {
+            overlay = ProgressOverlay()
+            pin(overlay)
+            progressOverlay = overlay
+        }
+        let clamped = min(max(fraction, 0), 1)
+        overlay.fraction = clamped
+        content.accessibilityValue = clamped.formatted(.percent.precision(.fractionLength(0)))
+    }
+
     private func fill(file: URL, isPhoto: Bool) {
         let type = UTType(filenameExtension: file.pathExtension)
         let name = file.lastPathComponent
@@ -159,6 +189,8 @@ private final class AttachmentTile: UIView {
             picture.contentMode = .scaleAspectFill
             picture.clipsToBounds = true
             pin(picture)
+            // A shrink may have started before the picture was read.
+            if let progressOverlay { content.bringSubviewToFront(progressOverlay) }
         }
     }
 
@@ -193,5 +225,43 @@ private final class AttachmentTile: UIView {
             view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
         ])
+    }
+}
+
+/// A dimming layer with a determinate ring in its middle.
+private final class ProgressOverlay: UIView {
+    private static let diameter: CGFloat = 28
+
+    private let ring = CAShapeLayer()
+    private let track = CAShapeLayer()
+
+    var fraction: Double = 0 {
+        didSet { ring.strokeEnd = fraction }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        isUserInteractionEnabled = false
+        let rect = CGRect(x: 0, y: 0, width: Self.diameter, height: Self.diameter).insetBy(dx: 2, dy: 2)
+        let path = UIBezierPath(arcCenter: CGPoint(x: rect.midX, y: rect.midY), radius: rect.width / 2, startAngle: -.pi / 2, endAngle: .pi * 1.5, clockwise: true).cgPath
+        for (layer, color) in [(track, UIColor.white.withAlphaComponent(0.3)), (ring, UIColor.white)] {
+            layer.path = path
+            layer.fillColor = nil
+            layer.strokeColor = color.cgColor
+            layer.lineWidth = 3
+            layer.lineCap = .round
+            layer.bounds = CGRect(x: 0, y: 0, width: Self.diameter, height: Self.diameter)
+            self.layer.addSublayer(layer)
+        }
+        ring.strokeEnd = 0
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        for layer in [track, ring] { layer.position = CGPoint(x: bounds.midX, y: bounds.midY) }
     }
 }

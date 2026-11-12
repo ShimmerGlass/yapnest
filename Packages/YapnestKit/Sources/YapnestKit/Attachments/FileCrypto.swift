@@ -9,6 +9,9 @@ enum FileCrypto {
         case decryptionFailed
     }
 
+    /// What sealing adds to a file: the GCM tag after the ciphertext.
+    static let tagLength: Int64 = 16
+
     /// The size and SHA-256 of a file, read in pieces so a large one isn't loaded.
     static func sizeAndHash(of file: URL) throws -> (size: Int64, sha256: Data) {
         let handle = try FileHandle(forReadingFrom: file)
@@ -54,12 +57,12 @@ enum FileCrypto {
     static func decrypt(_ data: Data, fragment: String) throws -> Data {
         guard let secret = Data(hex: fragment), secret.count == 44 || secret.count == 48 else { throw Failure.badFragment }
         let ivLength = secret.count - 32
-        guard data.count >= 16 else { throw Failure.decryptionFailed }
+        guard data.count >= Int(tagLength) else { throw Failure.decryptionFailed }
         do {
             let box = try AES.GCM.SealedBox(
                 nonce: AES.GCM.Nonce(data: secret.prefix(ivLength)),
-                ciphertext: data.dropLast(16),
-                tag: data.suffix(16),
+                ciphertext: data.dropLast(Int(tagLength)),
+                tag: data.suffix(Int(tagLength)),
             )
             return try AES.GCM.open(box, using: SymmetricKey(data: secret.suffix(32)))
         } catch {

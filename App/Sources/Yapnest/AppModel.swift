@@ -1498,7 +1498,7 @@ private final class BackgroundPushTask {
 /// A background task that can be ended from the system's expiry handler and
 /// by the work it covers, whichever comes first.
 @MainActor
-private final class BackgroundTaskBox {
+final class BackgroundTaskBox {
     var id = UIBackgroundTaskIdentifier.invalid
 
     nonisolated func end() {

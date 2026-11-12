@@ -160,6 +160,11 @@ enum UploadPhase: String, DiagEnum {
     case prepare, service, slot, put, store
 }
 
+/// How re-encoding a video to fit an upload limit ended, by the preset that fit.
+enum VideoShrinkResult: String, DiagEnum {
+    case fit1080, fit720, fit540, fitOther, stillTooLarge, cantBeConverted, cancelled
+}
+
 /// Which family of sign-in mechanism, without the server's list.
 enum SaslKind: String, DiagEnum {
     case fast, scram, plain, other, none

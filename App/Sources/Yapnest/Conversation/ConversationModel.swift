@@ -53,6 +53,8 @@ final class ConversationModel {
         case quoteNotFound
         /// The microphone is off for the app, so a voice message can't be recorded.
         case microphoneDenied
+        /// Videos in the composer are over what the server's upload service takes.
+        case videoTooLarge(limit: Int64)
     }
 
     let session: XMPPSession
@@ -288,6 +290,18 @@ final class ConversationModel {
     }
     /// The copies behind `pendingAttachments`, for `deinit`, which can't read it.
     @ObservationIgnored nonisolated(unsafe) private var stagedFiles: [URL] = []
+    /// The videos over the server's limit that wait for the user's answer, and that limit.
+    @ObservationIgnored var oversizedVideos: [PendingAttachment.ID] = []
+    @ObservationIgnored var oversizedLimit: Int64 = 0
+    /// The smaller copies being made, by the attachment they replace.
+    /// Unsafe for `deinit`, which stops them.
+    @ObservationIgnored nonisolated(unsafe) var shrinks: [PendingAttachment.ID: VideoShrinkRun] = [:]
+    /// What the server's upload limit is for this chat, which a test replaces.
+    @ObservationIgnored var uploadLimitLookup: @Sendable (XMPPSession, _ encrypted: Bool) async -> Int64? = { await $0.uploadLimit(encrypted: $1) }
+    /// Makes a video smaller, which a test replaces.
+    @ObservationIgnored var shrinkVideo: ShrinkVideo = { source, folder, limit, progress in
+        try await VideoShrink.shrink(source, into: folder, toFit: limit, progress: progress)
+    }
     /// False while the chat can't be written to (a blocked contact, a left
     /// group), when anything added to the composer is turned away.
     var canSendAttachments = true
@@ -409,7 +423,7 @@ final class ConversationModel {
     @ObservationIgnored private var linkPreviewsAllowed: Bool?
     /// Whether the chat is encrypted, which decides if a message sent in the
     /// clear is worth announcing to VoiceOver.
-    @ObservationIgnored private var chatIsEncrypted = true
+    @ObservationIgnored private(set) var chatIsEncrypted = true
     /// The app-wide choice, which overrides the chat's.
     @ObservationIgnored private var linkPreviewSetting: LinkPreviewSetting = .askPerConversation
     /// Read by the location cards alone, so an answer to the maps notice
@@ -583,6 +597,8 @@ final class ConversationModel {
         if let text = drafts.flush() { DraftWriter.shared.save(text, for: peer, to: session.database) }
         // Leaving the chat drops what was staged, and nothing else owns the copies.
         for file in stagedFiles { AttachmentPicker.discardCopy(file) }
+        // Each takes its folder away as it stops.
+        for run in shrinks.values { run.task.cancel() }
     }
 
     // MARK: Starting
@@ -2819,6 +2835,17 @@ final class ConversationModel {
         let staged = editing == nil ? pendingAttachments : []
         guard !trimmed.isEmpty || !staged.isEmpty else { return }
         guard staged.isEmpty || refuseUnlessCanSend() else { return }
+        // A video being made smaller isn't ready to go, and what is typed stays with it. Sent
+        // along, the wait would hold every later message back with nothing to show for it.
+        if staged.contains(where: { shrinks[$0.id] != nil }) {
+            prompt = .notice(
+                title: String(localized: "Still making the video smaller"),
+                message: String(localized: "Send again once it's done, or remove the video to send without it."),
+            )
+            return
+        }
+        // Sending without answering is keeping the originals.
+        if editing == nil { keepOriginalVideos() }
         // The message goes at the end, which a bounded window doesn't reach.
         if editing == nil { showNewest() }
         if editing == nil { followsOwnSend = true }
@@ -3271,6 +3298,7 @@ final class ConversationModel {
         guard let bar = composer.bar else { return }
         bar.setPreparingAttachment(preparingAttachments > 0)
         bar.setPendingAttachments(pendingAttachments)
+        for (id, run) in shrinks { bar.setShrinkProgress(run.progress, for: id) }
         bar.setGifsAvailable(gifsAvailable)
         bar.onEmojiPicked = { [database = session.database] emoji in
             Task.detached(priority: .utility) { try? database.recordEmojiPick(emoji) }

@@ -26,6 +26,10 @@ private struct ConversationPrompts: ViewModifier {
             (String(localized: "Message not found"), String(localized: "The message that was quoted may be too old, or have been deleted."))
         case .microphoneDenied:
             (String(localized: "Microphone access is off"), String(localized: "Allow Yapnest to use the microphone in Settings to record voice messages."))
+        case .videoTooLarge(let limit):
+            // The limit is the server's, or in an encrypted chat the size past which nobody could download it.
+            (String(localized: "Video too large to send"),
+             String(localized: "Files up to \(ByteCountFormatter.string(fromByteCount: limit, countStyle: .file)) can be sent in this chat. Yapnest can send a smaller version, in lower quality."))
         case .confirmRetraction, .confirmModeration, .reactions, nil: nil
         }
     }
@@ -77,6 +81,9 @@ private struct ConversationPrompts: ViewModifier {
                 Button("Remove", role: .destructive) { model.removeReactions(id) }
             }
             Button("Cancel", role: .cancel) {}
+        case .videoTooLarge:
+            Button("Send Smaller") { model.sendSmallerVideos() }
+            Button("Keep Original", role: .cancel) { model.keepOriginalVideos() }
         case .microphoneDenied:
             Button("Open Settings") {
                 if let url = Platform.privacySettingsURL("Privacy_Microphone") { openURL(url) }

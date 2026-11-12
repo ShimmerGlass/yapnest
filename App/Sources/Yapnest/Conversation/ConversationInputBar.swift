@@ -951,6 +951,11 @@ final class ConversationInputBar: UIView, UITextViewDelegate, UIDropInteractionD
         updateControls(animated: true)
     }
 
+    /// The progress of making a staged video smaller, or nil once it's done.
+    func setShrinkProgress(_ fraction: Double?, for id: PendingAttachment.ID) {
+        tray.setProgress(fraction, for: id)
+    }
+
     func setGifsAvailable(_ available: Bool) {
         guard gifButton.isHidden == available else { return }
         gifButton.isHidden = !available
